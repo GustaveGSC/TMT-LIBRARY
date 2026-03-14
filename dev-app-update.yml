@@ -1,0 +1,3 @@
+provider: generic
+url: https://tmt-oss.oss-cn-hangzhou.aliyuncs.com/tmt-library/releases/
+updaterCacheDirName: tmt-software-updater

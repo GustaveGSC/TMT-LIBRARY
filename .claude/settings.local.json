@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"from app import create_app; app = create_app\\(\\); print\\(''OK - blueprints:'', [bp for bp in app.blueprints]\\)\")",
+      "Bash(python -c \"from app import create_app; app = create_app\\(\\); print\\(''OK - blueprints:'', list\\(app.blueprints.keys\\(\\)\\)\\)\")"
+    ],
+    "additionalDirectories": [
+      "\\tmp"
+    ]
+  }
+}

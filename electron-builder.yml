@@ -1,0 +1,55 @@
+appId: com.tmt.software
+productName: TMT Software
+copyright: Copyright © 2025 TMT
+
+directories:
+  output: release
+
+files:
+  - out/**/*                # electron-vite 构建产物
+  - "!**/*.{ts,map}"
+
+# ── 额外资源：Python 可执行文件 ─────────────────────
+extraResources:
+  - from: electron/resources/python-backend
+    to: python-backend
+    filter:
+      - "**/*"
+
+# ── Windows ──────────────────────────────────────────
+win:
+  target:
+    - target: nsis          # 安装包
+      arch: [x64]
+  icon: resources/icon.ico
+
+nsis:
+  oneClick: false           # 允许用户选择安装路径
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+
+# ── macOS ────────────────────────────────────────────
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]    # 同时支持 Intel + Apple Silicon
+  icon: resources/icon.icns
+  category: public.app-category.productivity
+  # 如需公证（App Store 外分发），配置以下字段：
+  # hardenedRuntime: true
+  # entitlements: resources/entitlements.mac.plist
+
+dmg:
+  title: "${productName} ${version}"
+  contents:
+    - x: 410
+      y: 150
+      type: link
+      path: /Applications
+    - x: 130
+      y: 150
+      type: file
+
+publish:
+  provider: generic
+  url: https://tmt-oss.oss-cn-hangzhou.aliyuncs.com/tmt-library/releases/

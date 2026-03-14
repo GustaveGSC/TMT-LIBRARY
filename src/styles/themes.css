@@ -1,0 +1,56 @@
+/* ══════════════════════════════════════════════
+   两平米软件库 · 主题变量
+   切换主题：document.documentElement.className = 'theme-b'
+══════════════════════════════════════════════ */
+
+/* ── 主题 A：奶油纸质（默认）── */
+:root {
+  --bg:             #ede8dc;
+  --bg-card:        #ffffff;
+  --accent:         #c4883a;
+  --accent-hover:   #e09050;
+  --accent-bg:      #faf6f0;
+  --border:         #e0d4c0;
+  --text-primary:   #3d2b1a;
+  --text-secondary: #7a5c3a;
+  --text-muted:     #b09070;
+  --shadow:         rgba(150, 100, 50, 0.1);
+  --font-family:    'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Helvetica Neue', sans-serif;
+}
+
+/* ── 主题 B：预留位置 ── */
+/*
+:root.theme-b {
+  --bg:             ;
+  --bg-card:        ;
+  --accent:         ;
+  --accent-hover:   ;
+  --accent-bg:      ;
+  --border:         ;
+  --text-primary:   ;
+  --text-secondary: ;
+  --text-muted:     ;
+  --shadow:         ;
+  --font-family:    ;
+}
+*/
+
+:root {
+  --el-color-primary:          #c4883a;
+  --el-color-primary-light-3:  #d4a060;
+  --el-color-primary-light-5:  #e0b880;
+  --el-color-primary-light-9:  #faf0e0;
+  --el-color-primary-dark-2:   #a87030;
+  --el-border-color:           #e0d4c0;
+  --el-fill-color-blank:       #faf6f0;
+  --el-text-color-regular:     #3d2b1a;
+  --el-text-color-placeholder: #b09070;
+  --el-font-family:            'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Helvetica Neue', sans-serif;
+}
+
+/* ── 全局字体 ── */
+*, *::before, *::after {
+  font-family: var(--font-family);
+  -webkit-font-smoothing: antialiased;
+  box-sizing: border-box;
+}

@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Build outputs
+out/
+dist/
+dist-electron/
+release/
+backend/build/
+backend/dist/
+*.spec
+
+# Environment & secrets
+backend/.env
+.env
+.env.*
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+
+# Python venv
+backend/venv/
+backend/.venv/
+
+# Electron build cache
+.electron-builder-cache/
+
+# Temp
+*.tmp
+*.temp
