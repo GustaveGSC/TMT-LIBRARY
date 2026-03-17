@@ -8,7 +8,7 @@ class CategoryRepository:
     # ── Category ──────────────────────────────────────────────────────────
 
     @staticmethod
-    def get_all_tree() -> List[ProductCategory]:
+    def  get_all_tree() -> List[ProductCategory]:
         """获取完整树，按 sort_order 排序"""
         return ProductCategory.query.order_by(ProductCategory.sort_order, ProductCategory.id).all()
 

@@ -6,6 +6,8 @@ import { usePermission } from '@/composables/usePermission'
 import { ZoomIn, EditPen, Plus, Delete } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 import { useFinishedStore } from '@/stores/product/finished'
+import { usePackagedStore } from '@/stores/product/packaged'
+import GEditTagList from '@/components/common/GEditTagList.vue'
 
 // ── Props ─────────────────────────────────────────
 const props = defineProps({
@@ -66,9 +68,13 @@ const editForm = reactive({
   series_code:    '',
   series_name:    '',
   model_code:     '',
-  packaged_codes: [],   // 产成品清单（code 数组）
+  packaged_tags: [],    // 产成品清单（{value: code, state: 'new'|'raw'|'delete'} 数组）
+  // state 语义：new=编码不在产成品库里，raw=在库里，delete=标记删除
   tag_names:      [],   // 标签名称数组
 })
+
+// 编辑开始时的原始产成品 codes（用于 saveEdit 做对比，不依赖 state）
+const originalPackagedCodes = ref(new Set())
 
 // ── 折叠分组 ──────────────────────────────────────
 const openSec = reactive({})
@@ -83,10 +89,20 @@ function lc(row) {
 }
 
 // ── 编辑 ──────────────────────────────────────────
-function startEdit() {
+
+// 判断编码是否存在于产成品库
+function isInPackagedLibrary(code) {
+  return packagedOptions.value.some(o => o.code === code)
+}
+
+async function startEdit() {
   const d = props.row
   const domestic = d.market === 'domestic' || d.market === 'both'
   const foreign  = d.market === 'foreign'  || d.market === 'both'
+  // 先加载候选库，再判断每个 code 的初始状态
+  await Promise.all([ensurePackagedOptionsLoaded(), ensureTagOptionsLoaded()])
+  const initialCodes = (d.packaged_list || []).map(p => p?.code ?? p)
+  originalPackagedCodes.value = new Set(initialCodes)
   Object.assign(editForm, {
     name:            d.name          || '',
     name_en:         d.name_en       || '',
@@ -100,11 +116,12 @@ function startEdit() {
     series_code:     d.series_code   || '',
     series_name:     d.series_name   || '',
     model_code:      d.model_code    || '',
-    packaged_codes:  (d.packaged_list || []).map(p => p.code),
-    tag_names:       (d.tags         || []).map(t => t.name),
+    packaged_tags: initialCodes.map(code => ({
+      value: code,
+      state: isInPackagedLibrary(code) ? 'raw' : 'new',
+    })),
+    tag_names: (d.tags || []).map(t => t.name),
   })
-  ensurePackagedOptionsLoaded()
-  ensureTagOptionsLoaded()
   editing.value = true
 }
 function cancelEdit() { editing.value = false }
@@ -136,6 +153,19 @@ async function saveEdit() {
       model_code:    editForm.model_code    || null,
     })
     if (res.success) {
+      // 通过与原始 codes 对比决定增删，不依赖 state（state 仅用于 UI）
+      const finishedId  = props.row.id
+      const activeCodes = new Set(editForm.packaged_tags.filter(t => t.state !== 'delete').map(t => t.value))
+      const toRemove = [...originalPackagedCodes.value].filter(c => !activeCodes.has(c))
+      const toAdd    = [...activeCodes].filter(c => !originalPackagedCodes.value.has(c))
+      for (const code of toRemove) {
+        const pid = packagedStore.map[code]?.id
+        if (pid) await http.delete(`/api/product/finished/${finishedId}/packaged/${pid}`)
+      }
+      for (const code of toAdd) {
+        const pid = packagedStore.map[code]?.id
+        if (pid) await http.post(`/api/product/finished/${finishedId}/packaged/${pid}`)
+      }
       editing.value = false
       emit('saved')
     }
@@ -145,7 +175,8 @@ async function saveEdit() {
 }
 
 // ── Autocomplete 候选 ─────────────────────────────
-const finishedStore = useFinishedStore()
+const finishedStore  = useFinishedStore()
+const packagedStore  = usePackagedStore()
 
 // 中文名称 / 英文名称：从 rawItems 本地匹配
 function suggestName(query, cb) {
@@ -499,23 +530,12 @@ async function suggestModelCode(query, cb) {
             <div class="eg-cell"><span class="eg-lbl">净重 (kg)</span><span class="eg-val">{{ row.total_net_weight ?? '—' }}</span></div>
           </div>
 
-          <!-- 行6：产成品清单 → el-select -->
-          <div class="eg-row eg-row-edit">
-            <div class="eg-cell eg-full">
-              <span class="eg-lbl eg-lbl-edit">产成品清单</span>
-              <span class="eg-val eg-val-inp">
-                <el-select v-model="editForm.packaged_codes"
-                  multiple collapse-tags collapse-tags-tooltip
-                  allow-create filterable placeholder="选择产成品" class="ei-sel">
-                  <el-option
-                    v-for="opt in packagedOptions"
-                    :key="opt.code"
-                    :value="opt.code"
-                    :label="opt.code">
-                    <span>{{ opt.code }}</span>
-                    <span style="color:#999;font-size:12px;margin-left:8px;">{{ opt.name }}</span>
-                  </el-option>
-                </el-select>
+          <!-- 行6：产成品清单 → GEditTagList -->
+          <div class="eg-row eg-row-edit eg-row-grow">
+            <div class="eg-cell eg-full" style="align-items: flex-start;">
+              <span class="eg-lbl eg-lbl-edit" style="align-self: stretch;">产成品清单</span>
+              <span class="eg-val eg-val-inp" style="align-items: flex-start; padding: 4px 6px;">
+                <GEditTagList v-model="editForm.packaged_tags" :options="packagedOptions" />
               </span>
             </div>
           </div>
@@ -807,6 +827,11 @@ async function suggestModelCode(query, cb) {
   border: none;
   background: transparent;
 }
+/* 自动高度行（产成品清单等内容可能超过一行）*/
+.eg-row-grow {
+  height: auto;
+  min-height: 36px;
+}
 .eg-row-edit .eg-lbl {
   border-radius: 6px;
 }
@@ -858,6 +883,7 @@ async function suggestModelCode(query, cb) {
 .ei-sel :deep(.el-select__input)              { font-size: 13px; }
 .ei-sel :deep(.el-select__tags-text)          { font-size: 12px; }
 .ei-sel :deep(.el-tag:first-child)            { margin-left: 2px; }
+
 
 /* checkbox */
 .ei-check { flex-shrink: 0; margin-left: auto; }

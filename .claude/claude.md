@@ -1,5 +1,8 @@
 # 两平米软件库 · 项目上下文
 
+## 维护规范
+- 每次发生**架构调整、功能变更、接口变更、数据库结构变更**时，必须同步更新本文件，保持与代码实际状态一致。
+
 ## 技术栈
 - **桌面端**：Electron + Vue 3 + Vite（electron-vite）
 - **前端**：Vue 3 Composition API、Vue Router、Pinia、Element Plus、Axios
@@ -416,6 +419,29 @@ src/stores/product/
 ├── finished.js   # 成品store（含FIELD_GETTER、filters含market、FILTER_FIELDS含market）
 └── packaged.js   # 产成品store
 ```
+
+## UI 页面设计职责（Frontend Developer）
+涉及 UI 页面设计与实现时，须遵循以下原则（参考 `.claude/Frontend Developer.md`）：
+
+### 核心要求
+- **像素级还原**：严格按设计规范实现，颜色/间距/圆角/字体均以本文件「设计规范」为准
+- **组件复用**：优先复用已有组件和样式类，复用率目标 > 80%，避免重复声明
+- **用户体验**：交互状态（hover/focus/disabled/loading）必须完整，添加适当过渡动画（transition 0.15s~0.2s）
+- **反馈清晰**：操作结果（成功/失败/加载中）必须有明确的视觉反馈
+
+### 表单与弹窗规范
+- 必填字段校验：提交前校验，错误信息就近显示（红色 `#d05a3c`，12px）
+- Dialog 弹窗：`width` 根据内容合理设定，`:close-on-click-modal="false"`，有明确的取消/确认按钮
+- 加载状态：按钮 `:disabled="submitting"`，文案改为「提交中…」/「保存中…」
+
+### 可访问性
+- 按钮须有语义（`button` 元素，非 `div`）
+- 图标按钮须有 `title` 或 aria-label
+- 键盘可操作：表单输入框支持 `@keyup.enter` 触发提交
+
+### 性能
+- 数据懒加载：下拉候选、分类树等在首次交互时加载，加载完成后缓存
+- 列表渲染：合理使用 `:key`，避免不必要的重渲染
 
 ## 待开发
 - [ ] 概览页接真实数据（调用 /api/product/stats，分类数量）

@@ -124,7 +124,7 @@ const updateDesc      = ref('')
 
 window.electronAPI?.getVersion().then(v => { version.value = v })
 
-const loginForm    = reactive({ username: '', password: '' })
+const loginForm    = reactive({ username: 'admin', password: 'adminadmin' })
 const registerForm = reactive({ username: '', displayName: '', password: '', confirmPassword: '' })
 const registerTouched = reactive({ username: false, password: false, confirmPassword: false })
 
@@ -159,14 +159,9 @@ onMounted(async () => {
       latestDownload.value = res.data.download_url
       updateDesc.value     = res.data.description
 
-      console.log('showForceUpdate before:', showForceUpdate.value)  // 加这行
       if (type === 'force') showForceUpdate.value = true
-      console.log('showForceUpdate after:', showForceUpdate.value)   // 加这行
 
-      console.log('current:', version.value)
-      console.log('latest:', res.data.version)
-      console.log('updateType:', checkUpdateType(version.value, res.data.version))
-          }
+    }
   } catch (e) {
     console.error('版本检测失败:', e)
   }
