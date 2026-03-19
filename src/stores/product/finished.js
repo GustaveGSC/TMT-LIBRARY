@@ -1,6 +1,6 @@
 // src/stores/product/finished.js
 import { defineStore } from 'pinia'
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, watch } from 'vue'
 import http from '@/api/http'
 import { usePackagedStore } from './packaged'
 
@@ -9,7 +9,12 @@ export const useFinishedStore = defineStore('product/finished', () => {
   // ── 原始全量数据（从后端一次性拉取）──────────────
   const rawItems  = ref([])
   const loading   = ref(false)
+  const loaded    = ref(false)
   const error     = ref('')
+
+  // ── 分页 ──────────────────────────────────────────
+  const currentPage = ref(1)
+  const pageSize    = ref(50)
 
   // ── 搜索（每列独立）──────────────────────────────
   const filters = reactive({
@@ -108,6 +113,19 @@ export const useFinishedStore = defineStore('product/finished', () => {
 
   const total = computed(() => items.value.length)
 
+  // 当前页数据（切片）
+  const pagedItems = computed(() => {
+    const start = (currentPage.value - 1) * pageSize.value
+    return items.value.slice(start, start + pageSize.value)
+  })
+
+  // 过滤/排序条件变化时重置到第一页
+  watch(
+    [() => ({ ...filters }), status, sortField, sortOrder],
+    () => { currentPage.value = 1 },
+    { deep: true }
+  )
+
   // ── 从后端拉取全量数据（初始化时调用一次）────────
   async function load() {
     loading.value = true
@@ -118,6 +136,7 @@ export const useFinishedStore = defineStore('product/finished', () => {
       })
       if (res.success) {
         rawItems.value = res.data.items
+        loaded.value   = true
       } else {
         error.value = res.message || '加载失败'
       }
@@ -178,6 +197,7 @@ export const useFinishedStore = defineStore('product/finished', () => {
   // ── 重置（离开产品库时调用）──────────────────────
   function reset() {
     rawItems.value  = []
+    loaded.value    = false
     error.value     = ''
     status.value    = ''
     sortField.value = ''
@@ -198,7 +218,8 @@ export const useFinishedStore = defineStore('product/finished', () => {
 
   return {
     rawItems,
-    items, total, loading, error,
+    items, pagedItems, total, currentPage, pageSize,
+    loading, loaded, error,
     filters, status,
     sortField, sortOrder,
     selected, selectedPackaged,

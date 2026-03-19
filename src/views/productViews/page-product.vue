@@ -7,6 +7,7 @@ import ProductTable  from './ProductTable.vue'
 import ProductImage  from './ProductImage.vue'
 import { ArrowLeft, Upload, Setting, Folder, Collection } from '@element-plus/icons-vue'
 import { usePermission } from '@/composables/usePermission'
+import http from '@/api/http'
 
 // ── 权限 ──────────────────────────────────────────
 const { canEditProduct } = usePermission()
@@ -17,13 +18,45 @@ import ProductTag     from './ProductTag.vue'
 import iconTable  from '@/assets/icons/icon_table.png'
 import iconImage  from '@/assets/icons/icon_image.png'
 import iconEchart from '@/assets/icons/icon_echart.png'
-import { initProductStore, resetProductStore } from '@/stores/product'
+import { initProductStore, resetProductStore, ensureTableData, useFinishedStore, usePackagedStore } from '@/stores/product'
 
 // ── 路由 ──────────────────────────────────────────
 const router = useRouter()
 
 // ── 当前页面 ──────────────────────────────────────
-const activePage = ref('overview')
+const activePage  = ref('overview')
+const pageLoading = ref(false)
+
+// ── 各页面数据加载器（按需扩展）──────────────────
+const finishedStore = useFinishedStore()
+const packagedStore = usePackagedStore()
+
+const PAGE_LOADERS = {
+  table: ensureTableData,
+}
+
+async function navigateTo(page) {
+  if (page === activePage.value) return
+  const loader = PAGE_LOADERS[page]
+  const dataReady = page === 'table'
+    ? finishedStore.loaded && packagedStore.loaded
+    : true
+  if (loader && !dataReady) {
+    // 先显示 loading 遮罩，等两帧确保浏览器完成绘制，再切页 + 加载数据
+    pageLoading.value = true
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+  }
+  activePage.value = page
+  if (loader && !dataReady) {
+    const t0 = performance.now()
+    await loader()
+    const loadMs = (performance.now() - t0).toFixed(0)
+    // 等两帧：第一帧让 el-table 渲染数据，第二帧让 calcColWidths 完成
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+    pageLoading.value = false
+    console.log(`[导航] → ${page}  数据加载 ${loadMs} ms  总耗时（含渲染）${(performance.now() - t0).toFixed(0)} ms`)
+  }
+}
 
 // ── 搜索 ──────────────────────────────────────────
 
@@ -65,9 +98,20 @@ function handleBack() {
 }
 
 // ── 生命周期 ──────────────────────────────────────
-onMounted(() => {
+onMounted(async () => {
   window.electronAPI?.maximizeApp?.()
   initProductStore()
+  // 只加载概览所需数据
+  try {
+    const res = await http.get('/api/product/stats')
+    if (res.success) {
+      overviewStats.value = {
+        totalProducts:  res.data.total          ?? 0,
+        unprocessed:    res.data.unprocessed     ?? 0,
+        lastImportTime: res.data.last_imported_at ?? null,
+      }
+    }
+  } catch {}
 })
 </script>
 
@@ -94,7 +138,7 @@ onMounted(() => {
           :key="item.key"
           class="nav-item"
           :class="{ active: activePage === item.key }"
-          @click="activePage = item.key"
+          @click="navigateTo(item.key)"
         >
           <svg v-if="item.svg" class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <path :d="item.svg" />
@@ -107,11 +151,17 @@ onMounted(() => {
 
     </header>
 
+    <!-- ── 加载遮罩 ────────────────────────────── -->
+    <div v-if="pageLoading" class="page-loading">
+      <div class="page-spinner"></div>
+      <div class="page-loading-text">加载中…</div>
+    </div>
+
     <!-- ── 主内容区 ────────────────────────────── -->
     <main class="main-content">
 
       <!-- ① 概览 -->
-      <div v-if="activePage === 'overview'" class="page-overview">
+      <div v-show="activePage === 'overview'" class="page-overview">
         <div class="overview-body">
           <div class="welcome-title">产品库</div>
           <div class="welcome-sub">管理和查看所有产品信息</div>
@@ -149,15 +199,15 @@ onMounted(() => {
           <!-- 快捷操作（查看数据）-->
           <div class="section-title">快捷操作</div>
           <div class="quick-grid">
-            <button class="quick-btn" @click="activePage = 'table'">
+            <button class="quick-btn" @click="navigateTo('table')">
               <img class="quick-img" :src="iconTable" alt="表格" />
               <span>以表格形式查看</span>
             </button>
-            <button class="quick-btn" @click="activePage = 'image'">
+            <button class="quick-btn" @click="navigateTo('image')">
               <img class="quick-img" :src="iconImage" alt="图片" />
               <span>以图片形式查看</span>
             </button>
-            <button class="quick-btn" @click="activePage = 'chart'">
+            <button class="quick-btn" @click="navigateTo('chart')">
               <img class="quick-img" :src="iconEchart" alt="图表" />
               <span>以图表形式查看</span>
             </button>
@@ -201,14 +251,14 @@ onMounted(() => {
 
       </div>
 
-      <!-- ② 表格视图 -->
-      <ProductTable v-else-if="activePage === 'table'" />
+      <!-- ② 表格视图：始终挂载，v-show 切换显示 -->
+      <ProductTable v-show="activePage === 'table'" />
 
       <!-- ③ 图片视图 -->
-      <ProductImage v-else-if="activePage === 'image'" />
+      <ProductImage v-show="activePage === 'image'" />
 
       <!-- ④ 图表（占位）-->
-      <div v-else-if="activePage === 'chart'" class="page-placeholder">
+      <div v-show="activePage === 'chart'" class="page-placeholder">
         <img :src="iconEchart" class="ph-img" alt="图表" />
         <div class="ph-title">图表视图</div>
         <div class="ph-desc">产品结构图表，即将上线</div>
@@ -424,6 +474,24 @@ onMounted(() => {
 .ph-icon  { font-size: 52px; color: var(--text-muted); }
 .ph-title { font-size: 17px; font-weight: 600; color: var(--text-primary); }
 .ph-desc  { font-size: 13px; color: var(--text-muted); }
+
+/* ── 加载遮罩 ─────────────────────────────────── */
+.page-loading {
+  position: absolute; inset: 50px 0 0 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 14px; z-index: 100;
+  background: var(--bg);
+}
+.page-spinner {
+  width: 32px; height: 32px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.page-loading-text { font-size: 13px; color: var(--text-muted); }
 
 /* ── 弹窗占位 ─────────────────────────────────── */
 .dialog-placeholder {

@@ -90,7 +90,7 @@ class ProductFinished(db.Model):
             'status':        self.status,
             'status_label':  STATUS_LABELS.get(self.status, self.status),
             'model_id':      self.model_id,
-            'model_code':    self.model.code if self.model else None,
+            'model_code':    self.model.model_code if self.model else None,
             'model_name':    self.model.name if self.model else None,
             'listed_yymm':   self.listed_yymm,
             'delisted_yymm': self.delisted_yymm,

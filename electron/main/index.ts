@@ -1,4 +1,6 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import * as fs from 'fs'
+import * as path from 'path'
 import { createLoginWindow, createMainWindow } from './window'
 import { startPython, stopPython } from './python'
 import { destroyUpdater, initUpdater } from './updater'
@@ -22,6 +24,17 @@ ipcMain.on('logout', () => {
 })
 
 ipcMain.handle('get-version', () => app.getVersion())
+
+ipcMain.handle('show-open-dialog', (_event, options) =>
+  dialog.showOpenDialog(options)
+)
+
+ipcMain.handle('read-file-as-data-url', (_event, filePath: string) => {
+  const data = fs.readFileSync(filePath)
+  const ext  = path.extname(filePath).slice(1).toLowerCase()
+  const mime = ext === 'png' ? 'image/png' : 'image/jpeg'
+  return `data:${mime};base64,${data.toString('base64')}`
+})
 
 // 监听窗口最小化事件
 ipcMain.on('minimize-app', () => {

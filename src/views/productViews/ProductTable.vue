@@ -140,9 +140,11 @@ const colWidths = reactive({})
 function calcColWidths() {
   const items = finishedStore.rawItems
   if (!items?.length) return
+  // 采样前 100 行，避免大数据量时阻塞渲染
+  const sample = items.length > 100 ? items.slice(0, 100) : items
   for (const def of COL_DEFS) {
     let maxW = measureText(def.header) * 1.1
-    for (const row of items) {
+    for (const row of sample) {
       let val = ''
       if (def.key === 'packaged_list') {
         val = (row.packaged_list || []).join(', ')
@@ -160,12 +162,13 @@ function calcColWidths() {
   }
 }
 
+// 用 rAF 替代 nextTick，让浏览器先完成当前帧绘制再计算列宽
 watch(
   () => finishedStore.rawItems?.length ?? 0,
-  (len) => { if (len > 0) nextTick(() => calcColWidths()) }
+  (len) => { if (len > 0) requestAnimationFrame(() => calcColWidths()) }
 )
 onMounted(() => {
-  if (finishedStore.rawItems.length > 0) nextTick(() => calcColWidths())
+  if (finishedStore.rawItems.length > 0) requestAnimationFrame(() => calcColWidths())
 })
 </script>
 
@@ -183,7 +186,6 @@ onMounted(() => {
             @click="status = t.value"
           >{{ t.label }}</button>
         </div>
-        <span class="total-hint">共 {{ finishedStore.total }} 条</span>
       </div>
 
       <div v-if="finishedStore.error" class="error-bar">{{ finishedStore.error }}</div>
@@ -191,7 +193,7 @@ onMounted(() => {
       <!-- 表格 -->
       <div class="table-wrap">
         <el-table
-          :data="finishedStore.items"
+          :data="finishedStore.pagedItems"
           :row-class-name="rowClass"
           v-loading="finishedStore.loading"
           size="small"
@@ -237,7 +239,7 @@ onMounted(() => {
                 <ul v-if="sugg.name.show" class="sg-list"><li v-for="s in sugg.name.list" :key="s" class="sg-item" @mousedown="applySugg('name',s)">{{ s }}</li></ul>
               </div>
             </template>
-            <template #default="{ row }"><span>{{ row.name || '—' }}</span></template>
+            <template #default="{ row }"><span>{{ (row.status === 'recorded' && row.model_name) ? row.model_name : (row.name || '—') }}</span></template>
           </el-table-column>
 
           <!-- ── 英文名称 ── -->
@@ -414,14 +416,26 @@ onMounted(() => {
 
         </el-table>
       </div>
+
+      <!-- 分页器 -->
+      <div class="pg-bar">
+        <el-pagination
+          v-model:current-page="finishedStore.currentPage"
+          v-model:page-size="finishedStore.pageSize"
+          :page-sizes="[20, 50, 100]"
+          :total="finishedStore.total"
+          layout="total, sizes, prev, pager, next"
+          background
+        />
+      </div>
     </div>
 
-    <!-- ══ 包装清单卡片 ════════════════════════════ -->
+    <!-- ══ 产成品清单卡片 ════════════════════════════ -->
     <div class="card packaged-card" :class="{ collapsed: packagedCollapsed }">
       <div class="pk-hd" @click="packagedCollapsed = !packagedCollapsed">
-        <span class="pk-hd-title">包装清单</span>
+        <span class="pk-hd-title">产成品清单</span>
         <span v-if="finishedStore.selected" class="pk-hd-code">· {{ finishedStore.selected.code }}</span>
-        <span v-if="!finishedStore.selected && !packagedCollapsed" class="pk-hd-hint">点击成品行查看关联包装</span>
+        <span v-if="!finishedStore.selected && !packagedCollapsed" class="pk-hd-hint">点击成品行查看关联产成品</span>
         <el-icon class="pk-toggle"><CaretBottom v-if="!packagedCollapsed"/><CaretTop v-else/></el-icon>
       </div>
       <div v-show="!packagedCollapsed" class="pk-body">
@@ -465,6 +479,13 @@ onMounted(() => {
 
 /* ── 成品卡片 ────────────────────────────────── */
 .finished-card { flex: 8; min-height: 0; }
+
+.pg-bar {
+  padding: 6px 12px;
+  border-top: 1px solid #f0e8dc;
+  display: flex; justify-content: flex-end;
+  flex-shrink: 0; background: #faf7f2;
+}
 
 .card-topbar {
   display: flex; align-items: center; justify-content: space-between;
@@ -615,7 +636,7 @@ onMounted(() => {
 .dot-unrecorded { background: #d9d9d9; }
 
 /* ── 包装清单卡片 ────────────────────────────── */
-.packaged-card { flex: 2; min-height: 0; transition: flex 0.25s ease; }
+.packaged-card { flex: 2; min-height: 0; }
 .packaged-card.collapsed { flex: 0 0 40px; min-height: 40px; }
 
 .pk-hd {

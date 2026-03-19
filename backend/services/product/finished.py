@@ -37,7 +37,7 @@ class FinishedService:
         if not code:
             return Result.fail('code 不能为空')
 
-        allowed = {'status', 'model_id', 'listed_yymm', 'delisted_yymm', 'cover_image'}
+        allowed = {'status', 'model_id', 'listed_yymm', 'delisted_yymm', 'cover_image', 'market'}
         data = {k: v for k, v in kwargs.items() if k in allowed}
 
         if 'status' in data and data['status'] not in VALID_STATUSES:
@@ -47,7 +47,9 @@ class FinishedService:
         if obj:
             obj = FinishedRepository.update_finished(obj, **data)
         else:
-            data.setdefault('status', 'recorded')
+            # 首次创建时，若表单未明确设置状态（或仍为未录入），自动设为已录入
+            if not data.get('status') or data['status'] == 'unrecorded':
+                data['status'] = 'recorded'
             obj = FinishedRepository.create_finished(code, **data)
 
         return Result.ok(data=obj.to_dict(), message='保存成功')

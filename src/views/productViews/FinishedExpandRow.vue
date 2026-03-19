@@ -1,10 +1,12 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
-import { ref, reactive, computed, watch } from 'vue'
+import { ref, reactive, computed, watch, nextTick } from 'vue'
 import http from '@/api/http'
 import { usePermission } from '@/composables/usePermission'
 import { ZoomIn, EditPen, Plus, Delete } from '@element-plus/icons-vue'
-import { ElMessageBox } from 'element-plus'
+import { ElMessageBox, ElMessage } from 'element-plus'
+import Cropper from 'cropperjs'
+import 'cropperjs/dist/cropper.css'
 import { useFinishedStore } from '@/stores/product/finished'
 import { usePackagedStore } from '@/stores/product/packaged'
 import GEditTagList from '@/components/common/GEditTagList.vue'
@@ -21,30 +23,95 @@ const emit = defineEmits(['saved'])
 const { canEditProduct } = usePermission()
 
 // ── 响应式状态 ────────────────────────────────────
-const editing = ref(false)
-const saving  = ref(false)
+const editing      = ref(false)
+const saving       = ref(false)
+const initializing = ref(false)  // startEdit 初始化期间，跳过联动 watch
 
 // ── 图片相关状态 ──────────────────────────────────
-const imgHover    = ref(false)       // 编辑状态下鼠标悬停
-const imgPreview  = ref(false)       // 预览弹窗开关
-const addMenuVisible = ref(false)    // 新增子菜单
+const imgHover        = ref(false)  // 编辑状态下鼠标悬停
+const imgPreview      = ref(false)  // 预览弹窗开关
+const addMenuVisible  = ref(false)  // 新增子菜单
+const localCoverImage     = ref('')  // 裁剪后本地预览（base64），保存前显示用
+const savedCoverImage     = ref('')  // 进入编辑时的快照，取消时回退
+
+// ── 裁剪状态 ──────────────────────────────────────
+const cropDialogVisible = ref(false)
+const cropImgSrc  = ref('')
+const cropImgRef  = ref(null)       // 裁剪 img 的模板引用
+const cropperInst = ref(null)
+const cropSquare  = ref(false)      // 是否锁定正方形
+
+// 初始化 Cropper（dialog opened 后调用）
+function initCropper() {
+  if (cropperInst.value) { cropperInst.value.destroy(); cropperInst.value = null }
+  const img = cropImgRef.value
+  if (!img) return
+  const setup = () => {
+    cropperInst.value = new Cropper(img, {
+      aspectRatio: cropSquare.value ? 1 : NaN,
+      viewMode: 1,
+      autoCropArea: 0.8,
+    })
+  }
+  if (img.complete && img.naturalWidth) setup()
+  else img.addEventListener('load', setup, { once: true })
+}
+
+// 正方形开关切换时同步 aspectRatio
+watch(cropSquare, (val) => {
+  cropperInst.value?.setAspectRatio(val ? 1 : NaN)
+})
+
+// 确认裁剪：contain 缩放后居中绘制到 600×600 白底画布
+function applyCrop() {
+  if (!cropperInst.value) return
+  // 先获取裁剪区域原始尺寸的画布
+  const src = cropperInst.value.getCroppedCanvas({
+    imageSmoothingEnabled: true, imageSmoothingQuality: 'high',
+  })
+  const out = document.createElement('canvas')
+  out.width = 600; out.height = 600
+  const ctx = out.getContext('2d')
+  // 白底填充
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(0, 0, 600, 600)
+  // contain 缩放：短边扩展（留白），长边缩至 600
+  const scale = Math.min(600 / src.width, 600 / src.height)
+  const w = Math.round(src.width  * scale)
+  const h = Math.round(src.height * scale)
+  const x = Math.round((600 - w) / 2)
+  const y = Math.round((600 - h) / 2)
+  ctx.drawImage(src, x, y, w, h)
+  localCoverImage.value = out.toDataURL('image/png')
+  closeCropDialog()
+  // 图片暂存为 base64，提交时统一上传 OSS
+}
+
+// 关闭裁剪弹窗
+function closeCropDialog() {
+  cropDialogVisible.value = false
+  if (cropperInst.value) { cropperInst.value.destroy(); cropperInst.value = null }
+}
 
 // 图片操作
 function previewImage() {
-  if (!props.row.cover_image) return
+  if (!localCoverImage.value && !props.row.cover_image) return
   imgPreview.value = true
 }
 function editImage() {
-  // 裁切图片（后续接入裁切库）
+  // 对已有图片进行二次裁剪
+  cropImgSrc.value = localCoverImage.value || props.row.cover_image
+  cropDialogVisible.value = true
 }
 async function addImageFromUpload() {
   addMenuVisible.value = false
   const result = await window.electronAPI.showOpenDialog({
-    filters: [{ name: '图片', extensions: ['jpg', 'jpeg', 'png', 'webp'] }],
+    filters: [{ name: 'PNG 图片', extensions: ['png'] }],
     properties: ['openFile'],
   })
   if (result.canceled || !result.filePaths.length) return
-  // TODO: 上传到 OSS 并保存
+  cropImgSrc.value        = await window.electronAPI.readFileAsDataURL(result.filePaths[0])
+  cropDialogVisible.value = true
 }
 function addImageFromExisting() {
   addMenuVisible.value = false
@@ -55,7 +122,8 @@ async function deleteImage() {
     await ElMessageBox.confirm('确认删除当前封面图片？', '删除确认', {
       confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning',
     })
-    // TODO: 删除 OSS 图片并清空 cover_image
+    localCoverImage.value = ''
+    // OSS 删除及 DB 清空在提交时统一处理（cover_image: null）
   } catch {}
 }
 const editForm = reactive({
@@ -68,13 +136,15 @@ const editForm = reactive({
   series_code:    '',
   series_name:    '',
   model_code:     '',
-  packaged_tags: [],    // 产成品清单（{value: code, state: 'new'|'raw'|'delete'} 数组）
-  // state 语义：new=编码不在产成品库里，raw=在库里，delete=标记删除
+  packaged_tags: [],    // 产成品清单（{value: code, state: 'original'|'added'|'deleted'} 数组）
+  // state 语义：original=编辑开始时已在清单里，added=本次新增，deleted=标记删除
   tag_names:      [],   // 标签名称数组
 })
 
 // 编辑开始时的原始产成品 codes（用于 saveEdit 做对比，不依赖 state）
 const originalPackagedCodes = ref(new Set())
+// 编辑开始时已关联的标签名集合（用于区分新增 vs 原有）
+const originalTagNames = ref(new Set())
 
 // ── 折叠分组 ──────────────────────────────────────
 const openSec = reactive({})
@@ -90,11 +160,6 @@ function lc(row) {
 
 // ── 编辑 ──────────────────────────────────────────
 
-// 判断编码是否存在于产成品库
-function isInPackagedLibrary(code) {
-  return packagedOptions.value.some(o => o.code === code)
-}
-
 async function startEdit() {
   const d = props.row
   const domestic = d.market === 'domestic' || d.market === 'both'
@@ -103,8 +168,12 @@ async function startEdit() {
   await Promise.all([ensurePackagedOptionsLoaded(), ensureTagOptionsLoaded()])
   const initialCodes = (d.packaged_list || []).map(p => p?.code ?? p)
   originalPackagedCodes.value = new Set(initialCodes)
+  originalTagNames.value = new Set((d.tags || []).map(t => t.name))
+  // 初始化期间暂停联动 watch，避免 series/model 字段被清空
+  initializing.value = true
+  const initialTagNames = (d.tags || []).map(t => t.name)
   Object.assign(editForm, {
-    name:            d.name          || '',
+    name:            d.model_name    || d.name || '',
     name_en:         d.name_en       || '',
     status:          d.status        || 'unrecorded',
     listed_yymm:     d.listed_yymm   || '',
@@ -118,13 +187,21 @@ async function startEdit() {
     model_code:      d.model_code    || '',
     packaged_tags: initialCodes.map(code => ({
       value: code,
-      state: isInPackagedLibrary(code) ? 'raw' : 'new',
+      state: 'original',
     })),
-    tag_names: (d.tags || []).map(t => t.name),
+    tag_names: [],   // 先置空，等 el-select 挂载完再赋值
   })
+  savedCoverImage.value = localCoverImage.value
   editing.value = true
+  await nextTick()       // 等待 el-select 挂载 + watch 队列执行完毕
+  initializing.value = false
+  // el-select 挂载后再赋值，确保其内部 options 已注册，能正确识别已有标签
+  editForm.tag_names = initialTagNames
 }
-function cancelEdit() { editing.value = false }
+function cancelEdit() {
+  localCoverImage.value = savedCoverImage.value
+  editing.value = false
+}
 
 // market checkbox → market 字段
 function resolveMarket() {
@@ -139,7 +216,24 @@ function resolveMarket() {
 async function saveEdit() {
   saving.value = true
   try {
-    const res = await http.post('/api/product/finished', {
+    // ── 图片处理：上传新图 / 清除旧图 ──────────────
+    let coverImageValue = undefined   // undefined = 不变，null = 清除，string = 新 OSS URL
+    if (localCoverImage.value.startsWith('data:')) {
+      // 有新裁剪图（base64）→ 上传到 OSS
+      const uploadRes = await http.post('/api/product/finished/cover-image', {
+        code:     props.row.code,
+        data_url: localCoverImage.value,
+      })
+      if (uploadRes.success) {
+        coverImageValue = uploadRes.data.url
+        localCoverImage.value = coverImageValue   // 本地替换为 OSS URL，避免重复上传
+      }
+    } else if (localCoverImage.value === '' && savedCoverImage.value !== '') {
+      // 图片被删除
+      coverImageValue = null
+    }
+
+    const body = {
       code:          props.row.code,
       name:          editForm.name,
       name_en:       editForm.name_en,
@@ -151,11 +245,17 @@ async function saveEdit() {
       series_code:   editForm.series_code   || null,
       series_name:   editForm.series_name   || null,
       model_code:    editForm.model_code    || null,
-    })
+    }
+    // 仅当图片有变化时才携带 cover_image 字段
+    if (coverImageValue !== undefined) body.cover_image = coverImageValue
+
+    const res = await http.post('/api/product/finished', body)
     if (res.success) {
-      // 通过与原始 codes 对比决定增删，不依赖 state（state 仅用于 UI）
-      const finishedId  = props.row.id
-      const activeCodes = new Set(editForm.packaged_tags.filter(t => t.state !== 'delete').map(t => t.value))
+      // 新记录用返回的 id，已有记录用 props.row.id
+      const finishedId = res.data?.id ?? props.row.id
+
+      // ── 产成品清单同步（与原始 codes 对比增删）──
+      const activeCodes = new Set(editForm.packaged_tags.filter(t => t.state !== 'deleted').map(t => t.value))
       const toRemove = [...originalPackagedCodes.value].filter(c => !activeCodes.has(c))
       const toAdd    = [...activeCodes].filter(c => !originalPackagedCodes.value.has(c))
       for (const code of toRemove) {
@@ -166,7 +266,30 @@ async function saveEdit() {
         const pid = packagedStore.map[code]?.id
         if (pid) await http.post(`/api/product/finished/${finishedId}/packaged/${pid}`)
       }
+
+      // ── 标签同步（与原始 tag 名称对比增删）──
+      const activeTagNames = editForm.tag_names.filter(n => n)
+      const toRemoveTags   = [...originalTagNames.value].filter(n => !activeTagNames.includes(n))
+      const toAddTags      = activeTagNames.filter(n => !originalTagNames.value.has(n))
+      for (const name of toAddTags) {
+        // 若 tag 不在选项库中，先创建
+        let tag = tagOptions.value.find(t => t.name === name)
+        if (!tag) {
+          const createRes = await http.post('/api/product/tags/', { name, color: '#c4883a' })
+          if (createRes.success) {
+            tag = createRes.data
+            tagOptions.value.push(tag)   // 更新本地缓存
+          }
+        }
+        if (tag?.id) await http.post(`/api/product/tags/finished/${finishedId}/${tag.id}`)
+      }
+      for (const name of toRemoveTags) {
+        const tag = tagOptions.value.find(t => t.name === name)
+        if (tag?.id) await http.delete(`/api/product/tags/finished/${finishedId}/${tag.id}`)
+      }
+
       editing.value = false
+      ElMessage.success('保存完成')
       emit('saved')
     }
   } finally {
@@ -214,6 +337,24 @@ async function ensureTagOptionsLoaded() {
   } catch {}
 }
 
+// 判断标签名是否在 finished 原有关联里（不在则为本次新增）
+function isExistingTag(name) {
+  return originalTagNames.value.has(name)
+}
+
+// ── 编辑模式：根据产成品清单实时计算体积/毛重/净重 ──────────
+function sumPackaged(field) {
+  const active = editForm.packaged_tags.filter(t => t.state !== 'deleted')
+  const total = active.reduce((acc, t) => {
+    const val = packagedStore.map[t.value]?.[field]
+    return acc + (val != null ? Number(val) : 0)
+  }, 0)
+  return total > 0 ? parseFloat(total.toFixed(3)) : null
+}
+const editVolume      = computed(() => sumPackaged('volume'))
+const editGrossWeight = computed(() => sumPackaged('gross_weight'))
+const editNetWeight   = computed(() => sumPackaged('net_weight'))
+
 // ── 分类树（编辑时懒加载）────────────────────────
 const categoryTree = ref([])
 const treeLoaded   = ref(false)
@@ -238,15 +379,17 @@ const seriesDisabled     = computed(() => !editForm.category_name)
 const seriesNameReadonly = computed(() => !!selectedSeriesObj.value)
 const modelDisabled      = computed(() => !editForm.series_code)
 
-// 品类变化 → 清空下级
+// 品类变化 → 清空下级（初始化期间跳过）
 watch(() => editForm.category_name, () => {
+  if (initializing.value) return
   editForm.series_code = ''
   editForm.series_name = ''
   editForm.model_code  = ''
 })
 
-// 系列编码变化 → 自动填充系列名称 / 清空型号
+// 系列编码变化 → 自动填充系列名称 / 清空型号（初始化期间跳过）
 watch(() => editForm.series_code, (code) => {
+  if (initializing.value) return
   editForm.model_code = ''
   if (!code) {
     editForm.series_name = ''
@@ -281,14 +424,63 @@ async function suggestSeriesName(query, cb) {
   cb(series.filter(s => !query || s.name.includes(query)).map(s => ({ value: s.name })))
 }
 
-// 型号编码候选（限当前系列下，若系列不在树中则显示全部）
+// 型号简码候选（限当前系列下，若系列不在树中则显示全部）
 async function suggestModelCode(query, cb) {
   await ensureTreeLoaded()
   const models = selectedSeriesObj.value
     ? (selectedSeriesObj.value.models || [])
     : categoryTree.value.flatMap(c => (c.series || []).flatMap(s => s.models || []))
-  cb(models.filter(m => !query || m.code.includes(query)).map(m => ({ value: m.code })))
+  cb(models.filter(m => !query || (m.model_code || '').includes(query)).map(m => ({ value: m.model_code })))
 }
+
+// ── 表单校验 ──────────────────────────────────────
+const validations = computed(() => {
+  if (!editing.value) return {}
+  const errs = {}
+  const code = props.row.code
+
+  // 中文名称：必填（model_name 无需唯一性约束）
+  const name = editForm.name.trim()
+  if (!name) {
+    errs.name = '中文名称不能为空'
+  }
+
+  // 英文名称：外贸时必填；有值时唯一
+  const nameEn = editForm.name_en.trim()
+  if (editForm.market_foreign && !nameEn) {
+    errs.name_en = '勾选外贸时英文名称不能为空'
+  } else if (nameEn && finishedStore.rawItems.some(r => r.code !== code && r.name_en === nameEn)) {
+    errs.name_en = '与其他成品英文名称重复'
+  }
+
+  // 品类编码：必填
+  if (!editForm.category_name.trim()) errs.category_name = '品类编码不能为空'
+
+  // 系列编码：必填
+  if (!editForm.series_code.trim()) errs.series_code = '系列编码不能为空'
+
+  // 系列名称：必填
+  if (!editForm.series_name.trim()) errs.series_name = '系列名称不能为空'
+
+  // 型号简码：必填 + 唯一
+  const mc = editForm.model_code.trim()
+  if (!mc) {
+    errs.model_code = '型号简码不能为空'
+  } else if (finishedStore.rawItems.some(r => r.code !== code && r.model_code === mc)) {
+    errs.model_code = '与其他成品型号简码重复'
+  }
+
+  // 产成品清单：非空 + 无 not-in-library
+  const active = editForm.packaged_tags.filter(t => t.state !== 'deleted')
+  if (active.length === 0) {
+    errs.packaged_tags = '产成品清单不能为空'
+  } else if (active.some(t => !packagedStore.map[t.value])) {
+    errs.packaged_tags = '清单中存在未入库的产成品，请移除后再提交'
+  }
+
+  return errs
+})
+const formValid = computed(() => Object.keys(validations.value).length === 0)
 </script>
 
 <template>
@@ -306,7 +498,7 @@ async function suggestModelCode(query, cb) {
             <button class="eb eb-edit" @click.stop="startEdit">✎ 编辑</button>
           </template>
           <template v-else-if="canEditProduct && editing">
-            <button class="eb eb-save" :disabled="saving" @click.stop="saveEdit">
+            <button class="eb eb-save" :disabled="saving || !formValid" @click.stop="saveEdit">
               {{ saving ? '保存中…' : '✓ 提交' }}
             </button>
             <button class="eb eb-cancel" @click.stop="cancelEdit">× 取消</button>
@@ -324,8 +516,14 @@ async function suggestModelCode(query, cb) {
           @mouseleave="imgHover = false; addMenuVisible = false"
         >
           <!-- 有图片 -->
-          <template v-if="row.cover_image">
-            <img :src="row.cover_image" class="ec-img-photo" alt="封面图" />
+          <template v-if="localCoverImage || row.cover_image">
+            <img
+              :src="localCoverImage || row.cover_image"
+              class="ec-img-photo"
+              :class="{ 'ec-img-photo--viewable': !editing }"
+              alt="封面图"
+              @click="!editing && previewImage()"
+            />
           </template>
           <!-- 无图片 -->
           <template v-else>
@@ -333,22 +531,14 @@ async function suggestModelCode(query, cb) {
             <span class="ec-img-hint">暂无图片</span>
           </template>
 
-          <!-- 非编辑：点击预览 -->
-          <div v-if="!editing && row.cover_image && imgHover"
-            class="ec-img-overlay"
-            @click="previewImage"
-          >
-            <el-icon class="ov-icon"><ZoomIn /></el-icon>
-          </div>
-
           <!-- 编辑状态遮罩：4个按钮 -->
           <div v-if="editing && imgHover" class="ec-img-overlay ec-img-overlay-edit">
             <!-- 查看 -->
-            <button class="ov-btn" :disabled="!row.cover_image" @click.stop="previewImage">
+            <button class="ov-btn" :disabled="!localCoverImage && !row.cover_image" @click.stop="previewImage">
               <el-icon><ZoomIn /></el-icon>
             </button>
             <!-- 编辑（裁切） -->
-            <button class="ov-btn" :disabled="!row.cover_image" @click.stop="editImage">
+            <button class="ov-btn" :disabled="!localCoverImage && !row.cover_image" @click.stop="editImage">
               <el-icon><EditPen /></el-icon>
             </button>
             <!-- 新增（有子菜单） -->
@@ -362,16 +552,17 @@ async function suggestModelCode(query, cb) {
               </div>
             </div>
             <!-- 删除 -->
-            <button class="ov-btn ov-btn-danger" :disabled="!row.cover_image" @click.stop="deleteImage">
+            <button class="ov-btn ov-btn-danger" :disabled="!localCoverImage && !row.cover_image" @click.stop="deleteImage">
               <el-icon><Delete /></el-icon>
             </button>
           </div>
         </div>
 
-        <!-- 图片预览弹窗（el-image-viewer） -->
+        <!-- 图片预览（teleported 到 body，支持滚轮缩放/旋转） -->
         <el-image-viewer
-          v-if="imgPreview && row.cover_image"
-          :url-list="[row.cover_image]"
+          v-if="imgPreview && (localCoverImage || row.cover_image)"
+          :url-list="[localCoverImage || row.cover_image]"
+          :teleported="true"
           @close="imgPreview = false"
         />
 
@@ -386,7 +577,7 @@ async function suggestModelCode(query, cb) {
             <div class="eg-cell eg-full">
               <span class="eg-lbl">中文名称</span>
               <span class="eg-val">
-                <span class="eg-txt">{{ row.name || '—' }}</span>
+                <span class="eg-txt">{{ (row.status === 'recorded' && row.model_name) ? row.model_name : (row.name || '—') }}</span>
                 <span v-if="row.market === 'domestic' || row.market === 'both'" class="eg-inner-tag eg-tag-domestic">内销</span>
               </span>
             </div>
@@ -410,9 +601,9 @@ async function suggestModelCode(query, cb) {
             <div class="eg-cell"><span class="eg-lbl eg-lbl-em">上市日期</span><span class="eg-val">{{ row.listed_yymm || '—' }}</span></div>
           </div>
 
-          <!-- 行4：型号编码 / 系列名称 / 退市年月 -->
+          <!-- 行4：型号简码 / 系列名称 / 退市年月 -->
           <div class="eg-row">
-            <div class="eg-cell"><span class="eg-lbl">型号编码</span><span class="eg-val eg-mono">{{ row.model_code || '—' }}</span></div>
+            <div class="eg-cell"><span class="eg-lbl">型号简码</span><span class="eg-val eg-mono">{{ row.model_code || '—' }}</span></div>
             <div class="eg-cell"><span class="eg-lbl">系列名称</span><span class="eg-val">{{ row.series_name || '—' }}</span></div>
             <div class="eg-cell"><span class="eg-lbl eg-lbl-em">退市日期</span><span class="eg-val">{{ row.delisted_yymm || '—' }}</span></div>
           </div>
@@ -439,7 +630,15 @@ async function suggestModelCode(query, cb) {
           <div class="eg-row">
             <div class="eg-cell eg-full">
               <span class="eg-lbl">标签</span>
-              <span class="eg-val eg-dim">暂未定义</span>
+              <span class="eg-val">
+                <span
+                  v-for="tag in (row.tags || [])"
+                  :key="tag.id"
+                  class="ec-tag"
+                  :style="{ background: tag.color + '22', borderColor: tag.color, color: tag.color }"
+                >{{ tag.name }}</span>
+                <span v-if="!(row.tags || []).length" class="eg-dim">—</span>
+              </span>
             </div>
           </div>
 
@@ -451,7 +650,9 @@ async function suggestModelCode(query, cb) {
           <!-- 行1：中文名称 + 内销checkbox -->
           <div class="eg-row eg-row-edit">
             <div class="eg-cell eg-full">
-              <span class="eg-lbl eg-lbl-edit">中文名称</span>
+              <el-tooltip :content="validations.name" :disabled="!validations.name" placement="top">
+                <span class="eg-lbl eg-lbl-edit" :class="{ 'eg-lbl-error': validations.name }">中文名称</span>
+              </el-tooltip>
               <span class="eg-val eg-val-inp">
                 <el-autocomplete v-model="editForm.name" :fetch-suggestions="suggestName"
                   placeholder="中文名称" class="ei-auto" clearable />
@@ -463,7 +664,9 @@ async function suggestModelCode(query, cb) {
           <!-- 行2：英文名称 + 外贸checkbox -->
           <div class="eg-row eg-row-edit">
             <div class="eg-cell eg-full">
-              <span class="eg-lbl eg-lbl-edit">英文名称</span>
+              <el-tooltip :content="validations.name_en" :disabled="!validations.name_en" placement="top">
+                <span class="eg-lbl eg-lbl-edit" :class="{ 'eg-lbl-error': validations.name_en }">英文名称</span>
+              </el-tooltip>
               <span class="eg-val eg-val-inp">
                 <el-autocomplete v-model="editForm.name_en" :fetch-suggestions="suggestNameEn"
                   placeholder="英文名称（选填）" class="ei-auto" clearable />
@@ -475,14 +678,18 @@ async function suggestModelCode(query, cb) {
           <!-- 行3：品类 / 系列编码 / 上市年月 -->
           <div class="eg-row eg-row-edit">
             <div class="eg-cell eg-cell-edit">
-              <span class="eg-lbl eg-lbl-edit">品类编码</span>
+              <el-tooltip :content="validations.category_name" :disabled="!validations.category_name" placement="top">
+                <span class="eg-lbl eg-lbl-edit" :class="{ 'eg-lbl-error': validations.category_name }">品类编码</span>
+              </el-tooltip>
               <span class="eg-val eg-val-inp">
                 <el-autocomplete v-model="editForm.category_name" :fetch-suggestions="suggestCategory"
                   placeholder="品类" class="ei-auto" clearable />
               </span>
             </div>
             <div class="eg-cell eg-cell-edit">
-              <span class="eg-lbl eg-lbl-edit">系列编码</span>
+              <el-tooltip :content="validations.series_code" :disabled="!validations.series_code" placement="top">
+                <span class="eg-lbl eg-lbl-edit" :class="{ 'eg-lbl-error': validations.series_code }">系列编码</span>
+              </el-tooltip>
               <span class="eg-val eg-val-inp">
                 <el-autocomplete v-model="editForm.series_code" :fetch-suggestions="suggestSeriesCode"
                   placeholder="系列编码" class="ei-auto" clearable :disabled="seriesDisabled" />
@@ -497,17 +704,21 @@ async function suggestModelCode(query, cb) {
             </div>
           </div>
 
-          <!-- 行4：型号编码 / 系列名称 / 退市年月 -->
+          <!-- 行4：型号简码 / 系列名称 / 退市年月 -->
           <div class="eg-row eg-row-edit">
             <div class="eg-cell eg-cell-edit">
-              <span class="eg-lbl eg-lbl-edit">型号编码</span>
+              <el-tooltip :content="validations.model_code" :disabled="!validations.model_code" placement="top">
+                <span class="eg-lbl eg-lbl-edit" :class="{ 'eg-lbl-error': validations.model_code }">型号简码</span>
+              </el-tooltip>
               <span class="eg-val eg-val-inp">
                 <el-autocomplete v-model="editForm.model_code" :fetch-suggestions="suggestModelCode"
-                  placeholder="型号编码" class="ei-auto" clearable :disabled="modelDisabled" />
+                  placeholder="型号简码" class="ei-auto" clearable :disabled="modelDisabled" />
               </span>
             </div>
             <div class="eg-cell eg-cell-edit">
-              <span class="eg-lbl eg-lbl-edit">系列名称</span>
+              <el-tooltip :content="validations.series_name" :disabled="!validations.series_name" placement="top">
+                <span class="eg-lbl eg-lbl-edit" :class="{ 'eg-lbl-error': validations.series_name }">系列名称</span>
+              </el-tooltip>
               <span class="eg-val eg-val-inp">
                 <el-autocomplete v-model="editForm.series_name" :fetch-suggestions="suggestSeriesName"
                   placeholder="系列名称" class="ei-auto" clearable
@@ -523,31 +734,55 @@ async function suggestModelCode(query, cb) {
             </div>
           </div>
 
-          <!-- 行5：体积 / 毛重 / 净重（只读，不加 eg-row-edit） -->
+          <!-- 行5：体积 / 毛重 / 净重（只读，由产成品清单实时计算） -->
           <div class="eg-row">
-            <div class="eg-cell"><span class="eg-lbl">体积 (m³)</span><span class="eg-val">{{ row.total_volume ?? '—' }}</span></div>
-            <div class="eg-cell"><span class="eg-lbl">毛重 (kg)</span><span class="eg-val">{{ row.total_gross_weight ?? '—' }}</span></div>
-            <div class="eg-cell"><span class="eg-lbl">净重 (kg)</span><span class="eg-val">{{ row.total_net_weight ?? '—' }}</span></div>
+            <div class="eg-cell"><span class="eg-lbl">体积 (m³)</span><span class="eg-val">{{ editVolume ?? '—' }}</span></div>
+            <div class="eg-cell"><span class="eg-lbl">毛重 (kg)</span><span class="eg-val">{{ editGrossWeight ?? '—' }}</span></div>
+            <div class="eg-cell"><span class="eg-lbl">净重 (kg)</span><span class="eg-val">{{ editNetWeight ?? '—' }}</span></div>
           </div>
 
           <!-- 行6：产成品清单 → GEditTagList -->
           <div class="eg-row eg-row-edit eg-row-grow">
-            <div class="eg-cell eg-full" style="align-items: flex-start;">
-              <span class="eg-lbl eg-lbl-edit" style="align-self: stretch;">产成品清单</span>
-              <span class="eg-val eg-val-inp" style="align-items: flex-start; padding: 4px 6px;">
+            <div class="eg-cell eg-full">
+              <el-tooltip :content="validations.packaged_tags" :disabled="!validations.packaged_tags" placement="top">
+                <span class="eg-lbl eg-lbl-edit" :class="{ 'eg-lbl-error': validations.packaged_tags }" style="align-self: stretch;">产成品清单</span>
+              </el-tooltip>
+              <span class="eg-val eg-val-inp" style="align-items: flex-start; ">
                 <GEditTagList v-model="editForm.packaged_tags" :options="packagedOptions" />
               </span>
             </div>
           </div>
 
-          <!-- 行7：标签 → el-select -->
+          <!-- 行7：标签 → el-select，最多展示6个，新建标签 type=primary -->
           <div class="eg-row eg-row-edit">
             <div class="eg-cell eg-full">
               <span class="eg-lbl eg-lbl-edit">标签</span>
               <span class="eg-val eg-val-inp">
                 <el-select v-model="editForm.tag_names"
-                  multiple collapse-tags collapse-tags-tooltip
-                  allow-create filterable placeholder="选择标签" class="ei-sel">
+                  multiple allow-create filterable placeholder="选择标签" class="ei-sel">
+                  <template #tag="{ data }">
+                    <el-tag
+                      v-for="item in data.slice(0, 6)"
+                      :key="item.value"
+                      :type="isExistingTag(item.value) ? '' : 'primary'"
+                      size="small" closable
+                      @close="editForm.tag_names = editForm.tag_names.filter(n => n !== item.value)"
+                    >{{ item.value }}</el-tag>
+                    <el-tooltip v-if="data.length > 6" placement="top" effect="light">
+                      <template #content>
+                        <div class="tag-tip">
+                          <el-tag
+                            v-for="item in data.slice(6)"
+                            :key="item.value"
+                            :type="isExistingTag(item.value) ? '' : 'primary'"
+                            size="small" closable
+                            @close="editForm.tag_names = editForm.tag_names.filter(n => n !== item.value)"
+                          >{{ item.value }}</el-tag>
+                        </div>
+                      </template>
+                      <el-tag type="info" size="small">+{{ data.length - 6 }}</el-tag>
+                    </el-tooltip>
+                  </template>
                   <el-option
                     v-for="tag in tagOptions"
                     :key="tag.id"
@@ -583,9 +818,45 @@ async function suggestModelCode(query, cb) {
         </div>
       </div>
 
+      <!-- 提交遮罩 -->
+      <div v-if="saving" class="ec-saving-mask">
+        <div class="ec-saving-spinner"></div>
+        <span class="ec-saving-text">正在提交…</span>
+      </div>
+
     </div><!-- /ec-main -->
 
   </div>
+
+  <!-- ── 裁剪弹窗 ──────────────────────────────── -->
+  <el-dialog
+    v-model="cropDialogVisible"
+    title="裁剪图片"
+    width="760"
+    :close-on-click-modal="false"
+    append-to-body
+    class="crop-dialog"
+    @opened="initCropper"
+    @closed="closeCropDialog"
+  >
+    <!-- 裁剪区域：固定高度，cropperjs 在此区域内渲染 -->
+    <div class="crop-wrap">
+      <img ref="cropImgRef" :src="cropImgSrc" class="crop-src-img" alt="" />
+    </div>
+    <!-- 裁剪选项栏 -->
+    <div class="crop-controls">
+      <label class="crop-square-toggle">
+        <el-checkbox v-model="cropSquare" size="small" />
+        <span>正方形裁剪</span>
+      </label>
+      <span class="crop-output-hint">输出尺寸：600 × 600 px</span>
+    </div>
+    <template #footer>
+      <button class="crop-btn crop-btn-cancel" @click="closeCropDialog">取消</button>
+      <button class="crop-btn crop-btn-confirm" @click="applyCrop">应用裁剪</button>
+    </template>
+  </el-dialog>
+
 </template>
 
 <style scoped>
@@ -632,6 +903,7 @@ async function suggestModelCode(query, cb) {
 
 /* ── 大卡片容器 ───────────────────────────────── */
 .ec-main {
+  position: relative;
   width: 1200px;
   margin-left: 25px;
   background: #fff;
@@ -672,6 +944,13 @@ async function suggestModelCode(query, cb) {
   object-fit: cover;
   display: block;
   border-radius: 8px;
+  transition: transform 0.2s ease;
+}
+.ec-img-photo--viewable {
+  cursor: pointer;
+}
+.ec-img-photo--viewable:hover {
+  transform: scale(1.06);
 }
 
 /* ── 遮罩（查看 / 编辑两种） ────────────────────── */
@@ -788,6 +1067,32 @@ async function suggestModelCode(query, cb) {
 }
 .eg-lbl-em { color: #3a3028; font-weight: 700; }
 
+/* 校验失败时 label 变红 */
+.eg-lbl-error { color: #d05a3c !important; }
+
+/* 提交遮罩 */
+.ec-saving-mask {
+  position: absolute; inset: 0;
+  background: rgba(255, 255, 255, 0.72);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 10px;
+  z-index: 10;
+  border-radius: 10px;
+}
+.ec-saving-spinner {
+  width: 28px; height: 28px;
+  border: 3px solid #e8ddd0;
+  border-top-color: #c4883a;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.ec-saving-text {
+  font-size: 13px;
+  color: #6b5e4e;
+}
+
 /* 编辑模式 label：加左/上/下边框（右边框已有） */
 .eg-lbl-edit {
   border-left: 1px solid #e8ddd0;
@@ -816,10 +1121,18 @@ async function suggestModelCode(query, cb) {
 
 /* 产成品 tag */
 .pk-tag {
-  display: inline-block; font-size: 11px; color: #3a7bc8;
+  display: inline-block; font-size: 13px; color: #3a7bc8;
   background: #edf4ff; border: 1px solid #c5d9f5;
-  border-radius: 3px; padding: 1px 5px; margin-right: 3px; flex-shrink: 0;
+  border-radius: 4px; padding: 2px 8px; margin-right: 4px; flex-shrink: 0;
   font-family: 'Microsoft YaHei UI', 'Microsoft YaHei', monospace;
+}
+
+/* 产品标签 tag（查看模式行7） */
+.ec-tag {
+  display: inline-block; font-size: 13px; font-weight: 500;
+  border: 1px solid; border-radius: 5px;
+  padding: 2px 10px; margin-right: 5px; flex-shrink: 0;
+  font-family: 'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif;
 }
 
 /* ── 编辑模式行：取消整行外边框和背景 ─────────── */
@@ -884,6 +1197,8 @@ async function suggestModelCode(query, cb) {
 .ei-sel :deep(.el-select__tags-text)          { font-size: 12px; }
 .ei-sel :deep(.el-tag:first-child)            { margin-left: 2px; }
 
+/* tooltip 内的 tag 列表 */
+.tag-tip { display: flex; flex-wrap: wrap; gap: 4px; max-width: 240px; }
 
 /* checkbox */
 .ei-check { flex-shrink: 0; margin-left: auto; }
@@ -904,4 +1219,47 @@ async function suggestModelCode(query, cb) {
 .eg-sec-hd:hover { background: #faf5ee; }
 .eg-arr { color: #aaa; width: 12px; font-size: 11px; }
 .eg-sec-bd { padding: 8px 12px 10px 30px; }
+
+/* ── 裁剪弹窗 ────────────────────────────────── */
+/* 去除 dialog body 内边距，让 cropperjs 铺满 */
+:global(.crop-dialog .el-dialog__body) {
+  padding: 0 !important;
+}
+
+/* 裁剪容器：固定高度，cropperjs 在此布局 */
+.crop-wrap {
+  height: 460px;
+  background: #1a1a1a;
+  /* 不加 overflow:hidden，cropperjs 自己管理 */
+}
+/* 初始图片样式，cropperjs 初始化后会接管 */
+.crop-src-img {
+  display: block;
+  max-width: 100%;
+}
+
+/* 裁剪选项栏 */
+.crop-controls {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 16px;
+  border-top: 1px solid #f0e8dc;
+  background: #faf7f2;
+}
+.crop-square-toggle {
+  display: flex; align-items: center; gap: 6px;
+  cursor: pointer; font-size: 13px; color: #3a3028;
+}
+.crop-output-hint { font-size: 12px; color: #aaa; }
+
+/* 底部按钮 */
+.crop-btn {
+  padding: 6px 20px; border-radius: 7px;
+  font-size: 13px; font-family: inherit; cursor: pointer;
+  border: 1px solid #e0d4c0; transition: all 0.15s;
+}
+.crop-btn-cancel  { background: #fff; color: #6b5e4e; }
+.crop-btn-cancel:hover { background: #f5f0e8; }
+.crop-btn-confirm { background: #c4883a; color: #fff; border-color: #c4883a; margin-left: 8px; }
+.crop-btn-confirm:hover { background: #e09050; border-color: #e09050; }
+
 </style>

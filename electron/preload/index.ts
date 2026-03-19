@@ -22,9 +22,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
   },
 
-  // 原生对话框（示例）
+  // 原生对话框
   showOpenDialog: (options: Electron.OpenDialogOptions) =>
     ipcRenderer.invoke('show-open-dialog', options),
+
+  // 读取本地文件为 base64 data URL（绕过 file:// 安全限制）
+  readFileAsDataURL: (filePath: string) =>
+    ipcRenderer.invoke('read-file-as-data-url', filePath),
 
   // 最小化应用
   minimizeApp: () => ipcRenderer.send('minimize-app'),

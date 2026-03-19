@@ -124,7 +124,7 @@ async function handleSubmit() {
         const model_code = (formData.value.model_code || '').trim()
         const name_en    = (formData.value.name_en    || '').trim()
         if (!code)       { formError.value = 'ERP编码不能为空';  submitting.value = false; return }
-        if (!model_code) { formError.value = '型号编码不能为空'; submitting.value = false; return }
+        if (!model_code) { formError.value = '型号简码不能为空'; submitting.value = false; return }
         res = await http.post('/api/category/models', {
           series_id: parentId, code, name, model_code, name_en
         })
@@ -142,7 +142,7 @@ async function handleSubmit() {
         const model_code = (formData.value.model_code || '').trim()
         const name_en    = (formData.value.name_en    || '').trim()
         if (!code)       { formError.value = 'ERP编码不能为空';  submitting.value = false; return }
-        if (!model_code) { formError.value = '型号编码不能为空'; submitting.value = false; return }
+        if (!model_code) { formError.value = '型号简码不能为空'; submitting.value = false; return }
         res = await http.put(`/api/category/models/${data.id}`, { code, name, model_code, name_en })
       }
     }
@@ -355,7 +355,7 @@ onMounted(loadTree)
                 <span class="meta-value">{{ selected.data.name_en || '—' }}</span>
               </div>
               <div v-if="selected.type === 'model'" class="meta-row">
-                <span class="meta-label">型号编码</span>
+                <span class="meta-label">型号简码</span>
                 <span class="meta-value code-val">{{ selected.data.model_code }}</span>
               </div>
             </template>
@@ -412,16 +412,16 @@ onMounted(loadTree)
             />
           </div>
 
-          <!-- 型号编码：仅 model 显示，必填 -->
+          <!-- 型号简码：仅 model 显示，必填 -->
           <div
             v-if="(createContext?.type || selected?.type) === 'model'"
             class="form-row"
           >
-            <label class="form-label">型号编码 <span class="required">*</span></label>
+            <label class="form-label">型号简码 <span class="required">*</span></label>
             <input
               v-model="formData.model_code"
               class="form-input"
-              placeholder="输入型号编码（简码）"
+              placeholder="输入型号简码（简码）"
               @keyup.enter="handleSubmit"
             />
           </div>

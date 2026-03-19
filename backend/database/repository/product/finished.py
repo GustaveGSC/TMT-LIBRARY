@@ -111,9 +111,12 @@ class FinishedRepository:
                 packaged_codes = [p.code for p in fin.packaged_list]
 
             item = {
+                # 主键（前端用于产成品/标签关联操作）
+                'id':            fin.id            if fin else None,
                 # 基础信息
                 'code':          raw.code,
                 'name':          raw.name,                           # ERP 原始名称（中文）
+                'model_name':    model.name    if model else None,   # 产品型号中文名（recorded 时展示用）
                 'name_en':       model.name_en if model else None,   # 英文名来自 product_model
                 # 分类层级
                 'category_name': category.name    if category else None,
@@ -129,10 +132,15 @@ class FinishedRepository:
                 # 时间
                 'listed_yymm':   fin.listed_yymm   if fin else None,
                 'delisted_yymm': fin.delisted_yymm if fin else None,
+                # 市场
+                'market':        fin.market        if fin else None,
+                # 封面图
+                'cover_image':   fin.cover_image   if fin else None,
                 # 状态
                 'status':        fin.status        if fin else 'unrecorded',
-                'finished_id':   fin.id            if fin else None,
                 'model_id':      fin.model_id      if fin else None,
+                # 标签
+                'tags':          [t.to_dict() for t in fin.tags] if fin else [],
             }
             items.append(item)
 
