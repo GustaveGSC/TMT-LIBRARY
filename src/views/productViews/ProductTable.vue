@@ -170,6 +170,38 @@ watch(
 onMounted(() => {
   if (finishedStore.rawItems.length > 0) requestAnimationFrame(() => calcColWidths())
 })
+
+// ── 产成品表动态列宽 ──────────────────────────
+const PK_COL_DEFS = [
+  { key: 'code',         header: '产成品编码',    pad: 40, min: 120, max: 240 },
+  { key: 'name',         header: '产成品名称',    pad: 40, min: 120, max: 280 },
+  { key: 'length',       header: '包装长度 (mm)', pad: 32, min: 100, max: 160 },
+  { key: 'width',        header: '包装宽度 (mm)', pad: 32, min: 100, max: 160 },
+  { key: 'height',       header: '包装高度 (mm)', pad: 32, min: 100, max: 160 },
+  { key: 'volume',       header: '包装体积 (m³)', pad: 32, min: 100, max: 160 },
+  { key: 'gross_weight', header: '毛重 (kg)',     pad: 32, min: 80,  max: 120 },
+  { key: 'net_weight',   header: '净重 (kg)',     pad: 32, min: 80,  max: 120 },
+]
+
+const pkColWidths = reactive({})
+
+function calcPkColWidths() {
+  const items = finishedStore.selectedPackaged
+  if (!items?.length) return
+  for (const def of PK_COL_DEFS) {
+    let maxW = measureText(def.header) * 1.1
+    for (const row of items) {
+      const w = measureText(row[def.key] ?? '')
+      if (w > maxW) maxW = w
+    }
+    pkColWidths[def.key] = Math.min(Math.max(Math.ceil(maxW) + def.pad, def.min), def.max)
+  }
+}
+
+watch(
+  () => finishedStore.selectedPackaged,
+  (items) => { if (items?.length > 0) requestAnimationFrame(() => calcPkColWidths()) }
+)
 </script>
 
 <template>
@@ -195,7 +227,6 @@ onMounted(() => {
         <el-table
           :data="finishedStore.pagedItems"
           :row-class-name="rowClass"
-          v-loading="finishedStore.loading"
           size="small"
           height="100%"
           border
@@ -442,17 +473,17 @@ onMounted(() => {
         <template v-if="!finishedStore.selected">
           <div class="pk-empty">请先选择一行成品</div>
         </template>
-        <el-table v-else :data="finishedStore.selectedPackaged" size="small" height="100%">
-          <el-table-column prop="code"         label="产成品编码"    min-width="148">
-            <template #default="{ row }"><span class="pk-code-tag">{{ row.code }}</span></template>
+        <el-table v-else :data="finishedStore.selectedPackaged" size="small" height="100%" border :tooltip-effect="'light'" :show-overflow-tooltip="true">
+          <el-table-column resizable show-overflow-tooltip label="产成品编码"    :width="pkColWidths['code']         || 148">
+            <template #default="{ row }"><span style="font-weight:700;color:#2c2420;font-size:12px;">{{ row.code }}</span></template>
           </el-table-column>
-          <el-table-column prop="name"         label="产成品名称"    min-width="140"/>
-          <el-table-column prop="length"       label="包装长度 (mm)" min-width="110" align="right"><template #default="{ row }"><span class="dim">{{ row.length ?? '—' }}</span></template></el-table-column>
-          <el-table-column prop="width"        label="包装宽度 (mm)" min-width="110" align="right"><template #default="{ row }"><span class="dim">{{ row.width ?? '—' }}</span></template></el-table-column>
-          <el-table-column prop="height"       label="包装高度 (mm)" min-width="110" align="right"><template #default="{ row }"><span class="dim">{{ row.height ?? '—' }}</span></template></el-table-column>
-          <el-table-column prop="volume"       label="包装体积 (m³)" min-width="110" align="right"><template #default="{ row }"><span class="dim">{{ row.volume ?? '—' }}</span></template></el-table-column>
-          <el-table-column prop="gross_weight" label="毛重 (kg)"     min-width="86"  align="right"><template #default="{ row }"><span class="dim">{{ row.gross_weight ?? '—' }}</span></template></el-table-column>
-          <el-table-column prop="net_weight"   label="净重 (kg)"     min-width="86"  align="right"><template #default="{ row }"><span class="dim">{{ row.net_weight ?? '—' }}</span></template></el-table-column>
+          <el-table-column resizable show-overflow-tooltip prop="name"         label="产成品名称"    :width="pkColWidths['name']         || 140"/>
+          <el-table-column resizable show-overflow-tooltip prop="length"       label="包装长度 (mm)" :width="pkColWidths['length']       || 110" align="right"><template #default="{ row }"><span class="dim">{{ row.length ?? '—' }}</span></template></el-table-column>
+          <el-table-column resizable show-overflow-tooltip prop="width"        label="包装宽度 (mm)" :width="pkColWidths['width']        || 110" align="right"><template #default="{ row }"><span class="dim">{{ row.width ?? '—' }}</span></template></el-table-column>
+          <el-table-column resizable show-overflow-tooltip prop="height"       label="包装高度 (mm)" :width="pkColWidths['height']       || 110" align="right"><template #default="{ row }"><span class="dim">{{ row.height ?? '—' }}</span></template></el-table-column>
+          <el-table-column resizable show-overflow-tooltip prop="volume"       label="包装体积 (m³)" :width="pkColWidths['volume']       || 110" align="right"><template #default="{ row }"><span class="dim">{{ row.volume ?? '—' }}</span></template></el-table-column>
+          <el-table-column resizable show-overflow-tooltip prop="gross_weight" label="毛重 (kg)"     :width="pkColWidths['gross_weight'] || 86"  align="right"><template #default="{ row }"><span class="dim">{{ row.gross_weight ?? '—' }}</span></template></el-table-column>
+          <el-table-column resizable show-overflow-tooltip prop="net_weight"   label="净重 (kg)"     :width="pkColWidths['net_weight']   || 86"  align="right"><template #default="{ row }"><span class="dim">{{ row.net_weight ?? '—' }}</span></template></el-table-column>
         </el-table>
       </div>
     </div><!-- /packaged-card -->

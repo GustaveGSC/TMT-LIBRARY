@@ -10,6 +10,7 @@ import 'cropperjs/dist/cropper.css'
 import { useFinishedStore } from '@/stores/product/finished'
 import { usePackagedStore } from '@/stores/product/packaged'
 import GEditTagList from '@/components/common/GEditTagList.vue'
+import modelTipImg from '@/assets/images/image_model_tip.png'
 
 // ── Props ─────────────────────────────────────────
 const props = defineProps({
@@ -26,6 +27,7 @@ const { canEditProduct } = usePermission()
 const editing      = ref(false)
 const saving       = ref(false)
 const initializing = ref(false)  // startEdit 初始化期间，跳过联动 watch
+const moreMenuVisible = ref(false)  // ··· 更多菜单开关
 
 // ── 图片相关状态 ──────────────────────────────────
 const imgHover        = ref(false)  // 编辑状态下鼠标悬停
@@ -160,7 +162,84 @@ function lc(row) {
 
 // ── 编辑 ──────────────────────────────────────────
 
+// ── 复制 / 粘贴 ───────────────────────────────
+
+// 复制当前卡片参数到系统剪切板（仅查看模式可用）
+async function copyCard() {
+  moreMenuVisible.value = false
+  const d = props.row
+  const payload = {
+    __type:        'tmt-finished-card',
+    name:          (d.status === 'recorded' && d.model_name) ? d.model_name : (d.name || ''),
+    name_en:       d.name_en       || '',
+    market:        d.market        || '',
+    category_name: d.category_name || '',
+    series_code:   d.series_code   || '',
+    series_name:   d.series_name   || '',
+    model_code:    d.model_code    || '',
+    listed_yymm:   d.listed_yymm   || '',
+    delisted_yymm: d.delisted_yymm || '',
+    status:        d.status        || 'unrecorded',
+    packaged_codes: (d.packaged_list || []).map(p => p?.code ?? p),
+    tag_names:     (d.tags || []).map(t => t.name),
+    cover_image:   localCoverImage.value || d.cover_image || '',
+  }
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(payload))
+    ElMessage.success('已复制卡片参数')
+  } catch {
+    ElMessage.error('复制失败，请检查权限')
+  }
+}
+
+// 将剪切板参数粘贴到编辑表单（仅编辑模式可用）
+async function pasteCard() {
+  moreMenuVisible.value = false
+  try {
+    const text = await navigator.clipboard.readText()
+    const payload = JSON.parse(text)
+    if (payload.__type !== 'tmt-finished-card') {
+      ElMessage.warning('剪切板内容格式不匹配')
+      return
+    }
+    // 确保候选数据已加载
+    await Promise.all([ensurePackagedOptionsLoaded(), ensureTagOptionsLoaded()])
+    initializing.value = true
+    Object.assign(editForm, {
+      name:            payload.name          || '',
+      name_en:         payload.name_en       || '',
+      status:          payload.status        || 'unrecorded',
+      listed_yymm:     payload.listed_yymm   || '',
+      delisted_yymm:   payload.delisted_yymm || '',
+      market:          payload.market        || '',
+      market_domestic: payload.market === 'domestic' || payload.market === 'both',
+      market_foreign:  payload.market === 'foreign'  || payload.market === 'both',
+      category_name:   payload.category_name || '',
+      series_code:     payload.series_code   || '',
+      series_name:     payload.series_name   || '',
+      model_code:      payload.model_code    || '',
+      packaged_tags:   (payload.packaged_codes || []).map(code => ({
+        value: code,
+        state: originalPackagedCodes.value.has(code) ? 'original' : 'added',
+      })),
+    })
+    // 粘贴封面图片（OSS URL 或清空）
+    localCoverImage.value = payload.cover_image || ''
+    await nextTick()
+    initializing.value = false
+    editForm.tag_names = payload.tag_names || []
+    ElMessage.success('已粘贴卡片参数')
+  } catch (e) {
+    if (e instanceof SyntaxError) {
+      ElMessage.warning('剪切板内容不是有效的卡片数据')
+    } else {
+      ElMessage.error('粘贴失败')
+    }
+  }
+}
+
 async function startEdit() {
+  moreMenuVisible.value = false
   const d = props.row
   const domestic = d.market === 'domestic' || d.market === 'both'
   const foreign  = d.market === 'foreign'  || d.market === 'both'
@@ -199,6 +278,7 @@ async function startEdit() {
   editForm.tag_names = initialTagNames
 }
 function cancelEdit() {
+  moreMenuVisible.value = false
   localCoverImage.value = savedCoverImage.value
   editing.value = false
 }
@@ -227,10 +307,16 @@ async function saveEdit() {
       if (uploadRes.success) {
         coverImageValue = uploadRes.data.url
         localCoverImage.value = coverImageValue   // 本地替换为 OSS URL，避免重复上传
+      } else {
+        ElMessage.error(uploadRes.message || '图片上传失败')
+        return
       }
     } else if (localCoverImage.value === '' && savedCoverImage.value !== '') {
       // 图片被删除
       coverImageValue = null
+    } else if (localCoverImage.value && localCoverImage.value !== (props.row.cover_image || '')) {
+      // 粘贴了来自其他卡片的 OSS URL，直接使用
+      coverImageValue = localCoverImage.value
     }
 
     const body = {
@@ -250,6 +336,10 @@ async function saveEdit() {
     if (coverImageValue !== undefined) body.cover_image = coverImageValue
 
     const res = await http.post('/api/product/finished', body)
+    if (!res.success) {
+      ElMessage.error(res.message || '保存失败，请重试')
+      return
+    }
     if (res.success) {
       // 新记录用返回的 id，已有记录用 props.row.id
       const finishedId = res.data?.id ?? props.row.id
@@ -288,6 +378,7 @@ async function saveEdit() {
         if (tag?.id) await http.delete(`/api/product/tags/finished/${finishedId}/${tag.id}`)
       }
 
+      moreMenuVisible.value = false
       editing.value = false
       ElMessage.success('保存完成')
       emit('saved')
@@ -301,13 +392,25 @@ async function saveEdit() {
 const finishedStore  = useFinishedStore()
 const packagedStore  = usePackagedStore()
 
-// 中文名称 / 英文名称：从 rawItems 本地匹配
+// 中文名称：使用与表格显示一致的 effective name
+// （recorded 且有 model_name → 用 model_name，否则用 import 的 name）
 function suggestName(query, cb) {
-  const list = query
-    ? finishedStore.getSuggestions('name', query)
-    : finishedStore.getTopSuggestions('name')
-  cb(list.map(v => ({ value: v })))
+  const q = (query || '').trim().toLowerCase()
+  const seen = new Set()
+  const result = []
+  for (const row of finishedStore.rawItems) {
+    const effective = (row.status === 'recorded' && row.model_name) ? row.model_name : (row.name || '')
+    if (!effective) continue
+    const lower = effective.toLowerCase()
+    if (q && !lower.includes(q)) continue
+    if (seen.has(lower)) continue
+    seen.add(lower)
+    result.push({ value: effective })
+    if (result.length >= 20) break
+  }
+  cb(result)
 }
+// 英文名称：从 rawItems 本地匹配
 function suggestNameEn(query, cb) {
   const list = query
     ? finishedStore.getSuggestions('name_en', query)
@@ -503,7 +606,22 @@ const formValid = computed(() => Object.keys(validations.value).length === 0)
             </button>
             <button class="eb eb-cancel" @click.stop="cancelEdit">× 取消</button>
           </template>
-          <button class="eb eb-more">···</button>
+          <!-- ··· 更多菜单 -->
+          <div class="eb-more-wrap">
+            <button class="eb eb-more" @click.stop="moreMenuVisible = !moreMenuVisible">···</button>
+            <div v-if="moreMenuVisible" class="eb-more-menu">
+              <div
+                class="eb-more-item"
+                :class="{ 'eb-more-item--disabled': editing }"
+                @click.stop="!editing && copyCard()"
+              >复制</div>
+              <div
+                class="eb-more-item"
+                :class="{ 'eb-more-item--disabled': !editing }"
+                @click.stop="editing && pasteCard()"
+              >粘贴</div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -708,7 +826,15 @@ const formValid = computed(() => Object.keys(validations.value).length === 0)
           <div class="eg-row eg-row-edit">
             <div class="eg-cell eg-cell-edit">
               <el-tooltip :content="validations.model_code" :disabled="!validations.model_code" placement="top">
-                <span class="eg-lbl eg-lbl-edit" :class="{ 'eg-lbl-error': validations.model_code }">型号简码</span>
+                <span class="eg-lbl eg-lbl-edit" :class="{ 'eg-lbl-error': validations.model_code }" style="display:flex;align-items:center;gap:6px;">
+                  型号简码
+                  <el-popover placement="bottom-start" trigger="click" :width="'auto'" popper-style="padding:8px;">
+                    <template #reference>
+                      <button class="mc-tip-btn" title="查看型号简码说明" @click.stop>?</button>
+                    </template>
+                    <img :src="modelTipImg" style="display:block;border-radius:6px;" />
+                  </el-popover>
+                </span>
               </el-tooltip>
               <span class="eg-val eg-val-inp">
                 <el-autocomplete v-model="editForm.model_code" :fetch-suggestions="suggestModelCode"
@@ -764,7 +890,7 @@ const formValid = computed(() => Object.keys(validations.value).length === 0)
                     <el-tag
                       v-for="item in data.slice(0, 6)"
                       :key="item.value"
-                      :type="isExistingTag(item.value) ? '' : 'primary'"
+                      :type="isExistingTag(item.value) ? undefined : 'primary'"
                       size="small" closable
                       @close="editForm.tag_names = editForm.tag_names.filter(n => n !== item.value)"
                     >{{ item.value }}</el-tag>
@@ -774,7 +900,7 @@ const formValid = computed(() => Object.keys(validations.value).length === 0)
                           <el-tag
                             v-for="item in data.slice(6)"
                             :key="item.value"
-                            :type="isExistingTag(item.value) ? '' : 'primary'"
+                            :type="isExistingTag(item.value) ? undefined : 'primary'"
                             size="small" closable
                             @close="editForm.tag_names = editForm.tag_names.filter(n => n !== item.value)"
                           >{{ item.value }}</el-tag>
@@ -895,7 +1021,29 @@ const formValid = computed(() => Object.keys(validations.value).length === 0)
 .eb-edit   { border-color: #c0d4f0; color: #3a7bc8; }
 .eb-edit:hover { background: #edf4ff; }
 .eb-more   { border-color: #ddd5c4; color: #8a7a6a; letter-spacing: 2px; padding: 4px 8px; }
+.eb-more-wrap { position: relative; }
+.eb-more-menu {
+  position: absolute; top: calc(100% + 4px); right: 0;
+  background: #fff; border: 1px solid #e8ddd0;
+  border-radius: 7px; overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+  white-space: nowrap; z-index: 50; min-width: 80px;
+}
+.eb-more-item {
+  padding: 8px 16px; font-size: 12px; color: #3a3028;
+  cursor: pointer; transition: background 0.12s;
+}
+.eb-more-item:hover:not(.eb-more-item--disabled) { background: #faf5ee; color: #c4883a; }
+.eb-more-item--disabled { color: #c8bfb0; cursor: not-allowed; }
 .eb-save   { background: #c4883a; border-color: #c4883a; color: #fff; }
+.mc-tip-btn {
+  flex-shrink: 0; width: 18px; height: 18px; border-radius: 50%;
+  border: 1.5px solid #c4883a; background: #fff7ed;
+  color: #c4883a; font-size: 11px; font-weight: 700; line-height: 1;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s; padding: 0; font-family: inherit;
+}
+.mc-tip-btn:hover { background: #c4883a; color: #fff; }
 .eb-save:hover:not(:disabled) { background: #b07830; }
 .eb-save:disabled { opacity: 0.6; cursor: not-allowed; }
 .eb-cancel { border-color: #ffa39e; color: #cf1322; }

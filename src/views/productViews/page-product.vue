@@ -77,18 +77,17 @@ const navItems = [
   { key: 'chart', label: '图表', img: iconEchart },
 ]
 
-// ── 概览数据（后续替换为接口）────────────────────
+// ── 概览数据 ──────────────────────────────────────
 const overviewStats = ref({
-  totalProducts:  0,
-  unprocessed:    0,
-  lastImportTime: null,
+  totalProducts:   0,
+  unprocessed:     0,
+  lastImportTime:  null,
+  daysSinceImport: null,
 })
 
-const categoryStats = ref([
-  { label: '学习桌', count: 0, color: '#c4883a' },
-  { label: '学习椅', count: 0, color: '#4a8fc0' },
-  { label: '学习灯', count: 0, color: '#6ab47a' },
-])
+// 分类配色循环
+const CAT_COLORS = ['#c4883a', '#4a8fc0', '#6ab47a', '#9c6fba', '#e07070', '#70aacc', '#e0a040', '#7abcaa']
+const categoryStats = ref([])
 
 // ── 返回首页并还原窗口尺寸 ────────────────────────
 function handleBack() {
@@ -106,10 +105,16 @@ onMounted(async () => {
     const res = await http.get('/api/product/stats')
     if (res.success) {
       overviewStats.value = {
-        totalProducts:  res.data.total          ?? 0,
-        unprocessed:    res.data.unprocessed     ?? 0,
-        lastImportTime: res.data.last_imported_at ?? null,
+        totalProducts:   res.data.total_finished   ?? 0,
+        unprocessed:     res.data.unprocessed      ?? 0,
+        lastImportTime:  res.data.last_imported_at ?? null,
+        daysSinceImport: res.data.days_since_import ?? null,
       }
+      categoryStats.value = (res.data.categories || []).map((cat, i) => ({
+        label: cat.description || '未分类',
+        count: cat.count,
+        color: CAT_COLORS[i % CAT_COLORS.length],
+      }))
     }
   } catch {}
 })
@@ -180,6 +185,9 @@ onMounted(async () => {
             <div class="stat-card">
               <div class="stat-label">最近导入时间</div>
               <div class="stat-value stat-time">{{ overviewStats.lastImportTime || '暂无' }}</div>
+              <div v-if="overviewStats.daysSinceImport !== null" class="stat-hint">
+                {{ overviewStats.daysSinceImport === 0 ? '今天导入' : `距今 ${overviewStats.daysSinceImport} 天` }}
+              </div>
             </div>
           </div>
 
