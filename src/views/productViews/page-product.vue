@@ -5,7 +5,7 @@ import { useRouter } from 'vue-router'
 import WindowControls from '@/components/common/WindowControls.vue'
 import ProductTable  from './ProductTable.vue'
 import ProductImage  from './ProductImage.vue'
-import { ArrowLeft, Upload, Setting, Folder, Collection } from '@element-plus/icons-vue'
+import { ArrowLeft, Upload, Setting, Folder, Collection, Memo } from '@element-plus/icons-vue'
 import { usePermission } from '@/composables/usePermission'
 import http from '@/api/http'
 
@@ -15,6 +15,7 @@ import ProductImport    from './ProductImport.vue'
 import ProductRules     from './ProductRules.vue'
 import ProductCategory  from './ProductCategory.vue'
 import ProductTag     from './ProductTag.vue'
+import ProductParam   from './ProductParam.vue'
 import iconTable  from '@/assets/icons/icon_table.png'
 import iconImage  from '@/assets/icons/icon_image.png'
 import iconEchart from '@/assets/icons/icon_echart.png'
@@ -65,6 +66,7 @@ const showImportDialog   = ref(false)
 const showRulesDialog    = ref(false)
 const showCategoryDialog = ref(false)
 const showTagDialog    = ref(false)
+const showParamDialog  = ref(false)
 
 // ── 顶部导航配置 ──────────────────────────────────
 const navItems = [
@@ -254,6 +256,13 @@ onMounted(async () => {
                 <div class="tool-btn-desc">维护成品标签及颜色</div>
               </div>
             </button>
+            <button class="tool-btn" @click="showParamDialog = true">
+              <div class="tool-btn-icon"><el-icon><Memo /></el-icon></div>
+              <div class="tool-btn-body">
+                <div class="tool-btn-title">参数管理</div>
+                <div class="tool-btn-desc">维护成品参数键名与分组</div>
+              </div>
+            </button>
           </div>
         </div>
 
@@ -292,6 +301,11 @@ onMounted(async () => {
     <!-- ── 标签管理弹窗 ────────────────────────────── -->
     <el-dialog v-model="showTagDialog" title="标签管理" width="600" align-center>
       <ProductTag />
+    </el-dialog>
+
+    <!-- ── 参数管理弹窗 ────────────────────────────── -->
+    <el-dialog v-model="showParamDialog" title="参数管理" width="640" align-center :close-on-click-modal="false">
+      <ProductParam />
     </el-dialog>
 
   </div>

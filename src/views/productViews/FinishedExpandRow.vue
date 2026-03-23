@@ -4,13 +4,13 @@ import { ref, reactive, computed, watch, nextTick } from 'vue'
 import http from '@/api/http'
 import { usePermission } from '@/composables/usePermission'
 import { ZoomIn, EditPen, Plus, Delete } from '@element-plus/icons-vue'
-import { ElMessageBox, ElMessage } from 'element-plus'
-import Cropper from 'cropperjs'
-import 'cropperjs/dist/cropper.css'
+import { ElMessage } from 'element-plus'
 import { useFinishedStore } from '@/stores/product/finished'
 import { usePackagedStore } from '@/stores/product/packaged'
 import GEditTagList from '@/components/common/GEditTagList.vue'
 import modelTipImg from '@/assets/images/image_model_tip.png'
+import { useFinishedImage } from '@/composables/useFinishedImage'
+import { useFinishedParams, GROUP_DEFS } from '@/composables/useFinishedParams'
 
 // ── Props ─────────────────────────────────────────
 const props = defineProps({
@@ -29,105 +29,14 @@ const saving       = ref(false)
 const initializing = ref(false)  // startEdit 初始化期间，跳过联动 watch
 const moreMenuVisible = ref(false)  // ··· 更多菜单开关
 
-// ── 图片相关状态 ──────────────────────────────────
-const imgHover        = ref(false)  // 编辑状态下鼠标悬停
-const imgPreview      = ref(false)  // 预览弹窗开关
-const addMenuVisible  = ref(false)  // 新增子菜单
-const localCoverImage     = ref('')  // 裁剪后本地预览（base64），保存前显示用
-const savedCoverImage     = ref('')  // 进入编辑时的快照，取消时回退
-
-// ── 裁剪状态 ──────────────────────────────────────
-const cropDialogVisible = ref(false)
-const cropImgSrc  = ref('')
-const cropImgRef  = ref(null)       // 裁剪 img 的模板引用
-const cropperInst = ref(null)
-const cropSquare  = ref(false)      // 是否锁定正方形
-
-// 初始化 Cropper（dialog opened 后调用）
-function initCropper() {
-  if (cropperInst.value) { cropperInst.value.destroy(); cropperInst.value = null }
-  const img = cropImgRef.value
-  if (!img) return
-  const setup = () => {
-    cropperInst.value = new Cropper(img, {
-      aspectRatio: cropSquare.value ? 1 : NaN,
-      viewMode: 1,
-      autoCropArea: 0.8,
-    })
-  }
-  if (img.complete && img.naturalWidth) setup()
-  else img.addEventListener('load', setup, { once: true })
-}
-
-// 正方形开关切换时同步 aspectRatio
-watch(cropSquare, (val) => {
-  cropperInst.value?.setAspectRatio(val ? 1 : NaN)
-})
-
-// 确认裁剪：contain 缩放后居中绘制到 600×600 白底画布
-function applyCrop() {
-  if (!cropperInst.value) return
-  // 先获取裁剪区域原始尺寸的画布
-  const src = cropperInst.value.getCroppedCanvas({
-    imageSmoothingEnabled: true, imageSmoothingQuality: 'high',
-  })
-  const out = document.createElement('canvas')
-  out.width = 600; out.height = 600
-  const ctx = out.getContext('2d')
-  // 白底填充
-  ctx.fillStyle = '#ffffff'
-  ctx.fillRect(0, 0, 600, 600)
-  // contain 缩放：短边扩展（留白），长边缩至 600
-  const scale = Math.min(600 / src.width, 600 / src.height)
-  const w = Math.round(src.width  * scale)
-  const h = Math.round(src.height * scale)
-  const x = Math.round((600 - w) / 2)
-  const y = Math.round((600 - h) / 2)
-  ctx.drawImage(src, x, y, w, h)
-  localCoverImage.value = out.toDataURL('image/png')
-  closeCropDialog()
-  // 图片暂存为 base64，提交时统一上传 OSS
-}
-
-// 关闭裁剪弹窗
-function closeCropDialog() {
-  cropDialogVisible.value = false
-  if (cropperInst.value) { cropperInst.value.destroy(); cropperInst.value = null }
-}
-
-// 图片操作
-function previewImage() {
-  if (!localCoverImage.value && !props.row.cover_image) return
-  imgPreview.value = true
-}
-function editImage() {
-  // 对已有图片进行二次裁剪
-  cropImgSrc.value = localCoverImage.value || props.row.cover_image
-  cropDialogVisible.value = true
-}
-async function addImageFromUpload() {
-  addMenuVisible.value = false
-  const result = await window.electronAPI.showOpenDialog({
-    filters: [{ name: 'PNG 图片', extensions: ['png'] }],
-    properties: ['openFile'],
-  })
-  if (result.canceled || !result.filePaths.length) return
-  cropImgSrc.value        = await window.electronAPI.readFileAsDataURL(result.filePaths[0])
-  cropDialogVisible.value = true
-}
-function addImageFromExisting() {
-  addMenuVisible.value = false
-  // TODO: 从已有图片库选择
-}
-async function deleteImage() {
-  try {
-    await ElMessageBox.confirm('确认删除当前封面图片？', '删除确认', {
-      confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning',
-    })
-    localCoverImage.value = ''
-    // OSS 删除及 DB 清空在提交时统一处理（cover_image: null）
-  } catch {}
-}
+// ── 图片 / 裁剪（see useFinishedImage）────────────
+const {
+  imgHover, imgPreview, addMenuVisible,
+  localCoverImage, savedCoverImage,
+  cropDialogVisible, cropImgSrc, cropImgRef, cropSquare,
+  initCropper, applyCrop, closeCropDialog,
+  previewImage, editImage, addImageFromUpload, addImageFromExisting, deleteImage,
+} = useFinishedImage(props)
 const editForm = reactive({
   name: '', name_en: '', status: '',
   listed_yymm: '', delisted_yymm: '',
@@ -150,8 +59,7 @@ const originalTagNames = ref(new Set())
 
 // ── 折叠分组 ──────────────────────────────────────
 const openSec = reactive({})
-function toggleSec(key) { openSec[key] = !openSec[key] }
-function isSec(key)     { return !!openSec[key] }
+function isSec(key) { return !!openSec[key] }
 
 // ── 生命周期 badge（始终显示）────────────────────
 function lc(row) {
@@ -183,6 +91,7 @@ async function copyCard() {
     packaged_codes: (d.packaged_list || []).map(p => p?.code ?? p),
     tag_names:     (d.tags || []).map(t => t.name),
     cover_image:   localCoverImage.value || d.cover_image || '',
+    params:        paramsData.value,
   }
   try {
     await navigator.clipboard.writeText(JSON.stringify(payload))
@@ -228,6 +137,16 @@ async function pasteCard() {
     await nextTick()
     initializing.value = false
     editForm.tag_names = payload.tag_names || []
+    // 粘贴参数（按 key_id 匹配当前键名库）
+    if (payload.params) {
+      GROUP_DEFS.forEach(g => {
+        const items = payload.params[g.key] || []
+        const validKeys = new Set((paramKeys.value[g.key] || []).map(k => k.id))
+        editParams[g.key] = items
+          .filter(p => validKeys.has(p.key_id))
+          .map(p => ({ key_id: p.key_id, key_name: p.key_name, value: p.value }))
+      })
+    }
     ElMessage.success('已粘贴卡片参数')
   } catch (e) {
     if (e instanceof SyntaxError) {
@@ -244,7 +163,12 @@ async function startEdit() {
   const domestic = d.market === 'domestic' || d.market === 'both'
   const foreign  = d.market === 'foreign'  || d.market === 'both'
   // 先加载候选库，再判断每个 code 的初始状态
-  await Promise.all([ensurePackagedOptionsLoaded(), ensureTagOptionsLoaded()])
+  await Promise.all([
+    ensurePackagedOptionsLoaded(),
+    ensureTagOptionsLoaded(),
+    ensureParamKeysLoaded(),
+    loadParams(d.id),
+  ])
   const initialCodes = (d.packaged_list || []).map(p => p?.code ?? p)
   originalPackagedCodes.value = new Set(initialCodes)
   originalTagNames.value = new Set((d.tags || []).map(t => t.name))
@@ -271,15 +195,27 @@ async function startEdit() {
     tag_names: [],   // 先置空，等 el-select 挂载完再赋值
   })
   savedCoverImage.value = localCoverImage.value
+  // 初始化参数编辑态并保留快照
+  syncEditParamsFromData()
+  originalParamsSnapshot.value = JSON.stringify(paramsData.value)
+  paramsEditing.value = true
   editing.value = true
   await nextTick()       // 等待 el-select 挂载 + watch 队列执行完毕
   initializing.value = false
   // el-select 挂载后再赋值，确保其内部 options 已注册，能正确识别已有标签
   editForm.tag_names = initialTagNames
+  // 若参数区已展开，初始化拖拽
+  if (isSec('params')) initSortables()
 }
 function cancelEdit() {
   moreMenuVisible.value = false
   localCoverImage.value = savedCoverImage.value
+  // 从快照恢复参数编辑态
+  if (originalParamsSnapshot.value) {
+    paramsData.value = JSON.parse(originalParamsSnapshot.value)
+    syncEditParamsFromData()
+  }
+  paramsEditing.value = false
   editing.value = false
 }
 
@@ -378,7 +314,11 @@ async function saveEdit() {
         if (tag?.id) await http.delete(`/api/product/tags/finished/${finishedId}/${tag.id}`)
       }
 
+      // ── 参数保存（委托给 useFinishedParams）─────────
+      await saveParamsFor(finishedId)
+
       moreMenuVisible.value = false
+      paramsEditing.value = false
       editing.value = false
       ElMessage.success('保存完成')
       emit('saved')
@@ -584,6 +524,26 @@ const validations = computed(() => {
   return errs
 })
 const formValid = computed(() => Object.keys(validations.value).length === 0)
+
+// ── 参数（see useFinishedParams）─────────────────
+const {
+  paramsData, paramsLoaded, editParams, originalParamsSnapshot,
+  paramsEditing, paramsSaving, paramKeys,
+  paramAddDialog, sortableRefs,
+  openParamAdd, ensureParamKeysLoaded, availableKeyOptions,
+  addParamItem, removeParamItem, restoreParamItem,
+  loadParams, syncEditParamsFromData, initSortables,
+  startParamsEdit, cancelParamsEdit,
+  saveParamsFor, saveParamsOnly,
+} = useFinishedParams(props)
+
+// ── 折叠分组（params 区首次展开时懒加载）─────────
+function toggleSec(key) {
+  openSec[key] = !openSec[key]
+  if (key === 'params' && openSec[key] && !paramsLoaded.value && props.row.id) {
+    loadParams(props.row.id)
+  }
+}
 </script>
 
 <template>
@@ -929,17 +889,173 @@ const formValid = computed(() => Object.keys(validations.value).length === 0)
         <div class="eg-sec">
           <div class="eg-sec-hd" @click="toggleSec('params')">
             <span class="eg-arr">{{ isSec('params') ? '▾' : '›' }}</span>参数
+            <!-- 参数独立编辑按钮：仅在查看模式 + 有权限时显示 -->
+            <button
+              v-if="isSec('params') && canEditProduct && !editing && !paramsEditing"
+              class="param-sec-edit-btn"
+              title="编辑参数"
+              @click.stop="startParamsEdit"
+            >✎ 编辑</button>
           </div>
-          <div v-if="isSec('params')" class="eg-sec-bd">
-            <span class="eg-dim">暂未定义</span>
+          <div v-if="isSec('params')" class="eg-sec-bd eg-sec-bd-params">
+
+            <!-- 查看模式 -->
+            <template v-if="!paramsEditing">
+              <div v-if="!paramsLoaded" class="params-loading">加载中…</div>
+              <div v-else class="params-cards">
+                <div v-for="g in GROUP_DEFS" :key="g.key" class="param-card">
+                  <div class="param-card-hd" :style="{ background: g.bg, color: g.color }">{{ g.label }}</div>
+                  <div class="param-card-body">
+                    <div v-if="!paramsData[g.key].length" class="param-card-empty">—</div>
+                    <div v-for="item in paramsData[g.key]" :key="item.key_id" class="param-item">
+                      <span class="param-key-lbl">{{ item.key_name }}</span>
+                      <span class="param-val-txt">{{ item.value || '—' }}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </template>
+
+            <!-- 编辑模式（独立或随主行编辑） -->
+            <template v-else>
+              <div class="params-cards params-cards-edit">
+                <div v-for="g in GROUP_DEFS" :key="g.key" class="param-card param-card-edit">
+                  <!-- 卡片标题 + 添加按钮 -->
+                  <div class="param-card-hd" :style="{ background: g.bg, color: g.color }">
+                    <span>{{ g.label }}</span>
+                    <button
+                      class="param-add-btn"
+                      title="添加参数项"
+                      :style="{ color: g.color, borderColor: g.color }"
+                      @click.stop="openParamAdd(g.key)"
+                    >+</button>
+                  </div>
+                  <!-- 可拖拽列表 -->
+                  <div class="param-card-body">
+                  <div
+                    :ref="el => sortableRefs[g.key] = el"
+                    class="param-list"
+                  >
+                    <div
+                      v-for="(item, idx) in editParams[g.key]"
+                      :key="item.key_id ?? item.key_name"
+                      class="param-item-edit"
+                      :class="{ 'param-item-deleted': item.state === 'deleted' }"
+                    >
+                      <span
+                        class="drag-handle"
+                        :class="{ 'drag-handle-disabled': item.state === 'deleted' }"
+                        :title="item.state === 'deleted' ? '' : '拖动排序'"
+                      >⠿</span>
+                      <span
+                        class="param-key-lbl"
+                        :class="{ 'param-key-deleted': item.state === 'deleted' }"
+                      >{{ item.key_name }}</span>
+                      <input
+                        v-model="item.value"
+                        class="param-val-input"
+                        placeholder="输入值"
+                        :disabled="item.state === 'deleted'"
+                        @click.stop
+                      />
+                      <!-- deleted → 撤回按钮；其他 → 删除按钮 -->
+                      <button
+                        v-if="item.state === 'deleted'"
+                        class="param-restore-btn"
+                        title="撤回删除"
+                        @click.stop="restoreParamItem(g.key, idx)"
+                      >↩</button>
+                      <button
+                        v-else
+                        class="param-del-btn"
+                        title="移除"
+                        @click.stop="removeParamItem(g.key, idx)"
+                      >×</button>
+                    </div>
+                    <div v-if="!editParams[g.key].length" class="param-card-empty">—</div>
+                  </div>
+                  </div><!-- /param-card-body -->
+                </div>
+              </div>
+              <!-- 独立编辑时的保存/取消按钮 -->
+              <div v-if="!editing" class="params-actions">
+                <button class="params-action-btn params-action-cancel" @click.stop="cancelParamsEdit">取消</button>
+                <button class="params-action-btn params-action-save" :disabled="paramsSaving" @click.stop="saveParamsOnly">
+                  {{ paramsSaving ? '保存中…' : '保存参数' }}
+                </button>
+              </div>
+
+              <!-- 添加参数 dialog（四个分组共用） -->
+              <el-dialog
+                v-model="paramAddDialog.visible"
+                :title="`添加参数 · ${GROUP_DEFS.find(g => g.key === paramAddDialog.groupKey)?.label ?? ''}`"
+                width="360px"
+                :close-on-click-modal="false"
+                append-to-body
+                @keydown.enter.stop
+              >
+                <div style="display:flex;flex-direction:column;gap:14px;padding:4px 0;">
+                  <div>
+                    <div style="font-size:12px;color:#6b5e4e;margin-bottom:6px;">键名</div>
+                    <el-select
+                      v-model="paramAddDialog.name"
+                      filterable
+                      allow-create
+                      default-first-option
+                      placeholder="选择或输入键名"
+                      style="width:100%"
+                      clearable
+                      @keydown.enter.stop
+                    >
+                      <el-option
+                        v-for="k in availableKeyOptions(paramAddDialog.groupKey)"
+                        :key="k.id"
+                        :value="k.name"
+                        :label="k.name"
+                      />
+                    </el-select>
+                  </div>
+                  <div>
+                    <div style="font-size:12px;color:#6b5e4e;margin-bottom:6px;">值（可留空）</div>
+                    <el-input
+                      v-model="paramAddDialog.value"
+                      placeholder="输入参数值"
+                      clearable
+                      @keyup.enter.stop="addParamItem"
+                    />
+                  </div>
+                </div>
+                <template #footer>
+                  <button class="param-dlg-cancel" @click="paramAddDialog.visible = false">取消</button>
+                  <button
+                    class="param-dlg-confirm"
+                    :disabled="!paramAddDialog.name?.trim()"
+                    :style="{ background: GROUP_DEFS.find(g => g.key === paramAddDialog.groupKey)?.color }"
+                    @click="addParamItem"
+                  >确认添加</button>
+                </template>
+              </el-dialog>
+            </template>
+
           </div>
         </div>
         <div class="eg-sec">
           <div class="eg-sec-hd" @click="toggleSec('data')">
             <span class="eg-arr">{{ isSec('data') ? '▾' : '›' }}</span>数据
           </div>
-          <div v-if="isSec('data')" class="eg-sec-bd">
-            <span class="eg-dim">暂未定义</span>
+          <div v-if="isSec('data')" class="eg-sec-bd eg-sec-bd-data">
+            <div class="data-placeholder-card">
+              <div class="data-ph-hd">发货数据</div>
+              <div class="data-ph-body">
+                <span class="eg-dim">待开发 · {{ props.row.code }}</span>
+              </div>
+            </div>
+            <div class="data-placeholder-card">
+              <div class="data-ph-hd">售后数据</div>
+              <div class="data-ph-body">
+                <span class="eg-dim">待开发 · {{ props.row.code }}</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1409,5 +1525,150 @@ const formValid = computed(() => Object.keys(validations.value).length === 0)
 .crop-btn-cancel:hover { background: #f5f0e8; }
 .crop-btn-confirm { background: #c4883a; color: #fff; border-color: #c4883a; margin-left: 8px; }
 .crop-btn-confirm:hover { background: #e09050; border-color: #e09050; }
+
+/* ── 参数区 ───────────────────────────────────── */
+.eg-sec-bd-params { padding: 12px 14px; }
+.eg-sec-bd-data   { padding: 12px 14px; display: flex; gap: 12px; }
+.data-placeholder-card {
+  flex: 1; border: 1px solid #e8ddd0; border-radius: 10px; overflow: hidden;
+}
+.data-ph-hd {
+  padding: 7px 12px; font-size: 12px; font-weight: 600;
+  background: #f5f0e8; color: #8a7a6a;
+  border-bottom: 1px solid #e8ddd0;
+}
+.data-ph-body {
+  padding: 20px 12px; display: flex; align-items: center; justify-content: center;
+}
+.params-loading { font-size: 12px; color: #bbb; }
+
+/* 参数区头部编辑按钮 */
+.param-sec-edit-btn {
+  margin-left: auto; padding: 2px 9px; border-radius: 4px;
+  border: 1px solid #c0d4f0; background: transparent; color: #3a7bc8;
+  font-size: 11px; font-family: inherit; cursor: pointer; transition: all 0.15s;
+}
+.param-sec-edit-btn:hover { background: #edf4ff; }
+
+/* 独立编辑时底部操作按钮 */
+.params-actions {
+  display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;
+}
+.params-action-btn {
+  padding: 5px 16px; border-radius: 6px; font-size: 12px;
+  font-family: inherit; cursor: pointer; border: 1px solid; transition: all 0.15s;
+}
+.params-action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.params-action-cancel { border-color: #e8ddd0; background: #fff; color: #6b5e4e; }
+.params-action-cancel:hover:not(:disabled) { background: #f5f0e8; }
+.params-action-save { border-color: #c4883a; background: #c4883a; color: #fff; }
+.params-action-save:hover:not(:disabled) { background: #e09050; border-color: #e09050; }
+
+.params-cards {
+  display: flex; gap: 10px;
+}
+.param-card {
+  flex: 1; min-width: 0;
+  background: #fff; border: 1px solid #e8ddd0;
+  border-radius: 10px;
+  overflow: hidden;
+  display: flex; flex-direction: column;
+}
+.param-card-hd {
+  font-size: 12px; font-weight: 600;
+  padding: 7px 12px;
+  display: flex; align-items: center; justify-content: space-between;
+  flex-shrink: 0;
+}
+.param-card-body { padding: 8px 12px; flex: 1; }
+.param-card-empty { font-size: 12px; color: #ccc; padding: 4px 0; }
+.param-item {
+  display: flex; gap: 6px; align-items: baseline;
+  padding: 4px 0; border-bottom: 1px solid #f5f0e8; font-size: 12px;
+}
+.param-item:last-child { border-bottom: none; }
+.param-key-lbl { color: #6b5e4e; flex-shrink: 0; }
+.param-val-txt { color: #2c2420; flex: 1; text-align: right; }
+
+/* 编辑模式 */
+.param-card-edit { background: #faf7f2; }
+.param-list { display: flex; flex-direction: column; gap: 4px; }
+.param-item-edit {
+  display: flex; align-items: center; gap: 5px;
+  padding: 3px 0;
+}
+.drag-handle {
+  color: #c0b8ac; cursor: grab; font-size: 13px; flex-shrink: 0;
+  user-select: none; line-height: 1;
+}
+.drag-handle:active { cursor: grabbing; }
+.param-val-input {
+  flex: 1; min-width: 0; height: 26px; padding: 0 6px;
+  border: 1px solid #e0d4c0; border-radius: 5px;
+  background: #fff; color: #2c2420;
+  font-size: 12px; font-family: inherit;
+  outline: none; transition: border-color 0.15s;
+}
+.param-val-input:focus { border-color: #c4883a; }
+.param-del-btn {
+  width: 18px; height: 18px; border-radius: 4px; flex-shrink: 0;
+  border: 1px solid #e8ddd0; background: transparent;
+  color: #a09080; font-size: 13px; line-height: 1;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: all 0.12s; padding: 0;
+}
+.param-del-btn:hover { background: rgba(208,90,60,0.08); color: #d05a3c; border-color: #ffa39e; }
+
+/* deleted 项样式 */
+.param-item-deleted { opacity: 0.7; }
+.param-key-deleted  { color: #d05a3c !important; text-decoration: line-through; }
+.param-item-deleted .param-val-input { color: #bbb; }
+.drag-handle-disabled { cursor: default; opacity: 0.3; pointer-events: none; }
+
+/* 撤回按钮 */
+.param-restore-btn {
+  width: 18px; height: 18px; border-radius: 4px; flex-shrink: 0;
+  border: 1px solid #7ab87a; background: transparent;
+  color: #4a9a5a; font-size: 13px; line-height: 1;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: all 0.12s; padding: 0;
+}
+.param-restore-btn:hover { background: rgba(74,154,90,0.1); }
+
+.param-add-btn {
+  width: 18px; height: 18px; border-radius: 4px;
+  border: 1px solid #ddd5c4; background: transparent;
+  color: #8a7a6a; font-size: 14px; line-height: 1;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: all 0.12s; padding: 0;
+}
+.param-add-btn:hover { border-color: #c4883a; color: #c4883a; background: #fff7ed; }
+.param-add-confirm {
+  width: 100%; padding: 5px 0; border-radius: 5px;
+  border: none; background: #c4883a; color: #fff;
+  font-size: 12px; font-family: inherit; cursor: pointer;
+  transition: background 0.15s;
+}
+.param-add-confirm:hover:not(:disabled) { background: #e09050; }
+.param-add-confirm:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* 添加参数 dialog 按钮 */
+.param-dlg-cancel {
+  padding: 6px 18px; border-radius: 6px; border: 1px solid #e0d4c0;
+  background: #fff; color: #6b5e4e; font-size: 13px; font-family: inherit;
+  cursor: pointer; transition: background 0.15s; margin-right: 8px;
+}
+.param-dlg-cancel:hover { background: #faf7f2; }
+.param-dlg-confirm {
+  padding: 6px 18px; border-radius: 6px; border: none;
+  color: #fff; font-size: 13px; font-family: inherit;
+  cursor: pointer; transition: background 0.15s;
+}
+.param-dlg-confirm:hover:not(:disabled) { filter: brightness(1.1); }
+.param-dlg-confirm:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* SortableJS 拖拽占位样式 */
+.sortable-ghost { opacity: 0.4; border: 1px dashed #c4883a !important; border-radius: 5px; }
+.sortable-chosen { background: #fff7ed; }
 
 </style>

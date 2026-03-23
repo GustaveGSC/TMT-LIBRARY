@@ -19,6 +19,7 @@
     "electron-updater": "^6.8.3",
     "element-plus": "^2.13.5",
     "pinia": "^3.0.4",
+    "sortablejs": "^1.15.7",
     "vue-router": "^5.0.3"
   },
   "devDependencies": {

@@ -35,16 +35,21 @@ tmt-software/
 │   ├── assets/
 │   │   ├── author.png
 │   │   ├── logo-banner.png
-│   │   └── icons/
-│   │       ├── icon_table.png
-│   │       ├── icon_image.png
-│   │       └── icon_echart.png
+│   │   ├── icons/
+│   │   │   ├── icon_table.png
+│   │   │   ├── icon_image.png
+│   │   │   └── icon_echart.png
+│   │   └── images/
+│   │       └── image_model_tip.png   # 型号简码说明图
 │   ├── api/
 │   │   └── http.js         # axios实例，baseURL固定127.0.0.1:8765，timeout:30000
 │   │                       # 响应拦截器：res => res.data（已解一层）
 │   │                       # 调用方直接用 res.success / res.data / res.message
 │   ├── composables/
-│   │   └── usePermission.js  # 权限判断composable，见下方说明
+│   │   ├── usePermission.js      # 权限判断composable，见下方说明
+│   │   ├── useSortable.js        # SortableJS 轻量封装，initSortable(el, onEnd)
+│   │   ├── useFinishedImage.js   # 成品展开行图片/裁剪逻辑
+│   │   └── useFinishedParams.js  # 成品展开行参数区逻辑（GROUP_DEFS 也从此导出）
 │   ├── utils/
 │   │   └── version.js      # checkUpdateType(current, latest) → 'none'|'optional'|'force'
 │   ├── styles/
@@ -74,7 +79,8 @@ tmt-software/
 │       │   ├── ProductImport.vue     # 导入ERP数据弹窗
 │       │   ├── ProductRules.vue      # 编码规则弹窗
 │       │   ├── ProductCategory.vue   # 分类管理弹窗
-│       │   └── ProductTag.vue        # 标签管理弹窗
+│       │   ├── ProductTag.vue        # 标签管理弹窗
+│       │   └── ProductParam.vue      # 参数键名管理弹窗（概览页数据管理区入口）
 │       └── adminViews/
 │           ├── page-users.vue
 │           ├── page-permissions.vue
@@ -90,11 +96,12 @@ tmt-software/
 │   │   │   ├── account/        __init__.py   User/Role/Permission
 │   │   │   ├── version/        __init__.py   AppVersion
 │   │   │   └── product/
-│   │   │       ├── __init__.py               （空）
+│   │   │       ├── __init__.py               from . import param（注册模型到元数据）
 │   │   │       ├── import_raw.py             ImportProductRaw
 │   │   │       ├── erp_code_rules.py         ErpCodeRule
 │   │   │       ├── category.py               ProductCategory/ProductSeries/ProductModel
-│   │   │       └── finished.py               ProductFinished/ProductPackaged/ProductTag
+│   │   │       ├── finished.py               ProductFinished/ProductPackaged/ProductTag
+│   │   │       └── param.py                  ProductParamKey/ProductFinishedParam
 │   │   └── repository/
 │   │       ├── account/        __init__.py
 │   │       ├── version/        __init__.py
@@ -102,14 +109,16 @@ tmt-software/
 │   │           ├── import_raw.py
 │   │           ├── erp_code_rules.py
 │   │           ├── finished.py               FinishedRepository
-│   │           └── tag.py                    TagRepository
+│   │           ├── tag.py                    TagRepository
+│   │           └── param.py                  ParamRepository
 │   ├── services/
 │   │   ├── account/        __init__.py   AccountService
 │   │   ├── version/        __init__.py   VersionService
 │   │   └── product/
 │   │       ├── import_raw.py             ImportProductService
 │   │       ├── erp_code_rules.py         ErpCodeRuleService
-│   │       └── tag.py                    TagService
+│   │       ├── tag.py                    TagService
+│   │       └── param.py                  ParamService
 │   ├── routes/
 │   │   ├── account/        __init__.py   /api/account/*
 │   │   ├── version/        __init__.py   /api/version/*
@@ -118,7 +127,8 @@ tmt-software/
 │   │       ├── finished.py               /api/product/finished/*
 │   │       ├── erp_code_rules.py         /api/erp-code-rules/*
 │   │       ├── category.py               /api/category/*
-│   │       └── tag.py                    /api/product/tags/*
+│   │       ├── tag.py                    /api/product/tags/*
+│   │       └── param.py                  /api/product/params/*
 │   └── storage/
 │       └── client.py
 ├── dev-app-update.yml
@@ -231,6 +241,17 @@ product_tag
 
 product_finished_tag
   finished_id(FK), tag_id(FK), PRIMARY KEY(finished_id, tag_id)
+
+product_param_key
+  id, name(VARCHAR 64), group_name(VARCHAR 20), sort_order, created_at
+  # group_name: dimension=尺寸, config=配置, brand=品牌, other=其他
+  # UNIQUE(name, group_name)
+
+product_finished_param
+  id, finished_id(FK→product_finished CASCADE), key_id(FK→product_param_key CASCADE),
+  value(VARCHAR 255), sort_order, created_at, updated_at
+  # UNIQUE(finished_id, key_id)
+  # 保存使用 Upsert（按 key_id 对比已有记录，更新/插入/删除）
 ```
 
 ## 后端接口（完整）
@@ -291,6 +312,13 @@ PUT    /api/product/tags/:id
 DELETE /api/product/tags/:id
 POST   /api/product/tags/finished/:finished_id/:tag_id
 DELETE /api/product/tags/finished/:finished_id/:tag_id
+
+GET    /api/product/params/keys                       # 所有键名按分组聚合
+POST   /api/product/params/keys                       # 创建键名 {name, group_name, sort_order?}
+PUT    /api/product/params/keys/:key_id               # 更新键名
+DELETE /api/product/params/keys/:key_id               # 删除键名（返回 usage_count 供前端二次确认）
+GET    /api/product/params/finished/:finished_id      # 获取成品参数，按分组聚合
+POST   /api/product/params/finished/:finished_id      # 全量 Upsert 保存成品参数
 ```
 
 ## OSS结构
@@ -343,7 +371,7 @@ const { isAdmin, can, canEditProduct, canViewProduct, canDeleteProduct } = usePe
 - 返回按钮：先 `unmaximizeApp()` 再 `router.back()`
 - 顶部导航：概览(SVG inline) / 表格(PNG) / 图片(PNG) / 图表(PNG)
 - active 状态：文字加粗 + 主色 + 底部2px橙色指示线，无背景填充
-- 数据管理区：导入数据 / 编码规则 / 分类管理 / 标签管理
+- 数据管理区：导入数据 / 编码规则 / 分类管理 / 标签管理 / **参数管理**
 - **数据管理区需要 `product:edit` 权限才显示**（`v-if="canEditProduct"`）
 
 ## ProductTable.vue 说明
@@ -356,10 +384,15 @@ const { isAdmin, can, canEditProduct, canViewProduct, canDeleteProduct } = usePe
 - FILTER_FIELDS 含 market
 - MARKET_LABELS = `{ domestic: '内销', foreign: '外贸', both: '内外销' }`
 - 排序：英文名称、系列名称、销售市场均有排序按钮；产成品清单、生命周期、状态不排序
+- **产成品表**：`PK_COL_DEFS` + `pkColWidths`，watch `finishedStore.selectedPackaged` 触发动态列宽计算；`border` + `resizable` + `show-overflow-tooltip`
 
 ## FinishedExpandRow.vue 说明
 - Props: `row`（Object）；Emits: `saved`
 - **权限控制**：无 `product:edit` 权限时隐藏编辑/保存按钮，`···` 按钮始终显示（下载/复制/粘贴）
+- **`···` 菜单**：复制（仅查看模式可用）/ 粘贴（仅编辑模式可用）；复制内容不含图片，含参数
+- **composable 拆分**：
+  - `useFinishedImage(props)` — 图片/裁剪逻辑（localCoverImage / savedCoverImage / cropperInst 等）
+  - `useFinishedParams(props)` — 参数区逻辑（GROUP_DEFS 也从此导出）
 - **布局**（宽度1000px）：
   ```
   ec-top（编码 + lc-badge + [编辑按钮] + ···按钮）
@@ -374,21 +407,47 @@ const { isAdmin, can, canEditProduct, canViewProduct, canDeleteProduct } = usePe
   行4：型号编码 / 系列名称 / 退市年月
   行5：体积(m³) / 毛重(kg) / 净重(kg)
   行6：包装清单（全宽）
-  行7：标签（全宽，暂未定义）
+  行7：标签（全宽）
   ```
 - **编辑模式7行**（行列结构与查看模式相同）：
   ```
   行1：el-autocomplete(中文名称) + 内销checkbox（最右）
   行2：el-autocomplete(英文名称) + 外贸checkbox（最右）
   行3：el-autocomplete(品类) / el-autocomplete(系列编码) / el-date-picker(上市年月)
-  行4：el-autocomplete(型号编码) / el-autocomplete(系列名称) / el-date-picker(退市年月)
+  行4：el-autocomplete(型号编码[+?说明按钮]) / el-autocomplete(系列名称) / el-date-picker(退市年月)
   行5：体积/毛重/净重（只读）
   行6：包装清单（只读）
   行7：录入状态 select
   ```
+- **型号简码说明按钮**：`?` 圆形按钮位于"型号简码"文字右侧，点击弹出 el-popover 显示 `src/assets/images/image_model_tip.png`
+- **保存失败反馈**：`res.success` 为 false 或图片上传失败时 `ElMessage.error(res.message)`
 - market checkbox → resolveMarket() → 'domestic'/'foreign'/'both'/''
 - eg-lbl 宽80px，居中，背景#faf7f2，右边框分隔
 - eg-row min-height:34px，不用固定height
+
+## FinishedExpandRow 参数区说明
+- **折叠区 ec-sections 包含两个子节**：参数 / 数据
+- **参数节**：4个固定分组横排卡片（尺寸/配置/品牌/其他），由 `GROUP_DEFS` 定义
+  - 分组定义（`useFinishedParams.js` 导出）：
+    ```js
+    { key: 'dimension', label: '尺寸', color: '#c4883a', bg: '#fff7ed' }
+    { key: 'config',    label: '配置', color: '#3a7bc8', bg: '#edf4ff' }
+    { key: 'brand',     label: '品牌', color: '#9c6fba', bg: '#f5eeff' }
+    { key: 'other',     label: '其他', color: '#4a9a5a', bg: '#edf8ef' }
+    ```
+  - 参数项结构：`{ key_id, key_name, value, state: 'original'|'added'|'deleted' }`
+  - `original` 项删除 → 标记红色+删除线+撤回按钮，保存时排除；`added` 项删除 → 直接移除
+  - 支持拖动排序（SortableJS），sort_order = 保存时的数组下标
+  - **独立编辑模式**：不进入主行编辑也可单独编辑参数（参数区右上角 ✎ 按钮）
+  - 添加参数通过 el-dialog（el-select filterable allow-create + el-input），键名可选库中已有或自由输入
+  - 键名库通过「参数管理」弹窗维护（page-product.vue 概览页数据管理区）
+- **数据节**：占位，含两张卡片（发货数据 / 售后数据），待开发
+
+## ProductParam.vue 说明
+- 概览页数据管理区的「参数管理」按钮打开，需要 `product:edit` 权限
+- 弹窗固定高度 400px，内容不随 Tab 切换变化
+- 布局：顶部4个分组 Tab（尺寸/配置/品牌/其他）+ 左侧键名列表 + 右侧编辑表单
+- 支持新增/编辑/排序/删除，删除前调接口返回 usage_count 做二次确认
 
 ## ProductTag.vue 说明
 - 弹窗内容：左侧标签列表（220px）+ 右侧编辑表单
@@ -443,10 +502,23 @@ src/stores/product/
 - 数据懒加载：下拉候选、分类树等在首次交互时加载，加载完成后缓存
 - 列表渲染：合理使用 `:key`，避免不必要的重渲染
 
+## /api/product/stats 返回结构
+```json
+{
+  "total_finished":    <int>,   // 符合 finished 编码规则的 import 记录数
+  "unprocessed":       <int>,   // total_finished - product_finished 表记录数
+  "last_imported_at":  "YYYY-MM-DD" | null,
+  "days_since_import": <int> | null,
+  "categories": [
+    { "description": "xxx", "count": <int> }   // 按 erp_code_rules description 分组，按数量降序
+  ]
+}
+```
+
 ## 待开发
-- [ ] 概览页接真实数据（调用 /api/product/stats，分类数量）
 - [ ] FinishedExpandRow autocomplete 候选接真实数据（/api/category/tree）
 - [ ] FinishedExpandRow 标签行接真实数据（/api/product/tags/）
+- [ ] FinishedExpandRow 数据节：发货数据 / 售后数据（接真实数据）
 - [ ] ProductImage 接真实数据（OSS 图片）
 - [ ] 图表视图实现
 - [ ] 用户头像

@@ -40,6 +40,7 @@ def create_app() -> Flask:
     from routes.product.erp_code_rules import erp_code_rules_bp
     from routes.product.category import category_bp
     from routes.product.tag import bp as tag_bp
+    from routes.product.param import param_bp
 
     app.register_blueprint(account_bp,        url_prefix="/api/account")
     app.register_blueprint(version_bp,        url_prefix="/api/version")
@@ -48,6 +49,7 @@ def create_app() -> Flask:
     app.register_blueprint(erp_code_rules_bp, url_prefix="/api/erp-code-rules")
     app.register_blueprint(category_bp,       url_prefix="/api/category")
     app.register_blueprint(tag_bp,            url_prefix="/api/product/tags")
+    app.register_blueprint(param_bp,          url_prefix="/api/product/params")
 
     # ── 健康检查 ──────────────────────────────────────
     @app.get("/health")
