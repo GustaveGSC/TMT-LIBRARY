@@ -17,7 +17,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -28,6 +28,11 @@ jobs:
         run: |
           cd backend
           pip install -r requirements.txt pyinstaller
+
+      # 把本地 backend/.env 的完整内容存到 GitHub Secrets，名称为 BACKEND_ENV
+      # 设置路径：仓库 Settings → Secrets and variables → Actions → New repository secret
+      - name: Create backend .env from GitHub Secrets
+        run: echo "${{ secrets.BACKEND_ENV }}" > backend/.env
 
       - name: Build Python backend (macOS)
         run: bash scripts/build-python-mac.sh

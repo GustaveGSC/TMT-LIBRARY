@@ -7,10 +7,19 @@ echo "🐍 Building Python backend for macOS..."
 
 cd backend
 
+# .env 可能不在仓库里（被 .gitignore 排除），条件性添加
+ENV_ARG=""
+if [ -f ".env" ]; then
+  ENV_ARG="--add-data .env:."
+  echo "📄 Found .env, will bundle it"
+else
+  echo "⚠️  No .env found, skipping (will use environment variables at runtime)"
+fi
+
 pyinstaller \
   --onedir \
   --name backend \
-  --add-data ".env:." \
+  $ENV_ARG \
   --hidden-import=pymysql \
   --hidden-import=bcrypt \
   --hidden-import=openpyxl \
