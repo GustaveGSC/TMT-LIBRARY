@@ -1,0 +1,51 @@
+name: Build macOS DMG
+
+on:
+  workflow_dispatch: # 手动触发
+  push:
+    tags:
+      - 'v*' # push tag（如 v1.0.2）时自动触发
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt pyinstaller
+
+      - name: Build Python backend (macOS)
+        run: bash scripts/build-python-mac.sh
+
+      - name: Convert icon PNG to ICNS
+        run: bash scripts/make-icns.sh
+
+      - name: Install Node dependencies
+        run: npm install
+
+      - name: Build & Package macOS DMG
+        run: npm run build && npx electron-builder --mac --x64 --arm64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-dmg-${{ github.sha }}
+          path: release/*.dmg
+          retention-days: 14
