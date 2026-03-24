@@ -14,7 +14,9 @@ import { useFinishedParams, GROUP_DEFS } from '@/composables/useFinishedParams'
 
 // ── Props ─────────────────────────────────────────
 const props = defineProps({
-  row: { type: Object, required: true },
+  row:     { type: Object,   required: true },
+  plain:   { type: Boolean,  default: false  }, // true 时去掉外层容器样式（用于 dialog）
+  onClose: { type: Function, default: null   }, // plain 模式下关闭回调
 })
 
 // ── Emits ─────────────────────────────────────────
@@ -547,7 +549,7 @@ function toggleSec(key) {
 </script>
 
 <template>
-  <div class="ec">
+  <div :class="['ec', { 'ec--plain': props.plain }]">
 
     <!-- ── 大卡片：顶栏 + 图片信息 + 折叠分组 ── -->
     <div class="ec-main">
@@ -557,17 +559,19 @@ function toggleSec(key) {
         <span class="ec-code">{{ row.code }}</span>
         <span class="lc-badge" :class="lc(row).cls">{{ lc(row).label }}</span>
         <div class="ec-acts">
-          <template v-if="canEditProduct && !editing">
+          <!-- plain 模式：关闭按钮 -->
+          <button v-if="props.plain && props.onClose" class="eb eb-close" title="关闭" @click.stop="props.onClose()">✕</button>
+          <template v-if="!props.plain && canEditProduct && !editing">
             <button class="eb eb-edit" @click.stop="startEdit">✎ 编辑</button>
           </template>
-          <template v-else-if="canEditProduct && editing">
+          <template v-else-if="!props.plain && canEditProduct && editing">
             <button class="eb eb-save" :disabled="saving || !formValid" @click.stop="saveEdit">
               {{ saving ? '保存中…' : '✓ 提交' }}
             </button>
             <button class="eb eb-cancel" @click.stop="cancelEdit">× 取消</button>
           </template>
-          <!-- ··· 更多菜单 -->
-          <div class="eb-more-wrap">
+          <!-- ··· 更多菜单（plain 模式隐藏）-->
+          <div v-if="!props.plain" class="eb-more-wrap">
             <button class="eb eb-more" @click.stop="moreMenuVisible = !moreMenuVisible">···</button>
             <div v-if="moreMenuVisible" class="eb-more-menu">
               <div
@@ -1110,6 +1114,10 @@ function toggleSec(key) {
   flex-direction: column;
   gap: 10px;
 }
+.ec--plain {
+  padding: 0;
+  background: transparent;
+}
 
 /* ── 顶栏（在 ec-main 内，底部分隔线） ─────────── */
 .ec-top {
@@ -1134,6 +1142,8 @@ function toggleSec(key) {
   cursor: pointer; border: 1px solid; transition: all 0.15s; font-family: inherit;
   background: #fff;
 }
+.eb-close  { border-color: #ddd5c4; color: #8a7a6a; }
+.eb-close:hover { background: #f5f0e8; color: #3a3028; }
 .eb-edit   { border-color: #c0d4f0; color: #3a7bc8; }
 .eb-edit:hover { background: #edf4ff; }
 .eb-more   { border-color: #ddd5c4; color: #8a7a6a; letter-spacing: 2px; padding: 4px 8px; }
@@ -1169,7 +1179,6 @@ function toggleSec(key) {
 .ec-main {
   position: relative;
   width: 1200px;
-  margin-left: 25px;
   background: #fff;
   border: 1px solid #e8ddd0;
   border-radius: 10px;

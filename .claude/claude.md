@@ -75,7 +75,7 @@ tmt-software/
 │       │   ├── page-product.vue      # 主框架：顶部导航 + 概览/表格/图片/图表
 │       │   ├── ProductTable.vue      # 表格视图
 │       │   ├── FinishedExpandRow.vue # 成品展开行组件
-│       │   ├── ProductImage.vue      # 图片视图（待开发）
+│       │   ├── ProductImage.vue      # 图片视图
 │       │   ├── ProductImport.vue     # 导入ERP数据弹窗
 │       │   ├── ProductRules.vue      # 编码规则弹窗
 │       │   ├── ProductCategory.vue   # 分类管理弹窗
@@ -443,6 +443,15 @@ const { isAdmin, can, canEditProduct, canViewProduct, canDeleteProduct } = usePe
   - 键名库通过「参数管理」弹窗维护（page-product.vue 概览页数据管理区）
 - **数据节**：占位，含两张卡片（发货数据 / 售后数据），待开发
 
+## ProductImage.vue 说明
+- 图片视图，从 `finishedStore.rawItems` 读取数据（复用表格视图已加载的数据，不重复请求）
+- 始终过滤掉 `status === 'unrecorded'` 的成品
+- **工具栏**（单行）：搜索框 / 系列多选筛选（el-select filterable multiple） / 市场筛选 Tab / 排序按钮（品号/上市时间） / 数量统计
+- **分组展示**：按 `category_name` 分组，每组有可点击标题行（展开=主色实心背景，合拢=普通卡片样式），标题行 sticky 吸顶
+- **卡片**：固定高度图片区（180px） + 信息区（品号 + 中文名自动换行），点击弹出详情 dialog
+- **详情 dialog**：无原生 header/close，`close-on-click-modal=true`，内嵌 `<FinishedExpandRow :plain="true" :on-close="..." />`，plain 模式下只读（无编辑/复制/粘贴）
+- **滚动**：外层 `.grid-scroll`（`flex:1; min-height:0; overflow-y:auto`）负责滚动，内层 `.image-grid` 自然高度，缩小窗口宽度不压缩卡片高度
+
 ## ProductParam.vue 说明
 - 概览页数据管理区的「参数管理」按钮打开，需要 `product:edit` 权限
 - 弹窗固定高度 400px，内容不随 Tab 切换变化
@@ -519,7 +528,7 @@ src/stores/product/
 - [ ] FinishedExpandRow autocomplete 候选接真实数据（/api/category/tree）
 - [ ] FinishedExpandRow 标签行接真实数据（/api/product/tags/）
 - [ ] FinishedExpandRow 数据节：发货数据 / 售后数据（接真实数据）
-- [ ] ProductImage 接真实数据（OSS 图片）
+- [ ] ProductImage cover_image 接真实 OSS 图片 URL
 - [ ] 图表视图实现
 - [ ] 用户头像
 - [ ] 更多主题配色
