@@ -54,3 +54,9 @@ jobs:
           name: mac-dmg-${{ github.sha }}
           path: release/*.dmg
           retention-days: 14
+
+      - name: Build & Package macOS DMG
+        run: npm run build && npx electron-builder --mac --x64 --arm64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false

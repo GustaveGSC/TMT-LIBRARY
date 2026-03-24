@@ -39,4 +39,6 @@ pyinstaller \
   --specpath "$BACKEND_DIR" \
   app.py
 
+# 确保可执行文件有执行权限（zip/tar 传输过程中执行位可能丢失）
+chmod +x "$PROJECT_DIR/electron/resources/python-backend/backend/backend"
 echo "✅ Python backend built → electron/resources/python-backend/backend/"

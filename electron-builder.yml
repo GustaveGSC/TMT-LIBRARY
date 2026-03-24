@@ -35,6 +35,7 @@ mac:
       arch: [x64, arm64]    # 同时支持 Intel + Apple Silicon
   icon: resources/icon.icns
   category: public.app-category.productivity
+  identity: null 
   # 如需公证（App Store 外分发），配置以下字段：
   # hardenedRuntime: true
   # entitlements: resources/entitlements.mac.plist
