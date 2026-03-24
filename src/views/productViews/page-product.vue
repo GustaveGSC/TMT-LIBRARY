@@ -5,6 +5,7 @@ import { useRouter } from 'vue-router'
 import WindowControls from '@/components/common/WindowControls.vue'
 import ProductTable  from './ProductTable.vue'
 import ProductImage  from './ProductImage.vue'
+import ProductChart  from './ProductChart.vue'
 import { ArrowLeft, Upload, Setting, Folder, Collection, Memo } from '@element-plus/icons-vue'
 import { usePermission } from '@/composables/usePermission'
 import http from '@/api/http'
@@ -34,12 +35,13 @@ const packagedStore = usePackagedStore()
 
 const PAGE_LOADERS = {
   table: ensureTableData,
+  chart: ensureTableData,
 }
 
 async function navigateTo(page) {
   if (page === activePage.value) return
   const loader = PAGE_LOADERS[page]
-  const dataReady = page === 'table'
+  const dataReady = (page === 'table' || page === 'chart')
     ? finishedStore.loaded && packagedStore.loaded
     : true
   if (loader && !dataReady) {
@@ -274,12 +276,8 @@ onMounted(async () => {
       <!-- ③ 图片视图 -->
       <ProductImage v-show="activePage === 'image'" />
 
-      <!-- ④ 图表（占位）-->
-      <div v-show="activePage === 'chart'" class="page-placeholder">
-        <img :src="iconEchart" class="ph-img" alt="图表" />
-        <div class="ph-title">图表视图</div>
-        <div class="ph-desc">产品结构图表，即将上线</div>
-      </div>
+      <!-- ④ 图表视图 -->
+      <ProductChart v-show="activePage === 'chart'" />
 
     </main>
 

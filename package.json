@@ -15,6 +15,7 @@
     "@electron-toolkit/utils": "^4.0.0",
     "axios": "^1.13.6",
     "cropperjs": "^1.6.2",
+    "echarts": "^6.0.0",
     "electron-log": "^5.4.3",
     "electron-updater": "^6.8.3",
     "element-plus": "^2.13.5",
