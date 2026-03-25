@@ -135,7 +135,10 @@ const userName    = computed(() => userInfo.display_name || userInfo.username ||
 const userInitial = computed(() => (userName.value?.[0] ?? '?').toUpperCase())
 
 const modules = [
-  { key: 'product', name: '产品库', desc: '产品信息管理与检索', icon: '📦', route: '/product', disabled: false },
+  { key: 'product',   name: '产品库',   desc: '产品信息管理与检索', icon: '📦', route: '/product',   disabled: false },
+  { key: 'shipping',  name: '发货数据', desc: '发货记录查询与统计', icon: '🚚', route: '/shipping',  disabled: false },
+  { key: 'data-mgmt', name: '数据管理', desc: '导入数据与操作人配置', icon: '⚙️', route: '/data-mgmt', disabled: false },
+  { key: 'aftersale', name: '售后数据', desc: '售后记录查询与分析',  icon: '🔧', route: '/aftersale', disabled: true  },
 ]
 
 function handleEnter(mod) {

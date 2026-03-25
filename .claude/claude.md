@@ -56,7 +56,7 @@ tmt-software/
 │   │   └── themes.css      # 全局CSS变量，主题A（奶油纸质，默认）
 │   ├── routers/
 │   │   └── index.js        # Hash路由
-│   │                       # /login、/index、/product
+│   │                       # /login、/index、/product、/shipping、/data-mgmt
 │   │                       # /admin/users、/admin/permissions、/admin/version-release
 │   ├── components/
 │   │   ├── common/
@@ -81,6 +81,13 @@ tmt-software/
 │       │   ├── ProductCategory.vue   # 分类管理弹窗
 │       │   ├── ProductTag.vue        # 标签管理弹窗
 │       │   └── ProductParam.vue      # 参数键名管理弹窗（概览页数据管理区入口）
+│       ├── shippingViews/
+│       │   ├── page-shipping.vue     # 发货数据页，内嵌 ShippingDashboard
+│       │   └── ShippingDashboard.vue # 统计看板（ECharts，待完善）
+│       ├── dataMgmtViews/
+│       │   ├── page-data-mgmt.vue    # 数据管理页：导入数据 / 操作人配置
+│       │   ├── DataImport.vue        # 发货清单导入（SSE进度/取消/缺失日期日历）
+│       │   └── OperatorConfig.vue    # 最近操作人分类配置
 │       └── adminViews/
 │           ├── page-users.vue
 │           ├── page-permissions.vue
@@ -95,6 +102,7 @@ tmt-software/
 │   │   ├── models/
 │   │   │   ├── account/        __init__.py   User/Role/Permission
 │   │   │   ├── version/        __init__.py   AppVersion
+│   │   │   ├── shipping/       __init__.py   ShippingBatch/ShippingRecord/ShippingOperatorType/ShippingOrderFinished
 │   │   │   └── product/
 │   │   │       ├── __init__.py               from . import param（注册模型到元数据）
 │   │   │       ├── import_raw.py             ImportProductRaw
@@ -105,6 +113,7 @@ tmt-software/
 │   │   └── repository/
 │   │       ├── account/        __init__.py
 │   │       ├── version/        __init__.py
+│   │       ├── shipping/       __init__.py   shipping_repository
 │   │       └── product/
 │   │           ├── import_raw.py
 │   │           ├── erp_code_rules.py
@@ -114,6 +123,7 @@ tmt-software/
 │   ├── services/
 │   │   ├── account/        __init__.py   AccountService
 │   │   ├── version/        __init__.py   VersionService
+│   │   ├── shipping/       __init__.py   ShippingService
 │   │   └── product/
 │   │       ├── import_raw.py             ImportProductService
 │   │       ├── erp_code_rules.py         ErpCodeRuleService
@@ -122,6 +132,7 @@ tmt-software/
 │   ├── routes/
 │   │   ├── account/        __init__.py   /api/account/*
 │   │   ├── version/        __init__.py   /api/version/*
+│   │   ├── shipping/       __init__.py   /api/shipping/*
 │   │   └── product/
 │   │       ├── import_raw.py             /api/product/*
 │   │       ├── finished.py               /api/product/finished/*
@@ -199,6 +210,34 @@ role_permissions  role_id, permission_id
 ### 版本
 ```
 app_version       id, version, description, download_url, created_at
+```
+
+### 发货数据
+```
+shipping_batch
+  id, type(shipping/return), filename, row_count, imported_at
+
+shipping_record
+  id, batch_id(FK), ecommerce_order_no, line_no, shipped_date,
+  channel_name, channel_code, channel_org_name, operator(最近操作人),
+  product_code, product_name, spec, quantity, country, province, city,
+  district, street, address, buyer_remark, seller_remark
+  # UNIQUE(ecommerce_order_no, line_no, product_code)
+  # 文件内同 key 行先合并（quantity 累加）再与 DB 去重
+  # 按列名匹配（_build_col_map），与列顺序无关，缺失必要列抛 ValueError
+  # 必要列：电商主订单号/单据日期/渠道名称/渠道商/渠道商名称/最近操作人
+  #         项次/商品型号/商品名称/数量/省份
+  # 可选列（有则读取）：国家/市区/县区/街道/详细地址/规格/买家留言/商家备注
+
+shipping_operator_type
+  id, operator(UNIQUE), type(shipping/aftersale/unknown), created_at, updated_at
+  # 「最近操作人」→ 发货/售后/未分类
+
+shipping_order_finished
+  id, ecommerce_order_no, finished_code(NULL=未匹配), finished_name,
+  quantity, shipped_date, operator, channel_name, province,
+  is_stale(产品库变更后标记), resolved_at
+  # 按订单贪心匹配成品组合（优先匹配产成品数最多的成品）
 ```
 
 ### 产品库
@@ -319,6 +358,16 @@ PUT    /api/product/params/keys/:key_id               # 更新键名
 DELETE /api/product/params/keys/:key_id               # 删除键名（返回 usage_count 供前端二次确认）
 GET    /api/product/params/finished/:finished_id      # 获取成品参数，按分组聚合
 POST   /api/product/params/finished/:finished_id      # 全量 Upsert 保存成品参数
+
+POST   /api/shipping/import/shipping                  # 上传发货清单，返回 task_id
+GET    /api/shipping/import/progress/:task_id         # SSE 进度流：parsing→parsed→inserting→inserted→resolving→done/error/cancelled
+POST   /api/shipping/import/cancel/:task_id           # 发送中止信号，后台完成当前 chunk 后 rollback
+GET    /api/shipping/operators                        # 获取所有最近操作人及其分类
+POST   /api/shipping/operators/classify               # 批量保存操作人分类 [{operator, type}]
+GET    /api/shipping/stats                            # 统计摘要
+GET    /api/shipping/shipped-dates                    # 所有已存在 shipped_date（去重升序，用于缺失日期日历）
+POST   /api/shipping/resolve                          # 刷新 is_stale 订单的成品组合
+POST   /api/shipping/resolve-all                      # 全量重新计算所有订单成品组合（SSE 进度，task_id 复用 import/progress 流）
 ```
 
 ## OSS结构
@@ -511,6 +560,35 @@ src/stores/product/
 - 数据懒加载：下拉候选、分类树等在首次交互时加载，加载完成后缓存
 - 列表渲染：合理使用 `:key`，避免不必要的重渲染
 
+## page-data-mgmt.vue 说明
+- 路由 `/data-mgmt`，`onMounted` 调用 `maximizeApp()`，返回按钮先 `unmaximizeApp()` 再 `router.back()`
+- 顶部导航两个 Tab：**导入数据**（DataImport）/ **操作人配置**（OperatorConfig）
+- 右上角「重新计算成品组合」按钮：调 `POST /api/shipping/resolve-all` → 订阅 SSE 进度（复用 `import/progress/:task_id`），实时显示"xxx / xxx 个订单"
+
+## DataImport.vue 说明
+- 导入发货清单（xlsx/xls/csv），固定 100px 文件拖放区，选中后显示 Excel SVG 图标
+- 导入流程：上传文件获取 task_id → 订阅 SSE → 展示进度条（parsing→parsed→inserting→inserted→resolving→done）
+- **文件内合并**：同 `(ecommerce_order_no, line_no, product_code)` 的行 quantity 累加，被合并行记录在 `merged_away_rows`
+- **DB 去重**：与库中已有记录比对，跳过的记录返回在 `skipped_rows`
+- **中止导入**：中止后 rollback 已写入的 batch 数据
+- **错误弹窗**：导入失败用 el-dialog 展示（不自动消失），进度条隐藏
+- **结果卡片**：文件行数 / 新增记录 / 跳过重复 / 文件内合并（可点击→弹出明细 dialog）
+- **跳过重复弹窗**：9列表格（电商订单号/项次/商品型号/商品名称/数量/发货日期/渠道/最近操作人/省份）
+- **文件内合并弹窗**：19列完整内容
+- **缺失日期日历**：自定义 7 列网格（非 el-calendar slot，绕开响应性问题）
+  - `missingDates = ref([])` 数组，`calCells` computed 按年月生成 `{ d, missing }` 单元格
+  - 缺失日期显示红色 32×32 圆圈（`.cal-inner--missing`）
+  - 导航：年份 el-select + 月份 el-select + 上/下月按钮
+
+## OperatorConfig.vue 说明
+- 展示所有「最近操作人」列出现过的人员，可设置类型：发货 / 售后 / 未分类
+- 类型颜色：shipping=#c4883a，aftersale=#4a8fc0，unknown=#8a7a6a
+- 右上角「刷新成品组合」按钮（`stale_count > 0` 时显示），调 `POST /api/shipping/resolve`
+
+## page-shipping.vue 说明
+- 路由 `/shipping`，`onMounted` 调用 `maximizeApp()`，返回按钮先 `unmaximizeApp()`
+- 内嵌 ShippingDashboard（ECharts 统计看板，调 `/api/shipping/stats`，当前为占位状态）
+
 ## /api/product/stats 返回结构
 ```json
 {
@@ -527,9 +605,11 @@ src/stores/product/
 ## 待开发
 - [ ] FinishedExpandRow autocomplete 候选接真实数据（/api/category/tree）
 - [ ] FinishedExpandRow 标签行接真实数据（/api/product/tags/）
-- [ ] FinishedExpandRow 数据节：发货数据 / 售后数据（接真实数据）
+- [ ] FinishedExpandRow 数据节：发货数据 / 售后数据（接 /api/shipping/* 真实数据）
 - [ ] ProductImage cover_image 接真实 OSS 图片 URL
-- [ ] 图表视图实现
+- [ ] ShippingDashboard 图表完善（按渠道/省份/时间维度的发货量图表）
+- [ ] 销退清单导入（/api/shipping/import/return，参考发货清单流程）
+- [ ] 产品库图表视图实现
 - [ ] 用户头像
 - [ ] 更多主题配色
 - [ ] Mac打包验证
