@@ -85,9 +85,11 @@ tmt-software/
 │       │   ├── page-shipping.vue     # 发货数据页，内嵌 ShippingDashboard
 │       │   └── ShippingDashboard.vue # 统计看板（ECharts，待完善）
 │       ├── dataMgmtViews/
-│       │   ├── page-data-mgmt.vue    # 数据管理页：导入数据 / 操作人配置
+│       │   ├── page-data-mgmt.vue    # 数据管理页：导入数据 / 数据配置
 │       │   ├── DataImport.vue        # 发货清单导入（SSE进度/取消/缺失日期日历）
-│       │   └── OperatorConfig.vue    # 最近操作人分类配置
+│       │   ├── ReturnImport.vue      # 销退清单导入（SSE进度/取消，含仓库过滤）
+│       │   ├── OperatorConfig.vue    # 最近操作人分类配置
+│       │   └── WarehouseConfig.vue   # 销退仓库过滤配置
 │       └── adminViews/
 │           ├── page-users.vue
 │           ├── page-permissions.vue
@@ -223,11 +225,25 @@ shipping_record
   product_code, product_name, spec, quantity, country, province, city,
   district, street, address, buyer_remark, seller_remark
   # UNIQUE(ecommerce_order_no, line_no, product_code)
+  # 仅存发货数据；record_type 列存在但固定='shipping'（旧迁移残留，不再使用）
   # 文件内同 key 行先合并（quantity 累加）再与 DB 去重
   # 按列名匹配（_build_col_map），与列顺序无关，缺失必要列抛 ValueError
   # 必要列：电商主订单号/单据日期/渠道名称/渠道商/渠道商名称/最近操作人
   #         项次/商品型号/商品名称/数量/省份
   # 可选列（有则读取）：国家/市区/县区/街道/详细地址/规格/买家留言/商家备注
+
+return_record
+  id, batch_id(FK→shipping_batch), ecommerce_order_no, shipped_date,
+  product_code, quantity(负值), warehouse_name
+  # UNIQUE(ecommerce_order_no, product_code, shipped_date)
+  # 独立存储销退清单原始数据
+  # 必要列：平台订单/交易日期/品号/数量/仓库名称
+  # 导入时：过滤 is_excluded=True 的仓库；仅保留数量<0 的行；
+  #         仅保留 ecommerce_order_no 在 shipping_record 已存在的行
+
+return_warehouse_filter
+  id, warehouse_name(UNIQUE), is_excluded(默认False), created_at
+  # 配置销退导入时需忽略的仓库（UI：仓库配置 Tab）
 
 shipping_operator_type
   id, operator(UNIQUE), type(shipping/aftersale/unknown), created_at, updated_at
@@ -235,9 +251,10 @@ shipping_operator_type
 
 shipping_order_finished
   id, ecommerce_order_no, finished_code(NULL=未匹配), finished_name,
-  quantity, shipped_date, operator, channel_name, province,
+  quantity(发货数量), return_quantity(销退数量), actual_quantity(实际=发货-销退),
+  shipped_date, operator, channel_name, province,
   is_stale(产品库变更后标记), resolved_at
-  # 按订单贪心匹配成品组合（优先匹配产成品数最多的成品）
+  # 按订单对发货/销退数据分别贪心匹配成品组合，写入三列数量
 ```
 
 ### 产品库
@@ -360,14 +377,19 @@ GET    /api/product/params/finished/:finished_id      # 获取成品参数，按
 POST   /api/product/params/finished/:finished_id      # 全量 Upsert 保存成品参数
 
 POST   /api/shipping/import/shipping                  # 上传发货清单，返回 task_id
+POST   /api/shipping/import/return                    # 上传销退清单，返回 task_id（仅处理负数量行，按订单号匹配）
 GET    /api/shipping/import/progress/:task_id         # SSE 进度流：parsing→parsed→inserting→inserted→resolving→done/error/cancelled
 POST   /api/shipping/import/cancel/:task_id           # 发送中止信号，后台完成当前 chunk 后 rollback
 GET    /api/shipping/operators                        # 获取所有最近操作人及其分类
 POST   /api/shipping/operators/classify               # 批量保存操作人分类 [{operator, type}]
 GET    /api/shipping/stats                            # 统计摘要
-GET    /api/shipping/shipped-dates                    # 所有已存在 shipped_date（去重升序，用于缺失日期日历）
+GET    /api/shipping/shipped-dates                    # 所有发货记录的 shipped_date（去重升序，不含销退日期）
 POST   /api/shipping/resolve                          # 刷新 is_stale 订单的成品组合
 POST   /api/shipping/resolve-all                      # 全量重新计算所有订单成品组合（SSE 进度，task_id 复用 import/progress 流）
+GET    /api/shipping/warehouses                       # 所有出现过的仓库名及 is_excluded 状态
+POST   /api/shipping/warehouses/filter                # 批量保存仓库过滤配置 [{warehouse_name, is_excluded}]
+GET    /api/shipping/chart-options                    # 渠道名和省份去重列表 {channels, provinces}
+POST   /api/shipping/chart-data                       # 图表聚合数据，body: {group_by, date_start?, date_end?, channel_names?, provinces?, category_id?, series_id?, model_id?} → {summary, items}
 ```
 
 ## OSS结构
@@ -562,8 +584,8 @@ src/stores/product/
 
 ## page-data-mgmt.vue 说明
 - 路由 `/data-mgmt`，`onMounted` 调用 `maximizeApp()`，返回按钮先 `unmaximizeApp()` 再 `router.back()`
-- 顶部导航两个 Tab：**导入数据**（DataImport）/ **操作人配置**（OperatorConfig）
-- 右上角「重新计算成品组合」按钮：调 `POST /api/shipping/resolve-all` → 订阅 SSE 进度（复用 `import/progress/:task_id`），实时显示"xxx / xxx 个订单"
+- 顶部导航两个 Tab：**导入数据**（DataImport + ReturnImport 左右并排）/ **数据配置**（OperatorConfig + WarehouseConfig 左右并排）
+- 右上角「刷新全局数据」按钮：点击先弹二次确认框，确认后调 `POST /api/shipping/resolve-all` → 订阅 SSE 进度（复用 `import/progress/:task_id`），实时显示"xxx / xxx 个订单"；刷新时同时计算发货数量、销退数量、实际数量
 
 ## DataImport.vue 说明
 - 导入发货清单（xlsx/xls/csv），固定 100px 文件拖放区，选中后显示 Excel SVG 图标
@@ -580,14 +602,38 @@ src/stores/product/
   - 缺失日期显示红色 32×32 圆圈（`.cal-inner--missing`）
   - 导航：年份 el-select + 月份 el-select + 上/下月按钮
 
+## ReturnImport.vue 说明
+- 导入销退清单（xlsx/xls/csv），同 DataImport.vue 文件选择区风格
+- 导入流程与 DataImport.vue 相同（上传→ task_id → SSE → 进度条）
+- **仅处理数量 < 0 的行**，其余行忽略
+- **订单匹配**：仅保留 ecommerce_order_no 存在于 shipping_record 的行，其余入 `unmatched_rows`
+- **DB 去重**：检查 return_record 表 UNIQUE(ecommerce_order_no, product_code, shipped_date)
+- **导入后触发重算**：对受影响的订单删除旧成品组合结果并重算（含 return_quantity / actual_quantity）
+- **结果卡片**（3列网格）：文件总行数 / 销退行数 / 无匹配订单（可点击）/ 新增记录（accent）/ 跳过重复（可点击）/ 文件内合并（>0时可点击）
+- **弹窗列**：5列（平台订单/交易日期/品号/数量/仓库）
+- 无日历模块
+
 ## OperatorConfig.vue 说明
 - 展示所有「最近操作人」列出现过的人员，可设置类型：发货 / 售后 / 未分类
 - 类型颜色：shipping=#c4883a，aftersale=#4a8fc0，unknown=#8a7a6a
 - 右上角「刷新成品组合」按钮（`stale_count > 0` 时显示），调 `POST /api/shipping/resolve`
 
+## WarehouseConfig.vue 说明
+- 展示所有在 return_record 中出现过的仓库名，可配置 is_excluded（排除/正常导入）
+- 排除状态：橙红标签 + 橙红边框背景；正常状态：绿色标签
+- 调 `GET /api/shipping/warehouses` 加载，`POST /api/shipping/warehouses/filter` 保存
+
 ## page-shipping.vue 说明
 - 路由 `/shipping`，`onMounted` 调用 `maximizeApp()`，返回按钮先 `unmaximizeApp()`
-- 内嵌 ShippingDashboard（ECharts 统计看板，调 `/api/shipping/stats`，当前为占位状态）
+- 内嵌 ShippingDashboard（左右两栏布局：筛选面板 + 图表区）
+
+## ShippingDashboard.vue 说明
+- 左侧筛选面板（230px）：日期范围、品类/系列/型号级联选择、渠道多选、省份多选、分组维度 chip（日期/渠道/省份/产品）、图表类型 chip（柱状/折线/饼图/地图）、重置按钮
+- 右侧内容区：3个统计卡片（发货量/销退量/净发货，来自筛选后聚合数据）+ ECharts 图表
+- 图表类型：bar（三系列：发货量/销退量/净发货）/ line（折线：发货量+净发货）/ pie（donut：净发货分布）/ map（DOM 占位）
+- 数据接口：`GET /api/shipping/chart-options`（下拉选项）+ `POST /api/shipping/chart-data`（聚合数据）
+- 产品筛选复用 `GET /api/category/tree`
+- 筛选变化（排除 chartType）→ 重新请求后端；chartType 变化 → 仅重渲 ECharts
 
 ## /api/product/stats 返回结构
 ```json
@@ -607,8 +653,8 @@ src/stores/product/
 - [ ] FinishedExpandRow 标签行接真实数据（/api/product/tags/）
 - [ ] FinishedExpandRow 数据节：发货数据 / 售后数据（接 /api/shipping/* 真实数据）
 - [ ] ProductImage cover_image 接真实 OSS 图片 URL
-- [ ] ShippingDashboard 图表完善（按渠道/省份/时间维度的发货量图表）
-- [ ] 销退清单导入（/api/shipping/import/return，参考发货清单流程）
+- [x] ShippingDashboard 图表完善（bar/line/pie，按渠道/省份/日期/产品维度，含左侧筛选面板）
+- [x] 销退清单导入（/api/shipping/import/return，ReturnImport.vue，独立 return_record 表）
 - [ ] 产品库图表视图实现
 - [ ] 用户头像
 - [ ] 更多主题配色

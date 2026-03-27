@@ -65,6 +65,47 @@ def import_shipping():
     return Result.ok(data={'task_id': task_id}).to_response()
 
 
+@shipping_bp.post('/import/return')
+def import_return():
+    """接收销退清单，启动后台导入线程，返回 task_id 供前端订阅进度"""
+    file = request.files.get('file')
+    file_bytes, err = _check_file(file, '销退清单')
+    if err:
+        return err
+
+    task_id  = str(uuid.uuid4())
+    q        = queue.Queue()
+    _task_queues[task_id]  = q
+    _cancel_flags[task_id] = False
+    filename = file.filename
+    app      = current_app._get_current_object()
+
+    def run():
+        with app.app_context():
+            try:
+                def progress_cb(step, **kwargs):
+                    q.put({'step': step, **kwargs})
+
+                def cancel_check():
+                    return _cancel_flags.get(task_id, False)
+
+                result = shipping_service.import_return(
+                    filename, file_bytes,
+                    progress_cb=progress_cb,
+                    cancel_check=cancel_check,
+                )
+                q.put({'step': 'done', 'data': result})
+            except InterruptedError:
+                q.put({'step': 'cancelled', 'message': '导入已中止'})
+            except Exception as e:
+                q.put({'step': 'error', 'message': str(e)})
+            finally:
+                _cancel_flags.pop(task_id, None)
+
+    threading.Thread(target=run, daemon=True).start()
+    return Result.ok(data={'task_id': task_id}).to_response()
+
+
 @shipping_bp.post('/import/cancel/<task_id>')
 def cancel_import(task_id):
     """设置取消标志，后台线程将在下一个 progress_cb 时中止"""
@@ -168,5 +209,55 @@ def get_shipped_dates():
     """返回所有已存在的 shipped_date 列表（去重升序）"""
     try:
         return Result.ok(data=shipping_service.get_shipped_dates()).to_response()
+    except Exception as e:
+        return Result.fail(str(e)).to_response()
+
+
+@shipping_bp.get('/warehouses')
+def get_warehouses():
+    """返回所有出现过的仓库名及是否排除状态"""
+    try:
+        return Result.ok(data=shipping_service.get_warehouses()).to_response()
+    except Exception as e:
+        return Result.fail(str(e)).to_response()
+
+
+@shipping_bp.post('/warehouses/filter')
+def save_warehouse_filters():
+    """批量保存仓库过滤配置，body: [{ warehouse_name, is_excluded }]"""
+    items = request.get_json(silent=True)
+    if not isinstance(items, list):
+        return Result.fail('请求体应为数组').to_response()
+    try:
+        result = shipping_service.save_warehouse_filters(items)
+    except Exception as e:
+        return Result.fail(str(e)).to_response()
+    return Result.ok(data=result).to_response()
+
+
+@shipping_bp.get('/chart-options')
+def get_chart_options():
+    """返回渠道、省份、活跃产品 ID，按日期范围过滤（date_start/date_end 查询参数可选）"""
+    date_start = request.args.get('date_start')
+    date_end   = request.args.get('date_end')
+    try:
+        return Result.ok(data=shipping_service.get_chart_options(date_start, date_end)).to_response()
+    except Exception as e:
+        return Result.fail(str(e)).to_response()
+
+
+@shipping_bp.post('/chart-data')
+def get_chart_data():
+    """
+    POST body: { group_by, date_start?, date_end?, channel_names?, provinces?,
+                 category_id?, series_id?, model_id? }
+    返回 { summary: {quantity, return_quantity, actual_quantity},
+            items: [{label, quantity, return_quantity, actual_quantity}] }
+    """
+    params = request.get_json(silent=True) or {}
+    if params.get('group_by') not in {'date', 'category', 'series', 'model', 'channel', 'channel_code', 'province', 'city', 'district'}:
+        params['group_by'] = 'date'
+    try:
+        return Result.ok(data=shipping_service.get_chart_data(params)).to_response()
     except Exception as e:
         return Result.fail(str(e)).to_response()

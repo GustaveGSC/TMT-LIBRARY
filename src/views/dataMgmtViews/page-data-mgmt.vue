@@ -6,8 +6,10 @@ import { ArrowLeft } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import http from '@/api/http'
 import WindowControls  from '@/components/common/WindowControls.vue'
-import DataImport      from './DataImport.vue'
-import OperatorConfig  from './OperatorConfig.vue'
+import DataImport       from './DataImport.vue'
+import ReturnImport     from './ReturnImport.vue'
+import OperatorConfig   from './OperatorConfig.vue'
+import WarehouseConfig  from './WarehouseConfig.vue'
 
 // ── 路由 ──────────────────────────────────────────
 const router = useRouter()
@@ -15,9 +17,10 @@ const router = useRouter()
 // ── 当前页面 ──────────────────────────────────────
 const activePage = ref('import')
 
-// ── 重新计算成品组合 ────────────────────────────────
-const resolving       = ref(false)
-const resolveProgress = ref('')   // "123 / 4567 个订单"
+// ── 刷新全局数据 ────────────────────────────────────
+const resolving          = ref(false)
+const resolveProgress    = ref('')   // "123 / 4567 个订单"
+const showResolveConfirm = ref(false)
 
 const navItems = [
   {
@@ -26,9 +29,9 @@ const navItems = [
     svg: 'M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4 M17 8l-5-5-5 5 M12 3v12',
   },
   {
-    key: 'operator',
-    label: '操作人配置',
-    svg: 'M7 7a3 3 0 100-6 3 3 0 000 6 M1 21v-1a6 6 0 0112 0v1 M15 6h7 M15 10h6 M15 14h4',
+    key: 'config',
+    label: '数据配置',
+    svg: 'M12 2a4 4 0 100 8 4 4 0 000-8 M2 20a10 10 0 0120 0',
   },
 ]
 
@@ -45,6 +48,7 @@ function handleBack() {
 
 async function handleResolveAll() {
   if (resolving.value) return
+  showResolveConfirm.value = false
   resolving.value    = true
   resolveProgress.value = ''
   try {
@@ -60,7 +64,7 @@ async function handleResolveAll() {
           resolveProgress.value = data.total ? `${data.current} / ${data.total} 个订单` : ''
         } else if (data.step === 'done') {
           es.close()
-          ElMessage.success(`成品组合重新计算完成，共处理 ${data.data.resolved} 个订单`)
+          ElMessage.success(`全局数据刷新完成，共处理 ${data.data.resolved} 个订单`)
           resolve()
         } else if (data.step === 'error') {
           es.close()
@@ -110,11 +114,11 @@ async function handleResolveAll() {
       </nav>
 
       <div class="top-right">
-        <button class="btn-resolve" :class="{ resolving }" :disabled="resolving" @click="handleResolveAll">
+        <button class="btn-resolve" :class="{ resolving }" :disabled="resolving" @click="showResolveConfirm = true">
           <svg v-if="!resolving" class="resolve-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
           </svg>
-          <span v-if="!resolving">重新计算成品组合</span>
+          <span v-if="!resolving">刷新全局数据</span>
           <span v-else class="resolve-spin">↻</span>
           <span v-if="resolving && resolveProgress" class="resolve-progress">{{ resolveProgress }}</span>
           <span v-else-if="resolving">计算中…</span>
@@ -122,11 +126,35 @@ async function handleResolveAll() {
       </div>
     </header>
 
+    <!-- ── 刷新全局数据确认弹窗 ───────────────────── -->
+    <el-dialog
+      v-model="showResolveConfirm"
+      title="刷新全局数据"
+      width="400px"
+      :close-on-click-modal="false"
+    >
+      <div class="confirm-body">
+        将重新计算所有订单的成品组合（含发货数量、销退数量、实际数量），数据量较大时耗时较长，确认继续？
+      </div>
+      <template #footer>
+        <el-button @click="showResolveConfirm = false">取消</el-button>
+        <el-button type="primary" @click="handleResolveAll">确认刷新</el-button>
+      </template>
+    </el-dialog>
+
     <!-- ── 主内容区 ────────────────────────────── -->
     <main class="main-content">
       <div class="content-body">
-        <DataImport    v-show="activePage === 'import'"   />
-        <OperatorConfig v-show="activePage === 'operator'" />
+        <div v-show="activePage === 'import'" class="import-layout">
+          <DataImport />
+          <div class="import-divider"></div>
+          <ReturnImport />
+        </div>
+        <div v-show="activePage === 'config'" class="config-layout">
+          <OperatorConfig />
+          <div class="import-divider"></div>
+          <WarehouseConfig />
+        </div>
       </div>
     </main>
 
@@ -200,6 +228,10 @@ async function handleResolveAll() {
 .resolve-progress { color: var(--text-muted); font-size: 11px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+.confirm-body {
+  font-size: 13px; color: var(--text-primary); line-height: 1.7;
+}
+
 /* ── 主内容区 ─────────────────────────────────── */
 .main-content {
   flex: 1; overflow: hidden;
@@ -212,4 +244,27 @@ async function handleResolveAll() {
 .content-body::-webkit-scrollbar { width: 4px; }
 .content-body::-webkit-scrollbar-track { background: transparent; }
 .content-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* 导入数据双列布局 */
+.import-layout {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 0;
+  align-items: start;
+}
+.import-divider {
+  width: 1px;
+  background: var(--border);
+  margin: 0 36px;
+  align-self: stretch;
+  min-height: 200px;
+}
+
+/* 数据配置双列布局（操作人 + 仓库） */
+.config-layout {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 0;
+  align-items: start;
+}
 </style>
