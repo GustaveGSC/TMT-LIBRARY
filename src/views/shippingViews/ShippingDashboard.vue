@@ -68,10 +68,107 @@ const GROUP_BY_OPTIONS = [
 
 // 各聚合维度下允许使用的图表类型和对比模式
 const GROUPBY_ALLOWED = {
-  product:  { chartTypes: ['bar', 'pie'],  comparisons: []            },
-  channel:  { chartTypes: ['bar', 'pie'],  comparisons: []            },
-  province: { chartTypes: ['bar', 'map'],  comparisons: []            },
-  date:     { chartTypes: [],              comparisons: ['yoy', 'mom'] },
+  product:  { chartTypes: ['bar', 'pie'],  comparisons: [],             default: 'bar' },
+  channel:  { chartTypes: ['bar', 'pie'],  comparisons: [],             default: 'bar' },
+  province: { chartTypes: ['map', 'bar'],  comparisons: [],             default: 'map' },
+  date:     { chartTypes: [],              comparisons: ['yoy', 'mom'], default: null  },
+}
+
+// 省份简称 → ECharts GeoJSON 标准全称
+const PROVINCE_NAME_MAP = {
+  '北京': '北京市',   '天津': '天津市',   '上海': '上海市',   '重庆': '重庆市',
+  '河北': '河北省',   '山西': '山西省',   '辽宁': '辽宁省',   '吉林': '吉林省',
+  '黑龙江': '黑龙江省', '江苏': '江苏省', '浙江': '浙江省',   '安徽': '安徽省',
+  '福建': '福建省',   '江西': '江西省',   '山东': '山东省',   '河南': '河南省',
+  '湖北': '湖北省',   '湖南': '湖南省',   '广东': '广东省',   '海南': '海南省',
+  '四川': '四川省',   '贵州': '贵州省',   '云南': '云南省',   '陕西': '陕西省',
+  '甘肃': '甘肃省',   '青海': '青海省',   '台湾': '台湾省',
+  '内蒙古': '内蒙古自治区', '广西': '广西壮族自治区', '西藏': '西藏自治区',
+  '宁夏': '宁夏回族自治区', '新疆': '新疆维吾尔自治区',
+  '香港': '香港特别行政区', '澳门': '澳门特别行政区',
+}
+
+// 省份简称 → 行政区划代码（用于加载省份地图文件）
+const PROVINCE_ADCODE = {
+  '北京市': '110000', '天津市': '120000', '河北省': '130000', '山西省': '140000',
+  '内蒙古自治区': '150000', '辽宁省': '210000', '吉林省': '220000', '黑龙江省': '230000',
+  '上海市': '310000', '江苏省': '320000', '浙江省': '330000', '安徽省': '340000',
+  '福建省': '350000', '江西省': '360000', '山东省': '370000', '河南省': '410000',
+  '湖北省': '420000', '湖南省': '430000', '广东省': '440000', '广西壮族自治区': '450000',
+  '海南省': '460000', '重庆市': '500000', '四川省': '510000', '贵州省': '520000',
+  '云南省': '530000', '西藏自治区': '540000', '陕西省': '610000', '甘肃省': '620000',
+  '青海省': '630000', '宁夏回族自治区': '640000', '新疆维吾尔自治区': '650000',
+  '台湾省': '710000', '香港特别行政区': '810000', '澳门特别行政区': '820000',
+}
+
+// 通过 Vite glob 懒加载 src/assets/maps/ 下的省份地图 JSON
+// 省份地图文件命名规则：{adcode}_full.json，从 DataV 下载
+// 下载地址：https://geo.datav.aliyun.com/areas_v3/bound/{adcode}_full.json
+const PROVINCE_MAP_MODULES = import.meta.glob('@/assets/maps/*.json')
+
+// 已注册地图缓存
+const registeredMaps = new Set()
+
+/** 通过 glob key 中是否包含关键字来查找 loader，规避路径格式差异 */
+function findLoader(keyword) {
+  const entry = Object.entries(PROVINCE_MAP_MODULES).find(([k]) => k.includes(keyword))
+  return entry ? entry[1] : null
+}
+
+async function ensureChinaMap() {
+  if (registeredMaps.has('china')) return true
+  const loader = findLoader('china-map')
+  if (!loader) { ElMessage.error('地图数据未找到，请将 china-map.json 放入 src/assets/maps/ 目录'); return false }
+  try {
+    const mod = await loader()
+    echarts.registerMap('china', mod.default)
+    registeredMaps.add('china')
+    return true
+  } catch {
+    ElMessage.error('地图数据加载失败')
+    return false
+  }
+}
+
+/** 加载并注册指定行政区划代码的省份地图，返回 mapKey 或 null */
+async function ensureProvinceMap(adcode) {
+  if (registeredMaps.has(adcode)) return adcode
+  const loader = findLoader(`${adcode}_full`)
+  if (!loader) return null   // 文件不存在，降级显示全国地图
+  try {
+    const mod = await loader()
+    echarts.registerMap(adcode, mod.default)
+    registeredMaps.add(adcode)
+    return adcode
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 根据当前维度和筛选状态决定应该使用哪张地图。
+ * 地域维度下筛选了单一省份 → 尝试加载省份地图；否则使用全国地图。
+ * 返回最终使用的 mapKey。
+ */
+async function resolveMapKey() {
+  const ok = await ensureChinaMap()
+  if (!ok) return null
+
+  // 地域维度下，直接读取筛选中的省份（expandStrSel 处理自定义分组）
+  if (groupBy.value === 'province') {
+    const provs = expandStrSel(filters.value.provinces)
+    if (provs.length === 1) {
+      const fullName = PROVINCE_NAME_MAP[provs[0]] ?? provs[0]
+      const adcode   = PROVINCE_ADCODE[fullName]
+      console.log('[map] province selected:', provs[0], '→', fullName, '→ adcode:', adcode)
+      if (adcode) {
+        const key = await ensureProvinceMap(adcode)
+        console.log('[map] ensureProvinceMap result:', key)
+        if (key) return key
+      }
+    }
+  }
+  return 'china'
 }
 
 // ── 响应式状态 ────────────────────────────────────
@@ -705,6 +802,7 @@ async function loadChartData() {
     const [start, end] = filters.value.dateRange || []
     const body = {
       group_by:      effectiveGroupBy.value,
+      period:        groupBy.value === 'date' ? selectedPeriod.value : undefined,
       date_start:    start ? formatDate(start) : null,
       date_end:      end   ? formatDate(end)   : null,
       // 使用有效筛选函数（含单候选自动下钻逻辑）
@@ -739,7 +837,7 @@ function initChart() {
       // 右击柱子 → 下钻（自定义分组条目跳过）
       chartInst.on('contextmenu', (params) => {
         params.event?.event?.preventDefault?.()
-        if (params.componentType !== 'series' || params.seriesType !== 'bar') return
+        if (params.componentType !== 'series' || !['bar', 'pie'].includes(params.seriesType)) return
         const label = params.name
         const isCustomGroup = customGroups.value.some(
           g => activeGroupIds.value.includes(g.id) && g.name === label
@@ -816,12 +914,22 @@ function mergeGroupedItems(items) {
   return result
 }
 
-function renderChart() {
+async function renderChart() {
   if (!chartInst) return
   const items = mergeGroupedItems(chartItems.value)
-  const opt = chartType.value === 'line' ? buildLineOption(items)
-            : chartType.value === 'pie'  ? buildPieOption(items)
-            : buildBarOption(items)
+  let opt
+  if (groupBy.value === 'date') {
+    // 时间维度：由对比模式决定图表类型
+    opt = comparisonMode.value === 'mom' ? buildMomOption(items) : buildYoyOption(items)
+  } else if (chartType.value === 'map') {
+    const mapKey = await resolveMapKey()
+    if (!mapKey) return
+    opt = buildMapOption(items, mapKey)
+  } else {
+    opt = chartType.value === 'line' ? buildLineOption(items)
+        : chartType.value === 'pie'  ? buildPieOption(items)
+        : buildBarOption(items)
+  }
   chartInst.setOption(opt, { notMerge: true })
 }
 
@@ -892,6 +1000,21 @@ function buildChartTitle(label) {
   return `${parts.join(' - ')}   ${label}分布`
 }
 
+// 公共工具区配置
+// withZoom=true 时包含区域缩放（仅直角坐标系图表使用）
+function makeToolbox(withZoom = false) {
+  return {
+    right: 16, top: 12,
+    feature: {
+      ...(withZoom ? { dataZoom: { title: { zoom: '区域缩放', back: '缩放还原' }, yAxisIndex: 'none' } } : {}),
+      restore:      { title: '还原' },
+      saveAsImage:  { title: '保存图片', pixelRatio: 2 },
+    },
+    iconStyle:  { borderColor: '#8a7a6a' },
+    emphasis:   { iconStyle: { borderColor: '#c4883a', color: '#c4883a' } },
+  }
+}
+
 // 柱状图：主指标柱 + 占比折线 + 柏拉图累计占比折线
 function buildBarOption(items) {
   const { field, label } = METRIC_MAP[dataMetric.value]
@@ -934,6 +1057,7 @@ function buildBarOption(items) {
       textStyle: { color: '#3a3028', fontFamily: FONT, fontSize: 14, fontWeight: '600' },
       subtextStyle: { color: '#8a7a6a', fontFamily: FONT, fontSize: 12 },
     },
+    toolbox: makeToolbox(true),
     legend: {
       top: 76, left: 'center', itemWidth: 18, itemHeight: 12, itemGap: 20,
       textStyle: { color: '#6b5e4e', fontFamily: FONT, fontSize: 13 },
@@ -950,11 +1074,14 @@ function buildBarOption(items) {
         const title = name
           ? `<span style="font-weight:600;color:#3a3028">${code}</span><span style="font-size:12px;color:#8a7a6a;margin-left:6px">${name}</span>`
           : `<span style="font-weight:600;color:#3a3028">${code}</span>`
-        let s = `<div style="font-family:${FONT};font-size:14px">`
-        s += `<div style="margin-bottom:3px">${title}</div>`
-        if (bar)   s += `<div>${bar.marker}${bar.seriesName}：${bar.value}</div>`
-        if (pct)   s += `<div>${pct.marker}占比：${pct.value}%</div>`
-        if (cumul) s += `<div>${cumul.marker}累计占比：${cumul.value}%</div>`
+        const row = (marker, name, val) =>
+          `<div style="display:flex;justify-content:space-between;align-items:center;gap:20px;line-height:1.8">` +
+          `<span>${marker}${name}</span><span style="font-weight:600">${val}</span></div>`
+        let s = `<div style="font-family:${FONT};font-size:14px;min-width:160px">`
+        s += `<div style="margin-bottom:4px">${title}</div>`
+        if (bar)   s += row(bar.marker,   bar.seriesName, bar.value)
+        if (pct)   s += row(pct.marker,   '占比',         `${pct.value}%`)
+        if (cumul) s += row(cumul.marker, '累计占比',     `${cumul.value}%`)
         if (members?.length) {
           s += `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #e0d4c0">`
           s += members.map(m => `<div style="color:#3a7bc8;font-size:12px">${m}</div>`).join('')
@@ -1032,8 +1159,9 @@ function buildLineOption(items) {
   }
   return {
     backgroundColor: 'transparent',
+    toolbox: makeToolbox(true),
     tooltip: { trigger: 'axis', textStyle: { fontFamily: FONT } },
-    grid: { top: 12, left: 52, right: 16, bottom: 44 },
+    grid: { top: 48, left: 52, right: 16, bottom: 44 },
     xAxis: { type: 'category', data: labels, axisLabel: labelOpt, axisLine: { lineStyle: { color: '#e0d4c0' } }, axisTick: { lineStyle: { color: '#e0d4c0' } } },
     yAxis: { type: 'value', axisLabel: { color: '#7a5c3a', fontFamily: FONT, fontSize: 11 }, splitLine: { lineStyle: { color: '#f0e8d8' } } },
     series: [
@@ -1042,28 +1170,407 @@ function buildLineOption(items) {
   }
 }
 
+// 同比（YoY）：将日期序列按年拆分，各年同期数据并排对比
+function buildYoyOption(items) {
+  const { field, label } = METRIC_MAP[dataMetric.value]
+  const period = selectedPeriod.value
+
+  // 解析后端 label 为 { year, periodKey, periodLabel }
+  function parseLabel(raw) {
+    if (period === 'year') {
+      return { year: raw, periodKey: raw, periodLabel: raw }
+    }
+    const dashIdx = raw.indexOf('-')
+    const yr  = raw.slice(0, dashIdx)     // '2024'
+    const seg = raw.slice(dashIdx + 1)    // 'Q1' | 'H1' | '03'
+    if (period === 'quarter') {
+      return { year: yr, periodKey: seg, periodLabel: seg }
+    }
+    if (period === 'halfyear') {
+      return { year: yr, periodKey: seg, periodLabel: seg === 'H1' ? '上半年' : '下半年' }
+    }
+    // month: '03' → '3月'
+    return { year: yr, periodKey: seg, periodLabel: `${parseInt(seg)}月` }
+  }
+
+  // 生成完整的期号序列（X 轴固定展示完整一年，缺失数据填 0）
+  // year 粒度则由数据自身决定 X 轴
+  const FULL_PERIODS = {
+    month:    ['01','02','03','04','05','06','07','08','09','10','11','12'],
+    quarter:  ['Q1','Q2','Q3','Q4'],
+    halfyear: ['H1','H2'],
+    year:     null,   // 年粒度无固定序列
+  }
+  const PERIOD_LABELS = {
+    month:    ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'],
+    quarter:  ['Q1','Q2','Q3','Q4'],
+    halfyear: ['上半年','下半年'],
+    year:     null,
+  }
+
+  // 收集所有年份和数据
+  const yearMap = new Map()   // year → Map<periodKey, value>
+
+  for (const item of items) {
+    const { year, periodKey } = parseLabel(item.label)
+    if (!yearMap.has(year)) yearMap.set(year, new Map())
+    yearMap.get(year).set(periodKey, item[field] || 0)
+  }
+
+  // 确定 X 轴期号序列
+  let periodOrder, xLabels
+  if (FULL_PERIODS[period]) {
+    // 固定完整序列
+    periodOrder = FULL_PERIODS[period]
+    xLabels     = PERIOD_LABELS[period]
+  } else {
+    // year 粒度：按出现年份升序
+    periodOrder = [...yearMap.keys()].sort()
+    xLabels     = periodOrder
+  }
+
+  const years   = [...yearMap.keys()].sort()
+
+  const YEAR_COLORS = ['#c4883a', '#4a8fc0', '#6ab47a', '#9c6fba', '#e07070', '#f0a030', '#50c0c0']
+
+  const series = years.map((yr, idx) => {
+    const clr  = YEAR_COLORS[idx % YEAR_COLORS.length]
+    // 缺失期号填 0（确保每年序列长度与 X 轴一致）
+    const data = periodOrder.map(k => yearMap.get(yr)?.get(k) ?? 0)
+    return {
+      name: `${yr}年`,
+      type: 'bar',
+      data,
+      itemStyle: { color: clr, borderRadius: [2, 2, 0, 0] },
+      label: {
+        show: true, position: 'top', color: clr,
+        fontFamily: FONT, fontSize: 12, fontWeight: 'bold', formatter: '{c}',
+      },
+    }
+  })
+
+  const titleText = `${buildChartTitle(label)} · 同比`
+  return {
+    backgroundColor: 'transparent',
+    title: {
+      text: titleText,
+      subtext: (() => {
+        const [start, end] = filters.value.dateRange || []
+        if (start && end) return `${formatDate(start)}  ~  ${formatDate(end)}`
+        if (start) return `${formatDate(start)} 起`
+        return '全部时间'
+      })(),
+      left: 10, top: 16,
+      textStyle:    { color: '#3a3028', fontFamily: FONT, fontSize: 14, fontWeight: '600' },
+      subtextStyle: { color: '#8a7a6a', fontFamily: FONT, fontSize: 12 },
+    },
+    toolbox: makeToolbox(true),
+    legend: {
+      top: 76, left: 'center', itemWidth: 18, itemHeight: 12, itemGap: 20,
+      textStyle: { color: '#6b5e4e', fontFamily: FONT, fontSize: 13 },
+    },
+    tooltip: {
+      trigger: 'axis', axisPointer: { type: 'shadow' }, textStyle: { fontFamily: FONT },
+      formatter(params) {
+        const periodLabel = params[0]?.name
+        const row = (marker, name, val) =>
+          `<div style="display:flex;justify-content:space-between;align-items:center;gap:20px;line-height:1.8">` +
+          `<span>${marker}${name}</span><span style="font-weight:600">${val ?? '-'}</span></div>`
+        let s = `<div style="font-family:${FONT};font-size:14px;min-width:160px">`
+        s += `<div style="margin-bottom:4px;font-weight:600;color:#3a3028">${periodLabel}</div>`
+        for (const p of params) {
+          if (p.value != null) s += row(p.marker, p.seriesName, p.value)
+        }
+        return s + '</div>'
+      },
+    },
+    grid: { top: 116, left: 60, right: 30, bottom: 50 },
+    xAxis: {
+      type: 'category', data: xLabels,
+      axisLabel: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13 },
+      axisLine: { lineStyle: { color: '#e0d4c0' } },
+      axisTick: { lineStyle: { color: '#e0d4c0' } },
+    },
+    yAxis: {
+      type: 'value', name: '数量（PCS）',
+      nameTextStyle: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13 },
+      axisLabel: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13 },
+      splitLine: { lineStyle: { color: '#f0e8d8' } },
+      axisLine: { show: true, lineStyle: { color: '#e0d4c0' } },
+      axisTick: { show: true, lineStyle: { color: '#e0d4c0' } },
+    },
+    series,
+  }
+}
+
+// 环比（MoM）：按时间顺序显示柱状数据，叠加环比增长率折线
+function buildMomOption(items) {
+  const { field, label } = METRIC_MAP[dataMetric.value]
+  const labels = items.map(i => i.label)
+  const values = items.map(i => i[field] || 0)
+
+  // 计算环比增长率（%）
+  const momData = values.map((v, i) => {
+    if (i === 0 || values[i - 1] === 0) return null
+    return Math.round((v - values[i - 1]) / values[i - 1] * 1000) / 10
+  })
+
+  const titleText = `${buildChartTitle(label)} · 环比`
+  return {
+    backgroundColor: 'transparent',
+    title: {
+      text: titleText,
+      subtext: (() => {
+        const [start, end] = filters.value.dateRange || []
+        if (start && end) return `${formatDate(start)}  ~  ${formatDate(end)}`
+        if (start) return `${formatDate(start)} 起`
+        return '全部时间'
+      })(),
+      left: 10, top: 16,
+      textStyle:    { color: '#3a3028', fontFamily: FONT, fontSize: 14, fontWeight: '600' },
+      subtextStyle: { color: '#8a7a6a', fontFamily: FONT, fontSize: 12 },
+    },
+    toolbox: makeToolbox(true),
+    legend: {
+      top: 76, left: 'center', itemWidth: 18, itemHeight: 12, itemGap: 20,
+      textStyle: { color: '#6b5e4e', fontFamily: FONT, fontSize: 13 },
+    },
+    tooltip: {
+      trigger: 'axis', axisPointer: { type: 'shadow' }, textStyle: { fontFamily: FONT },
+      formatter(params) {
+        const periodLabel = params[0]?.name
+        const row = (marker, name, val) =>
+          `<div style="display:flex;justify-content:space-between;align-items:center;gap:20px;line-height:1.8">` +
+          `<span>${marker}${name}</span><span style="font-weight:600">${val ?? '-'}</span></div>`
+        let s = `<div style="font-family:${FONT};font-size:14px;min-width:160px">`
+        s += `<div style="margin-bottom:4px;font-weight:600;color:#3a3028">${periodLabel}</div>`
+        for (const p of params) {
+          if (p.value == null) continue
+          const display = p.seriesName === '环比增长率' ? `${p.value}%` : p.value
+          s += row(p.marker, p.seriesName, display)
+        }
+        return s + '</div>'
+      },
+    },
+    dataZoom: [
+      { type: 'slider', xAxisIndex: 0, bottom: 14, height: 20, borderColor: '#e0d4c0', fillerColor: 'rgba(196,136,58,0.1)', handleStyle: { color: '#c4883a' }, textStyle: { color: '#7a5c3a', fontFamily: FONT, fontSize: 11 } },
+      { type: 'inside', xAxisIndex: 0 },
+    ],
+    grid: { top: 116, left: 60, right: 60, bottom: 82 },
+    xAxis: {
+      type: 'category', data: labels,
+      axisLabel: { rotate: labels.length > 10 ? 30 : 0, color: '#7a5c3a', fontFamily: FONT, fontSize: 13, interval: labels.length > 20 ? Math.floor(labels.length / 20) : 0 },
+      axisLine: { lineStyle: { color: '#e0d4c0' } },
+      axisTick: { lineStyle: { color: '#e0d4c0' } },
+    },
+    yAxis: [
+      {
+        type: 'value', name: '数量（PCS）',
+        nameTextStyle: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13 },
+        axisLabel: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13 },
+        splitLine: { lineStyle: { color: '#f0e8d8' } },
+        axisLine: { show: true, lineStyle: { color: '#e0d4c0' } },
+        axisTick: { show: true, lineStyle: { color: '#e0d4c0' } },
+      },
+      {
+        type: 'value', name: '环比增长率',
+        nameTextStyle: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13 },
+        axisLabel: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13, formatter: '{value}%' },
+        splitLine: { show: false },
+        axisLine: { show: true, lineStyle: { color: '#e0d4c0' } },
+        axisTick: { show: true, lineStyle: { color: '#e0d4c0' } },
+      },
+    ],
+    series: [
+      {
+        name: label, type: 'bar', data: values, yAxisIndex: 0,
+        itemStyle: { color: '#a8cce8', borderRadius: [2, 2, 0, 0] },
+        label: { show: true, position: 'top', color: '#2c2420', fontFamily: FONT, fontSize: 14, fontWeight: 'bold', formatter: '{c}' },
+      },
+      {
+        name: '环比增长率', type: 'line', data: momData, yAxisIndex: 1,
+        smooth: true, connectNulls: false,
+        lineStyle: { color: '#e07c00', width: 2 },
+        itemStyle: { color: '#e07c00' },
+        symbol: 'circle', symbolSize: 5,
+        label: { show: true, position: 'top', color: '#e07c00', fontFamily: FONT, fontSize: 12, fontWeight: 'bold', formatter: p => p.value != null ? `${p.value}%` : '' },
+      },
+    ],
+  }
+}
+
 // 饼图（donut）：按当前指标显示分布
 function buildPieOption(items) {
   const { field, label } = METRIC_MAP[dataMetric.value]
-  const data = items.filter(i => i[field] > 0).map(i => ({ name: i.label, value: i[field] }))
+  const nameMap         = Object.fromEntries(items.filter(i => i.name).map(i => [i.label, i.name]))
+  const groupMembersMap = Object.fromEntries(items.filter(i => i.isGroup && i.groupMembers).map(i => [i.label, i.groupMembers]))
+  const total = items.reduce((s, i) => s + (i[field] || 0), 0)
+  const data  = items.filter(i => i[field] > 0).map(i => ({ name: i.label, value: i[field] }))
+
+  const titleText = buildChartTitle(label)
+
   return {
     backgroundColor: 'transparent',
-    tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)', textStyle: { fontFamily: FONT } },
-    legend: { orient: 'vertical', right: 10, top: 'center', textStyle: { color: '#7a5c3a', fontFamily: FONT, fontSize: 11 }, type: 'scroll' },
+    title: {
+      text: titleText,
+      subtext: (() => {
+        const [start, end] = filters.value.dateRange || []
+        if (start && end) return `${formatDate(start)}  ~  ${formatDate(end)}`
+        if (start) return `${formatDate(start)} 起`
+        return '全部时间'
+      })(),
+      left: 10, top: 16,
+      textStyle:    { color: '#3a3028', fontFamily: FONT, fontSize: 14, fontWeight: '600' },
+      subtextStyle: { color: '#8a7a6a', fontFamily: FONT, fontSize: 12 },
+    },
+    toolbox: makeToolbox(false),
+    tooltip: {
+      trigger: 'item',
+      textStyle: { fontFamily: FONT },
+      formatter(params) {
+        const code    = params.name
+        const name    = nameMap[code]
+        const members = groupMembersMap[code]
+        const pct     = total > 0 ? Math.round(params.value / total * 1000) / 10 : 0
+        const titleEl = name
+          ? `<span style="font-weight:600;color:#3a3028">${code}</span><span style="font-size:12px;color:#8a7a6a;margin-left:6px">${name}</span>`
+          : `<span style="font-weight:600;color:#3a3028">${code}</span>`
+        const row = (marker, name, val) =>
+          `<div style="display:flex;justify-content:space-between;align-items:center;gap:20px;line-height:1.8">` +
+          `<span>${marker}${name}</span><span style="font-weight:600">${val}</span></div>`
+        let s = `<div style="font-family:${FONT};font-size:14px;min-width:160px">`
+        s += `<div style="margin-bottom:4px">${titleEl}</div>`
+        s += row(params.marker, params.seriesName, `${params.value}（${pct}%）`)
+        if (members?.length) {
+          s += `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #e0d4c0">`
+          s += members.map(m => `<div style="color:#3a7bc8;font-size:12px">${m}</div>`).join('')
+          s += `</div>`
+        }
+        if (!members && DRILLABLE_LEVELS.has(effectiveGroupBy.value)) {
+          s += `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #e0d4c0;color:#8a7a6a;font-size:12px">右击扇区查看详情</div>`
+        }
+        return s + '</div>'
+      },
+    },
+    legend: {
+      orient: 'vertical', right: 40, top: 'middle',
+      textStyle: { color: '#6b5e4e', fontFamily: FONT, fontSize: 14 },
+      type: 'scroll',
+      itemWidth: 16, itemHeight: 12, itemGap: 14,
+      pageButtonItemGap: 6,
+      pageIconSize: 12,
+      pageTextStyle: { color: '#8a7a6a', fontFamily: FONT, fontSize: 12 },
+    },
     series: [{
-      name: label, type: 'pie', radius: ['40%', '68%'],
-      center: ['40%', '50%'],
+      name: label, type: 'pie', radius: ['36%', '62%'],
+      // 右侧图例占位，饼图左移
+      center: ['50%', '54%'],
       data,
-      label: { show: false },
-      emphasis: { label: { show: true, fontSize: 13, fontWeight: 'bold', fontFamily: FONT } },
+      label: {
+        show: true,
+        position: 'outside',
+        formatter: '{a|{a}}{abg|}\n{hr|}\n  {b|{b}：}{c}  {per|{d}%}  ',
+        backgroundColor: '#fff',
+        borderColor: '#e0d4c0',
+        borderWidth: 1,
+        borderRadius: 6,
+        rich: {
+          a:   { color: '#8a7a6a', lineHeight: 22, align: 'center', fontFamily: FONT, fontSize: 11 },
+          hr:  { borderColor: '#e0d4c0', width: '100%', borderWidth: 1, height: 0 },
+          b:   { color: '#3a3028', fontSize: 13, fontWeight: 'bold', lineHeight: 30, fontFamily: FONT },
+          per: { color: '#fff', backgroundColor: '#c4883a', padding: [3, 5], borderRadius: 4, fontSize: 11, fontFamily: FONT },
+        },
+      },
+      labelLine: { show: true, length: 10, length2: 14, smooth: true },
+      emphasis: {
+        itemStyle: { shadowBlur: 8, shadowColor: 'rgba(0,0,0,0.15)' },
+      },
       itemStyle: { borderRadius: 4, borderColor: '#fff', borderWidth: 2 },
     }],
   }
 }
 
+// 地图：全国地图或省份地图
+// mapKey='china' → 全国，需要将省份简称转换为 GeoJSON 标准全称
+// mapKey=adcode  → 省份地图，城市名称直接使用 DB 中的值
+function buildMapOption(items, mapKey = 'china') {
+  const { field, label } = METRIC_MAP[dataMetric.value]
+  const titleText = buildChartTitle(label)
+  const isChina = mapKey === 'china'
+  const data = items.map(i => ({
+    name:  isChina ? (PROVINCE_NAME_MAP[i.label] ?? i.label) : i.label,
+    value: i[field] ?? 0,
+    originalName: i.label,
+  }))
+  const maxVal = Math.max(...data.map(d => d.value), 1)
+
+  return {
+    backgroundColor: 'transparent',
+    title: {
+      text: titleText,
+      subtext: (() => {
+        const [start, end] = filters.value.dateRange || []
+        if (start && end) return `${formatDate(start)}  ~  ${formatDate(end)}`
+        if (start) return `${formatDate(start)} 起`
+        return '全部时间'
+      })(),
+      left: 10, top: 16,
+      textStyle:    { color: '#3a3028', fontFamily: FONT, fontSize: 14, fontWeight: '600' },
+      subtextStyle: { color: '#8a7a6a', fontFamily: FONT, fontSize: 12 },
+    },
+    toolbox: makeToolbox(false),
+    tooltip: {
+      trigger: 'item',
+      textStyle: { fontFamily: FONT, fontSize: 13 },
+      formatter(params) {
+        if (params.value == null || isNaN(params.value)) return `${params.name}：暂无数据`
+        const name = params.data?.originalName ?? params.name
+        return `<div style="font-family:${FONT};font-size:13px;min-width:140px">` +
+          `<div style="font-weight:600;margin-bottom:4px">${name}</div>` +
+          `<div style="display:flex;justify-content:space-between;align-items:center;gap:20px;line-height:1.8">` +
+          `<span>${label}</span><span style="font-weight:600">${params.value}</span></div></div>`
+      },
+    },
+    visualMap: {
+      min: 0, max: maxVal,
+      left: 16, bottom: 40,
+      text: ['多', '少'],
+      calculable: true,
+      inRange: { color: ['#fef3e0', '#e8a855', '#c4883a'] },
+      textStyle: { color: '#6b5e4e', fontFamily: FONT, fontSize: 12 },
+    },
+    series: [{
+      name: label, type: 'map', map: mapKey,
+      roam: true,
+      data,
+      label: { show: true, fontFamily: FONT, fontSize: 11, color: '#3a3028' },
+      emphasis:  { label: { show: true, fontFamily: FONT, fontSize: 12, fontWeight: 'bold' }, itemStyle: { areaColor: '#e09050' } },
+      select:    { disabled: true },
+      itemStyle: { areaColor: '#f5f0e8', borderColor: '#d4c4a8', borderWidth: 0.8 },
+    }],
+  }
+}
+
+// 地图右侧 Top10 表格：地域维度且图表为地图时显示
+const showMapTable = computed(() => groupBy.value === 'province' && chartType.value === 'map')
+
+// 按当前指标降序取前 10 条（过滤 0 值）
+const mapTopItems = computed(() => {
+  if (!showMapTable.value) return []
+  const { field } = METRIC_MAP[dataMetric.value]
+  return [...chartItems.value]
+    .filter(i => (i[field] ?? 0) > 0)
+    .sort((a, b) => (b[field] ?? 0) - (a[field] ?? 0))
+    .slice(0, 10)
+})
+
 // 图表类型切换：仅重渲，不重新请求数据
 watch(chartType,       () => renderChart())
 watch(dataMetric,      () => renderChart())
+// 对比模式切换（同比/环比）→ 仅重渲
+watch(comparisonMode,  () => { if (groupBy.value === 'date') renderChart() })
+// 时间粒度切换（在时间维度下）→ 重新请求数据
+watch(selectedPeriod,  () => { if (groupBy.value === 'date') loadChartData() })
 // 产品/渠道/地域筛选变化 → 自动刷新图表
 watch(
   () => [
@@ -1076,13 +1583,21 @@ watch(
 )
 // 日期变化 → 重新加载筛选候选（图表需点击查询才更新）
 watch(() => filters.value.dateRange, () => loadOptions(), { deep: true })
-// groupBy 切换时，自动重置不合法的图表类型 / 对比模式
+// groupBy 切换时，自动重置不合法的图表类型 / 对比模式；地域维度默认使用地图
 watch(groupBy, () => {
-  if (!allowedChartTypes.value.includes(chartType.value)) {
-    chartType.value = allowedChartTypes.value[0] ?? null
+  const allowed  = allowedChartTypes.value
+  const defType  = GROUPBY_ALLOWED[groupBy.value]?.default ?? null
+  if (!allowed.includes(chartType.value)) {
+    chartType.value = defType
+  } else if (defType && defType !== chartType.value) {
+    chartType.value = defType
   }
   if (comparisonMode.value && !allowedComparisons.value.includes(comparisonMode.value)) {
     comparisonMode.value = null
+  }
+  // 切换到时间维度时，默认激活同比
+  if (groupBy.value === 'date' && !comparisonMode.value) {
+    comparisonMode.value = 'yoy'
   }
 })
 </script>
@@ -1114,7 +1629,7 @@ watch(groupBy, () => {
             <el-date-picker v-model="filters.dateRange" type="daterange" range-separator="~"
               start-placeholder="开始日期" end-placeholder="结束日期"
               size="default" style="width:100%" :shortcuts="DATE_SHORTCUTS" />
-            <el-segmented v-model="selectedPeriod" :options="PERIOD_OPTIONS" size="normal" block />
+            <el-segmented v-model="selectedPeriod" :options="PERIOD_OPTIONS" size="default" block />
           </div>
         </div>
       </div>
@@ -1350,15 +1865,28 @@ watch(groupBy, () => {
 
         <!-- 右侧：数据指标选择 -->
         <div class="ct-right">
-          <el-select v-model="dataMetric" size="normal" class="metric-select" style="width: 150px">
+          <el-select v-model="dataMetric" size="default" class="metric-select" style="width: 150px">
             <el-option v-for="m in METRIC_OPTIONS" :key="m.value" :label="m.label" :value="m.value" />
           </el-select>
         </div>
       </div>
 
       <!-- 中间：图表 -->
-      <div v-loading="loadingChart" class="chart-wrap" @contextmenu.prevent>
+      <div v-loading="loadingChart" class="chart-wrap" :class="{ 'chart-wrap--with-table': showMapTable }" @contextmenu.prevent>
         <div ref="chartEl" class="chart-canvas"></div>
+
+        <!-- 地域维度地图：右侧 Top10 排行表 -->
+        <div v-if="showMapTable" class="map-rank-panel">
+          <div class="map-rank-title">{{ METRIC_MAP[dataMetric].label }} Top 10</div>
+          <div class="map-rank-list">
+            <div v-for="(item, idx) in mapTopItems" :key="item.label" class="map-rank-row">
+              <span class="map-rank-no" :class="{ 'top3': idx < 3 }">{{ idx + 1 }}</span>
+              <span class="map-rank-name">{{ item.label }}</span>
+              <span class="map-rank-val">{{ item[METRIC_MAP[dataMetric].field] }}</span>
+            </div>
+            <div v-if="mapTopItems.length === 0" class="map-rank-empty">暂无数据</div>
+          </div>
+        </div>
       </div>
 
       <!-- 底部：类别选择 -->
@@ -1612,7 +2140,41 @@ watch(groupBy, () => {
 
 /* 图表区 */
 .chart-wrap { flex: 1; min-height: 0; background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; position: relative; }
+.chart-wrap--with-table { display: flex; }
 .chart-canvas { width: 100%; height: 100%; }
+.chart-wrap--with-table .chart-canvas { flex: 1; min-width: 0; width: auto; }
+
+/* 地图 Top10 侧边表格 */
+.map-rank-panel {
+  width: 190px; flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  padding: 12px 0;
+  background: var(--bg-card);
+}
+.map-rank-title {
+  font-size: 12px; font-weight: 600; color: var(--text-secondary);
+  padding: 0 14px 8px; border-bottom: 1px solid var(--border);
+  letter-spacing: 0.5px;
+}
+.map-rank-list { flex: 1; overflow-y: auto; padding: 4px 0; }
+.map-rank-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 14px;
+  font-size: 12px; color: var(--text-primary);
+  transition: background 0.12s;
+}
+.map-rank-row:hover { background: var(--bg-page); }
+.map-rank-no {
+  width: 18px; height: 18px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 600; flex-shrink: 0;
+  background: var(--border); color: var(--text-muted);
+}
+.map-rank-no.top3 { background: var(--accent); color: #fff; }
+.map-rank-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-rank-val { font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; }
+.map-rank-empty { padding: 20px 14px; color: var(--text-muted); font-size: 12px; text-align: center; }
 
 /* 底部类别选择 */
 .chart-footer {

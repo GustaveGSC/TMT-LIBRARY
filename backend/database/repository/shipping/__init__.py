@@ -627,7 +627,24 @@ class ShippingRepository:
 
         # ── 分组维度 label 表达式 ─────────────────────────────
         if group_by == 'date':
-            label_expr = func.date_format(sof.shipped_date, '%Y-%m')
+            period = params.get('period', 'month')
+            if period == 'year':
+                label_expr = func.date_format(sof.shipped_date, '%Y')
+            elif period == 'quarter':
+                # 格式：'2024-Q1' / '2024-Q2' ...
+                label_expr = func.concat(
+                    func.year(sof.shipped_date), '-Q', func.quarter(sof.shipped_date)
+                )
+            elif period == 'halfyear':
+                # 格式：'2024-H1' / '2024-H2'
+                from sqlalchemy import case as sa_case
+                half_suffix = sa_case(
+                    (func.month(sof.shipped_date) <= 6, '-H1'),
+                    else_='-H2',
+                )
+                label_expr = func.concat(func.year(sof.shipped_date), half_suffix)
+            else:  # month（默认）
+                label_expr = func.date_format(sof.shipped_date, '%Y-%m')
             name_expr  = None
             order_expr = label_expr.asc()
         elif group_by == 'category':

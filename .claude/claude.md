@@ -628,12 +628,46 @@ src/stores/product/
 - 内嵌 ShippingDashboard（左右两栏布局：筛选面板 + 图表区）
 
 ## ShippingDashboard.vue 说明
-- 左侧筛选面板（230px）：日期范围、品类/系列/型号级联选择、渠道多选、省份多选、分组维度 chip（日期/渠道/省份/产品）、图表类型 chip（柱状/折线/饼图/地图）、重置按钮
-- 右侧内容区：3个统计卡片（发货量/销退量/净发货，来自筛选后聚合数据）+ ECharts 图表
-- 图表类型：bar（三系列：发货量/销退量/净发货）/ line（折线：发货量+净发货）/ pie（donut：净发货分布）/ map（DOM 占位）
-- 数据接口：`GET /api/shipping/chart-options`（下拉选项）+ `POST /api/shipping/chart-data`（聚合数据）
+- 左侧筛选面板（230px）：日期范围 + 时间粒度 segmented（月/季度/半年/年）、品类/系列/型号级联选择、渠道多选、省份多选、重置按钮
+- 右侧顶部工具栏：图表类型图标（柱/折/饼/地图）+ 分隔线 + 同比/环比按钮；最左显示下钻面包屑，最右显示数据指标选择
+- 右侧内容区：ECharts 图表（占满）+ 底部聚合维度切换 chip（产品/渠道/地域/时间）
+
+### 聚合维度与图表类型
+| 维度 | 可用图表 | 默认 |
+|------|---------|------|
+| 产品（品类→系列→型号自动下钻） | bar、pie | bar |
+| 渠道（渠道→渠道商自动下钻） | bar、pie | bar |
+| 地域（省份→城市→县区自动下钻） | map、bar | map |
+| 时间 | 同比（yoy）、环比（mom） | 同比 |
+
+### 时间维度
+- 切换到时间维度自动激活「同比」；可手动切换为「环比」
+- 时间粒度（月/季度/半年/年）绑定左侧 segmented，切换后重新请求数据
+- **同比（buildYoyOption）**：X 轴为完整一年期号（月 01-12 / Q1-Q4 / 上下半年），每年一个柱状系列；缺失期号显示 0
+- **环比（buildMomOption）**：顺序柱状图 + 环比增长率折线（双 Y 轴）
+- title 末尾追加「· 同比」或「· 环比」
+- 后端 `POST /api/shipping/chart-data` 时额外传 `period`（month/quarter/halfyear/year），后端对应使用不同 `DATE_FORMAT` / `QUARTER()` / CASE 表达式
+
+### 工具区（toolbox）
+- 所有图表均含 ECharts toolbox（右上角），统一由 `makeToolbox(withZoom)` 生成
+- 直角坐标系（bar/line/yoy/mom）：区域缩放 + 还原 + 保存图片
+- 饼图/地图：还原 + 保存图片
+
+### 地图
+- 地域维度 + 地图类型时，右侧显示 Top10 排行面板（190px），按当前指标降序，前三名圆圈用主色高亮
+- 省份级别筛选到单一省份时，自动切换为对应省级地图（通过 adcode 从 `src/assets/maps/{adcode}_full.json` 加载）
+- 全国地图文件：`src/assets/maps/china-map.json`；34 个省级地图文件均已下载至同目录
+
+### 自定义分组
+- 支持产品/渠道/地域三个维度的多层级自定义分组，保存在 localStorage（key: `shipping_product_groups`）
+- 激活分组后，图表中该分组成员合并为单条，tooltip 底部蓝色显示成员列表
+- 右击柱/饼扇区可下钻，自定义分组条目跳过下钻；面包屑显示在工具栏左侧
+
+### 数据接口
+- `GET /api/shipping/chart-options`：返回渠道列表、省份列表、有数据的产品 ID 集合
+- `POST /api/shipping/chart-data`：body 含 `group_by`、`period`（时间维度专用）、日期范围、产品/渠道/地域筛选 ID；返回 `summary` + `items`
 - 产品筛选复用 `GET /api/category/tree`
-- 筛选变化（排除 chartType）→ 重新请求后端；chartType 变化 → 仅重渲 ECharts
+- 筛选变化（排除 chartType/comparisonMode 切换）→ 重新请求后端；chartType/comparisonMode 变化 → 仅重渲 ECharts
 
 ## /api/product/stats 返回结构
 ```json
@@ -653,7 +687,7 @@ src/stores/product/
 - [ ] FinishedExpandRow 标签行接真实数据（/api/product/tags/）
 - [ ] FinishedExpandRow 数据节：发货数据 / 售后数据（接 /api/shipping/* 真实数据）
 - [ ] ProductImage cover_image 接真实 OSS 图片 URL
-- [x] ShippingDashboard 图表完善（bar/line/pie，按渠道/省份/日期/产品维度，含左侧筛选面板）
+- [x] ShippingDashboard 图表完善（bar/line/pie/map/同比/环比，按渠道/省份/时间/产品维度，含自定义分组、下钻面包屑、地图 Top10 面板、工具区）
 - [x] 销退清单导入（/api/shipping/import/return，ReturnImport.vue，独立 return_record 表）
 - [ ] 产品库图表视图实现
 - [ ] 用户头像
