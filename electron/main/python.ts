@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { spawn, ChildProcess } from 'child_process'
 import { join } from 'path'
-import { existsSync } from 'fs'
+import { existsSync, chmodSync } from 'fs'
 
 let pythonProcess: ChildProcess | null = null
 const PYTHON_PORT = 8765           // Flask 监听端口，与前端 api/http.js 保持一致
@@ -47,6 +47,11 @@ export async function startPython(): Promise<void> {
   const args = app.isPackaged
     ? []                                       // 生产：直接运行可执行文件
     : ['backend/app.py', '--port', String(PYTHON_PORT)]  // 开发：传参给 Flask
+
+  // macOS/Linux 打包后可执行权限可能丢失，补加
+  if (app.isPackaged && process.platform !== 'win32') {
+    try { chmodSync(executable, 0o755) } catch { /* 已有权限则忽略 */ }
+  }
 
   pythonProcess = spawn(executable, args, {
     env: {
