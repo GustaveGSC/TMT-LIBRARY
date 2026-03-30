@@ -236,14 +236,14 @@ return_record
   id, batch_id(FK→shipping_batch), ecommerce_order_no, shipped_date,
   product_code, quantity(负值), warehouse_name
   # UNIQUE(ecommerce_order_no, product_code, shipped_date)
-  # 独立存储销退清单原始数据
+  # 独立存储销退清单原始数据（全量保存，不在导入时过滤仓库）
   # 必要列：平台订单/交易日期/品号/数量/仓库名称
-  # 导入时：过滤 is_excluded=True 的仓库；仅保留数量<0 的行；
-  #         仅保留 ecommerce_order_no 在 shipping_record 已存在的行
+  # 导入时：仅保留数量<0 的行；仅保留 ecommerce_order_no 在 shipping_record 已存在的行
+  # 计算 shipping_order_finished 时动态过滤 is_excluded=True 的仓库，不影响原始数据
 
 return_warehouse_filter
   id, warehouse_name(UNIQUE), is_excluded(默认False), created_at
-  # 配置销退导入时需忽略的仓库（UI：仓库配置 Tab）
+  # 配置计算成品组合时需忽略的仓库（UI：仓库配置 Tab）；调整后刷新全局数据即可生效
 
 shipping_operator_type
   id, operator(UNIQUE), type(shipping/aftersale/unknown), created_at, updated_at
@@ -618,6 +618,7 @@ src/stores/product/
 - 导入销退清单（xlsx/xls/csv），同 DataImport.vue 文件选择区风格
 - 导入流程与 DataImport.vue 相同（上传→ task_id → SSE → 进度条）
 - **仅处理数量 < 0 的行**，其余行忽略
+- **不在导入时过滤仓库**，全量保存至 return_record；仓库过滤在计算 shipping_order_finished 时动态应用
 - **订单匹配**：仅保留 ecommerce_order_no 存在于 shipping_record 的行，其余入 `unmatched_rows`
 - **DB 去重**：检查 return_record 表 UNIQUE(ecommerce_order_no, product_code, shipped_date)
 - **导入后触发重算**：对受影响的订单删除旧成品组合结果并重算（含 return_quantity / actual_quantity）
@@ -674,6 +675,12 @@ src/stores/product/
 - 支持产品/渠道/地域三个维度的多层级自定义分组，保存在 localStorage（key: `shipping_product_groups`）
 - 激活分组后，图表中该分组成员合并为单条，tooltip 底部蓝色显示成员列表
 - 右击柱/饼扇区可下钻，自定义分组条目跳过下钻；面包屑显示在工具栏左侧
+
+### Bar 图（buildBarOption）行为
+- items 按当前数据指标（发货量/销退量/净发货）**降序排列**后再绘制
+- X 轴：`interval:0, hideOverlap:true` — 所有类目均纳入渲染，空间不足时自动隐藏重叠标签；dataZoom 放大后隐藏的标签自动恢复显示
+- **选择「销退量」指标时**额外显示紫色「销退率」折线（销退量 ÷ 发货量，右侧 Y 轴百分比），tooltip 中同步展示；切换其他指标时折线消失
+- 图表数据（`get_chart_options`、`get_chart_data`、`get_product_monthly`）均**排除 `type='aftersale'` 的操作人**对应记录（子查询过滤）
 
 ### 数据接口
 - `GET /api/shipping/chart-options`：返回渠道列表、省份列表、有数据的产品 ID 集合

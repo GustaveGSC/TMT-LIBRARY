@@ -1021,12 +1021,14 @@ function makeToolbox(withZoom = false) {
 // 柱状图：主指标柱 + 占比折线 + 柏拉图累计占比折线
 function buildBarOption(items) {
   const { field, label } = METRIC_MAP[dataMetric.value]
-  const labels = items.map(i => i.label)
-  const values = items.map(i => i[field])
+  // 切换指标时按当前指标降序排列
+  const sorted = [...items].sort((a, b) => (b[field] ?? 0) - (a[field] ?? 0))
+  const labels = sorted.map(i => i.label)
+  const values = sorted.map(i => i[field])
   // label → name 映射，用于 tooltip 显示（仅 series/model 维度有 name）
-  const nameMap = Object.fromEntries(items.filter(i => i.name).map(i => [i.label, i.name]))
+  const nameMap = Object.fromEntries(sorted.filter(i => i.name).map(i => [i.label, i.name]))
   // label → groupMembers 映射，用于分组 tooltip 底部展示成员列表
-  const groupMembersMap = Object.fromEntries(items.filter(i => i.isGroup && i.groupMembers).map(i => [i.label, i.groupMembers]))
+  const groupMembersMap = Object.fromEntries(sorted.filter(i => i.isGroup && i.groupMembers).map(i => [i.label, i.groupMembers]))
   const total  = values.reduce((sum, v) => sum + v, 0)
 
   // 各项占比（%）
@@ -1040,9 +1042,19 @@ function buildBarOption(items) {
     cumulData.push(total > 0 ? Math.round(running / total * 1000) / 10 : 0)
   }
 
+  // 销退指标时：计算每项「销退占发货」比例（%）
+  const isReturn = dataMetric.value === 'return_quantity'
+  const returnRatioData = isReturn
+    ? sorted.map(i => {
+        const q = i.quantity ?? 0
+        const r = i.return_quantity ?? 0
+        return q > 0 ? Math.round(r / q * 1000) / 10 : 0
+      })
+    : []
+
   const labelOpt = {
+    interval: 0, hideOverlap: true,
     rotate: labels.length > 10 ? 30 : 0, color: '#7a5c3a', fontFamily: FONT, fontSize: 13,
-    interval: labels.length > 20 ? Math.floor(labels.length / 20) : 0,
   }
   const titleText = buildChartTitle(label)
 
@@ -1068,9 +1080,10 @@ function buildBarOption(items) {
     tooltip: {
       trigger: 'axis', axisPointer: { type: 'shadow' }, textStyle: { fontFamily: FONT },
       formatter(params) {
-        const bar     = params.find(p => p.seriesType === 'bar')
-        const pct     = params.find(p => p.seriesName === '占比')
-        const cumul   = params.find(p => p.seriesName === '累计占比')
+        const bar       = params.find(p => p.seriesType === 'bar')
+        const pct       = params.find(p => p.seriesName === '占比')
+        const cumul     = params.find(p => p.seriesName === '累计占比')
+        const retRatio  = params.find(p => p.seriesName === '销退率')
         const code    = params[0]?.name
         const name    = nameMap[code]
         const members = groupMembersMap[code]
@@ -1082,9 +1095,10 @@ function buildBarOption(items) {
           `<span>${marker}${name}</span><span style="font-weight:600">${val}</span></div>`
         let s = `<div style="font-family:${FONT};font-size:14px;min-width:160px">`
         s += `<div style="margin-bottom:4px">${title}</div>`
-        if (bar)   s += row(bar.marker,   bar.seriesName, bar.value)
-        if (pct)   s += row(pct.marker,   '占比',         `${pct.value}%`)
-        if (cumul) s += row(cumul.marker, '累计占比',     `${cumul.value}%`)
+        if (bar)      s += row(bar.marker,      bar.seriesName,  bar.value)
+        if (retRatio) s += row(retRatio.marker, '销退率',        `${retRatio.value}%`)
+        if (pct)      s += row(pct.marker,      '占比',          `${pct.value}%`)
+        if (cumul)    s += row(cumul.marker,    '累计占比',      `${cumul.value}%`)
         if (members?.length) {
           s += `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #e0d4c0">`
           s += members.map(m => `<div style="color:#3a7bc8;font-size:12px">${m}</div>`).join('')
@@ -1132,6 +1146,15 @@ function buildBarOption(items) {
         itemStyle: { color: '#a8cce8', borderRadius: [2, 2, 0, 0] },
         label: { show: true, position: 'top', color: '#2c2420', fontFamily: FONT, fontSize: 14, fontWeight: 'bold', formatter: '{c}' },
       },
+      // 销退指标时额外显示「销退率」折线（销退量 / 发货量）
+      ...(isReturn ? [{
+        name: '销退率', type: 'line', data: returnRatioData, yAxisIndex: 1,
+        smooth: true,
+        lineStyle: { color: '#9c6fba', width: 2 },
+        itemStyle: { color: '#9c6fba' },
+        symbol: 'circle', symbolSize: 4,
+        label: { show: true, position: 'top', color: '#9c6fba', fontFamily: FONT, fontSize: 13, fontWeight: 'bold', formatter: p => `${p.value}%` },
+      }] : []),
       {
         name: '占比', type: 'line', data: pctData, yAxisIndex: 1,
         smooth: true,

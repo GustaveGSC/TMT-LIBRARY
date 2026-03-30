@@ -190,12 +190,23 @@ class ShippingRepository:
         """
         返回 {order_no: {product_code: abs_return_qty}}
         数量取绝对值，方便成品组合匹配时直接用正数运算。
+        计算时动态排除 is_excluded=True 的仓库，不影响 return_record 原始数据。
         """
         if not order_nos:
             return {}
-        records = ReturnRecord.query.filter(
+        excluded_warehouses = ShippingRepository.get_excluded_warehouse_set()
+        q = ReturnRecord.query.filter(
             ReturnRecord.ecommerce_order_no.in_(order_nos)
-        ).all()
+        )
+        if excluded_warehouses:
+            q = q.filter(
+                db.or_(
+                    ReturnRecord.warehouse_name.is_(None),
+                    ReturnRecord.warehouse_name == '',
+                    ~ReturnRecord.warehouse_name.in_(excluded_warehouses),
+                )
+            )
+        records = q.all()
         result: Dict[str, Dict[str, float]] = {}
         for r in records:
             on = r.ecommerce_order_no
@@ -483,7 +494,12 @@ class ShippingRepository:
                     pass
             return q
 
-        base_filter = [sof.finished_code.isnot(None)]
+        # 售后操作人子查询（排除 type='aftersale' 的操作人对应记录）
+        aftersale_ops = db.session.query(ShippingOperatorType.operator).filter_by(type='aftersale').subquery()
+        base_filter = [
+            sof.finished_code.isnot(None),
+            db.or_(sof.operator.is_(None), ~sof.operator.in_(aftersale_ops)),
+        ]
 
         # 渠道：channel_name → [{code, org_name}] 层级结构
         ch_q = db.session.query(
@@ -581,9 +597,15 @@ class ShippingRepository:
         needs_series_join = group_by in ('category', 'series') or bool(category_ids or series_ids)
         needs_cat_join    = group_by == 'category' or bool(category_ids)
 
+        # 售后操作人子查询（在整个 get_chart_data 调用中复用）
+        aftersale_ops_sub = db.session.query(ShippingOperatorType.operator).filter_by(type='aftersale').subquery()
+
         def _apply_filters(q):
             """将所有过滤条件应用到查询对象，返回新查询"""
-            q = q.filter(sof.finished_code.isnot(None))
+            q = q.filter(
+                sof.finished_code.isnot(None),
+                db.or_(sof.operator.is_(None), ~sof.operator.in_(aftersale_ops_sub)),
+            )
             if needs_model_join:
                 q = q.join(ProductFinished,
                            sa_collate(sof.finished_code, 'utf8mb4_unicode_ci') ==
@@ -731,9 +753,10 @@ class ShippingRepository:
 
     @staticmethod
     def get_product_monthly(code: str) -> list:
-        """按月聚合指定成品的发货/销退/实际数量，从最早记录月到最新月"""
+        """按月聚合指定成品的发货/销退/实际数量，从最早记录月到最新月（排除售后操作人）"""
         from sqlalchemy import func
         sof = ShippingOrderFinished
+        aftersale_ops = db.session.query(ShippingOperatorType.operator).filter_by(type='aftersale').subquery()
         rows = (
             db.session.query(
                 func.date_format(sof.shipped_date, '%Y-%m').label('month'),
@@ -744,6 +767,7 @@ class ShippingRepository:
             .filter(
                 sof.finished_code == code,
                 sof.shipped_date.isnot(None),
+                db.or_(sof.operator.is_(None), ~sof.operator.in_(aftersale_ops)),
             )
             .group_by('month')
             .order_by('month')

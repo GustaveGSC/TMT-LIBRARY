@@ -474,12 +474,7 @@ class ShippingService:
 
             total = len(all_rows)
 
-            # 读取排除仓库集合，过滤掉排除仓库的行
-            excluded_warehouses = shipping_repository.get_excluded_warehouse_set()
-            all_rows = [r for r in all_rows
-                        if r.get('warehouse_name') not in excluded_warehouses]
-
-            # 仅处理数量为负数的行
+            # 仅处理数量为负数的行（不在导入时过滤仓库，保存全量数据）
             negative_rows = [r for r in all_rows if r.get('quantity') is not None and r.get('quantity') < 0]
 
             # 按订单号匹配：仅保留发货库中存在对应订单的行
