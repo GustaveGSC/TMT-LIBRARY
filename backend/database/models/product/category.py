@@ -33,12 +33,13 @@ class ProductSeries(db.Model):
 
     id          = db.Column(db.Integer,    primary_key=True, autoincrement=True)
     category_id = db.Column(db.Integer,    db.ForeignKey('product_category.id'), nullable=False)
-    code        = db.Column(db.String(64), nullable=False, unique=True)
+    code        = db.Column(db.String(64), nullable=False)
     name        = db.Column(db.String(64), nullable=False)
     sort_order  = db.Column(db.Integer,    nullable=False, default=0)
     created_at  = db.Column(db.DateTime,   nullable=False, default=now_cst)
 
     __table_args__ = (
+        db.UniqueConstraint('category_id', 'code', name='uq_series_code'),
         db.UniqueConstraint('category_id', 'name', name='uq_series_name'),
     )
 
@@ -64,7 +65,7 @@ class ProductModel(db.Model):
 
     id         = db.Column(db.Integer,     primary_key=True, autoincrement=True)
     series_id  = db.Column(db.Integer,     db.ForeignKey('product_series.id'), nullable=False)
-    code       = db.Column(db.String(64),  nullable=False, unique=True)
+    code       = db.Column(db.String(64),  nullable=False)
     name       = db.Column(db.String(64),  nullable=False)
     name_en    = db.Column(db.String(128), nullable=True)
     model_code = db.Column(db.String(64),  nullable=False, unique=True)
@@ -72,6 +73,7 @@ class ProductModel(db.Model):
     created_at = db.Column(db.DateTime,    nullable=False, default=now_cst)
 
     __table_args__ = (
+        db.UniqueConstraint('series_id', 'code', name='uq_model_code'),
         db.UniqueConstraint('series_id', 'name', name='uq_model_name'),
     )
 

@@ -729,4 +729,39 @@ class ShippingRepository:
         }
 
 
+    @staticmethod
+    def get_product_monthly(code: str) -> list:
+        """按月聚合指定成品的发货/销退/实际数量，从最早记录月到最新月"""
+        from sqlalchemy import func
+        sof = ShippingOrderFinished
+        rows = (
+            db.session.query(
+                func.date_format(sof.shipped_date, '%Y-%m').label('month'),
+                func.sum(sof.quantity).label('shipped'),
+                func.sum(sof.return_quantity).label('returned'),
+                func.sum(sof.actual_quantity).label('actual'),
+            )
+            .filter(
+                sof.finished_code == code,
+                sof.shipped_date.isnot(None),
+            )
+            .group_by('month')
+            .order_by('month')
+            .all()
+        )
+
+        def _f(v):
+            return float(v) if v is not None else 0.0
+
+        return [
+            {
+                'month':    r.month,
+                'shipped':  _f(r.shipped),
+                'returned': _f(r.returned),
+                'actual':   _f(r.actual),
+            }
+            for r in rows
+        ]
+
+
 shipping_repository = ShippingRepository()

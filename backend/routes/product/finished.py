@@ -48,7 +48,7 @@ def save_finished():
             category = CategoryRepository.create_category(category_name)
 
         # 系列（按 code 查找，name 用于新建）
-        series = CategoryRepository.get_series_by_code(series_code)
+        series = CategoryRepository.get_series_by_code(category.id, series_code)
         if not series:
             series = CategoryRepository.create_series(
                 category.id, series_code, series_name or series_code

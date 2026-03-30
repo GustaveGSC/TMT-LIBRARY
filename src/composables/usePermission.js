@@ -31,10 +31,15 @@ export function usePermission() {
     return permSet.has(code)
   }
 
-  // ── 常用快捷属性 ──────────────────────────────────
+  // ── 产品库 ────────────────────────────────────────
   const canViewProduct   = can('product:view')
   const canEditProduct   = can('product:edit')
   const canDeleteProduct = can('product:delete')
+
+  // ── 发货数据 / 数据管理 ───────────────────────────
+  const canViewShipping   = can('shipping:view')
+  const canEditShipping   = can('shipping:edit')
+  const canExportShipping = can('shipping:export')
 
   return {
     userInfo,
@@ -43,5 +48,8 @@ export function usePermission() {
     canViewProduct,
     canEditProduct,
     canDeleteProduct,
+    canViewShipping,
+    canEditShipping,
+    canExportShipping,
   }
 }

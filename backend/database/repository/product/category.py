@@ -51,8 +51,8 @@ class CategoryRepository:
         return ProductSeries.query.filter_by(category_id=category_id, name=name).first()
 
     @staticmethod
-    def get_series_by_code(code: str) -> Optional[ProductSeries]:
-        return ProductSeries.query.filter_by(code=code).first()
+    def get_series_by_code(category_id: int, code: str) -> Optional[ProductSeries]:
+        return ProductSeries.query.filter_by(category_id=category_id, code=code).first()
 
     @staticmethod
     def create_series(category_id: int, code: str, name: str, sort_order: int = 0) -> ProductSeries:
@@ -86,8 +86,8 @@ class CategoryRepository:
         return ProductModel.query.filter_by(series_id=series_id, name=name).first()
 
     @staticmethod
-    def get_model_by_code(code: str) -> Optional[ProductModel]:
-        return ProductModel.query.filter_by(code=code).first()
+    def get_model_by_code(series_id: int, code: str) -> Optional[ProductModel]:
+        return ProductModel.query.filter_by(series_id=series_id, code=code).first()
 
     @staticmethod
     def get_model_by_model_code(model_code: str) -> Optional[ProductModel]:

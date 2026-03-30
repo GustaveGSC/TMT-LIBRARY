@@ -56,8 +56,8 @@ class CategoryService:
             return Result.fail('系列名称不能为空')
         if not CategoryRepository.get_category(category_id):
             return Result.fail('所属分类不存在')
-        if CategoryRepository.get_series_by_code(code):
-            return Result.fail(f'编码「{code}」已存在')
+        if CategoryRepository.get_series_by_code(category_id, code):
+            return Result.fail(f'编码「{code}」在该品类下已存在')
         if CategoryRepository.get_series_by_name(category_id, name):
             return Result.fail(f'系列「{name}」已存在')
         obj = CategoryRepository.create_series(category_id, code, name, sort_order)
@@ -71,9 +71,9 @@ class CategoryService:
             kwargs['code'] = kwargs['code'].strip()
             if not kwargs['code']:
                 return Result.fail('编码不能为空')
-            exist = CategoryRepository.get_series_by_code(kwargs['code'])
+            exist = CategoryRepository.get_series_by_code(obj.category_id, kwargs['code'])
             if exist and exist.id != series_id:
-                return Result.fail(f'编码「{kwargs["code"]}」已存在')
+                return Result.fail(f'编码「{kwargs["code"]}」在该品类下已存在')
         if 'name' in kwargs:
             kwargs['name'] = kwargs['name'].strip()
             if not kwargs['name']:
@@ -110,8 +110,8 @@ class CategoryService:
             return Result.fail('型号编码不能为空')
         if not CategoryRepository.get_series(series_id):
             return Result.fail('所属系列不存在')
-        if CategoryRepository.get_model_by_code(code):
-            return Result.fail(f'ERP编码「{code}」已存在')
+        if CategoryRepository.get_model_by_code(series_id, code):
+            return Result.fail(f'ERP编码「{code}」在该系列下已存在')
         if CategoryRepository.get_model_by_model_code(model_code):
             return Result.fail(f'型号编码「{model_code}」已存在')
         if CategoryRepository.get_model_by_name(series_id, name):
@@ -129,9 +129,9 @@ class CategoryService:
             kwargs['code'] = kwargs['code'].strip()
             if not kwargs['code']:
                 return Result.fail('ERP编码不能为空')
-            exist = CategoryRepository.get_model_by_code(kwargs['code'])
+            exist = CategoryRepository.get_model_by_code(obj.series_id, kwargs['code'])
             if exist and exist.id != model_id:
-                return Result.fail(f'ERP编码「{kwargs["code"]}」已存在')
+                return Result.fail(f'ERP编码「{kwargs["code"]}」在该系列下已存在')
         if 'model_code' in kwargs:
             kwargs['model_code'] = kwargs['model_code'].strip()
             if not kwargs['model_code']:

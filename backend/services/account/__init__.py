@@ -20,6 +20,10 @@ class AccountService:
             return Result.fail(f"用户名 '{username}' 已存在")
         password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
         user = UserRepository.create(username, password_hash, display_name)
+        # 新用户自动绑定内置游客角色
+        guest_role = RoleRepository.get_by_name("guest")
+        if guest_role:
+            UserRepository.assign_role(user, guest_role)
         return Result.ok(user.to_dict(), message="用户创建成功")
 
     def update_user(self, user_id: int, **kwargs) -> Result:
@@ -123,6 +127,20 @@ class AccountService:
         perm = PermissionRepository.get_by_id(perm_id)
         if not perm: return Result.fail(f"权限 {perm_id} 不存在")
         return Result.ok(PermissionRepository.update(perm, **kwargs).to_dict(), message="更新成功")
+
+    def guest_login(self) -> Result:
+        """返回游客身份信息，权限取自 guest 角色"""
+        guest_role = RoleRepository.get_by_name("guest")
+        perm_codes = [p.code for p in guest_role.permissions] if guest_role else []
+        return Result.ok({
+            "id":           None,
+            "username":     "guest",
+            "display_name": "游客",
+            "is_active":    True,
+            "roles":        ["guest"],
+            "permissions":  perm_codes,
+            "created_at":   None,
+        })
 
     def assign_permission_to_role(self, role_id: int, permission_code: str) -> Result:
         role = RoleRepository.get_by_id(role_id)

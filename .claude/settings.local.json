@@ -2,7 +2,12 @@
   "permissions": {
     "allow": [
       "Bash(python -c \"from app import create_app; app = create_app\\(\\); print\\(''OK - blueprints:'', [bp for bp in app.blueprints]\\)\")",
-      "Bash(python -c \"from app import create_app; app = create_app\\(\\); print\\(''OK - blueprints:'', list\\(app.blueprints.keys\\(\\)\\)\\)\")"
+      "Bash(python -c \"from app import create_app; app = create_app\\(\\); print\\(''OK - blueprints:'', list\\(app.blueprints.keys\\(\\)\\)\\)\")",
+      "Bash(python:*)",
+      "Bash(ls -la *.xlsx)",
+      "Bash(iconv -f GB18030 -t UTF-8)",
+      "Bash(python3 -c \":*)",
+      "Bash(curl -s -o 110000_full.json \"https://geo.datav.aliyun.com/areas_v3/bound/110000_full.json\")"
     ],
     "additionalDirectories": [
       "\\tmp"

@@ -41,7 +41,7 @@ const permFormVisible = ref(false)
 const permFormLoading = ref(false)
 const permFormMode    = ref('add')   // 'add' | 'edit'
 const permEditingId   = ref(null)
-const permForm        = ref({ code: '', name: '', description: '' })
+const permForm        = ref({ code: '', description: '' })
 
 // ── 加载角色列表 ──────────────────────────
 async function loadRoles() {
@@ -99,10 +99,13 @@ async function handleRoleFormSubmit() {
   }
 }
 
-// ── 删除角色（admin 不可删除） ────────────
+// 内置角色不可删除
+const BUILTIN_ROLES = ['admin', 'guest']
+
+// ── 删除角色（内置角色不可删除） ──────────
 async function handleDeleteRole(row) {
-  if (row.name === 'admin') {
-    ElMessage.warning('admin 角色不可删除')
+  if (BUILTIN_ROLES.includes(row.name)) {
+    ElMessage.warning(`「${row.name}」是内置角色，不可删除`)
     return
   }
   try {
@@ -161,13 +164,13 @@ function handleAddPerm() {
 function handleEditPerm(perm) {
   permFormMode.value    = 'edit'
   permEditingId.value   = perm.id
-  permForm.value        = { code: perm.code, name: perm.name, description: perm.description || '' }
+  permForm.value        = { code: perm.code, description: perm.description || '' }
   permFormVisible.value = true
 }
 
 async function handlePermFormSubmit() {
-  if (!permForm.value.code || !permForm.value.name) {
-    ElMessage.warning('权限代码和名称不能为空'); return
+  if (!permForm.value.code) {
+    ElMessage.warning('权限代码不能为空'); return
   }
   permFormLoading.value = true
   try {
@@ -175,13 +178,11 @@ async function handlePermFormSubmit() {
     if (permFormMode.value === 'add') {
       res = await http.post('/api/account/permissions', {
         code:        permForm.value.code,
-        name:        permForm.value.name,
         description: permForm.value.description || undefined,
       })
     } else {
       res = await http.put(`/api/account/permissions/${permEditingId.value}`, {
         code:        permForm.value.code,
-        name:        permForm.value.name,
         description: permForm.value.description || undefined,
       })
     }
@@ -233,8 +234,8 @@ onMounted(() => {
               <!-- 角色名称和描述 -->
               <div class="role-name-row">
                 <span class="role-name">{{ role.name }}</span>
-                <!-- admin 标记不可删除 -->
-                <el-tag v-if="role.name === 'admin'" size="small" type="warning">内置</el-tag>
+                <!-- 内置角色标记 -->
+                <el-tag v-if="BUILTIN_ROLES.includes(role.name)" size="small" type="warning">内置</el-tag>
               </div>
               <div class="role-desc">{{ role.description || '暂无描述' }}</div>
 
@@ -264,7 +265,7 @@ onMounted(() => {
                 绑定权限
               </el-button>
               <el-button
-                v-if="role.name !== 'admin'"
+                v-if="!BUILTIN_ROLES.includes(role.name)"
                 size="small" text type="danger"
                 @click="handleDeleteRole(role)"
               >
@@ -286,7 +287,6 @@ onMounted(() => {
           <div v-if="permissions.length === 0 && !permsLoading" class="empty-tip">暂无权限项</div>
           <div v-for="perm in permissions" :key="perm.code" class="perm-item">
             <div class="perm-item-main">
-              <div class="perm-name">{{ perm.name }}</div>
               <div class="perm-code">{{ perm.code }}</div>
               <div v-if="perm.description" class="perm-desc">{{ perm.description }}</div>
             </div>
@@ -327,7 +327,8 @@ onMounted(() => {
           >
             <el-checkbox :value="perm.code">
               <div class="bind-perm-info">
-                <span class="bind-perm-name">{{ perm.name }}</span>
+                <span class="bind-perm-name">{{ perm.code }}</span>
+                <span v-if="perm.description" class="bind-perm-desc">{{ perm.description }}</span>
               </div>
             </el-checkbox>
           </div>
@@ -348,10 +349,6 @@ onMounted(() => {
           <div class="field-label">权限代码 <span class="required">*</span></div>
           <el-input v-model="permForm.code" placeholder="如 product:edit" />
           <div class="field-hint">格式：模块:操作，如 product:edit</div>
-        </div>
-        <div class="field">
-          <div class="field-label">权限名称 <span class="required">*</span></div>
-          <el-input v-model="permForm.name" placeholder="如 编辑产品" />
         </div>
         <div class="field">
           <div class="field-label">描述</div>
@@ -585,11 +582,12 @@ onMounted(() => {
 .bind-perm-name {
   font-size: 13px;
   color: var(--text-primary);
+  font-family: monospace;
 }
 
-.bind-perm-code {
+.bind-perm-desc {
   font-size: 11px;
-  font-family: monospace;
   color: var(--text-muted);
+  margin-left: 8px;
 }
 </style>

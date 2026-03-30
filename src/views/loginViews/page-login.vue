@@ -17,7 +17,13 @@
 
         <div v-if="mode === 'login'" key="login" class="form">
           <div class="field">
-            <div class="field-label">用户名</div>
+            <div class="field-label">
+              <span>用户名</span>
+              <label class="remember-label">
+                <input v-model="rememberAccount" type="checkbox" class="remember-checkbox" />
+                <span>记住账号</span>
+              </label>
+            </div>
             <input v-model="loginForm.username" class="input" type="text" placeholder="输入用户名" @keyup.enter="handleLogin" />
           </div>
           <div class="field">
@@ -36,7 +42,7 @@
             <span class="divider-text">或</span>
             <span class="divider-line"></span>
           </div>
-          <button class="btn-ghost" @click="handleGuest">游客模式进入</button>
+          <button class="btn-ghost" :disabled="loading" @click="handleGuest">游客模式进入</button>
         </div>
 
         <div v-else key="register" class="form">
@@ -124,7 +130,11 @@ const updateDesc      = ref('')
 
 window.electronAPI?.getVersion().then(v => { version.value = v })
 
-const loginForm    = reactive({ username: 'admin', password: 'adminadmin' })
+const rememberAccount = ref(localStorage.getItem('remembered_username') !== null)
+const loginForm    = reactive({
+  username: localStorage.getItem('remembered_username') ?? '',
+  password: '',
+})
 const registerForm = reactive({ username: '', displayName: '', password: '', confirmPassword: '' })
 const registerTouched = reactive({ username: false, password: false, confirmPassword: false })
 
@@ -190,6 +200,11 @@ async function handleLogin() {
   try {
     const res = await http.post('/api/account/login', { username: loginForm.username, password: loginForm.password })
     if (res.success) {
+      if (rememberAccount.value) {
+        localStorage.setItem('remembered_username', loginForm.username)
+      } else {
+        localStorage.removeItem('remembered_username')
+      }
       localStorage.setItem('user', JSON.stringify(res.data))
       window.electronAPI ? window.electronAPI.loginSuccess() : router.push('/index')
     } else {
@@ -223,9 +238,21 @@ function handleForgotPassword() {
   ElMessage({ message: '请联系管理员重置密码。', type: 'info', duration: 3000 })
 }
 
-function handleGuest() {
-  localStorage.setItem('user', JSON.stringify({ username: '游客', roles: [] }))
-  window.electronAPI ? window.electronAPI.loginSuccess() : router.push('/index')
+async function handleGuest() {
+  loading.value = true
+  try {
+    const res = await http.get('/api/account/guest')
+    if (res.success) {
+      localStorage.setItem('user', JSON.stringify(res.data))
+      window.electronAPI ? window.electronAPI.loginSuccess() : router.push('/index')
+    } else {
+      toast.value?.show(res.message || '游客登录失败', 'error')
+    }
+  } catch {
+    toast.value?.show('网络错误，请重试', 'error')
+  } finally {
+    loading.value = false
+  }
 }
 
 function handleForceDownload() {
@@ -400,6 +427,22 @@ function handleClose() { window.electronAPI?.quitApp() }
   font-size: 11px; color: var(--text-muted);
   background: var(--accent-bg); border: 1px solid var(--border);
   border-radius: 4px; padding: 1px 6px; opacity: 0.7;
+}
+
+.remember-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.remember-checkbox {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+  cursor: pointer;
 }
 
 .loading-dot { display: inline-block; animation: blink 1s infinite; letter-spacing: 0.2em; }

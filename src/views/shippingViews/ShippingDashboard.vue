@@ -278,7 +278,10 @@ const effectiveGroupBy = computed(() => {
       return effChannelNames().length === 1 ? 'channel_code' : 'channel'
     case 'province': {
       if (effProvinces().length !== 1) return 'province'
-      if (effCities().length    !== 1) return 'city'
+      // 只有用户显式选定了唯一城市才下钻到县区；
+      // effCities() 的自动推导仅用于后端过滤参数，不影响层级判断
+      const explicitCities = expandStrSel(filters.value.cities)
+      if (explicitCities.length !== 1) return 'city'
       return 'district'
     }
     default:

@@ -235,6 +235,15 @@ def save_warehouse_filters():
     return Result.ok(data=result).to_response()
 
 
+@shipping_bp.get('/product/<string:code>/monthly')
+def get_product_monthly(code):
+    """返回指定成品编码按月聚合的发货/销退/实际数量"""
+    try:
+        return shipping_service.get_product_monthly(code).to_response()
+    except Exception as e:
+        return Result.fail(str(e)).to_response()
+
+
 @shipping_bp.get('/chart-options')
 def get_chart_options():
     """返回渠道、省份、活跃产品 ID，按日期范围过滤（date_start/date_end 查询参数可选）"""

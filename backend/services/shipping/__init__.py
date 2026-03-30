@@ -5,6 +5,7 @@ from datetime import datetime, timezone, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import List, Dict
 from database.repository.shipping import shipping_repository
+from result import Result
 
 CST = timezone(timedelta(hours=8))
 def now_cst(): return datetime.now(CST).replace(tzinfo=None)
@@ -581,6 +582,10 @@ class ShippingService:
 
     def get_chart_data(self, params: Dict) -> Dict:
         return shipping_repository.get_chart_data(params)
+
+    def get_product_monthly(self, code: str) -> Result:
+        data = shipping_repository.get_product_monthly(code)
+        return Result.ok(data)
 
 
 shipping_service = ShippingService()

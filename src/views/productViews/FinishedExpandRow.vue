@@ -1,10 +1,11 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
-import { ref, reactive, computed, watch, nextTick } from 'vue'
+import { ref, reactive, computed, watch, nextTick, onBeforeUnmount } from 'vue'
+import * as echarts from 'echarts'
 import http from '@/api/http'
 import { usePermission } from '@/composables/usePermission'
 import { ZoomIn, EditPen, Plus, Delete } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFinishedStore } from '@/stores/product/finished'
 import { usePackagedStore } from '@/stores/product/packaged'
 import GEditTagList from '@/components/common/GEditTagList.vue'
@@ -23,7 +24,7 @@ const props = defineProps({
 const emit = defineEmits(['saved'])
 
 // ── 权限 ──────────────────────────────────────────
-const { canEditProduct } = usePermission()
+const { canEditProduct, canViewShipping } = usePermission()
 
 // ── 响应式状态 ────────────────────────────────────
 const editing      = ref(false)
@@ -62,6 +63,77 @@ const originalTagNames = ref(new Set())
 // ── 折叠分组 ──────────────────────────────────────
 const openSec = reactive({})
 function isSec(key) { return !!openSec[key] }
+
+// ── 发货数据图表 ──────────────────────────────────
+const shippingChartEl      = ref(null)   // DOM 节点
+const shippingChartLoading = ref(false)
+const shippingLoaded       = ref(false)
+const shippingMonthly      = ref([])     // [{ month, shipped, returned, actual }]
+let   shippingChartInst    = null
+
+async function loadShippingMonthly() {
+  if (!canViewShipping || shippingLoaded.value) return
+  shippingChartLoading.value = true
+  try {
+    const res = await http.get(`/api/shipping/product/${props.row.code}/monthly`)
+    if (res.success) {
+      shippingMonthly.value      = res.data || []
+      shippingLoaded.value       = true
+      shippingChartLoading.value = false  // 先关 loading，让 chart div 渲染出来
+      await nextTick()                    // 等 DOM 更新
+      initShippingChart()
+    }
+  } finally {
+    shippingChartLoading.value = false
+  }
+}
+
+function initShippingChart() {
+  if (!shippingChartEl.value) return
+  if (!shippingChartInst) {
+    shippingChartInst = echarts.init(shippingChartEl.value, null, { renderer: 'canvas' })
+  }
+  const data   = shippingMonthly.value
+  const months = data.map(d => d.month)
+  const actual = data.map(d => d.actual)
+
+  shippingChartInst.setOption({
+    grid:    { top: 12, right: 12, bottom: 40, left: 44, containLabel: false },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      formatter(params) {
+        const p = params[0]
+        return `<div style="font-size:12px;color:#3a3028">${p.axisValue}</div>
+                <div style="font-size:12px;margin-top:2px">净发货：<b>${p.value}</b></div>`
+      },
+    },
+    xAxis: {
+      type: 'category',
+      data: months,
+      axisLabel: { fontSize: 10, color: '#8a7a6a', rotate: months.length > 18 ? 45 : 0 },
+      axisLine:  { lineStyle: { color: '#e0d4c0' } },
+      axisTick:  { show: false },
+    },
+    yAxis: {
+      type:        'value',
+      minInterval: 1,
+      axisLabel:   { fontSize: 10, color: '#8a7a6a' },
+      splitLine:   { lineStyle: { color: '#f0ebe0' } },
+    },
+    series: [{
+      type: 'bar',
+      data: actual,
+      barMaxWidth: 18,
+      itemStyle: { color: '#c4883a', borderRadius: [3, 3, 0, 0] },
+    }],
+  }, true)
+}
+
+onBeforeUnmount(() => {
+  shippingChartInst?.dispose()
+  shippingChartInst = null
+})
 
 // ── 生命周期 badge（始终显示）────────────────────
 function lc(row) {
@@ -156,6 +228,27 @@ async function pasteCard() {
     } else {
       ElMessage.error('粘贴失败')
     }
+  }
+}
+
+async function markIgnored() {
+  try {
+    await ElMessageBox.confirm(
+      `确认将「${props.row.code}」标记为无需录入？`,
+      '无需录入',
+      { confirmButtonText: '确认', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch { return }
+  saving.value = true
+  try {
+    const res = await http.post('/api/product/finished', { code: props.row.code, status: 'ignored' })
+    if (res.success) {
+      emit('saved')
+    } else {
+      ElMessage.error(res.message || '操作失败')
+    }
+  } finally {
+    saving.value = false
   }
 }
 
@@ -545,6 +638,9 @@ function toggleSec(key) {
   if (key === 'params' && openSec[key] && !paramsLoaded.value && props.row.id) {
     loadParams(props.row.id)
   }
+  if (key === 'data' && openSec[key]) {
+    loadShippingMonthly()
+  }
 }
 </script>
 
@@ -562,6 +658,12 @@ function toggleSec(key) {
           <!-- plain 模式：关闭按钮 -->
           <button v-if="props.plain && props.onClose" class="eb eb-close" title="关闭" @click.stop="props.onClose()">✕</button>
           <template v-if="!props.plain && canEditProduct && !editing">
+            <button
+              v-if="props.row.status !== 'ignored'"
+              class="eb eb-ignore"
+              title="标记为无需录入"
+              @click.stop="markIgnored"
+            >无需录入</button>
             <button class="eb eb-edit" @click.stop="startEdit">✎ 编辑</button>
           </template>
           <template v-else-if="!props.plain && canEditProduct && editing">
@@ -1048,16 +1150,26 @@ function toggleSec(key) {
             <span class="eg-arr">{{ isSec('data') ? '▾' : '›' }}</span>数据
           </div>
           <div v-if="isSec('data')" class="eg-sec-bd eg-sec-bd-data">
-            <div class="data-placeholder-card">
+            <!-- 发货数据 bar 图 -->
+            <div class="data-shipping-card">
               <div class="data-ph-hd">发货数据</div>
-              <div class="data-ph-body">
-                <span class="eg-dim">待开发 · {{ props.row.code }}</span>
+              <div class="data-shipping-body">
+                <div v-if="shippingChartLoading" class="data-shipping-loading">
+                  <div class="data-shipping-spinner"></div>
+                </div>
+                <div v-else-if="!shippingMonthly.length" class="data-shipping-empty">暂无发货记录</div>
+                <div v-else ref="shippingChartEl" class="data-shipping-chart"></div>
+                <!-- 无权限遮罩：仅覆盖图表区域 -->
+                <div v-if="!canViewShipping" class="data-shipping-mask">
+                  <span class="data-shipping-mask-text">无权限</span>
+                </div>
               </div>
             </div>
+            <!-- 售后数据（待开发） -->
             <div class="data-placeholder-card">
               <div class="data-ph-hd">售后数据</div>
               <div class="data-ph-body">
-                <span class="eg-dim">待开发 · {{ props.row.code }}</span>
+                <span class="eg-dim">待开发</span>
               </div>
             </div>
           </div>
@@ -1144,8 +1256,10 @@ function toggleSec(key) {
 }
 .eb-close  { border-color: #ddd5c4; color: #8a7a6a; }
 .eb-close:hover { background: #f5f0e8; color: #3a3028; }
-.eb-edit   { border-color: #c0d4f0; color: #3a7bc8; }
-.eb-edit:hover { background: #edf4ff; }
+.eb-edit        { border-color: #c0d4f0; color: #3a7bc8; }
+.eb-edit:hover  { background: #edf4ff; }
+.eb-ignore       { border-color: #f0b8b0; color: #c05040; }
+.eb-ignore:hover { background: #fff0ee; }
 .eb-more   { border-color: #ddd5c4; color: #8a7a6a; letter-spacing: 2px; padding: 4px 8px; }
 .eb-more-wrap { position: relative; }
 .eb-more-menu {
@@ -1541,6 +1655,9 @@ function toggleSec(key) {
 .data-placeholder-card {
   flex: 1; border: 1px solid #e8ddd0; border-radius: 10px; overflow: hidden;
 }
+.data-shipping-card {
+  flex: 2; border: 1px solid #e8ddd0; border-radius: 10px; overflow: hidden;
+}
 .data-ph-hd {
   padding: 7px 12px; font-size: 12px; font-weight: 600;
   background: #f5f0e8; color: #8a7a6a;
@@ -1548,6 +1665,38 @@ function toggleSec(key) {
 }
 .data-ph-body {
   padding: 20px 12px; display: flex; align-items: center; justify-content: center;
+}
+.data-shipping-body {
+  padding: 8px 4px; height: 180px;
+  display: flex; align-items: center; justify-content: center;
+  position: relative;
+}
+.data-shipping-chart { width: 100%; height: 100%; }
+.data-shipping-loading {
+  display: flex; align-items: center; justify-content: center;
+  width: 100%; height: 100%;
+}
+.data-shipping-spinner {
+  width: 22px; height: 22px;
+  border: 2px solid #e8ddd0;
+  border-top-color: #c4883a;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+.data-shipping-empty  { font-size: 12px; color: #bbb; }
+.data-shipping-mask {
+  position: absolute; inset: 0;
+  background: rgba(200, 200, 200, 0.25);
+  backdrop-filter: blur(4px);
+  border-radius: 0 0 10px 10px;
+  display: flex; align-items: center; justify-content: center;
+}
+.data-shipping-mask-text {
+  font-size: 12px; color: #6b6b6b;
+  background: rgba(255,255,255,0.6);
+  border: 1px solid rgba(200,200,200,0.6);
+  border-radius: 6px;
+  padding: 3px 12px;
 }
 .params-loading { font-size: 12px; color: #bbb; }
 

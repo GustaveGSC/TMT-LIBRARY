@@ -15,20 +15,24 @@ let   resizeObs     = null               // ResizeObserver 实例
 const filterStatus = ref('')
 
 const STATUS_TABS = [
-  { key: '',           label: '全部'     },
-  { key: 'recorded',   label: '已录入'   },
-  { key: 'unrecorded', label: '未录入'   },
-  { key: 'ignored',    label: '无需录入' },
+  { key: '',           label: '全部'   },
+  { key: 'recorded',   label: '已录入' },
+  { key: 'unrecorded', label: '未录入' },
 ]
 
-// 品类配色（与 page-product.vue 一致）
+// 品类配色
 const CAT_COLORS = ['#c4883a', '#4a8fc0', '#6ab47a', '#9c6fba', '#e07070', '#70aacc', '#e0a040', '#7abcaa']
 
 // ── 计算属性 ──────────────────────────────────────
+// 基础数据集：始终排除「无需录入」
+const activeItems = computed(() =>
+  finishedStore.rawItems.filter(r => r.status !== 'ignored')
+)
+
 // 按状态筛选
 const filteredItems = computed(() => {
-  if (!filterStatus.value) return finishedStore.rawItems
-  return finishedStore.rawItems.filter(r => r.status === filterStatus.value)
+  if (!filterStatus.value) return activeItems.value
+  return activeItems.value.filter(r => r.status === filterStatus.value)
 })
 
 const totalCount = computed(() => filteredItems.value.length)
@@ -61,18 +65,28 @@ watch([sunburstData, totalCount], () => {
 // ── 方法 ──────────────────────────────────────────
 
 /**
- * 将 hex 颜色与白色混合，生成指定程度的浅色
- * @param {string} hex  原色，如 '#c4883a'
+ * 将 hex 颜色与白色混合，生成浅色
+ * @param {string} hex  原色
  * @param {number} t    混合量 0=原色  1=纯白
  */
 function tintColor(hex, t) {
-  const r = parseInt(hex.slice(1, 3), 16)
-  const g = parseInt(hex.slice(3, 5), 16)
-  const b = parseInt(hex.slice(5, 7), 16)
+  const r  = parseInt(hex.slice(1, 3), 16)
+  const g  = parseInt(hex.slice(3, 5), 16)
+  const b  = parseInt(hex.slice(5, 7), 16)
   const tr = Math.round(r + (255 - r) * t).toString(16).padStart(2, '0')
   const tg = Math.round(g + (255 - g) * t).toString(16).padStart(2, '0')
   const tb = Math.round(b + (255 - b) * t).toString(16).padStart(2, '0')
   return `#${tr}${tg}${tb}`
+}
+
+/** 判断颜色亮度，决定文字用白色还是深色 */
+function labelColor(hex) {
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  // 感知亮度公式
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+  return lum > 0.55 ? '#3a3028' : '#ffffff'
 }
 
 /**
@@ -104,8 +118,8 @@ function buildSunburstData(items) {
 
   for (const [catName, seriesMap] of catMap) {
     const catColor    = CAT_COLORS[colorIdx % CAT_COLORS.length]
-    const seriesColor = tintColor(catColor, 0.40)  // 中亮，与品类明显区分
-    const modelColor  = tintColor(catColor, 0.72)  // 浅色，与系列明显区分
+    const seriesColor = tintColor(catColor, 0.32)
+    const modelColor  = tintColor(catColor, 0.62)
     colorIdx++
     const catChildren = []
     let   catTotal    = 0
@@ -116,12 +130,12 @@ function buildSunburstData(items) {
 
       for (const [modelCode, { count, products }] of modelMap) {
         seriesTotal += count
-        // products 存入节点，供 tooltip formatter 读取
         seriesChildren.push({
           name:      modelCode,
           value:     count,
           products,
           itemStyle: { color: modelColor },
+          label:     { color: labelColor(modelColor) },
         })
       }
 
@@ -130,6 +144,7 @@ function buildSunburstData(items) {
         name:      seriesName,
         value:     seriesTotal,
         itemStyle: { color: seriesColor },
+        label:     { color: labelColor(seriesColor) },
         children:  seriesChildren,
       })
     }
@@ -138,6 +153,7 @@ function buildSunburstData(items) {
       name:      catName,
       value:     catTotal,
       itemStyle: { color: catColor },
+      label:     { color: labelColor(catColor) },
       children:  catChildren,
     })
   }
@@ -146,7 +162,10 @@ function buildSunburstData(items) {
 }
 
 /**
- * 构建 ECharts option
+ * 构建 ECharts option（旭日风味轮风格）
+ * - 内环：品类，深色背景+白字，切向文字
+ * - 中环：系列，中色背景，切向文字
+ * - 外环：型号，浅色背景，标签径向排列在环外
  */
 function buildChartOption(data, total) {
   const FONT = "'Microsoft YaHei UI','Microsoft YaHei','PingFang SC',sans-serif"
@@ -157,33 +176,31 @@ function buildChartOption(data, total) {
     tooltip: {
       trigger: 'item',
       formatter(params) {
-        const depth  = (params.treePathInfo?.length ?? 1) - 1  // 1=品类 2=系列 3=型号
+        const depth  = (params.treePathInfo?.length ?? 1) - 1
         const labels = ['', '品类', '系列', '型号']
         const label  = labels[depth] || '型号'
 
         let extra = ''
-        // 型号节点：列出各成品的中文名和英文名
         if (depth === 3 && params.data?.products?.length) {
-          const list    = params.data.products
-          const MAX     = 6
-          const shown   = list.slice(0, MAX)
-          const more    = list.length - MAX
-          const rows    = shown.map(p => {
+          const list  = params.data.products
+          const MAX   = 6
+          const shown = list.slice(0, MAX)
+          const more  = list.length - MAX
+          const rows  = shown.map(p => {
             const cn = p.name    ? `<span style="color:#3a3028">${p.name}</span>` : ''
             const en = p.name_en ? `<span style="color:#8a7a6a;font-size:11px"> / ${p.name_en}</span>` : ''
             return `<div style="padding:1px 0;border-bottom:1px solid #f0e8d8;white-space:nowrap">${cn}${en}</div>`
           }).join('')
-          const moreRow = more > 0 ? `<div style="color:#8a7a6a;font-size:11px;padding-top:2px">…还有 ${more} 个</div>` : ''
+          const moreRow = more > 0
+            ? `<div style="color:#8a7a6a;font-size:11px;padding-top:2px">…还有 ${more} 个</div>` : ''
           extra = `<div style="margin-top:6px">${rows}${moreRow}</div>`
         }
 
         const countLine = depth < 3
-          ? `<div style="color:#6b5e4e">${label} · ${params.value} 个成品</div>`
-          : ''
+          ? `<div style="color:#6b5e4e">${label} · ${params.value} 个成品</div>` : ''
         return `<div style="font-size:13px;color:#3a3028;font-family:${FONT};line-height:1.6;max-width:280px">
           <div style="font-weight:600;margin-bottom:2px">${params.name}</div>
-          ${countLine}
-          ${extra}
+          ${countLine}${extra}
         </div>`
       },
       backgroundColor: '#fff',
@@ -194,35 +211,17 @@ function buildChartOption(data, total) {
     },
 
     graphic: [{
-      type: 'group',
-      left: 'center',
-      top:  'middle',
-      z:    100,
+      type: 'group', left: 'center', top: 'middle', z: 100,
       children: [
         {
-          type: 'text',
-          left: 'center',
-          top: -16,
-          style: {
-            text:       String(total),
-            textAlign:  'center',
-            fontSize:   30,
-            fontWeight: 700,
-            fill:       '#c4883a',
-            fontFamily: FONT,
-          },
+          type: 'text', left: 'center', top: -16,
+          style: { text: String(total), textAlign: 'center', fontSize: 28,
+                   fontWeight: 700, fill: '#c4883a', fontFamily: FONT },
         },
         {
-          type: 'text',
-          left: 'center',
-          top:  20,
-          style: {
-            text:       '个成品',
-            textAlign:  'center',
-            fontSize:   12,
-            fill:       '#8a7a6a',
-            fontFamily: FONT,
-          },
+          type: 'text', left: 'center', top: 18,
+          style: { text: '个成品', textAlign: 'center', fontSize: 12,
+                   fill: '#8a7a6a', fontFamily: FONT },
         },
       ],
     }],
@@ -230,49 +229,52 @@ function buildChartOption(data, total) {
     series: [{
       type:   'sunburst',
       data:   data,
-      radius: ['18%', '82%'],
+      // 外环仅占到 62%，留足空间放环外标签
+      radius: ['15%', '62%'],
       center: ['50%', '50%'],
       sort:   'desc',
       emphasis: {
         focus: 'ancestor',
-        itemStyle: { shadowBlur: 12, shadowColor: 'rgba(0,0,0,0.12)' },
+        itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.15)' },
       },
       levels: [
-        {},  // 虚拟根（index 0，不显示）
-        // 品类环（深色背景，白色文字）
+        {},  // 虚拟根
+        // ① 品类环：深色，切向白字，粗
         {
-          r0: '18%', r: '42%',
+          r0: '15%', r: '36%',
           label: {
             rotate:     'tangential',
-            fontSize:   12,
-            fontWeight: 600,
+            fontSize:   13,
+            fontWeight: 700,
             fontFamily: FONT,
-            color:      '#fff',
             minAngle:   8,
+            // 文字色由节点 label.color 覆盖（buildSunburstData 中设置）
           },
-          itemStyle: { borderColor: '#fff', borderWidth: 2 },
+          itemStyle: { borderColor: '#fff', borderWidth: 2.5 },
         },
-        // 系列环（中亮色背景，深色文字）
+        // ② 系列环：中色，径向字
         {
-          r0: '42%', r: '63%',
+          r0: '36%', r: '57%',
           label: {
-            rotate:     'tangential',
+            rotate:     'radial',
             fontSize:   11,
             fontFamily: FONT,
-            color:      '#3a3028',
             minAngle:   6,
           },
           itemStyle: { borderColor: '#fff', borderWidth: 1.5 },
         },
-        // 型号环（浅色背景，深色文字）
+        // ③ 型号环：浅色，标签径向排在环外
         {
-          r0: '63%', r: '82%',
+          r0: '57%', r: '62%',
           label: {
-            rotate:     'tangential',
+            position:   'outside',
+            rotate:     'radial',
             fontSize:   10,
             fontFamily: FONT,
             color:      '#5a4a3a',
-            minAngle:   5,
+            minAngle:   4,
+            overflow:   'truncate',
+            ellipsis:   '…',
           },
           itemStyle: { borderColor: '#fff', borderWidth: 1 },
         },

@@ -115,9 +115,10 @@ onMounted(async () => {
         daysSinceImport: res.data.days_since_import ?? null,
       }
       categoryStats.value = (res.data.categories || []).map((cat, i) => ({
-        label: cat.description || '未分类',
-        count: cat.count,
-        color: CAT_COLORS[i % CAT_COLORS.length],
+        label:       cat.description || '未分类',
+        count:       cat.count,
+        unprocessed: cat.unprocessed ?? 0,
+        color:       CAT_COLORS[i % CAT_COLORS.length],
       }))
     }
   } catch {}
@@ -205,6 +206,7 @@ onMounted(async () => {
               </div>
               <div class="cat-count" :style="{ color: cat.color }">{{ cat.count }}</div>
               <div class="cat-unit">个成品</div>
+              <div v-if="cat.unprocessed > 0" class="cat-unprocessed">{{ cat.unprocessed }} 个待处理</div>
             </div>
           </div>
 
@@ -426,7 +428,8 @@ onMounted(async () => {
 .cat-dot    { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .cat-label  { font-size: 13px; font-weight: 500; color: var(--text-primary); }
 .cat-count  { font-size: 36px; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 4px; }
-.cat-unit   { font-size: 12px; color: var(--text-muted); }
+.cat-unit        { font-size: 12px; color: var(--text-muted); }
+.cat-unprocessed { font-size: 12px; color: #c05040; margin-top: 6px; }
 
 /* 快捷操作 */
 .quick-grid { display: flex; gap: 12px; }

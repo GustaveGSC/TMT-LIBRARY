@@ -112,6 +112,12 @@ def assign_permission(role_id, code):
     return account_service.assign_permission_to_role(role_id, code).to_response()
 
 
+# ── 游客登录 ──────────────────────────────────────
+@account_bp.get("/guest")
+def guest_login():
+    return account_service.guest_login().to_response()
+
+
 # ── 权限管理 ──────────────────────────────────────
 @account_bp.get("/permissions")
 def get_permissions():

@@ -273,10 +273,13 @@ product_category
   id, name(UNIQUE), sort_order, created_at
 
 product_series
-  id, category_id(FK), code(UNIQUE), name, sort_order, created_at
+  id, category_id(FK), code, name, sort_order, created_at
+  # UNIQUE(category_id, code)  ← code 在同一品类内唯一（跨品类可重复）
 
 product_model
-  id, series_id(FK), code(UNIQUE), name, name_en, model_code(UNIQUE), sort_order, created_at
+  id, series_id(FK), code, name, name_en, model_code(UNIQUE), sort_order, created_at
+  # UNIQUE(series_id, code)    ← code 在同一系列内唯一（跨系列可重复）
+  # model_code 全局唯一
 
 product_finished
   id, code(UNIQUE), status, model_id(FK→product_model),
@@ -444,6 +447,7 @@ const { isAdmin, can, canEditProduct, canViewProduct, canDeleteProduct } = usePe
 - active 状态：文字加粗 + 主色 + 底部2px橙色指示线，无背景填充
 - 数据管理区：导入数据 / 编码规则 / 分类管理 / 标签管理 / **参数管理**
 - **数据管理区需要 `product:edit` 权限才显示**（`v-if="canEditProduct"`）
+- **概览分类卡片**：每块显示该分类成品总数 + 待处理数量（`cat.unprocessed > 0` 时红色显示「X 个待处理」）；统计均排除 `ignored` 状态产品
 
 ## ProductTable.vue 说明
 - 双表格布局：成品表（上）+ 产成品表（下）
@@ -514,9 +518,17 @@ const { isAdmin, can, canEditProduct, canViewProduct, canDeleteProduct } = usePe
   - 键名库通过「参数管理」弹窗维护（page-product.vue 概览页数据管理区）
 - **数据节**：占位，含两张卡片（发货数据 / 售后数据），待开发
 
+## ProductChart.vue 说明
+- 图表视图，从 `finishedStore.rawItems` 读取数据
+- **始终排除 `status === 'ignored'` 的成品**（`activeItems` computed 预过滤，`filteredItems` 在此基础上按状态筛选）
+- STATUS_TABS：全部 / 已录入 / 未录入（不含「无需录入」，ignored 已在基础集排除）
+- 旭日图：品类（内环，tangential）→ 系列（中环，radial）→ 型号（外环5%，outside radial）
+- 品类配色：`CAT_COLORS = ['#c4883a', '#4a8fc0', '#6ab47a', '#9c6fba', '#e07070', '#70aacc', '#e0a040', '#7abcaa']`
+- 外环 r0:57% r:62%，中环 r0:36% r:57%，内环 r0:15% r:36%
+
 ## ProductImage.vue 说明
 - 图片视图，从 `finishedStore.rawItems` 读取数据（复用表格视图已加载的数据，不重复请求）
-- 始终过滤掉 `status === 'unrecorded'` 的成品
+- 始终过滤掉 `status === 'unrecorded'` 和 `status === 'ignored'` 的成品
 - **工具栏**（单行）：搜索框 / 系列多选筛选（el-select filterable multiple） / 市场筛选 Tab / 排序按钮（品号/上市时间） / 数量统计
 - **分组展示**：按 `category_name` 分组，每组有可点击标题行（展开=主色实心背景，合拢=普通卡片样式），标题行 sticky 吸顶
 - **卡片**：固定高度图片区（180px） + 信息区（品号 + 中文名自动换行），点击弹出详情 dialog
@@ -672,12 +684,13 @@ src/stores/product/
 ## /api/product/stats 返回结构
 ```json
 {
-  "total_finished":    <int>,   // 符合 finished 编码规则的 import 记录数
-  "unprocessed":       <int>,   // total_finished - product_finished 表记录数
+  "total_finished":    <int>,   // 符合 finished 编码规则的 import 记录数（排除 ignored）
+  "unprocessed":       <int>,   // total_finished - product_finished 非ignored记录数
   "last_imported_at":  "YYYY-MM-DD" | null,
   "days_since_import": <int> | null,
   "categories": [
-    { "description": "xxx", "count": <int> }   // 按 erp_code_rules description 分组，按数量降序
+    { "description": "xxx", "count": <int>, "unprocessed": <int> }
+    // 按 erp_code_rules description 分组，按数量降序，均排除 ignored 产品
   ]
 }
 ```

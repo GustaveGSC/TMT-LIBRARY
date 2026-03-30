@@ -37,7 +37,7 @@ class ImportProductRepository:
 
     @staticmethod
     def get_stats() -> Dict:
-        """获取概览统计：成品总数、待处理、最近导入、成品分类"""
+        """获取概览统计：成品总数、待处理、最近导入、成品分类（均排除 ignored）"""
         from database.models.product.erp_code_rules import ErpCodeRule
         from database.models.product.finished import ProductFinished
 
@@ -53,26 +53,46 @@ class ImportProductRepository:
         finished_rules = ErpCodeRule.query.filter_by(type='finished').all()
         prefix_desc = [(r.prefix, r.description or '') for r in finished_rules]
 
-        # 遍历 import 表，按 description 分组计数
+        # 已标记为 ignored 的品号集合，统计时排除
+        ignored_codes = {
+            row[0] for row in db.session.query(ProductFinished.code)
+            .filter(ProductFinished.status == 'ignored').all()
+        }
+
+        # 已处理品号集合：在 product_finished 且状态为 recorded（非 unrecorded/ignored）
+        processed_codes = {
+            row[0] for row in db.session.query(ProductFinished.code)
+            .filter(ProductFinished.status == 'recorded').all()
+        }
+
+        # 遍历 import 表，按 description 分组计数（跳过 ignored）
         all_codes = [r.code for r in db.session.query(ImportProductRaw.code).all()]
-        desc_counts = defaultdict(int)
+        desc_counts      = defaultdict(int)
+        desc_unprocessed = defaultdict(int)
         total_finished = 0
         for code in all_codes:
+            if code in ignored_codes:
+                continue
             matched_descs = set()
             for prefix, desc in prefix_desc:
                 if code.startswith(prefix):
                     matched_descs.add(desc)
             if matched_descs:
                 total_finished += 1
+                is_unprocessed = code not in processed_codes
                 for desc in matched_descs:
                     desc_counts[desc] += 1
+                    if is_unprocessed:
+                        desc_unprocessed[desc] += 1
 
-        # 待处理 = 成品总数 - product_finished 表已有的记录数
-        finished_count = ProductFinished.query.count()
+        # 待处理 = 成品总数(排除ignored) - product_finished 非ignored记录数
+        finished_count = ProductFinished.query.filter(
+            ProductFinished.status != 'ignored'
+        ).count()
         unprocessed = max(0, total_finished - finished_count)
 
         categories = [
-            {'description': desc, 'count': count}
+            {'description': desc, 'count': count, 'unprocessed': desc_unprocessed.get(desc, 0)}
             for desc, count in sorted(desc_counts.items(), key=lambda x: -x[1])
         ]
 

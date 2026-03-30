@@ -11,7 +11,7 @@
           v-for="mod in modules"
           :key="mod.key"
           class="module-card"
-          :class="{ disabled: mod.disabled }"
+          :class="{ disabled: mod.disabled || mod.noPermission }"
           @click="handleEnter(mod)"
         >
           <div class="module-icon">
@@ -20,6 +20,7 @@
           <div class="module-name">{{ mod.name }}</div>
           <div class="module-desc">{{ mod.desc }}</div>
           <div v-if="mod.disabled" class="module-badge">即将上线</div>
+          <div v-else-if="mod.noPermission" class="module-badge module-badge--noperm">无权限</div>
         </div>
       </div>
     </main>
@@ -79,6 +80,7 @@ import { useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import http from '@/api/http'
 import { checkUpdateType } from '@/utils/version'
+import { usePermission } from '@/composables/usePermission'
 import UserSettingsDrawer from '@/components/user/UserSettingsDrawer.vue'
 import UpdateDialog from '@/components/update/UpdateDialog.vue'
 import WindowControls from '@/components/common/WindowControls.vue'
@@ -130,19 +132,54 @@ onUnmounted(() => {
   window.electronAPI?.updater.off('updater:not-available', onNotAvailable)
 })
 
+const { isAdmin, canViewProduct, canViewShipping, canEditShipping } = usePermission()
+
 const userInfo    = JSON.parse(localStorage.getItem('user') || '{}')
 const userName    = computed(() => userInfo.display_name || userInfo.username || '游客')
 const userInitial = computed(() => (userName.value?.[0] ?? '?').toUpperCase())
 
-const modules = [
-  { key: 'product',   name: '产品库',   desc: '产品信息管理与检索', icon: '📦', route: '/product',   disabled: false },
-  { key: 'shipping',  name: '发货数据', desc: '发货记录查询与统计', icon: '🚚', route: '/shipping',  disabled: false },
-  { key: 'data-mgmt', name: '数据管理', desc: '导入数据与操作人配置', icon: '⚙️', route: '/data-mgmt', disabled: false },
-  { key: 'aftersale', name: '售后数据', desc: '售后记录查询与分析',  icon: '🔧', route: '/aftersale', disabled: true  },
-]
+// noPermission=true：无权限时禁用并显示"无权限"标签
+const modules = computed(() => [
+  {
+    key: 'product',
+    name: '产品库',
+    desc: '产品信息管理与检索',
+    icon: '📦',
+    route: '/product',
+    disabled: false,
+    noPermission: !canViewProduct,
+  },
+  {
+    key: 'shipping',
+    name: '发货数据',
+    desc: '发货记录查询与统计',
+    icon: '🚚',
+    route: '/shipping',
+    disabled: false,
+    noPermission: !canViewShipping,
+  },
+  {
+    key: 'data-mgmt',
+    name: '数据管理',
+    desc: '导入数据与操作人配置',
+    icon: '⚙️',
+    route: '/data-mgmt',
+    disabled: false,
+    noPermission: !canEditShipping,
+  },
+  {
+    key: 'aftersale',
+    name: '售后数据',
+    desc: '售后记录查询与分析',
+    icon: '🔧',
+    route: '/aftersale',
+    disabled: true,
+    noPermission: false,
+  },
+])
 
 function handleEnter(mod) {
-  if (mod.disabled) return
+  if (mod.disabled || mod.noPermission) return
   router.push(mod.route)
 }
 
@@ -234,6 +271,11 @@ function handleUserSetting() { settingsDrawer.value?.open() }
   background: var(--accent-bg); border: 1px solid var(--border);
   border-radius: 6px; padding: 2px 7px;
   font-size: 10px; color: var(--text-muted);
+}
+.module-badge--noperm {
+  background: rgba(210, 70, 50, 0.07);
+  border-color: rgba(210, 70, 50, 0.25);
+  color: #c0402a;
 }
 
 .bottom-bar {

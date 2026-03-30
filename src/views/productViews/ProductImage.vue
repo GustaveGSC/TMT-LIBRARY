@@ -19,7 +19,7 @@ const sortBy       = ref('code') // 'code' | 'listed_yymm'
 const seriesOptions = computed(() => {
   const seen = new Set()
   for (const r of finishedStore.rawItems) {
-    if (r.status === 'unrecorded') continue
+    if (r.status === 'unrecorded' || r.status === 'ignored') continue
     if (r.series_name) seen.add(r.series_name)
   }
   return [...seen].sort()
@@ -37,8 +37,8 @@ const MARKET_TABS = [
 const filteredItems = computed(() => {
   let list = finishedStore.rawItems
 
-  // 始终过滤掉未录入的成品
-  list = list.filter(r => r.status !== 'unrecorded')
+  // 始终过滤掉未录入和无需录入的成品
+  list = list.filter(r => r.status !== 'unrecorded' && r.status !== 'ignored')
   if (filterMarket.value) {
     list = list.filter(r => r.market === filterMarket.value)
   }
