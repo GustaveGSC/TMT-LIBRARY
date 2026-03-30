@@ -8,8 +8,9 @@ def now_cst(): return datetime.now(CST).replace(tzinfo=None)
 class AppVersion(db.Model):
     __tablename__ = 'app_version'
 
-    id           = db.Column(db.Integer,     primary_key=True, autoincrement=True)
-    version      = db.Column(db.String(20),  nullable=False)
-    description  = db.Column(db.Text)
-    download_url = db.Column(db.String(500))
-    created_at   = db.Column(db.DateTime,    default=now_cst)
+    id               = db.Column(db.Integer,     primary_key=True, autoincrement=True)
+    version          = db.Column(db.String(20),  nullable=False)
+    description      = db.Column(db.Text)
+    download_url     = db.Column(db.String(500))   # Windows 安装包 URL
+    mac_download_url = db.Column(db.String(500))   # macOS 安装包 URL（可为空）
+    created_at       = db.Column(db.DateTime,    default=now_cst)

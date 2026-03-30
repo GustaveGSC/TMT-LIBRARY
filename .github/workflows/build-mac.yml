@@ -49,9 +49,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
-      - name: Upload DMG artifact
+      - name: Upload artifacts (DMG + latest-mac.yml)
         uses: actions/upload-artifact@v4
         with:
-          name: mac-dmg-${{ github.sha }}
-          path: release/*.dmg
+          name: mac-release-${{ github.sha }}
+          path: |
+            release/*.dmg
+            release/latest-mac.yml
           retention-days: 14

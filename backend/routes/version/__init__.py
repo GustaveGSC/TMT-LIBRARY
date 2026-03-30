@@ -17,23 +17,27 @@ def get_latest():
 def get_list():
     versions = AppVersion.query.order_by(AppVersion.id.desc()).all()
     return Result.ok(data=[{
-        "id":           v.id,
-        "version":      v.version,
-        "description":  v.description,
-        "download_url": v.download_url,
-        "created_at":   v.created_at.strftime("%Y-%m-%d"),
+        "id":               v.id,
+        "version":          v.version,
+        "description":      v.description,
+        "download_url":     v.download_url,
+        "mac_download_url": v.mac_download_url,
+        "created_at":       v.created_at.strftime("%Y-%m-%d"),
     } for v in versions]).to_response()
 
 
 @version_bp.post("/")
 def create_version():
-    body         = request.get_json() or {}
-    version      = body.get("version",      "").strip()
-    description  = body.get("description",  "")
-    download_url = body.get("download_url", "")
-    if not version or not download_url:
-        return Result.fail("版本号和下载地址不能为空").to_response()
-    return version_service.create(version, description, download_url).to_response()
+    body             = request.get_json() or {}
+    version          = body.get("version",          "").strip()
+    description      = body.get("description",      "")
+    download_url     = body.get("download_url",     "").strip() or None
+    mac_download_url = body.get("mac_download_url", "").strip() or None
+    if not version:
+        return Result.fail("版本号不能为空").to_response()
+    if not download_url and not mac_download_url:
+        return Result.fail("至少需要上传 Windows 或 macOS 安装包之一").to_response()
+    return version_service.create(version, description, download_url, mac_download_url).to_response()
 
 
 @version_bp.post("/upload")

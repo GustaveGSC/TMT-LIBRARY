@@ -18,8 +18,9 @@ class VersionService:
         })
 
     @staticmethod
-    def create(version: str, description: str, download_url: str) -> Result:
-        v = VersionRepository.create(version, description, download_url)
+    def create(version: str, description: str,
+               download_url: str = None, mac_download_url: str = None) -> Result:
+        v = VersionRepository.create(version, description, download_url, mac_download_url)
         return Result.ok(data={"id": v.id, "version": v.version})
 
 
