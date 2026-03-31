@@ -582,5 +582,8 @@ class ShippingService:
         data = shipping_repository.get_product_monthly(code)
         return Result.ok(data)
 
+    def get_orders(self, page: int, size: int, filters: Dict, sort_field: str, sort_order: str) -> Dict:
+        return shipping_repository.get_orders(page, size, filters, sort_field, sort_order)
+
 
 shipping_service = ShippingService()

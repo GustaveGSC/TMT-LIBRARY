@@ -5,6 +5,7 @@ import { useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import WindowControls    from '@/components/common/WindowControls.vue'
 import ShippingDashboard from './ShippingDashboard.vue'
+import ShippingTable     from './ShippingTable.vue'
 
 // ── 路由 ──────────────────────────────────────────
 const router = useRouter()
@@ -46,9 +47,7 @@ function handleBack() {
     <!-- ── 主内容区 ────────────────────────────── -->
     <main class="main-content">
       <ShippingDashboard v-show="activeTab === 'chart'" />
-      <div v-show="activeTab === 'data'" class="placeholder">
-        <div class="placeholder-text">数据功能开发中</div>
-      </div>
+      <ShippingTable     v-show="activeTab === 'data'" />
     </main>
 
   </div>
@@ -111,10 +110,4 @@ function handleBack() {
   display: flex; flex-direction: column;
 }
 
-/* 数据占位 */
-.placeholder {
-  flex: 1; display: flex;
-  align-items: center; justify-content: center;
-}
-.placeholder-text { font-size: 14px; color: var(--text-muted); }
 </style>

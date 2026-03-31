@@ -759,6 +759,102 @@ class ShippingRepository:
 
 
     @staticmethod
+    def get_orders(page: int, size: int, filters: Dict, sort_field: str, sort_order: str) -> Dict:
+        """分页查询 shipping_order_finished（仅含已匹配成品），LEFT JOIN 产品表取系列/型号"""
+        from datetime import datetime as _dt
+        from database.models.product.category import ProductSeries, ProductModel
+        from database.models.product.finished import ProductFinished
+        from sqlalchemy import collate as sa_collate
+
+        sof = ShippingOrderFinished
+
+        # 始终过滤掉未匹配记录，LEFT JOIN 获取品类/系列/型号信息
+        from database.models.product.category import ProductCategory
+        q = db.session.query(
+            sof,
+            ProductModel.code.label('model_code'),
+            ProductSeries.code.label('series_code'),
+            ProductCategory.name.label('category_name'),
+        ).outerjoin(
+            ProductFinished,
+            sa_collate(sof.finished_code, 'utf8mb4_unicode_ci') ==
+            sa_collate(ProductFinished.code, 'utf8mb4_unicode_ci'),
+        ).outerjoin(
+            ProductModel, ProductFinished.model_id == ProductModel.id,
+        ).outerjoin(
+            ProductSeries, ProductModel.series_id == ProductSeries.id,
+        ).outerjoin(
+            ProductCategory, ProductSeries.category_id == ProductCategory.id,
+        ).filter(
+            sof.finished_code.isnot(None)
+        )
+
+        # 文本模糊筛选
+        if filters.get('ecommerce_order_no'):
+            q = q.filter(sof.ecommerce_order_no.like(f"%{filters['ecommerce_order_no']}%"))
+        if filters.get('finished_code'):
+            q = q.filter(sof.finished_code.like(f"%{filters['finished_code']}%"))
+        if filters.get('finished_name'):
+            q = q.filter(sof.finished_name.like(f"%{filters['finished_name']}%"))
+        if filters.get('category_name'):
+            q = q.filter(ProductCategory.name.like(f"%{filters['category_name']}%"))
+        if filters.get('series_code'):
+            q = q.filter(ProductSeries.code.like(f"%{filters['series_code']}%"))
+        if filters.get('model_code'):
+            q = q.filter(ProductModel.code.like(f"%{filters['model_code']}%"))
+        if filters.get('channel_name'):
+            q = q.filter(sof.channel_name.like(f"%{filters['channel_name']}%"))
+        if filters.get('channel_code'):
+            q = q.filter(sof.channel_code.like(f"%{filters['channel_code']}%"))
+        if filters.get('channel_org_name'):
+            q = q.filter(sof.channel_org_name.like(f"%{filters['channel_org_name']}%"))
+        if filters.get('province'):
+            q = q.filter(sof.province.like(f"%{filters['province']}%"))
+        if filters.get('city'):
+            q = q.filter(sof.city.like(f"%{filters['city']}%"))
+        if filters.get('district'):
+            q = q.filter(sof.district.like(f"%{filters['district']}%"))
+
+        # 日期范围筛选
+        if filters.get('date_start'):
+            try:
+                q = q.filter(sof.shipped_date >= _dt.strptime(filters['date_start'], '%Y-%m-%d').date())
+            except ValueError:
+                pass
+        if filters.get('date_end'):
+            try:
+                q = q.filter(sof.shipped_date <= _dt.strptime(filters['date_end'], '%Y-%m-%d').date())
+            except ValueError:
+                pass
+
+        # 排序（joined 列需单独处理）
+        sort_col_map = {
+            'shipped_date':       sof.shipped_date,
+            'quantity':           sof.quantity,
+            'return_quantity':    sof.return_quantity,
+            'actual_quantity':    sof.actual_quantity,
+            'finished_code':      sof.finished_code,
+            'ecommerce_order_no': sof.ecommerce_order_no,
+            'model_code':         ProductModel.code,
+            'series_code':        ProductSeries.code,
+        }
+        col = sort_col_map.get(sort_field, sof.shipped_date)
+        q = q.order_by(col.asc() if sort_order == 'asc' else col.desc())
+
+        total = q.count()
+        rows  = q.offset((page - 1) * size).limit(size).all()
+
+        items = []
+        for row in rows:
+            d = row.ShippingOrderFinished.to_dict()
+            d['model_code']    = row.model_code
+            d['series_code']   = row.series_code
+            d['category_name'] = row.category_name
+            items.append(d)
+
+        return {'items': items, 'total': total}
+
+    @staticmethod
     def get_product_monthly(code: str) -> list:
         """按月聚合指定成品的发货/销退/实际数量，从最早记录月到最新月（排除售后操作人）"""
         from sqlalchemy import func

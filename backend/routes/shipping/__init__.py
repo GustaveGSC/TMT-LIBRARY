@@ -235,6 +235,36 @@ def save_warehouse_filters():
     return Result.ok(data=result).to_response()
 
 
+@shipping_bp.get('/orders')
+def get_orders():
+    """分页查询 shipping_order_finished，支持筛选和排序"""
+    page       = max(1, int(request.args.get('page', 1)))
+    size       = min(200, max(1, int(request.args.get('size', 50))))
+    sort_field = request.args.get('sort_field', 'shipped_date')
+    sort_order = request.args.get('sort_order', 'desc')
+
+    filters = {
+        'ecommerce_order_no': request.args.get('ecommerce_order_no', '').strip(),
+        'finished_code':      request.args.get('finished_code', '').strip(),
+        'finished_name':      request.args.get('finished_name', '').strip(),
+        'category_name':      request.args.get('category_name', '').strip(),
+        'series_code':        request.args.get('series_code', '').strip(),
+        'model_code':         request.args.get('model_code', '').strip(),
+        'channel_name':       request.args.get('channel_name', '').strip(),
+        'channel_code':       request.args.get('channel_code', '').strip(),
+        'channel_org_name':   request.args.get('channel_org_name', '').strip(),
+        'province':           request.args.get('province', '').strip(),
+        'city':               request.args.get('city', '').strip(),
+        'district':           request.args.get('district', '').strip(),
+        'date_start':         request.args.get('date_start', '').strip(),
+        'date_end':           request.args.get('date_end', '').strip(),
+    }
+    try:
+        return Result.ok(data=shipping_service.get_orders(page, size, filters, sort_field, sort_order)).to_response()
+    except Exception as e:
+        return Result.fail(str(e)).to_response()
+
+
 @shipping_bp.get('/product/<string:code>/monthly')
 def get_product_monthly(code):
     """返回指定成品编码按月聚合的发货/销退/实际数量"""
