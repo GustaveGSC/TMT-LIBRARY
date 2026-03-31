@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-mac:
-    runs-on: macos-latest
+    runs-on: macos-13   # Intel x64，与 PyInstaller 产物架构一致
 
     steps:
       - name: Checkout
