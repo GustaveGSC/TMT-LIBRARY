@@ -80,7 +80,7 @@ if %errorlevel% neq 0 (
   exit /b 1
 )
 
-REM ── 推送 ────────────────────────────────────────────
+REM ── 推送 Git ─────────────────────────────────────────
 echo 🚀 推送 commit 和 tag 到远程...
 git push
 if %errorlevel% neq 0 (
@@ -91,6 +91,20 @@ git push origin "v!VERSION!"
 if %errorlevel% neq 0 (
   echo ❌ git push tag 失败
   exit /b 1
+)
+
+REM ── 上传下载页到 OSS ─────────────────────────────────
+where ossutil >nul 2>&1
+if %errorlevel% equ 0 (
+  echo ☁️  上传下载页到 OSS...
+  ossutil cp docs/index.html oss://tmt-oss/index.html --acl public-read --meta "Content-Type:text/html; charset=utf-8" -f
+  if %errorlevel% neq 0 (
+    echo ⚠️  OSS 上传失败，请手动上传 docs/index.html 到 oss://tmt-oss/index.html
+  ) else (
+    echo    下载页已更新
+  )
+) else (
+  echo ⚠️  未检测到 ossutil，请手动上传 docs/index.html 到 oss://tmt-oss/index.html
 )
 
 REM ── 完成 ────────────────────────────────────────────
