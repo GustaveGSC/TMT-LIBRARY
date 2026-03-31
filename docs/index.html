@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>两平米软件库 · 下载</title>
+  <style>
+    /* ── 变量 ── */
+    :root {
+      --bg:       #ede8dc;
+      --card:     #ffffff;
+      --accent:   #c4883a;
+      --accent-h: #e09050;
+      --border:   #e0d4c0;
+      --t1:       #3d2b1a;
+      --t2:       #7a5c3a;
+      --t3:       #b09070;
+      --radius:   14px;
+    }
+
+    /* ── 基础 ── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--t1);
+      font-family: 'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Helvetica Neue', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    /* ── 顶部装饰条 ── */
+    .top-bar {
+      width: 100%;
+      height: 4px;
+      background: linear-gradient(90deg, #c4883a, #e0a050, #c4883a);
+    }
+
+    /* ── 主体 ── */
+    .page {
+      width: 100%;
+      max-width: 680px;
+      padding: 60px 24px 80px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 40px;
+    }
+
+    /* ── Hero ── */
+    .hero {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+      text-align: center;
+    }
+
+    .app-icon {
+      width: 100px;
+      height: 100px;
+      border-radius: 24px;
+      box-shadow: 0 8px 32px rgba(150, 100, 50, 0.18);
+      object-fit: contain;
+      background: #fff;
+    }
+
+    .app-name {
+      font-size: 32px;
+      font-weight: 700;
+      color: var(--t1);
+      letter-spacing: 0.02em;
+    }
+
+    .app-tagline {
+      font-size: 15px;
+      color: var(--t2);
+      line-height: 1.7;
+      max-width: 420px;
+    }
+
+    .version-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 14px;
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      font-size: 13px;
+      color: var(--t2);
+    }
+    .version-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: #52c41a;
+    }
+
+    /* ── 下载卡片区 ── */
+    .download-cards {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      width: 100%;
+    }
+
+    .dl-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      box-shadow: 0 2px 12px rgba(150, 100, 50, 0.07);
+      transition: box-shadow 0.2s, transform 0.2s;
+    }
+    .dl-card:hover {
+      box-shadow: 0 6px 24px rgba(150, 100, 50, 0.13);
+      transform: translateY(-2px);
+    }
+
+    .dl-os-icon {
+      font-size: 36px;
+      line-height: 1;
+    }
+
+    .dl-os-name {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--t1);
+    }
+
+    .dl-os-hint {
+      font-size: 12px;
+      color: var(--t3);
+      text-align: center;
+    }
+
+    .dl-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      width: 100%;
+      padding: 10px 0;
+      border-radius: 10px;
+      border: none;
+      background: var(--accent);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background 0.15s;
+    }
+    .dl-btn:hover { background: var(--accent-h); }
+    .dl-btn.secondary {
+      background: transparent;
+      color: var(--accent);
+      border: 1.5px solid var(--accent);
+    }
+    .dl-btn.secondary:hover { background: #faf6f0; }
+
+    .dl-btn svg {
+      flex-shrink: 0;
+    }
+
+    /* ── 说明区 ── */
+    .info-card {
+      width: 100%;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px 28px;
+      box-shadow: 0 2px 12px rgba(150, 100, 50, 0.07);
+    }
+
+    .info-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--t2);
+      letter-spacing: 0.08em;
+      margin-bottom: 14px;
+    }
+
+    .info-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .info-list li {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      font-size: 13px;
+      color: var(--t2);
+      line-height: 1.6;
+    }
+
+    .info-list li::before {
+      content: '';
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      flex-shrink: 0;
+      margin-top: 6px;
+    }
+
+    /* ── 页脚 ── */
+    footer {
+      margin-top: auto;
+      padding: 24px;
+      font-size: 12px;
+      color: var(--t3);
+      text-align: center;
+    }
+
+    /* ── 响应式 ── */
+    @media (max-width: 480px) {
+      .download-cards { grid-template-columns: 1fr; }
+      .app-name { font-size: 26px; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="top-bar"></div>
+
+<div class="page">
+
+  <!-- Hero -->
+  <div class="hero">
+    <img class="app-icon" src="https://tmt-oss.oss-cn-hangzhou.aliyuncs.com/tmt-library/icon.png" alt="两平米软件库图标" onerror="this.style.display='none'" />
+    <div class="app-name">两平米软件库</div>
+    <div class="app-tagline">专为两平米打造的产品数据与发货管理工具，支持产品库维护、发货数据统计、图表分析。</div>
+    <div class="version-badge">
+      <div class="version-dot"></div>
+      当前版本 v1.0.0
+    </div>
+  </div>
+
+  <!-- 下载卡片 -->
+  <div class="download-cards">
+
+    <!-- Windows -->
+    <div class="dl-card">
+      <div class="dl-os-icon">🪟</div>
+      <div class="dl-os-name">Windows</div>
+      <div class="dl-os-hint">Windows 10 / 11<br/>x64</div>
+      <a class="dl-btn"
+         href="https://tmt-oss.oss-cn-hangzhou.aliyuncs.com/tmt-library/releases/TMT%20Software%20Setup%201.0.0.exe"
+         download>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/>
+          <line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        下载安装包 .exe
+      </a>
+    </div>
+
+    <!-- macOS -->
+    <div class="dl-card">
+      <div class="dl-os-icon">🍎</div>
+      <div class="dl-os-name">macOS</div>
+      <div class="dl-os-hint">macOS 12+<br/>Intel &amp; Apple Silicon</div>
+      <a class="dl-btn"
+         href="https://tmt-oss.oss-cn-hangzhou.aliyuncs.com/tmt-library/releases/TMT%20Software-1.0.0.dmg"
+         download>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/>
+          <line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        下载安装包 .dmg
+      </a>
+    </div>
+
+  </div>
+
+  <!-- 安装说明 -->
+  <div class="info-card">
+    <div class="info-title">安装说明</div>
+    <ul class="info-list">
+      <li>Windows：下载 .exe 后双击运行，按向导完成安装，支持自定义安装路径。</li>
+      <li>macOS：下载 .dmg 后打开，将应用拖入「应用程序」文件夹。首次运行如提示"无法验证开发者"，请在「系统设置 → 隐私与安全性」中点击「仍要打开」。</li>
+      <li>应用需要连接内网数据库，请确保网络环境可访问服务器。</li>
+      <li>有新版本时，应用会在登录后自动提示更新。</li>
+    </ul>
+  </div>
+
+</div>
+
+<footer>© 2025 两平米 · 内部使用</footer>
+
+</body>
+</html>
