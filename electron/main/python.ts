@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { spawn, ChildProcess } from 'child_process'
 import { join } from 'path'
-import { existsSync, chmodSync } from 'fs'
+import { existsSync, chmodSync, cpSync, mkdirSync } from 'fs'
 
 let pythonProcess: ChildProcess | null = null
 const PYTHON_PORT = 8765           // Flask 监听端口，与前端 api/http.js 保持一致
@@ -10,10 +10,29 @@ const MAX_WAIT_MS = 10000          // 最多等待 10 秒
 // ── 获取 Python 可执行文件路径 ────────────────────
 function getPythonExecutable(): string {
   if (app.isPackaged) {
-    // 生产：使用打包进 resources 的 PyInstaller 产物
-    const platform = process.platform
-    const exeName = platform === 'win32' ? 'backend.exe' : 'backend'
-    return join(process.resourcesPath, 'python-backend', exeName)
+    const exeName = process.platform === 'win32' ? 'backend.exe' : 'backend'
+    const srcExe  = join(process.resourcesPath, 'python-backend', exeName)
+
+    if (process.platform !== 'win32') {
+      // macOS/Linux：优先直接 chmod；若文件系统只读（如从 DMG 直接运行），
+      // 则将整个 python-backend 目录复制到可写的 userData 再启动
+      try {
+        chmodSync(srcExe, 0o755)
+        return srcExe
+      } catch {
+        // 只读文件系统（DMG），复制到 userData
+        const destDir = join(app.getPath('userData'), 'python-backend')
+        const destExe = join(destDir, exeName)
+        if (!existsSync(destExe)) {
+          mkdirSync(destDir, { recursive: true })
+          cpSync(join(process.resourcesPath, 'python-backend'), destDir, { recursive: true })
+        }
+        try { chmodSync(destExe, 0o755) } catch { /* ignore */ }
+        return destExe
+      }
+    }
+
+    return srcExe
   } else {
     // 开发：直接用系统 Python
     return process.platform === 'win32' ? 'python' : 'python3'
@@ -47,11 +66,6 @@ export async function startPython(): Promise<void> {
   const args = app.isPackaged
     ? []                                       // 生产：直接运行可执行文件
     : ['backend/app.py', '--port', String(PYTHON_PORT)]  // 开发：传参给 Flask
-
-  // macOS/Linux 打包后可执行权限可能丢失，补加
-  if (app.isPackaged && process.platform !== 'win32') {
-    try { chmodSync(executable, 0o755) } catch { /* 已有权限则忽略 */ }
-  }
 
   pythonProcess = spawn(executable, args, {
     env: {

@@ -395,39 +395,46 @@ class ShippingRepository:
 
     @staticmethod
     def delete_order_finished(order_nos: List[str]):
-        """删除这些订单的旧结果（刷新前清除）"""
+        """删除这些订单的旧结果（刷新前清除），立即 commit 释放锁"""
         if order_nos:
-            ShippingOrderFinished.query.filter(
-                ShippingOrderFinished.ecommerce_order_no.in_(order_nos)
-            ).delete(synchronize_session=False)
+            # 分批删除，避免 IN 子句过大
+            chunk_size = 500
+            for i in range(0, len(order_nos), chunk_size):
+                chunk = order_nos[i:i + chunk_size]
+                ShippingOrderFinished.query.filter(
+                    ShippingOrderFinished.ecommerce_order_no.in_(chunk)
+                ).delete(synchronize_session=False)
+                db.session.commit()
 
     @staticmethod
     def bulk_insert_order_finished(rows: List[Dict]):
-        """批量写入组合结果（含 return_quantity / actual_quantity）"""
-        objects = [
-            ShippingOrderFinished(
-                ecommerce_order_no = r['ecommerce_order_no'],
-                finished_code      = r.get('finished_code'),
-                finished_name      = r.get('finished_name'),
-                quantity           = r.get('quantity'),
-                return_quantity    = r.get('return_quantity', 0),
-                actual_quantity    = r.get('actual_quantity'),
-                shipped_date       = r.get('shipped_date'),
-                operator           = r.get('operator'),
-                channel_name       = r.get('channel_name'),
-                channel_code       = r.get('channel_code'),
-                channel_org_name   = r.get('channel_org_name'),
-                province           = r.get('province'),
-                city               = r.get('city'),
-                district           = r.get('district'),
-                is_stale           = False,
-                resolved_at        = r.get('resolved_at'),
-            )
-            for r in rows
-        ]
-        if objects:
+        """批量写入组合结果，分块 commit 避免大事务持锁超时"""
+        chunk_size = 200
+        for i in range(0, len(rows), chunk_size):
+            chunk = rows[i:i + chunk_size]
+            objects = [
+                ShippingOrderFinished(
+                    ecommerce_order_no = r['ecommerce_order_no'],
+                    finished_code      = r.get('finished_code'),
+                    finished_name      = r.get('finished_name'),
+                    quantity           = r.get('quantity'),
+                    return_quantity    = r.get('return_quantity', 0),
+                    actual_quantity    = r.get('actual_quantity'),
+                    shipped_date       = r.get('shipped_date'),
+                    operator           = r.get('operator'),
+                    channel_name       = r.get('channel_name'),
+                    channel_code       = r.get('channel_code'),
+                    channel_org_name   = r.get('channel_org_name'),
+                    province           = r.get('province'),
+                    city               = r.get('city'),
+                    district           = r.get('district'),
+                    is_stale           = False,
+                    resolved_at        = r.get('resolved_at'),
+                )
+                for r in chunk
+            ]
             db.session.bulk_save_objects(objects)
-        db.session.commit()
+            db.session.commit()
 
     # ── 统计 ─────────────────────────────────────────
 
