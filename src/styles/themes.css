@@ -5,35 +5,80 @@
 
 /* ── 主题 A：奶油纸质（默认）── */
 :root {
-  --bg:             #ede8dc;
-  --bg-card:        #ffffff;
-  --accent:         #c4883a;
-  --accent-hover:   #e09050;
-  --accent-bg:      #faf6f0;
-  --border:         #e0d4c0;
-  --text-primary:   #3d2b1a;
-  --text-secondary: #7a5c3a;
-  --text-muted:     #b09070;
-  --shadow:         rgba(150, 100, 50, 0.1);
-  --font-family:    'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Helvetica Neue', sans-serif;
+  --bg:               #ede8dc;
+  --bg-card:          #ffffff;
+  --accent:           #c4883a;
+  --accent-hover:     #e09050;
+  --accent-bg:        #faf6f0;
+  --border:           #e0d4c0;
+  --text-primary:     #3d2b1a;
+  --text-secondary:   #7a5c3a;
+  --text-muted:       #b09070;
+  --shadow:           rgba(150, 100, 50, 0.1);
+  --font-family:      'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Helvetica Neue', sans-serif;
+  --bg-table-header:  #f5f0e8;
+  --bg-table-hover:   #faf7f2;
 }
 
-/* ── 主题 B：预留位置 ── */
-/*
+/* ── 主题 B：墨青竹韵 ── */
 :root.theme-b {
-  --bg:             ;
-  --bg-card:        ;
-  --accent:         ;
-  --accent-hover:   ;
-  --accent-bg:      ;
-  --border:         ;
-  --text-primary:   ;
-  --text-secondary: ;
-  --text-muted:     ;
-  --shadow:         ;
-  --font-family:    ;
+  --bg:               #e8ede9;
+  --bg-card:          #f5f8f5;
+  --accent:           #3a7a5c;
+  --accent-hover:     #4d9470;
+  --accent-bg:        #f0f6f3;
+  --border:           #c4d4ca;
+  --text-primary:     #1a2e24;
+  --text-secondary:   #4a6858;
+  --text-muted:       #8aaa98;
+  --shadow:           rgba(40, 90, 65, 0.1);
+  --font-family:      'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Helvetica Neue', sans-serif;
+  --bg-table-header:  #dde8e1;
+  --bg-table-hover:   #e8f0ea;
 }
-*/
+
+:root.theme-b {
+  --el-color-primary:          #3a7a5c;
+  --el-color-primary-light-3:  #5a9a7c;
+  --el-color-primary-light-5:  #7ab89a;
+  --el-color-primary-light-9:  #e0f0ea;
+  --el-color-primary-dark-2:   #2a6048;
+  --el-border-color:           #c4d4ca;
+  --el-fill-color-blank:       #f0f6f3;
+  --el-text-color-regular:     #1a2e24;
+  --el-text-color-placeholder: #8aaa98;
+  --el-font-family:            'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Helvetica Neue', sans-serif;
+}
+
+/* ── 主题 C：深海墨蓝 ── */
+:root.theme-c {
+  --bg:               #e4eaf4;
+  --bg-card:          #eef2f9;
+  --accent:           #1d4ed8;
+  --accent-hover:     #2563eb;
+  --accent-bg:        #eff3fd;
+  --border:           #c2cedf;
+  --text-primary:     #0f1e38;
+  --text-secondary:   #2d4470;
+  --text-muted:       #7088aa;
+  --shadow:           rgba(29, 78, 216, 0.1);
+  --font-family:      'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Helvetica Neue', sans-serif;
+  --bg-table-header:  #d8e2f0;
+  --bg-table-hover:   #e2eaf6;
+}
+
+:root.theme-c {
+  --el-color-primary:          #1d4ed8;
+  --el-color-primary-light-3:  #3b6ee0;
+  --el-color-primary-light-5:  #6090e8;
+  --el-color-primary-light-9:  #d8e4fa;
+  --el-color-primary-dark-2:   #1540b0;
+  --el-border-color:           #c2cedf;
+  --el-fill-color-blank:       #eff3fd;
+  --el-text-color-regular:     #0f1e38;
+  --el-text-color-placeholder: #7088aa;
+  --el-font-family:            'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Helvetica Neue', sans-serif;
+}
 
 :root {
   --el-color-primary:          #c4883a;

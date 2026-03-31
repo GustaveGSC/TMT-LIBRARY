@@ -62,7 +62,8 @@ async function handleChangePassword() {
 // ── 切换主题 ──────────────────────────────
 const themes = [
   { key: 'theme-a', name: '奶油纸质', bg: '#ede8dc', accent: '#c4883a' },
-  // 预留更多主题
+  { key: 'theme-b', name: '墨青竹韵', bg: '#e8ede9', accent: '#3a7a5c' },
+  { key: 'theme-c', name: '深海墨蓝', bg: '#e4eaf4', accent: '#1d4ed8' },
 ]
 
 const currentTheme = ref(localStorage.getItem('theme') || 'theme-a')

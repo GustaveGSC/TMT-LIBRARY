@@ -422,14 +422,14 @@ watch(dateRange, onFilterChange)
   flex: 1; display: flex; flex-direction: column;
   overflow: hidden; min-height: 0;
   padding: 10px 12px 12px; box-sizing: border-box;
-  background: #ede8dc;
+  background: var(--bg);
 }
 
 /* ── 卡片 ────────────────────────────────────── */
 .card {
   flex: 1; display: flex; flex-direction: column;
-  background: #fff; border-radius: 12px; overflow: hidden;
-  border: 1px solid #e0d4c0;
+  background: var(--bg-card); border-radius: 12px; overflow: hidden;
+  border: 1px solid var(--border);
   box-shadow: 0 2px 8px rgba(0,0,0,0.06);
   min-height: 0;
 }
@@ -438,19 +438,19 @@ watch(dateRange, onFilterChange)
 .card-topbar {
   display: flex; align-items: center; justify-content: space-between;
   padding: 8px 14px; flex-shrink: 0;
-  border-bottom: 1px solid #f0e8dc;
-  background: #faf7f2;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-table-hover);
 }
 .topbar-left  { display: flex; align-items: center; gap: 8px; }
 .topbar-right { display: flex; align-items: center; gap: 10px; }
 
-.total-hint { font-size: 12px; color: #8a7a6a; white-space: nowrap; }
+.total-hint { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
 .reset-btn {
   padding: 4px 10px; border-radius: 6px; font-size: 12px;
-  border: 1px solid #e0d4c0; background: transparent;
-  color: #6b5e4e; cursor: pointer; transition: all 0.15s; font-family: inherit;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--text-secondary); cursor: pointer; transition: all 0.15s; font-family: inherit;
 }
-.reset-btn:hover { background: #f0e8dc; color: #3a3028; }
+.reset-btn:hover { background: var(--bg-table-header); color: var(--text-primary); }
 
 /* ── 表格容器 ────────────────────────────────── */
 .table-wrap { flex: 1; min-height: 0; overflow: hidden; }
@@ -458,21 +458,21 @@ watch(dateRange, onFilterChange)
 /* ── 分页器 ──────────────────────────────────── */
 .pg-bar {
   padding: 6px 12px;
-  border-top: 1px solid #f0e8dc;
+  border-top: 1px solid var(--border);
   display: flex; justify-content: flex-end;
-  flex-shrink: 0; background: #faf7f2;
+  flex-shrink: 0; background: var(--bg-table-hover);
 }
 
 /* ── el-table 覆盖（与 ProductTable 一致）────── */
 :deep(.el-table__body-wrapper)::-webkit-scrollbar         { width: 4px; height: 5px; }
-:deep(.el-table__body-wrapper)::-webkit-scrollbar-thumb   { background: #d0c4b0; border-radius: 3px; }
+:deep(.el-table__body-wrapper)::-webkit-scrollbar-thumb   { background: var(--border); border-radius: 3px; }
 :deep(.el-table__body-wrapper)::-webkit-scrollbar-track   { background: transparent; }
 :deep(.el-scrollbar__bar.is-horizontal)                   { height: 5px; }
 :deep(.el-scrollbar__bar.is-vertical)                     { width: 4px; }
-:deep(.el-scrollbar__thumb)                               { background: #d0c4b0; border-radius: 3px; }
+:deep(.el-scrollbar__thumb)                               { background: var(--border); border-radius: 3px; }
 
 :deep(.el-table__header th.el-table__cell) {
-  background: #f5f0e8 !important;
+  background: var(--bg-table-header) !important;
   padding: 6px 0 4px;
   vertical-align: top;
   position: relative;
@@ -480,16 +480,16 @@ watch(dateRange, onFilterChange)
 :deep(.el-table__header th.el-table__cell::after) {
   content: ''; position: absolute;
   right: 0; top: 25%; height: 50%; width: 1px;
-  background: #ccc0aa;
+  background: var(--border);
 }
 :deep(.el-table__header th.el-table__cell:last-child::after) { display: none; }
-:deep(.el-table__header-wrapper)                { background: #f5f0e8; border-bottom: 2px solid #e0d4c0; }
+:deep(.el-table__header-wrapper)                { background: var(--bg-table-header); border-bottom: 2px solid var(--border); }
 :deep(.el-table__fixed)                         { box-shadow:  4px 0 10px rgba(0,0,0,0.08) !important; }
 :deep(.el-table__fixed-right)                   { box-shadow: -4px 0 10px rgba(0,0,0,0.06) !important; }
-:deep(.el-table__fixed .el-table__header th.el-table__cell) { background: #f5f0e8 !important; }
-:deep(.el-table__row td.el-table__cell)         { background: #fff; }
-:deep(.el-table__row:hover td.el-table__cell)   { background: #faf7f2 !important; }
-:deep(.el-table__body-wrapper)                  { background: #fff; }
+:deep(.el-table__fixed .el-table__header th.el-table__cell) { background: var(--bg-table-header) !important; }
+:deep(.el-table__row td.el-table__cell)         { background: var(--bg-card); }
+:deep(.el-table__row:hover td.el-table__cell)   { background: var(--bg-table-hover) !important; }
+:deep(.el-table__body-wrapper)                  { background: var(--bg-card); }
 :deep(.el-table__row td.el-table__cell .cell)   { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ── 表头内部元素 ─────────────────────────────── */
@@ -498,7 +498,7 @@ watch(dateRange, onFilterChange)
   margin-bottom: 5px;
 }
 .th-lbl {
-  font-size: 12px; font-weight: 700; color: #4a3f32;
+  font-size: 12px; font-weight: 700; color: var(--text-secondary);
   white-space: nowrap; line-height: 1.3; text-align: center;
 }
 .th-fph { height: 22px; }   /* 占位，对齐无筛选列 */
@@ -508,55 +508,55 @@ watch(dateRange, onFilterChange)
   width: 18px; height: 18px; flex-shrink: 0;
   background: none; border: 1px solid transparent;
   border-radius: 4px; cursor: pointer; padding: 0; font-size: 10px;
-  color: #b0a090; transition: all 0.15s;
+  color: var(--text-muted); transition: all 0.15s;
 }
 .sort-btn::after           { content: '⇅'; }
-.sort-btn:hover            { background: #f0e8dc; color: #6b5e4e; border-color: #e0d4c0; }
-.sort-btn.sort-asc::after  { content: '↑'; color: #c4883a; }
-.sort-btn.sort-desc::after { content: '↓'; color: #c4883a; }
+.sort-btn:hover            { background: var(--bg-table-header); color: var(--text-secondary); border-color: var(--border); }
+.sort-btn.sort-asc::after  { content: '↑'; color: var(--accent); }
+.sort-btn.sort-desc::after { content: '↓'; color: var(--accent); }
 .sort-btn.sort-asc,
-.sort-btn.sort-desc        { border-color: rgba(196,136,58,0.4); background: #fff7ed; }
+.sort-btn.sort-desc        { border-color: var(--border); background: var(--accent-bg); }
 
 .th-filter-wrap { position: relative; padding: 0 6px; }
 .th-fi {
   width: 100%; box-sizing: border-box;
   height: 22px; line-height: 22px;
-  font-size: 11px; color: #3a3028;
-  border: 1px solid #e0d4c0; border-radius: 4px;
-  background: #fff; padding: 0 5px;
+  font-size: 11px; color: var(--text-primary);
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--bg-card); padding: 0 5px;
   outline: none; font-family: inherit;
   transition: border-color 0.15s;
 }
-.th-fi:focus       { border-color: #c4883a; }
-.th-fi::placeholder { color: #b0a090; }
+.th-fi:focus       { border-color: var(--accent); }
+.th-fi::placeholder { color: var(--text-muted); }
 
 /* ── 单元格内容 ────────────────────────────────── */
-.row-no   { font-size: 11px; color: #b0a090; font-variant-numeric: tabular-nums; }
-.order-no { font-size: 11.5px; color: #3a3028; letter-spacing: 0.01em; }
+.row-no   { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.order-no { font-size: 11.5px; color: var(--text-primary); letter-spacing: 0.01em; }
 .mono     { font-family: var(--font-mono, 'Microsoft YaHei UI', monospace); }
 
 .code-tag {
   display: inline-block;
   padding: 1px 6px; border-radius: 4px;
-  background: #fff7ed; color: #c4883a;
+  background: var(--accent-bg); color: var(--accent);
   font-size: 11.5px; font-weight: 600; letter-spacing: 0.02em;
-  border: 1px solid rgba(196,136,58,0.3);
+  border: 1px solid var(--border);
 }
-.dim { color: #6b5e4e; font-size: 12px; }
+.dim { color: var(--text-secondary); font-size: 12px; }
 
 .num-cell {
   font-variant-numeric: tabular-nums;
-  font-size: 12.5px; color: #3a3028; font-weight: 600;
+  font-size: 12.5px; color: var(--text-primary); font-weight: 600;
 }
 .num-return { color: #9c6fba; }
-.num-actual { color: #c4883a; }
+.num-actual { color: var(--accent); }
 
 /* el-date-picker 覆盖 */
 :deep(.el-date-editor .el-input__wrapper) {
-  background: #fff; border-color: #e0d4c0; border-radius: 7px;
+  background: var(--bg-card); border-color: var(--border); border-radius: 7px;
   box-shadow: none !important;
 }
-:deep(.el-date-editor .el-input__wrapper:hover) { border-color: #c4883a; }
+:deep(.el-date-editor .el-input__wrapper:hover) { border-color: var(--accent); }
 :deep(.el-date-editor .el-input__inner)         { font-size: 12px; }
-:deep(.el-date-editor .el-range-separator)      { color: #8a7a6a; font-size: 12px; }
+:deep(.el-date-editor .el-range-separator)      { color: var(--text-muted); font-size: 12px; }
 </style>

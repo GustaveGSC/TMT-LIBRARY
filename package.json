@@ -1,6 +1,6 @@
 {
-  "name": "tmt-software",
-  "version": "1.0.1",
+  "name": "tmt-library",
+  "version": "1.0.0",
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -10,7 +10,9 @@
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build:python && npm run build && electron-builder",
     "dist:win": "npm run dist -- --win",
-    "dist:mac": "npm run build:python:mac && npm run build && electron-builder --mac"
+    "dist:mac": "npm run build:python:mac && npm run build && electron-builder --mac",
+    "release": "scripts\\release.bat",
+    "make-ico": "node scripts/make-ico.js"
   },
   "dependencies": {
     "@electron-toolkit/utils": "^4.0.0",
@@ -29,6 +31,7 @@
     "electron": "^28.0.0",
     "electron-builder": "^24.0.0",
     "electron-vite": "^2.0.0",
+    "png-to-ico": "^2.1.8",
     "typescript": "^5.0.0",
     "vue": "^3.3.0"
   }
