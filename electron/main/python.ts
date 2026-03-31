@@ -10,10 +10,12 @@ const MAX_WAIT_MS = 10000          // 最多等待 10 秒
 // ── 获取 Python 可执行文件路径 ────────────────────
 function getPythonExecutable(): string {
   if (app.isPackaged) {
-    const exeName = process.platform === 'win32' ? 'backend.exe' : 'backend'
-    const srcExe  = join(process.resourcesPath, 'python-backend', exeName)
+    const isWin   = process.platform === 'win32'
+    const exeName = isWin ? 'backend.exe' : 'backend'
+    // PyInstaller --onedir --name backend 产出：python-backend/backend/{backend|backend.exe}
+    const srcExe  = join(process.resourcesPath, 'python-backend', 'backend', exeName)
 
-    if (process.platform !== 'win32') {
+    if (!isWin) {
       // macOS/Linux：优先直接 chmod；若文件系统只读（如从 DMG 直接运行），
       // 则将整个 python-backend 目录复制到可写的 userData 再启动
       try {
@@ -21,11 +23,11 @@ function getPythonExecutable(): string {
         return srcExe
       } catch {
         // 只读文件系统（DMG），复制到 userData
-        const destDir = join(app.getPath('userData'), 'python-backend')
-        const destExe = join(destDir, exeName)
+        const destBase = join(app.getPath('userData'), 'python-backend')
+        const destExe  = join(destBase, 'backend', exeName)
         if (!existsSync(destExe)) {
-          mkdirSync(destDir, { recursive: true })
-          cpSync(join(process.resourcesPath, 'python-backend'), destDir, { recursive: true })
+          mkdirSync(destBase, { recursive: true })
+          cpSync(join(process.resourcesPath, 'python-backend'), destBase, { recursive: true })
         }
         try { chmodSync(destExe, 0o755) } catch { /* ignore */ }
         return destExe
