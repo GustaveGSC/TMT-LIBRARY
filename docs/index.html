@@ -5,20 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>两平米软件库 · 下载</title>
   <style>
-    /* ── 变量 ── */
     :root {
-      --bg:       #ede8dc;
-      --card:     #ffffff;
-      --accent:   #c4883a;
+      --bg:     #ede8dc;
+      --card:   #ffffff;
+      --accent: #c4883a;
       --accent-h: #e09050;
-      --border:   #e0d4c0;
-      --t1:       #3d2b1a;
-      --t2:       #7a5c3a;
-      --t3:       #b09070;
-      --radius:   14px;
+      --border: #e0d4c0;
+      --t1:     #3d2b1a;
+      --t2:     #7a5c3a;
+      --t3:     #b09070;
+      --radius: 14px;
     }
-
-    /* ── 基础 ── */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       background: var(--bg);
@@ -29,15 +26,11 @@
       flex-direction: column;
       align-items: center;
     }
-
-    /* ── 顶部装饰条 ── */
     .top-bar {
       width: 100%;
       height: 4px;
       background: linear-gradient(90deg, #c4883a, #e0a050, #c4883a);
     }
-
-    /* ── 主体 ── */
     .page {
       width: 100%;
       max-width: 680px;
@@ -56,55 +49,23 @@
       gap: 20px;
       text-align: center;
     }
-
     .app-icon {
-      width: 100px;
-      height: 100px;
+      width: 100px; height: 100px;
       border-radius: 24px;
-      box-shadow: 0 8px 32px rgba(150, 100, 50, 0.18);
+      box-shadow: 0 8px 32px rgba(150,100,50,0.18);
       object-fit: contain;
       background: #fff;
     }
+    .app-name    { font-size: 32px; font-weight: 700; color: var(--t1); letter-spacing: 0.02em; }
+    .app-tagline { font-size: 15px; color: var(--t2); line-height: 1.7; max-width: 420px; }
 
-    .app-name {
-      font-size: 32px;
-      font-weight: 700;
-      color: var(--t1);
-      letter-spacing: 0.02em;
-    }
-
-    .app-tagline {
-      font-size: 15px;
-      color: var(--t2);
-      line-height: 1.7;
-      max-width: 420px;
-    }
-
-    .version-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 4px 14px;
-      background: #fff;
-      border: 1px solid var(--border);
-      border-radius: 20px;
-      font-size: 13px;
-      color: var(--t2);
-    }
-    .version-dot {
-      width: 7px; height: 7px;
-      border-radius: 50%;
-      background: #52c41a;
-    }
-
-    /* ── 下载卡片区 ── */
+    /* ── 下载卡片 ── */
     .download-cards {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 16px;
       width: 100%;
     }
-
     .dl-card {
       background: var(--card);
       border: 1px solid var(--border);
@@ -113,32 +74,34 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 14px;
-      box-shadow: 0 2px 12px rgba(150, 100, 50, 0.07);
+      gap: 12px;
+      box-shadow: 0 2px 12px rgba(150,100,50,0.07);
       transition: box-shadow 0.2s, transform 0.2s;
     }
-    .dl-card:hover {
-      box-shadow: 0 6px 24px rgba(150, 100, 50, 0.13);
-      transform: translateY(-2px);
-    }
+    .dl-card:hover { box-shadow: 0 6px 24px rgba(150,100,50,0.13); transform: translateY(-2px); }
+    .dl-os-icon   { font-size: 36px; line-height: 1; }
+    .dl-os-name   { font-size: 15px; font-weight: 600; color: var(--t1); }
+    .dl-os-sub    { font-size: 12px; color: var(--t3); text-align: center; line-height: 1.6; }
 
-    .dl-os-icon {
-      font-size: 36px;
-      line-height: 1;
-    }
-
-    .dl-os-name {
-      font-size: 15px;
-      font-weight: 600;
-      color: var(--t1);
-    }
-
-    .dl-os-hint {
+    /* 版本号 */
+    .dl-version {
       font-size: 12px;
       color: var(--t3);
-      text-align: center;
+      height: 18px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
     }
+    .dl-version .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: #52c41a;
+      flex-shrink: 0;
+    }
+    .dl-version.loading { color: var(--t3); font-style: italic; }
+    .dl-version.none    { color: #d08060; }
 
+    /* 按钮 */
     .dl-btn {
       display: inline-flex;
       align-items: center;
@@ -155,77 +118,55 @@
       font-family: inherit;
       cursor: pointer;
       text-decoration: none;
-      transition: background 0.15s;
+      transition: background 0.15s, opacity 0.15s;
     }
-    .dl-btn:hover { background: var(--accent-h); }
-    .dl-btn.secondary {
-      background: transparent;
-      color: var(--accent);
-      border: 1.5px solid var(--accent);
-    }
-    .dl-btn.secondary:hover { background: #faf6f0; }
-
-    .dl-btn svg {
-      flex-shrink: 0;
+    .dl-btn:hover:not([disabled]) { background: var(--accent-h); }
+    .dl-btn[disabled] {
+      background: #e8e0d4;
+      color: var(--t3);
+      cursor: not-allowed;
+      pointer-events: none;
     }
 
-    /* ── 说明区 ── */
+    /* ── 说明 ── */
     .info-card {
       width: 100%;
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: var(--radius);
       padding: 24px 28px;
-      box-shadow: 0 2px 12px rgba(150, 100, 50, 0.07);
+      box-shadow: 0 2px 12px rgba(150,100,50,0.07);
     }
-
     .info-title {
-      font-size: 13px;
-      font-weight: 700;
-      color: var(--t2);
-      letter-spacing: 0.08em;
+      font-size: 13px; font-weight: 700;
+      color: var(--t2); letter-spacing: 0.08em;
       margin-bottom: 14px;
     }
-
-    .info-list {
-      list-style: none;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-
+    .info-list { list-style: none; display: flex; flex-direction: column; gap: 10px; }
     .info-list li {
-      display: flex;
-      align-items: flex-start;
-      gap: 10px;
-      font-size: 13px;
-      color: var(--t2);
-      line-height: 1.6;
+      display: flex; align-items: flex-start; gap: 10px;
+      font-size: 13px; color: var(--t2); line-height: 1.6;
     }
-
     .info-list li::before {
-      content: '';
-      width: 6px; height: 6px;
-      border-radius: 50%;
-      background: var(--accent);
-      flex-shrink: 0;
-      margin-top: 6px;
+      content: ''; width: 6px; height: 6px;
+      border-radius: 50%; background: var(--accent);
+      flex-shrink: 0; margin-top: 6px;
     }
 
-    /* ── 页脚 ── */
-    footer {
-      margin-top: auto;
-      padding: 24px;
-      font-size: 12px;
-      color: var(--t3);
-      text-align: center;
-    }
+    footer { margin-top: auto; padding: 24px; font-size: 12px; color: var(--t3); text-align: center; }
 
-    /* ── 响应式 ── */
     @media (max-width: 480px) {
       .download-cards { grid-template-columns: 1fr; }
       .app-name { font-size: 26px; }
     }
+
+    /* 骨架动画 */
+    @keyframes shimmer {
+      0%   { opacity: 0.5; }
+      50%  { opacity: 1;   }
+      100% { opacity: 0.5; }
+    }
+    .loading-pulse { animation: shimmer 1.4s ease-in-out infinite; }
   </style>
 </head>
 <body>
@@ -234,34 +175,30 @@
 
 <div class="page">
 
-  <!-- Hero -->
   <div class="hero">
-    <img class="app-icon" src="https://tmt-oss.oss-cn-hangzhou.aliyuncs.com/tmt-library/icon.png" alt="两平米软件库图标" onerror="this.style.display='none'" />
+    <img class="app-icon"
+      src="https://tmt-oss.oss-cn-hangzhou.aliyuncs.com/tmt-library/icon.png"
+      alt="两平米软件库"
+      onerror="this.style.display='none'" />
     <div class="app-name">两平米软件库</div>
     <div class="app-tagline">专为两平米打造的产品数据与发货管理工具，支持产品库维护、发货数据统计、图表分析。</div>
-    <div class="version-badge">
-      <div class="version-dot"></div>
-      当前版本 v1.0.0
-    </div>
   </div>
 
-  <!-- 下载卡片 -->
   <div class="download-cards">
 
     <!-- Windows -->
     <div class="dl-card">
       <div class="dl-os-icon">🪟</div>
       <div class="dl-os-name">Windows</div>
-      <div class="dl-os-hint">Windows 10 / 11<br/>x64</div>
-      <a class="dl-btn"
-         href="https://tmt-oss.oss-cn-hangzhou.aliyuncs.com/tmt-library/releases/TMT%20Software%20Setup%201.0.0.exe"
-         download>
+      <div class="dl-os-sub">Windows 10 / 11 · x64</div>
+      <div class="dl-version loading loading-pulse" id="win-version">检测中…</div>
+      <a class="dl-btn" id="win-btn" disabled>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
           <polyline points="7 10 12 15 17 10"/>
           <line x1="12" y1="15" x2="12" y2="3"/>
         </svg>
-        下载安装包 .exe
+        检测中…
       </a>
     </div>
 
@@ -269,22 +206,20 @@
     <div class="dl-card">
       <div class="dl-os-icon">🍎</div>
       <div class="dl-os-name">macOS</div>
-      <div class="dl-os-hint">macOS 12+<br/>Intel &amp; Apple Silicon</div>
-      <a class="dl-btn"
-         href="https://tmt-oss.oss-cn-hangzhou.aliyuncs.com/tmt-library/releases/TMT%20Software-1.0.0.dmg"
-         download>
+      <div class="dl-os-sub">macOS 12+ · Intel &amp; Apple Silicon</div>
+      <div class="dl-version loading loading-pulse" id="mac-version">检测中…</div>
+      <a class="dl-btn" id="mac-btn" disabled>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
           <polyline points="7 10 12 15 17 10"/>
           <line x1="12" y1="15" x2="12" y2="3"/>
         </svg>
-        下载安装包 .dmg
+        检测中…
       </a>
     </div>
 
   </div>
 
-  <!-- 安装说明 -->
   <div class="info-card">
     <div class="info-title">安装说明</div>
     <ul class="info-list">
@@ -298,6 +233,68 @@
 </div>
 
 <footer>© 2025 两平米 · 内部使用</footer>
+
+<script>
+  const RELEASES = 'https://tmt-oss.oss-cn-hangzhou.aliyuncs.com/tmt-library/releases'
+
+  // 解析 electron-builder 生成的 latest.yml / latest-mac.yml
+  function parseYml(text) {
+    const version = (text.match(/^version:\s*(.+)$/m) || [])[1]?.trim()
+    const path    = (text.match(/^path:\s*(.+)$/m)    || [])[1]?.trim()
+    return (version && path) ? { version, path } : null
+  }
+
+  async function fetchRelease(ymlName) {
+    try {
+      const res = await fetch(`${RELEASES}/${ymlName}`, { cache: 'no-cache' })
+      if (!res.ok) return null
+      return parseYml(await res.text())
+    } catch {
+      return null
+    }
+  }
+
+  function renderCard(btnId, versionId, data, ext) {
+    const btn     = document.getElementById(btnId)
+    const verEl   = document.getElementById(versionId)
+
+    btn.classList.remove('loading-pulse')
+    verEl.classList.remove('loading', 'loading-pulse')
+
+    if (!data) {
+      btn.removeAttribute('href')
+      btn.setAttribute('disabled', '')
+      btn.innerHTML = '暂无下载内容'
+      verEl.classList.add('none')
+      verEl.textContent = '暂无发布版本'
+      return
+    }
+
+    const url = `${RELEASES}/${encodeURIComponent(data.path)}`
+    btn.href = url
+    btn.removeAttribute('disabled')
+    btn.innerHTML = `
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="7 10 12 15 17 10"/>
+        <line x1="12" y1="15" x2="12" y2="3"/>
+      </svg>
+      下载安装包 .${ext}
+    `
+    verEl.innerHTML = `<span class="dot"></span> v${data.version}`
+  }
+
+  async function init() {
+    const [winData, macData] = await Promise.all([
+      fetchRelease('latest.yml'),
+      fetchRelease('latest-mac.yml'),
+    ])
+    renderCard('win-btn', 'win-version', winData, 'exe')
+    renderCard('mac-btn', 'mac-version', macData, 'dmg')
+  }
+
+  init()
+</script>
 
 </body>
 </html>

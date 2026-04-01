@@ -43,10 +43,6 @@ if %errorlevel% equ 0 (
   exit /b 1
 )
 
-REM ── 读取旧版本号 ────────────────────────────────────
-for /f "delims=" %%i in ('node -e "const p=JSON.parse(require('fs').readFileSync('package.json','utf8'));process.stdout.write(p.version)"') do set OLD_VERSION=%%i
-echo    当前版本：!OLD_VERSION! → !VERSION!
-
 REM ── 更新 package.json 版本号 ────────────────────────
 echo 📝 更新 package.json...
 node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='!VERSION!';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')"
@@ -55,17 +51,9 @@ if %errorlevel% neq 0 (
   exit /b 1
 )
 
-REM ── 更新下载页版本号 ────────────────────────────────
-echo 📝 更新 docs/index.html...
-node -e "const fs=require('fs');const f='docs/index.html';let s=fs.readFileSync(f,'utf8');s=s.replaceAll('!OLD_VERSION!','!VERSION!');fs.writeFileSync(f,s)"
-if %errorlevel% neq 0 (
-  echo ❌ 更新 docs/index.html 失败
-  exit /b 1
-)
-
 REM ── Git commit ──────────────────────────────────────
 echo 📦 提交版本号变更...
-git add package.json docs/index.html
+git add package.json
 git commit -m "chore: release v!VERSION!"
 if %errorlevel% neq 0 (
   echo ❌ git commit 失败
