@@ -383,16 +383,21 @@ onMounted(async () => {
 
 /* ── 概览页 ───────────────────────────────────── */
 .page-overview {
-  flex: 1; overflow-y: auto;
+  flex: 1; min-height: 0;
   display: flex; flex-direction: column;
+  overflow: hidden;
   padding: 0;
 }
-.page-overview::-webkit-scrollbar { width: 4px; }
-.page-overview::-webkit-scrollbar-track { background: transparent; }
-.page-overview::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
-/* 上方内容区 */
-.overview-body { padding: 36px 48px 28px; }
+/* 上方内容区：独立滚动，撑满剩余高度 */
+.overview-body {
+  flex: 1; min-height: 0;
+  overflow-y: auto;
+  padding: 36px 48px 28px;
+}
+.overview-body::-webkit-scrollbar { width: 4px; }
+.overview-body::-webkit-scrollbar-track { background: transparent; }
+.overview-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
 .welcome-title { font-size: 24px; font-weight: 700; color: var(--text-primary); margin-bottom: 4px; }
 .welcome-sub   { font-size: 13px; color: var(--text-muted); margin-bottom: 28px; }
@@ -448,9 +453,8 @@ onMounted(async () => {
 .quick-svg { width: 18px; height: 18px; flex-shrink: 0; }
 .quick-img { width: 28px; height: 28px; flex-shrink: 0; object-fit: contain; }
 
-/* 工具区：贴底 */
+/* 工具区：固定在概览底部 */
 .tool-section {
-  margin-top: auto;
   border-top: 1px solid var(--border);
   padding: 16px 48px 20px;
   background: rgba(255,255,255,0.4);

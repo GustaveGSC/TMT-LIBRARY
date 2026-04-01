@@ -1,0 +1,163 @@
+from flask import Blueprint, request
+from services.aftersale import AftersaleService
+
+aftersale_bp = Blueprint('aftersale', __name__)
+_svc = AftersaleService()
+
+
+# ── 物料简称 ───────────────────────────────────────────────────────────────
+
+@aftersale_bp.get('/product-aliases')
+def get_product_aliases():
+    return _svc.get_aliases().to_response()
+
+
+@aftersale_bp.post('/product-aliases')
+def create_product_alias():
+    return _svc.create_alias(request.get_json() or {}).to_response()
+
+
+@aftersale_bp.put('/product-aliases/<int:alias_id>')
+def update_product_alias(alias_id):
+    return _svc.update_alias(alias_id, request.get_json() or {}).to_response()
+
+
+@aftersale_bp.delete('/product-aliases/<int:alias_id>')
+def delete_product_alias(alias_id):
+    return _svc.delete_alias(alias_id).to_response()
+
+
+@aftersale_bp.get('/product-code-suggestions')
+def get_product_code_suggestions():
+    q = request.args.get('q')
+    return _svc.get_product_code_suggestions(q).to_response()
+
+
+# ── 一级分类 ───────────────────────────────────────────────────────────────
+
+@aftersale_bp.get('/reason-categories')
+def get_reason_categories():
+    return _svc.get_categories().to_response()
+
+
+@aftersale_bp.post('/reason-categories')
+def create_reason_category():
+    return _svc.create_category(request.get_json() or {}).to_response()
+
+
+@aftersale_bp.put('/reason-categories/<int:cat_id>')
+def update_reason_category(cat_id):
+    return _svc.update_category(cat_id, request.get_json() or {}).to_response()
+
+
+@aftersale_bp.delete('/reason-categories/<int:cat_id>')
+def delete_reason_category(cat_id):
+    return _svc.delete_category(cat_id).to_response()
+
+
+# ── 二级原因 ───────────────────────────────────────────────────────────────
+
+@aftersale_bp.get('/reasons')
+def get_reasons():
+    return _svc.get_reasons().to_response()
+
+
+@aftersale_bp.post('/reasons')
+def create_reason():
+    return _svc.create_reason(request.get_json() or {}).to_response()
+
+
+@aftersale_bp.put('/reasons/<int:reason_id>')
+def update_reason(reason_id):
+    return _svc.update_reason(reason_id, request.get_json() or {}).to_response()
+
+
+@aftersale_bp.delete('/reasons/<int:reason_id>')
+def delete_reason(reason_id):
+    return _svc.delete_reason(reason_id).to_response()
+
+
+@aftersale_bp.get('/reasons/<int:reason_id>/usage')
+def get_reason_usage(reason_id):
+    return _svc.get_reason_usage(reason_id).to_response()
+
+
+# ── 待处理订单 ──────────────────────────────────────────────────────────────
+
+@aftersale_bp.get('/pending')
+def get_pending():
+    page       = int(request.args.get('page', 1))
+    page_size  = int(request.args.get('page_size', 50))
+    search     = request.args.get('search')
+    date_start = request.args.get('date_start')
+    date_end   = request.args.get('date_end')
+    return _svc.get_pending_orders(page, page_size, search, date_start, date_end).to_response()
+
+
+@aftersale_bp.get('/pending/count')
+def get_pending_count():
+    return _svc.get_pending_count().to_response()
+
+
+# ── 工单 ────────────────────────────────────────────────────────────────────
+
+@aftersale_bp.get('/cases')
+def get_cases():
+    page       = int(request.args.get('page', 1))
+    page_size  = int(request.args.get('page_size', 50))
+    status     = request.args.get('status')
+    date_start = request.args.get('date_start')
+    date_end   = request.args.get('date_end')
+    reason_id  = request.args.get('reason_id', type=int)
+    channel    = request.args.get('channel_name')
+    province   = request.args.get('province')
+    search     = request.args.get('search')
+    return _svc.get_cases(
+        page, page_size, status, date_start, date_end,
+        reason_id, channel, province, search,
+    ).to_response()
+
+
+@aftersale_bp.get('/cases/<int:case_id>')
+def get_case(case_id):
+    return _svc.get_case(case_id).to_response()
+
+
+@aftersale_bp.post('/cases')
+def confirm_case():
+    return _svc.confirm_case(request.get_json() or {}).to_response()
+
+
+@aftersale_bp.put('/cases/<int:case_id>')
+def update_case(case_id):
+    return _svc.update_case(case_id, request.get_json() or {}).to_response()
+
+
+@aftersale_bp.post('/cases/<string:order_no>/ignore')
+def ignore_case(order_no):
+    return _svc.ignore_case(order_no).to_response()
+
+
+# ── 自动匹配 ────────────────────────────────────────────────────────────────
+
+@aftersale_bp.post('/auto-match')
+def auto_match():
+    body = request.get_json() or {}
+    return _svc.auto_match(body.get('text', '')).to_response()
+
+
+# ── 统计 & 图表 ─────────────────────────────────────────────────────────────
+
+@aftersale_bp.get('/stats')
+def get_stats():
+    return _svc.get_stats().to_response()
+
+
+@aftersale_bp.get('/chart-options')
+def get_chart_options():
+    return _svc.get_chart_options().to_response()
+
+
+@aftersale_bp.post('/chart-data')
+def get_chart_data():
+    return _svc.get_chart_data(request.get_json() or {}).to_response()

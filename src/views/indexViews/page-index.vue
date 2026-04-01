@@ -132,7 +132,7 @@ onUnmounted(() => {
   window.electronAPI?.updater.off('updater:not-available', onNotAvailable)
 })
 
-const { isAdmin, canViewProduct, canViewShipping, canEditShipping } = usePermission()
+const { isAdmin, canViewProduct, canViewShipping, canEditShipping, canViewAftersale } = usePermission()
 
 const userInfo    = JSON.parse(localStorage.getItem('user') || '{}')
 const userName    = computed(() => userInfo.display_name || userInfo.username || '游客')

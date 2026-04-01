@@ -39,6 +39,10 @@ const router = createRouter({
       path: '/data-mgmt',
       component: () => import('@/views/dataMgmtViews/page-data-mgmt.vue')
     },
+    {
+      path: '/aftersale',
+      component: () => import('@/views/aftersaleViews/page-aftersale.vue')
+    },
   ]
 })
 

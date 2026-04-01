@@ -1,7 +1,14 @@
 # 两平米软件库 · 项目上下文
 
 ## 维护规范
-- 每次发生**架构调整、功能变更、接口变更、数据库结构变更**时，必须同步更新本文件，保持与代码实际状态一致。
+- 每次发生**架构调整、功能变更、接口变更、数据库结构变更**时，必须同步更新本文件及相关模块文件，保持与代码实际状态一致。
+- 模块详细文档位于 `.claude/modules/`，按需读取：
+  - `database.md` — 数据库表结构（账号/版本/发货/售后/产品库）
+  - `api.md` — 后端接口完整列表 + /api/product/stats 返回结构
+  - `frontend-product.md` — 产品库前端组件（page-product/ProductTable/FinishedExpandRow/ProductChart/ProductImage/ProductParam/ProductTag/ProductRules/Pinia Store）
+  - `frontend-data-mgmt.md` — 数据管理 & 发货图表（page-data-mgmt/DataImport/ReturnImport/OperatorConfig/WarehouseConfig/page-shipping/ShippingDashboard）
+  - `frontend-aftersale.md` — 售后数据前端（page-aftersale/AftersaleProcess/AftersaleReasonLib/AftersaleDashboard/AftersaleTable）
+  - `frontend-admin.md` — 管理页注意事项（page-users/page-permissions/UserSettingsDrawer）
 
 ## 技术栈
 - **桌面端**：Electron + Vue 3 + Vite（electron-vite）
@@ -22,7 +29,7 @@ tmt-software/
 │   │   │                   # minimize/maximize/unmaximize IPC handlers
 │   │   ├── window.ts       # 窗口创建
 │   │   │                   # 登录窗口：420×640，resizable:false
-│   │   │                   # 主窗口：800×600，resizable:false
+│   │   │                   # 主窗口：800×600，resizable:true，minWidth/minHeight:800/600
 │   │   │                   # backgroundColor: #ede8dc，frame:false
 │   │   ├── python.ts       # Flask子进程管理，端口8765
 │   │   └── updater.ts      # electron-updater封装
@@ -35,21 +42,17 @@ tmt-software/
 │   ├── assets/
 │   │   ├── author.png
 │   │   ├── logo-banner.png
-│   │   ├── icons/
-│   │   │   ├── icon_table.png
-│   │   │   ├── icon_image.png
-│   │   │   └── icon_echart.png
+│   │   ├── icons/          # icon_table.png / icon_image.png / icon_echart.png
 │   │   └── images/
 │   │       └── image_model_tip.png   # 型号简码说明图
 │   ├── api/
 │   │   └── http.js         # axios实例，baseURL固定127.0.0.1:8765，timeout:30000
 │   │                       # 响应拦截器：res => res.data（已解一层）
-│   │                       # 调用方直接用 res.success / res.data / res.message
 │   ├── composables/
-│   │   ├── usePermission.js      # 权限判断composable，见下方说明
-│   │   ├── useSortable.js        # SortableJS 轻量封装，initSortable(el, onEnd)
-│   │   ├── useFinishedImage.js   # 成品展开行图片/裁剪逻辑
-│   │   └── useFinishedParams.js  # 成品展开行参数区逻辑（GROUP_DEFS 也从此导出）
+│   │   ├── usePermission.js
+│   │   ├── useSortable.js
+│   │   ├── useFinishedImage.js
+│   │   └── useFinishedParams.js
 │   ├── utils/
 │   │   └── version.js      # checkUpdateType(current, latest) → 'none'|'optional'|'force'
 │   ├── styles/
@@ -59,89 +62,26 @@ tmt-software/
 │   │                       # /login、/index、/product、/shipping、/data-mgmt
 │   │                       # /admin/users、/admin/permissions、/admin/version-release
 │   ├── components/
-│   │   ├── common/
-│   │   │   ├── GToast.vue
-│   │   │   └── WindowControls.vue  # top:11px，right:14px，z-index:10000
-│   │   ├── user/
-│   │   │   └── UserSettingsDrawer.vue
-│   │   └── update/
-│   │       └── UpdateDialog.vue
+│   │   ├── common/         # GToast.vue / WindowControls.vue
+│   │   ├── user/           # UserSettingsDrawer.vue
+│   │   └── update/         # UpdateDialog.vue
 │   └── views/
-│       ├── loginViews/
-│       │   └── page-login.vue
-│       ├── indexViews/
-│       │   └── page-index.vue
-│       ├── productViews/
-│       │   ├── page-product.vue      # 主框架：顶部导航 + 概览/表格/图片/图表
-│       │   ├── ProductTable.vue      # 表格视图
-│       │   ├── FinishedExpandRow.vue # 成品展开行组件
-│       │   ├── ProductImage.vue      # 图片视图
-│       │   ├── ProductImport.vue     # 导入ERP数据弹窗
-│       │   ├── ProductRules.vue      # 编码规则弹窗
-│       │   ├── ProductCategory.vue   # 分类管理弹窗
-│       │   ├── ProductTag.vue        # 标签管理弹窗
-│       │   └── ProductParam.vue      # 参数键名管理弹窗（概览页数据管理区入口）
-│       ├── shippingViews/
-│       │   ├── page-shipping.vue     # 发货数据页，内嵌 ShippingDashboard
-│       │   └── ShippingDashboard.vue # 统计看板（ECharts，待完善）
-│       ├── dataMgmtViews/
-│       │   ├── page-data-mgmt.vue    # 数据管理页：导入数据 / 数据配置
-│       │   ├── DataImport.vue        # 发货清单导入（SSE进度/取消/缺失日期日历）
-│       │   ├── ReturnImport.vue      # 销退清单导入（SSE进度/取消，含仓库过滤）
-│       │   ├── OperatorConfig.vue    # 最近操作人分类配置
-│       │   └── WarehouseConfig.vue   # 销退仓库过滤配置
-│       └── adminViews/
-│           ├── page-users.vue
-│           ├── page-permissions.vue
-│           └── page-version-release.vue
+│       ├── loginViews/     # page-login.vue
+│       ├── indexViews/     # page-index.vue
+│       ├── productViews/   # page-product / ProductTable / FinishedExpandRow / ProductImage / ProductImport / ProductRules / ProductCategory / ProductTag / ProductParam
+│       ├── shippingViews/  # page-shipping / ShippingDashboard
+│       ├── dataMgmtViews/  # page-data-mgmt / DataImport / ReturnImport / OperatorConfig / WarehouseConfig
+│       ├── aftersaleViews/ # page-aftersale / AftersaleProcess / AftersaleReasonLib / AftersaleDashboard / AftersaleTable
+│       └── adminViews/     # page-users / page-permissions / page-version-release
 ├── backend/
 │   ├── app.py              # Flask工厂函数，注册蓝图
 │   │                       # SQLALCHEMY_ENGINE_OPTIONS = {"pool_pre_ping": True}
 │   ├── result.py           # Result.ok/fail → { success, message, data }
-│   ├── .env
 │   ├── database/
-│   │   ├── base.py
-│   │   ├── models/
-│   │   │   ├── account/        __init__.py   User/Role/Permission
-│   │   │   ├── version/        __init__.py   AppVersion
-│   │   │   ├── shipping/       __init__.py   ShippingBatch/ShippingRecord/ShippingOperatorType/ShippingOrderFinished
-│   │   │   └── product/
-│   │   │       ├── __init__.py               from . import param（注册模型到元数据）
-│   │   │       ├── import_raw.py             ImportProductRaw
-│   │   │       ├── erp_code_rules.py         ErpCodeRule
-│   │   │       ├── category.py               ProductCategory/ProductSeries/ProductModel
-│   │   │       ├── finished.py               ProductFinished/ProductPackaged/ProductTag
-│   │   │       └── param.py                  ProductParamKey/ProductFinishedParam
-│   │   └── repository/
-│   │       ├── account/        __init__.py
-│   │       ├── version/        __init__.py
-│   │       ├── shipping/       __init__.py   shipping_repository
-│   │       └── product/
-│   │           ├── import_raw.py
-│   │           ├── erp_code_rules.py
-│   │           ├── finished.py               FinishedRepository
-│   │           ├── tag.py                    TagRepository
-│   │           └── param.py                  ParamRepository
-│   ├── services/
-│   │   ├── account/        __init__.py   AccountService
-│   │   ├── version/        __init__.py   VersionService
-│   │   ├── shipping/       __init__.py   ShippingService
-│   │   └── product/
-│   │       ├── import_raw.py             ImportProductService
-│   │       ├── erp_code_rules.py         ErpCodeRuleService
-│   │       ├── tag.py                    TagService
-│   │       └── param.py                  ParamService
-│   ├── routes/
-│   │   ├── account/        __init__.py   /api/account/*
-│   │   ├── version/        __init__.py   /api/version/*
-│   │   ├── shipping/       __init__.py   /api/shipping/*
-│   │   └── product/
-│   │       ├── import_raw.py             /api/product/*
-│   │       ├── finished.py               /api/product/finished/*
-│   │       ├── erp_code_rules.py         /api/erp-code-rules/*
-│   │       ├── category.py               /api/category/*
-│   │       ├── tag.py                    /api/product/tags/*
-│   │       └── param.py                  /api/product/params/*
+│   │   ├── models/         # account / version / shipping / aftersale / product
+│   │   └── repository/     # account / version / shipping / aftersale / product
+│   ├── services/           # account / version / shipping / aftersale / product
+│   ├── routes/             # account / version / shipping / aftersale / product
 │   └── storage/
 │       └── client.py
 ├── dev-app-update.yml
@@ -198,203 +138,6 @@ if (res.success) { /* res.data */ }
 else { errorMsg = res.message }
 ```
 
-## 数据库表
-
-### 账号
-```
-users             id, username, password(bcrypt), display_name, is_active, created_at, updated_at
-roles             id, name, description
-permissions       id, code, name, description
-user_roles        user_id, role_id
-role_permissions  role_id, permission_id
-```
-
-### 版本
-```
-app_version       id, version, description, download_url, created_at
-```
-
-### 发货数据
-```
-shipping_batch
-  id, type(shipping/return), filename, row_count, imported_at
-
-shipping_record
-  id, batch_id(FK), ecommerce_order_no, line_no, shipped_date,
-  channel_name, channel_code, channel_org_name, operator(最近操作人),
-  product_code, product_name, spec, quantity, country, province, city,
-  district, street, address, buyer_remark, seller_remark
-  # UNIQUE(ecommerce_order_no, line_no, product_code)
-  # 仅存发货数据；record_type 列存在但固定='shipping'（旧迁移残留，不再使用）
-  # 文件内同 key 行先合并（quantity 累加）再与 DB 去重
-  # 按列名匹配（_build_col_map），与列顺序无关，缺失必要列抛 ValueError
-  # 必要列：电商主订单号/单据日期/渠道名称/渠道商/渠道商名称/最近操作人
-  #         项次/商品型号/商品名称/数量/省份
-  # 可选列（有则读取）：国家/市区/县区/街道/详细地址/规格/买家留言/商家备注
-
-return_record
-  id, batch_id(FK→shipping_batch), ecommerce_order_no, shipped_date,
-  product_code, quantity(负值), warehouse_name
-  # UNIQUE(ecommerce_order_no, product_code, shipped_date)
-  # 独立存储销退清单原始数据（全量保存，不在导入时过滤仓库）
-  # 必要列：平台订单/交易日期/品号/数量/仓库名称
-  # 导入时：仅保留数量<0 的行；仅保留 ecommerce_order_no 在 shipping_record 已存在的行
-  # 计算 shipping_order_finished 时动态过滤 is_excluded=True 的仓库，不影响原始数据
-
-return_warehouse_filter
-  id, warehouse_name(UNIQUE), is_excluded(默认False), created_at
-  # 配置计算成品组合时需忽略的仓库（UI：仓库配置 Tab）；调整后刷新全局数据即可生效
-
-shipping_operator_type
-  id, operator(UNIQUE), type(shipping/aftersale/unknown), created_at, updated_at
-  # 「最近操作人」→ 发货/售后/未分类
-
-shipping_order_finished
-  id, ecommerce_order_no, finished_code(NULL=未匹配), finished_name,
-  quantity(发货数量), return_quantity(销退数量), actual_quantity(实际=发货-销退),
-  shipped_date, operator, channel_name, province,
-  is_stale(产品库变更后标记), resolved_at
-  # 按订单对发货/销退数据分别贪心匹配成品组合，写入三列数量
-```
-
-### 产品库
-```
-import_product_raw
-  id, code(UNIQUE), name, group_code, group_name, imported_at
-  # Excel列：品号(0)/品名(1)/规格(2)/品号群组(7)/群组名称(8)
-  # name = 品名（去除「（已停用）」）+ 规格
-
-erp_code_rules
-  id, prefix, type(finished/packaged/semi/material), description, created_at
-  # UNIQUE(prefix, type)，同一前缀可对应多个类型，无优先级
-  # type含义：finished=成品，packaged=产成品，semi=半成品，material=物料
-
-product_category
-  id, name(UNIQUE), sort_order, created_at
-
-product_series
-  id, category_id(FK), code, name, sort_order, created_at
-  # UNIQUE(category_id, code)  ← code 在同一品类内唯一（跨品类可重复）
-
-product_model
-  id, series_id(FK), code, name, name_en, model_code(UNIQUE), sort_order, created_at
-  # UNIQUE(series_id, code)    ← code 在同一系列内唯一（跨系列可重复）
-  # model_code 全局唯一
-
-product_finished
-  id, code(UNIQUE), status, model_id(FK→product_model),
-  listed_yymm, delisted_yymm, market(domestic/foreign/both),
-  cover_image, created_at, updated_at
-  # status: unrecorded=未录入, recorded=已录入, ignored=无需录入
-  # market: domestic=内销, foreign=外贸, both=内外销
-
-product_packaged
-  id, code(UNIQUE), name, length, width, height,
-  volume, gross_weight, net_weight, created_at, updated_at
-
-product_finished_packaged
-  finished_id(FK), packaged_id(FK), PRIMARY KEY(finished_id, packaged_id)
-
-product_tag
-  id, name(UNIQUE), color(default:#c4883a), created_at
-
-product_finished_tag
-  finished_id(FK), tag_id(FK), PRIMARY KEY(finished_id, tag_id)
-
-product_param_key
-  id, name(VARCHAR 64), group_name(VARCHAR 20), sort_order, created_at
-  # group_name: dimension=尺寸, config=配置, brand=品牌, other=其他
-  # UNIQUE(name, group_name)
-
-product_finished_param
-  id, finished_id(FK→product_finished CASCADE), key_id(FK→product_param_key CASCADE),
-  value(VARCHAR 255), sort_order, created_at, updated_at
-  # UNIQUE(finished_id, key_id)
-  # 保存使用 Upsert（按 key_id 对比已有记录，更新/插入/删除）
-```
-
-## 后端接口（完整）
-```
-GET    /health
-
-POST   /api/account/login
-GET    /api/account/users
-POST   /api/account/users
-PUT    /api/account/users/:id
-DELETE /api/account/users/:id
-POST   /api/account/users/:id/roles/:id
-DELETE /api/account/users/:id/roles/:id
-GET    /api/account/roles
-POST   /api/account/roles
-DELETE /api/account/roles/:id
-POST   /api/account/roles/:id/permissions/:code
-GET    /api/account/permissions
-POST   /api/account/permissions
-PUT    /api/account/permissions/:id
-
-GET    /api/version/latest
-GET    /api/version/list
-POST   /api/version/
-POST   /api/version/upload
-
-POST   /api/product/import/preview
-POST   /api/product/import
-GET    /api/product/stats
-GET    /api/product/finished
-POST   /api/product/finished
-GET    /api/product/packaged/all
-GET    /api/product/packaged/candidates
-POST   /api/product/packaged
-GET    /api/product/finished/:id/packaged
-POST   /api/product/finished/:id/packaged/:id
-DELETE /api/product/finished/:id/packaged/:id
-
-GET    /api/erp-code-rules/
-POST   /api/erp-code-rules/
-PUT    /api/erp-code-rules/:id
-DELETE /api/erp-code-rules/:id
-
-GET    /api/category/tree
-POST   /api/category/categories
-PUT    /api/category/categories/:id
-DELETE /api/category/categories/:id
-POST   /api/category/series
-PUT    /api/category/series/:id
-DELETE /api/category/series/:id
-POST   /api/category/models
-PUT    /api/category/models/:id
-DELETE /api/category/models/:id
-
-GET    /api/product/tags/
-POST   /api/product/tags/
-PUT    /api/product/tags/:id
-DELETE /api/product/tags/:id
-POST   /api/product/tags/finished/:finished_id/:tag_id
-DELETE /api/product/tags/finished/:finished_id/:tag_id
-
-GET    /api/product/params/keys                       # 所有键名按分组聚合
-POST   /api/product/params/keys                       # 创建键名 {name, group_name, sort_order?}
-PUT    /api/product/params/keys/:key_id               # 更新键名
-DELETE /api/product/params/keys/:key_id               # 删除键名（返回 usage_count 供前端二次确认）
-GET    /api/product/params/finished/:finished_id      # 获取成品参数，按分组聚合
-POST   /api/product/params/finished/:finished_id      # 全量 Upsert 保存成品参数
-
-POST   /api/shipping/import/shipping                  # 上传发货清单，返回 task_id
-POST   /api/shipping/import/return                    # 上传销退清单，返回 task_id（仅处理负数量行，按订单号匹配）
-GET    /api/shipping/import/progress/:task_id         # SSE 进度流：parsing→parsed→inserting→inserted→resolving→done/error/cancelled
-POST   /api/shipping/import/cancel/:task_id           # 发送中止信号，后台完成当前 chunk 后 rollback
-GET    /api/shipping/operators                        # 获取所有最近操作人及其分类
-POST   /api/shipping/operators/classify               # 批量保存操作人分类 [{operator, type}]
-GET    /api/shipping/stats                            # 统计摘要
-GET    /api/shipping/shipped-dates                    # 所有发货记录的 shipped_date（去重升序，不含销退日期）
-POST   /api/shipping/resolve                          # 刷新 is_stale 订单的成品组合
-POST   /api/shipping/resolve-all                      # 全量重新计算所有订单成品组合（SSE 进度，task_id 复用 import/progress 流）
-GET    /api/shipping/warehouses                       # 所有出现过的仓库名及 is_excluded 状态
-POST   /api/shipping/warehouses/filter                # 批量保存仓库过滤配置 [{warehouse_name, is_excluded}]
-GET    /api/shipping/chart-options                    # 渠道名和省份去重列表 {channels, provinces}
-POST   /api/shipping/chart-data                       # 图表聚合数据，body: {group_by, date_start?, date_end?, channel_names?, provinces?, category_id?, series_id?, model_id?} → {summary, items}
-```
-
 ## OSS结构
 ```
 tmt-oss/tmt-library/
@@ -433,146 +176,12 @@ rd:view / rd:edit
 
 ## usePermission composable
 ```javascript
-// src/composables/usePermission.js
 import { usePermission } from '@/composables/usePermission'
 const { isAdmin, can, canEditProduct, canViewProduct, canDeleteProduct } = usePermission()
-
 // can('product:edit') → true/false（admin直接返回true）
 ```
 
-## page-product.vue 说明
-- `onMounted`：调用 `maximizeApp()`
-- 返回按钮：先 `unmaximizeApp()` 再 `router.back()`
-- 顶部导航：概览(SVG inline) / 表格(PNG) / 图片(PNG) / 图表(PNG)
-- active 状态：文字加粗 + 主色 + 底部2px橙色指示线，无背景填充
-- 数据管理区：导入数据 / 编码规则 / 分类管理 / 标签管理 / **参数管理**
-- **数据管理区需要 `product:edit` 权限才显示**（`v-if="canEditProduct"`）
-- **概览分类卡片**：每块显示该分类成品总数 + 待处理数量（`cat.unprocessed > 0` 时红色显示「X 个待处理」）；统计均排除 `ignored` 状态产品
-
-## ProductTable.vue 说明
-- 双表格布局：成品表（上）+ 产成品表（下）
-- 成品表展开行：`<FinishedExpandRow :row="row" @saved="finishedStore.load()" />`
-- `expandedCode = ref(null)`，`expandedKeys = computed(() => expandedCode.value ? [expandedCode.value] : [])`
-- `:expand-row-keys="expandedKeys"`，`:row-key="r => r.code"`
-- 动态列宽：canvas measureText，watch rawItems.length + onMounted 触发
-- COL_DEFS 含 market 列（销售市场，排在上市年月前）
-- FILTER_FIELDS 含 market
-- MARKET_LABELS = `{ domestic: '内销', foreign: '外贸', both: '内外销' }`
-- 排序：英文名称、系列名称、销售市场均有排序按钮；产成品清单、生命周期、状态不排序
-- **产成品表**：`PK_COL_DEFS` + `pkColWidths`，watch `finishedStore.selectedPackaged` 触发动态列宽计算；`border` + `resizable` + `show-overflow-tooltip`
-
-## FinishedExpandRow.vue 说明
-- Props: `row`（Object）；Emits: `saved`
-- **权限控制**：无 `product:edit` 权限时隐藏编辑/保存按钮，`···` 按钮始终显示（下载/复制/粘贴）
-- **`···` 菜单**：复制（仅查看模式可用）/ 粘贴（仅编辑模式可用）；复制内容不含图片，含参数
-- **composable 拆分**：
-  - `useFinishedImage(props)` — 图片/裁剪逻辑（localCoverImage / savedCoverImage / cropperInst 等）
-  - `useFinishedParams(props)` — 参数区逻辑（GROUP_DEFS 也从此导出）
-- **布局**（宽度1000px）：
-  ```
-  ec-top（编码 + lc-badge + [编辑按钮] + ···按钮）
-  ec-row（图片卡片238×238 | 信息卡片flex:1）
-  ec-sections（折叠：参数/数据）
-  ```
-- **查看模式7行**：
-  ```
-  行1：中文名称（全宽）+ [内销tag if market=domestic/both]
-  行2：英文名称（全宽）+ [外贸tag if market=foreign/both]
-  行3：品类 / 系列编码 / 上市年月
-  行4：型号编码 / 系列名称 / 退市年月
-  行5：体积(m³) / 毛重(kg) / 净重(kg)
-  行6：包装清单（全宽）
-  行7：标签（全宽）
-  ```
-- **编辑模式7行**（行列结构与查看模式相同）：
-  ```
-  行1：el-autocomplete(中文名称) + 内销checkbox（最右）
-  行2：el-autocomplete(英文名称) + 外贸checkbox（最右）
-  行3：el-autocomplete(品类) / el-autocomplete(系列编码) / el-date-picker(上市年月)
-  行4：el-autocomplete(型号编码[+?说明按钮]) / el-autocomplete(系列名称) / el-date-picker(退市年月)
-  行5：体积/毛重/净重（只读）
-  行6：包装清单（只读）
-  行7：录入状态 select
-  ```
-- **型号简码说明按钮**：`?` 圆形按钮位于"型号简码"文字右侧，点击弹出 el-popover 显示 `src/assets/images/image_model_tip.png`
-- **保存失败反馈**：`res.success` 为 false 或图片上传失败时 `ElMessage.error(res.message)`
-- market checkbox → resolveMarket() → 'domestic'/'foreign'/'both'/''
-- eg-lbl 宽80px，居中，背景#faf7f2，右边框分隔
-- eg-row min-height:34px，不用固定height
-
-## FinishedExpandRow 参数区说明
-- **折叠区 ec-sections 包含两个子节**：参数 / 数据
-- **参数节**：4个固定分组横排卡片（尺寸/配置/品牌/其他），由 `GROUP_DEFS` 定义
-  - 分组定义（`useFinishedParams.js` 导出）：
-    ```js
-    { key: 'dimension', label: '尺寸', color: '#c4883a', bg: '#fff7ed' }
-    { key: 'config',    label: '配置', color: '#3a7bc8', bg: '#edf4ff' }
-    { key: 'brand',     label: '品牌', color: '#9c6fba', bg: '#f5eeff' }
-    { key: 'other',     label: '其他', color: '#4a9a5a', bg: '#edf8ef' }
-    ```
-  - 参数项结构：`{ key_id, key_name, value, state: 'original'|'added'|'deleted' }`
-  - `original` 项删除 → 标记红色+删除线+撤回按钮，保存时排除；`added` 项删除 → 直接移除
-  - 支持拖动排序（SortableJS），sort_order = 保存时的数组下标
-  - **独立编辑模式**：不进入主行编辑也可单独编辑参数（参数区右上角 ✎ 按钮）
-  - 添加参数通过 el-dialog（el-select filterable allow-create + el-input），键名可选库中已有或自由输入
-  - 键名库通过「参数管理」弹窗维护（page-product.vue 概览页数据管理区）
-- **数据节**：占位，含两张卡片（发货数据 / 售后数据），待开发
-
-## ProductChart.vue 说明
-- 图表视图，从 `finishedStore.rawItems` 读取数据
-- **始终排除 `status === 'ignored'` 的成品**（`activeItems` computed 预过滤，`filteredItems` 在此基础上按状态筛选）
-- STATUS_TABS：全部 / 已录入 / 未录入（不含「无需录入」，ignored 已在基础集排除）
-- 旭日图：品类（内环，tangential）→ 系列（中环，radial）→ 型号（外环5%，outside radial）
-- 品类配色：`CAT_COLORS = ['#c4883a', '#4a8fc0', '#6ab47a', '#9c6fba', '#e07070', '#70aacc', '#e0a040', '#7abcaa']`
-- 外环 r0:57% r:62%，中环 r0:36% r:57%，内环 r0:15% r:36%
-
-## ProductImage.vue 说明
-- 图片视图，从 `finishedStore.rawItems` 读取数据（复用表格视图已加载的数据，不重复请求）
-- 始终过滤掉 `status === 'unrecorded'` 和 `status === 'ignored'` 的成品
-- **工具栏**（单行）：搜索框 / 系列多选筛选（el-select filterable multiple） / 市场筛选 Tab / 排序按钮（品号/上市时间） / 数量统计
-- **分组展示**：按 `category_name` 分组，每组有可点击标题行（展开=主色实心背景，合拢=普通卡片样式），标题行 sticky 吸顶
-- **卡片**：固定高度图片区（180px） + 信息区（品号 + 中文名自动换行），点击弹出详情 dialog
-- **详情 dialog**：无原生 header/close，`close-on-click-modal=true`，内嵌 `<FinishedExpandRow :plain="true" :on-close="..." />`，plain 模式下只读（无编辑/复制/粘贴）
-- **滚动**：外层 `.grid-scroll`（`flex:1; min-height:0; overflow-y:auto`）负责滚动，内层 `.image-grid` 自然高度，缩小窗口宽度不压缩卡片高度
-
-## ProductParam.vue 说明
-- 概览页数据管理区的「参数管理」按钮打开，需要 `product:edit` 权限
-- 弹窗固定高度 400px，内容不随 Tab 切换变化
-- 布局：顶部4个分组 Tab（尺寸/配置/品牌/其他）+ 左侧键名列表 + 右侧编辑表单
-- 支持新增/编辑/排序/删除，删除前调接口返回 usage_count 做二次确认
-
-## ProductTag.vue 说明
-- 弹窗内容：左侧标签列表（220px）+ 右侧编辑表单
-- 支持新增/编辑/删除，颜色选择器（8预设色 + 自定义）
-- 接口路径注意加尾斜杠：`/api/product/tags/`（GET/POST），`/api/product/tags/:id`（PUT/DELETE）
-
-## ProductRules.vue 说明
-- 顶部筛选tabs：全部/成品/产成品/半成品/物料
-- 表头固定，表体最大高度220px可滚动
-- 新增/编辑表单内嵌在弹窗下方（卡片形式）
-- 类型颜色：finished=#c4883a，packaged=#4a8fc0，semi=#9c6fba，material=#6ab47a
-
-## page-users.vue / page-permissions.vue 注意事项
-- `roles` 是字符串数组，不是对象数组
-- isAdminUser: `row.roles?.includes('admin')`（不是 `.some(r => r.name === 'admin')`）
-- 角色tag渲染：`:key="role"` `{{ role }}`（不是 `role.id` / `role.name`）
-- handleAssignRole：先 loadRoles()，再通过 name 匹配 allRoles 里的 id
-- role.permissions 是字符串数组（权限码），不是对象数组
-- handleBindPermissions: `currentPerms.value = row.permissions || []`（不需要 map）
-
-## UserSettingsDrawer.vue 注意事项
-- isAdmin: `userInfo.value.roles?.includes('admin')`（不是 `.some(r => r.name === 'admin')`）
-
-## Pinia Store 结构
-```
-src/stores/product/
-├── index.js      # 产品库主store
-├── finished.js   # 成品store（含FIELD_GETTER、filters含market、FILTER_FIELDS含market）
-└── packaged.js   # 产成品store
-```
-
 ## UI 页面设计职责（Frontend Developer）
-涉及 UI 页面设计与实现时，须遵循以下原则（参考 `.claude/Frontend Developer.md`）：
 
 ### 核心要求
 - **像素级还原**：严格按设计规范实现，颜色/间距/圆角/字体均以本文件「设计规范」为准
@@ -594,114 +203,6 @@ src/stores/product/
 - 数据懒加载：下拉候选、分类树等在首次交互时加载，加载完成后缓存
 - 列表渲染：合理使用 `:key`，避免不必要的重渲染
 
-## page-data-mgmt.vue 说明
-- 路由 `/data-mgmt`，`onMounted` 调用 `maximizeApp()`，返回按钮先 `unmaximizeApp()` 再 `router.back()`
-- 顶部导航两个 Tab：**导入数据**（DataImport + ReturnImport 左右并排）/ **数据配置**（OperatorConfig + WarehouseConfig 左右并排）
-- 右上角「刷新全局数据」按钮：点击先弹二次确认框，确认后调 `POST /api/shipping/resolve-all` → 订阅 SSE 进度（复用 `import/progress/:task_id`），实时显示"xxx / xxx 个订单"；刷新时同时计算发货数量、销退数量、实际数量
-
-## DataImport.vue 说明
-- 导入发货清单（xlsx/xls/csv），固定 100px 文件拖放区，选中后显示 Excel SVG 图标
-- 导入流程：上传文件获取 task_id → 订阅 SSE → 展示进度条（parsing→parsed→inserting→inserted→resolving→done）
-- **文件内合并**：同 `(ecommerce_order_no, line_no, product_code)` 的行 quantity 累加，被合并行记录在 `merged_away_rows`
-- **DB 去重**：与库中已有记录比对，跳过的记录返回在 `skipped_rows`
-- **中止导入**：中止后 rollback 已写入的 batch 数据
-- **错误弹窗**：导入失败用 el-dialog 展示（不自动消失），进度条隐藏
-- **结果卡片**：文件行数 / 新增记录 / 跳过重复 / 文件内合并（可点击→弹出明细 dialog）
-- **跳过重复弹窗**：9列表格（电商订单号/项次/商品型号/商品名称/数量/发货日期/渠道/最近操作人/省份）
-- **文件内合并弹窗**：19列完整内容
-- **缺失日期日历**：自定义 7 列网格（非 el-calendar slot，绕开响应性问题）
-  - `missingDates = ref([])` 数组，`calCells` computed 按年月生成 `{ d, missing }` 单元格
-  - 缺失日期显示红色 32×32 圆圈（`.cal-inner--missing`）
-  - 导航：年份 el-select + 月份 el-select + 上/下月按钮
-
-## ReturnImport.vue 说明
-- 导入销退清单（xlsx/xls/csv），同 DataImport.vue 文件选择区风格
-- 导入流程与 DataImport.vue 相同（上传→ task_id → SSE → 进度条）
-- **仅处理数量 < 0 的行**，其余行忽略
-- **不在导入时过滤仓库**，全量保存至 return_record；仓库过滤在计算 shipping_order_finished 时动态应用
-- **订单匹配**：仅保留 ecommerce_order_no 存在于 shipping_record 的行，其余入 `unmatched_rows`
-- **DB 去重**：检查 return_record 表 UNIQUE(ecommerce_order_no, product_code, shipped_date)
-- **导入后触发重算**：对受影响的订单删除旧成品组合结果并重算（含 return_quantity / actual_quantity）
-- **结果卡片**（3列网格）：文件总行数 / 销退行数 / 无匹配订单（可点击）/ 新增记录（accent）/ 跳过重复（可点击）/ 文件内合并（>0时可点击）
-- **弹窗列**：5列（平台订单/交易日期/品号/数量/仓库）
-- 无日历模块
-
-## OperatorConfig.vue 说明
-- 展示所有「最近操作人」列出现过的人员，可设置类型：发货 / 售后 / 未分类
-- 类型颜色：shipping=#c4883a，aftersale=#4a8fc0，unknown=#8a7a6a
-- 右上角「刷新成品组合」按钮（`stale_count > 0` 时显示），调 `POST /api/shipping/resolve`
-
-## WarehouseConfig.vue 说明
-- 展示所有在 return_record 中出现过的仓库名，可配置 is_excluded（排除/正常导入）
-- 排除状态：橙红标签 + 橙红边框背景；正常状态：绿色标签
-- 调 `GET /api/shipping/warehouses` 加载，`POST /api/shipping/warehouses/filter` 保存
-
-## page-shipping.vue 说明
-- 路由 `/shipping`，`onMounted` 调用 `maximizeApp()`，返回按钮先 `unmaximizeApp()`
-- 内嵌 ShippingDashboard（左右两栏布局：筛选面板 + 图表区）
-
-## ShippingDashboard.vue 说明
-- 左侧筛选面板（230px）：日期范围 + 时间粒度 segmented（月/季度/半年/年）、品类/系列/型号级联选择、渠道多选、省份多选、重置按钮
-- 右侧顶部工具栏：图表类型图标（柱/折/饼/地图）+ 分隔线 + 同比/环比按钮；最左显示下钻面包屑，最右显示数据指标选择
-- 右侧内容区：ECharts 图表（占满）+ 底部聚合维度切换 chip（产品/渠道/地域/时间）
-
-### 聚合维度与图表类型
-| 维度 | 可用图表 | 默认 |
-|------|---------|------|
-| 产品（品类→系列→型号自动下钻） | bar、pie | bar |
-| 渠道（渠道→渠道商自动下钻） | bar、pie | bar |
-| 地域（省份→城市→县区自动下钻） | map、bar | map |
-| 时间 | 同比（yoy）、环比（mom） | 同比 |
-
-### 时间维度
-- 切换到时间维度自动激活「同比」；可手动切换为「环比」
-- 时间粒度（月/季度/半年/年）绑定左侧 segmented，切换后重新请求数据
-- **同比（buildYoyOption）**：X 轴为完整一年期号（月 01-12 / Q1-Q4 / 上下半年），每年一个柱状系列；缺失期号显示 0
-- **环比（buildMomOption）**：顺序柱状图 + 环比增长率折线（双 Y 轴）
-- title 末尾追加「· 同比」或「· 环比」
-- 后端 `POST /api/shipping/chart-data` 时额外传 `period`（month/quarter/halfyear/year），后端对应使用不同 `DATE_FORMAT` / `QUARTER()` / CASE 表达式
-
-### 工具区（toolbox）
-- 所有图表均含 ECharts toolbox（右上角），统一由 `makeToolbox(withZoom)` 生成
-- 直角坐标系（bar/line/yoy/mom）：区域缩放 + 还原 + 保存图片
-- 饼图/地图：还原 + 保存图片
-
-### 地图
-- 地域维度 + 地图类型时，右侧显示 Top10 排行面板（190px），按当前指标降序，前三名圆圈用主色高亮
-- 省份级别筛选到单一省份时，自动切换为对应省级地图（通过 adcode 从 `src/assets/maps/{adcode}_full.json` 加载）
-- 全国地图文件：`src/assets/maps/china-map.json`；34 个省级地图文件均已下载至同目录
-
-### 自定义分组
-- 支持产品/渠道/地域三个维度的多层级自定义分组，保存在 localStorage（key: `shipping_product_groups`）
-- 激活分组后，图表中该分组成员合并为单条，tooltip 底部蓝色显示成员列表
-- 右击柱/饼扇区可下钻，自定义分组条目跳过下钻；面包屑显示在工具栏左侧
-
-### Bar 图（buildBarOption）行为
-- items 按当前数据指标（发货量/销退量/净发货）**降序排列**后再绘制
-- X 轴：`interval:0, hideOverlap:true` — 所有类目均纳入渲染，空间不足时自动隐藏重叠标签；dataZoom 放大后隐藏的标签自动恢复显示
-- **选择「销退量」指标时**额外显示紫色「销退率」折线（销退量 ÷ 发货量，右侧 Y 轴百分比），tooltip 中同步展示；切换其他指标时折线消失
-- 图表数据（`get_chart_options`、`get_chart_data`、`get_product_monthly`）均**排除 `type='aftersale'` 的操作人**对应记录（子查询过滤）
-
-### 数据接口
-- `GET /api/shipping/chart-options`：返回渠道列表、省份列表、有数据的产品 ID 集合
-- `POST /api/shipping/chart-data`：body 含 `group_by`、`period`（时间维度专用）、日期范围、产品/渠道/地域筛选 ID；返回 `summary` + `items`
-- 产品筛选复用 `GET /api/category/tree`
-- 筛选变化（排除 chartType/comparisonMode 切换）→ 重新请求后端；chartType/comparisonMode 变化 → 仅重渲 ECharts
-
-## /api/product/stats 返回结构
-```json
-{
-  "total_finished":    <int>,   // 符合 finished 编码规则的 import 记录数（排除 ignored）
-  "unprocessed":       <int>,   // total_finished - product_finished 非ignored记录数
-  "last_imported_at":  "YYYY-MM-DD" | null,
-  "days_since_import": <int> | null,
-  "categories": [
-    { "description": "xxx", "count": <int>, "unprocessed": <int> }
-    // 按 erp_code_rules description 分组，按数量降序，均排除 ignored 产品
-  ]
-}
-```
-
 ## 待开发
 - [ ] FinishedExpandRow autocomplete 候选接真实数据（/api/category/tree）
 - [ ] FinishedExpandRow 标签行接真实数据（/api/product/tags/）
@@ -709,6 +210,7 @@ src/stores/product/
 - [ ] ProductImage cover_image 接真实 OSS 图片 URL
 - [x] ShippingDashboard 图表完善（bar/line/pie/map/同比/环比，按渠道/省份/时间/产品维度，含自定义分组、下钻面包屑、地图 Top10 面板、工具区）
 - [x] 销退清单导入（/api/shipping/import/return，ReturnImport.vue，独立 return_record 表）
+- [x] 售后数据模块（AftersaleProcess / AftersaleDashboard / AftersaleTable / AftersaleReasonLib，/api/aftersale/*）
 - [ ] 产品库图表视图实现
 - [ ] 用户头像
 - [ ] 更多主题配色

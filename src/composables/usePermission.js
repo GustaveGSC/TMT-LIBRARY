@@ -41,6 +41,11 @@ export function usePermission() {
   const canEditShipping   = can('shipping:edit')
   const canExportShipping = can('shipping:export')
 
+  // ── 售后数据 ──────────────────────────────────────
+  const canViewAftersale   = can('aftersale:view')
+  const canEditAftersale   = can('aftersale:edit')
+  const canExportAftersale = can('aftersale:export')
+
   return {
     userInfo,
     isAdmin,
@@ -51,5 +56,8 @@ export function usePermission() {
     canViewShipping,
     canEditShipping,
     canExportShipping,
+    canViewAftersale,
+    canEditAftersale,
+    canExportAftersale,
   }
 }

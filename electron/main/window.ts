@@ -42,9 +42,11 @@ export function createMainWindow(): BrowserWindow {
   mainWindow = new BrowserWindow({
     width: 800,
     height: 600,
+    minWidth: 800,
+    minHeight: 600,
     frame: false,
     backgroundColor: '#ede8dc',
-    resizable: false,
+    resizable: true,
     center: true,
     show: false,
     webPreferences: {

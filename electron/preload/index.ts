@@ -39,6 +39,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 还原应用
   unmaximizeApp: () => ipcRenderer.send('unmaximize-app'),
 
+  // 监听窗口最大化/还原状态变更（主进程转发）
+  onMaximize:   (cb: () => void) => ipcRenderer.on('window-maximized',   () => cb()),
+  onUnmaximize: (cb: () => void) => ipcRenderer.on('window-unmaximized', () => cb()),
+
   // 登录成功后通知主进程切换窗口
   loginSuccess: () => ipcRenderer.send('login-success'),
 

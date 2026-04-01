@@ -21,7 +21,7 @@ win:
   target:
     - target: nsis          # 安装包
       arch: [x64]
-  icon: resources/icon.ico
+  icon: resources/icon.png
 
 nsis:
   oneClick: false           # 允许用户选择安装路径

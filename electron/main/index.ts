@@ -15,6 +15,9 @@ ipcMain.on('login-success', () => {
   loginWin?.close()
   mainWin = createMainWindow()
   initUpdater(mainWin)
+  // 转发窗口最大化/还原事件到渲染进程
+  mainWin.on('maximize',   () => mainWin?.webContents.send('window-maximized'))
+  mainWin.on('unmaximize', () => mainWin?.webContents.send('window-unmaximized'))
 })
 
 ipcMain.on('logout', () => {

@@ -12,8 +12,8 @@ function getPythonExecutable(): string {
   if (app.isPackaged) {
     const isWin   = process.platform === 'win32'
     const exeName = isWin ? 'backend.exe' : 'backend'
-    // PyInstaller --onedir --name backend 产出：python-backend/backend/{backend|backend.exe}
-    const srcExe  = join(process.resourcesPath, 'python-backend', 'backend', exeName)
+    // PyInstaller --onefile --name backend 产出：python-backend/{backend|backend.exe}
+    const srcExe  = join(process.resourcesPath, 'python-backend', exeName)
 
     if (!isWin) {
       // macOS/Linux：优先直接 chmod；若文件系统只读（如从 DMG 直接运行），
@@ -24,7 +24,7 @@ function getPythonExecutable(): string {
       } catch {
         // 只读文件系统（DMG），复制到 userData
         const destBase = join(app.getPath('userData'), 'python-backend')
-        const destExe  = join(destBase, 'backend', exeName)
+        const destExe  = join(destBase, exeName)
         if (!existsSync(destExe)) {
           mkdirSync(destBase, { recursive: true })
           cpSync(join(process.resourcesPath, 'python-backend'), destBase, { recursive: true })

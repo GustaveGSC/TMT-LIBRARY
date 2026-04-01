@@ -7,10 +7,44 @@
       "Bash(ls -la *.xlsx)",
       "Bash(iconv -f GB18030 -t UTF-8)",
       "Bash(python3 -c \":*)",
-      "Bash(curl -s -o 110000_full.json \"https://geo.datav.aliyun.com/areas_v3/bound/110000_full.json\")"
+      "Bash(curl -s -o 110000_full.json \"https://geo.datav.aliyun.com/areas_v3/bound/110000_full.json\")",
+      "Bash(scriptsrelease.bat 1.0.0 \"首次正式发布\")",
+      "Bash(cmd /c \"scripts\\\\release.bat 1.0.0 首次正式发布\")",
+      "Bash(cmd /c \"scripts\\\\release.bat 1.0.0 \"\"首次正式发布\"\"\")",
+      "Bash(node -e \"const fs=require\\(''fs''\\);const p=JSON.parse\\(fs.readFileSync\\(''package.json'',''utf8''\\)\\);p.version=''1.0.0'';fs.writeFileSync\\(''package.json'',JSON.stringify\\(p,null,2\\)+''\\\\n''\\);console.log\\(''version updated to'',p.version\\)\")",
+      "Bash(handle \"e:\\\\Project\\\\tmt-library\\\\release\\\\win-unpacked\\\\resources\\\\app.asar\")",
+      "Bash(powershell -Command \"Get-Process | Where-Object {$_Path -like ''*tmt*'' -or $_Name -like ''*TMT*'' -or $_Name -like ''*electron*''} | Select-Object Name, Id, Path\")",
+      "Bash(powershell -Command \"Get-Process | Where-Object {$_Name -like ''*electron*'' -or $_Name -like ''*TMT*'' -or $_Name -like ''*tmt*''} | Select-Object Name, Id\")",
+      "Bash(cmd /c \"rmdir /s /q E:\\\\Project\\\\tmt-library\\\\release\\\\win-unpacked\")",
+      "Bash(cmd /c \"rd /s /q \"\"E:\\\\Project\\\\tmt-library\\\\release\\\\win-unpacked\"\"\")",
+      "Bash(npx electron-builder:*)",
+      "Bash(electron-builder --dir)",
+      "Bash(taskkill /f /im \"TMT Software.exe\")",
+      "Bash(taskkill /f /im \"tmt-library.exe\")",
+      "Bash(tasklist)",
+      "Bash(cmd /c \"taskkill /f /im \\\\\"TMT Software.exe\\\\\"\")",
+      "Bash(cmd /c \"taskkill /f /im \\\\\"TMT Software.exe\\\\\" 2>&1 && echo killed\")",
+      "Bash(cmd /c \"taskkill /F /IM \\\\\"TMT Software.exe\\\\\"\")",
+      "Bash(identify \"e:/Project/tmt-library/resources/icon.png\")",
+      "Bash(powershell -Command 'Add-Type -AssemblyName System.Drawing; $img = [System.Drawing.Image]::FromFile\\('\\\\''E:\\\\Project\\\\tmt-library\\\\resources\\\\icon.png'\\\\''\\); Write-Host \"$\\($img.Width\\)x$\\($img.Height\\) $\\($img.PixelFormat\\)\"; $img.Dispose\\(\\)')",
+      "Bash(node scripts/make-ico.js)",
+      "Bash(cmd /c \"wmic process where \\\\\"name='TMT Software.exe'\\\\\" delete\")",
+      "Bash(cmd /c \"wmic process where \\\\\"name='backend.exe'\\\\\" delete\")",
+      "Bash(cmd /c \"del /f /q E:\\\\Project\\\\tmt-library\\\\release\\\\win-unpacked\\\\resources\\\\python-backend\\\\backend.exe\")",
+      "Bash(powershell -Command \"Add-MpPreference -ExclusionPath 'E:\\\\Project\\\\tmt-library\\\\release'\")",
+      "Bash(cmd /c \"del /f /q E:\\\\Project\\\\tmt-library\\\\release\\\\win-unpacked\\\\resources\\\\python-backend\\\\backend.exe 2>nul & rmdir /s /q E:\\\\Project\\\\tmt-library\\\\release\\\\win-unpacked 2>nul & timeout /t 5 /nobreak & echo done\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" \"https://tmt-oss.oss-cn-hangzhou.aliyuncs.com/tmt-library/releases/latest.yml\")",
+      "Bash(curl -s \"https://tmt-oss.oss-cn-hangzhou.aliyuncs.com/tmt-library/releases/latest.yml\")",
+      "Bash(curl -s -I -H \"Origin: https://gustavegsc.github.io\" \"https://tmt-oss.oss-cn-hangzhou.aliyuncs.com/tmt-library/releases/latest.yml\")",
+      "Bash(grep -E '\\\\.\\(js|ts\\)$')",
+      "Bash(echo \"EXIT:$?\")",
+      "Read(//c/Users/gusta/AppData/Local/Temp/claude/e--Project-tmt-library/9d1a0f4a-52fa-4923-af28-19380bb7af91/tasks/**)",
+      "Bash(echo \"RC=$?\")",
+      "Read(//tmp/**)"
     ],
     "additionalDirectories": [
-      "\\tmp"
+      "\\tmp",
+      "e:\\Project\\tmt-library\\.claude"
     ]
   }
 }

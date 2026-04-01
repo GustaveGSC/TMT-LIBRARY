@@ -5,7 +5,7 @@
     <div class="bg-circle bg-circle-1"></div>
     <div class="bg-circle bg-circle-2"></div>
 
-    <WindowControls />
+    <WindowControls :show-maximize="false" />
 
     <div class="card" :class="{ 'is-flipping': isFlipping }">
       <div class="tabs">

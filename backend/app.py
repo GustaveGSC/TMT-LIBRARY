@@ -42,6 +42,7 @@ def create_app() -> Flask:
     from routes.product.tag import bp as tag_bp
     from routes.product.param import param_bp
     from routes.shipping import shipping_bp
+    from routes.aftersale import aftersale_bp
 
     app.register_blueprint(account_bp,        url_prefix="/api/account")
     app.register_blueprint(version_bp,        url_prefix="/api/version")
@@ -52,6 +53,7 @@ def create_app() -> Flask:
     app.register_blueprint(tag_bp,            url_prefix="/api/product/tags")
     app.register_blueprint(param_bp,          url_prefix="/api/product/params")
     app.register_blueprint(shipping_bp,       url_prefix="/api/shipping")
+    app.register_blueprint(aftersale_bp,      url_prefix="/api/aftersale")
 
     # ── 健康检查 ──────────────────────────────────────
     @app.get("/health")

@@ -5,6 +5,7 @@
 ───────────────────────────────────────── -->
 
 <script setup>
+import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessageBox } from 'element-plus'
 
 // ── Props ──────────────────────────────────
@@ -19,11 +20,41 @@ const props = defineProps({
     type:    String,
     default: '确认退出两平米软件库？',
   },
+  // 是否显示最大化按钮（登录窗口不需要）
+  showMaximize: {
+    type:    Boolean,
+    default: true,
+  },
+})
+
+// ── 响应式状态 ─────────────────────────────
+const isMaximized = ref(false)
+
+// ── 生命周期 ──────────────────────────────
+function onMaximize()   { isMaximized.value = true  }
+function onUnmaximize() { isMaximized.value = false }
+
+onMounted(() => {
+  window.electronAPI?.onMaximize(onMaximize)
+  window.electronAPI?.onUnmaximize(onUnmaximize)
+})
+
+onUnmounted(() => {
+  // preload 未暴露 off，事件监听在窗口销毁时自动清理
 })
 
 // ── 最小化 ────────────────────────────────
 function handleMinimize() {
   window.electronAPI?.minimizeApp()
+}
+
+// ── 最大化 / 还原 ──────────────────────────
+function handleMaximize() {
+  if (isMaximized.value) {
+    window.electronAPI?.unmaximizeApp()
+  } else {
+    window.electronAPI?.maximizeApp()
+  }
 }
 
 // ── 关闭 ──────────────────────────────────
@@ -48,6 +79,10 @@ async function handleClose() {
     <!-- 最小化 -->
     <button class="ctrl-btn minimize" title="最小化" @click="handleMinimize">
       <span class="ctrl-icon">─</span>
+    </button>
+    <!-- 最大化 / 还原 -->
+    <button v-if="showMaximize" class="ctrl-btn maximize" :title="isMaximized ? '还原' : '最大化'" @click="handleMaximize">
+      <span class="ctrl-icon">{{ isMaximized ? '❐' : '□' }}</span>
     </button>
     <!-- 关闭 -->
     <button class="ctrl-btn close" title="关闭" @click="handleClose">
@@ -88,6 +123,13 @@ async function handleClose() {
 
 /* 最小化 hover */
 .ctrl-btn.minimize:hover {
+  background: rgba(196,136,58,0.1);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* 最大化/还原 hover */
+.ctrl-btn.maximize:hover {
   background: rgba(196,136,58,0.1);
   border-color: var(--accent);
   color: var(--accent);
