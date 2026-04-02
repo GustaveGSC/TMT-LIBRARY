@@ -1,5 +1,5 @@
 import { app } from 'electron'
-import { spawn, ChildProcess } from 'child_process'
+import { spawn, spawnSync, ChildProcess } from 'child_process'
 import { join } from 'path'
 import { existsSync, chmodSync, cpSync, mkdirSync } from 'fs'
 
@@ -95,11 +95,11 @@ export function stopPython(): void {
   const pid = pythonProcess.pid
   if (pid) {
     if (process.platform === 'win32') {
-      // Windows：强制杀掉整个进程树
-      spawn('taskkill', ['/pid', String(pid), '/f', '/t'])
+      // Windows：同步强制杀掉整个进程树，确保退出前 backend 已停止
+      spawnSync('taskkill', ['/pid', String(pid), '/f', '/t'])
     } else {
       // macOS / Linux：杀掉进程组
-      process.kill(-pid, 'SIGTERM')
+      try { process.kill(-pid, 'SIGKILL') } catch { /* already gone */ }
     }
   }
 

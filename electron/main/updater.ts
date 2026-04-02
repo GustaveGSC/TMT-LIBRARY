@@ -1,6 +1,7 @@
 import { autoUpdater } from 'electron-updater'
 import { ipcMain, BrowserWindow, app } from 'electron'
 import log from 'electron-log'
+import { stopPython } from './python'
 
 // 日志输出到文件
 autoUpdater.logger = log
@@ -82,8 +83,9 @@ export function initUpdater(win: BrowserWindow) {
     }
   })
 
-  // 安装并重启
+  // 安装并重启：先同步停掉 backend，再启动安装程序
   ipcMain.handle('updater:install', () => {
+    stopPython()
     autoUpdater.quitAndInstall(false, true)
   })
 }

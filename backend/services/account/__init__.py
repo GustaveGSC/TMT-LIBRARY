@@ -40,6 +40,8 @@ class AccountService:
         user = UserRepository.get_by_id(user_id)
         if not user:
             return Result.fail(f"用户 {user_id} 不存在")
+        if user.username in ('admin', 'author'):
+            return Result.fail(f"用户 '{user.username}' 不可删除")
         UserRepository.delete(user)
         return Result.ok(message="删除成功")
 
@@ -69,6 +71,8 @@ class AccountService:
         user = UserRepository.get_by_id(user_id)
         if not user:
             return Result.fail("用户不存在")
+        if user.username in ('admin', 'author'):
+            return Result.fail(f"用户 '{user.username}' 不可禁用")
         UserRepository.update(user, is_active=is_active)
         return Result.ok(message="状态更新成功")
 

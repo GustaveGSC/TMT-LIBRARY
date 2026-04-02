@@ -32,8 +32,10 @@ tmt-software/
 │   │   │                   # 主窗口：800×600，resizable:true，minWidth/minHeight:800/600
 │   │   │                   # backgroundColor: #ede8dc，frame:false
 │   │   ├── python.ts       # Flask子进程管理，端口8765
+│   │   │                   # stopPython 用 spawnSync taskkill（同步，确保退出前 backend 已停）
 │   │   └── updater.ts      # electron-updater封装
 │   │                       # autoDownload=false, forceDevUpdateConfig=true
+│   │                       # quitAndInstall 前先调 stopPython()
 │   └── preload/
 │       └── index.ts        # contextBridge暴露electronAPI
 ├── src/
@@ -75,7 +77,8 @@ tmt-software/
 │       └── adminViews/     # page-users / page-permissions / page-version-release
 ├── backend/
 │   ├── app.py              # Flask工厂函数，注册蓝图
-│   │                       # SQLALCHEMY_ENGINE_OPTIONS = {"pool_pre_ping": True}
+│   │                       # POOL_SIZE=5, MAX_OVERFLOW=10, POOL_RECYCLE=120s
+│   │                       # pool_pre_ping=True, connect/read/write_timeout=10/30/30s
 │   ├── result.py           # Result.ok/fail → { success, message, data }
 │   ├── database/
 │   │   ├── models/         # account / version / shipping / aftersale / product
@@ -120,11 +123,20 @@ tmt-software/
 window.electronAPI = {
   getApiBase, getVersion, loginSuccess, logout, quitApp,
   openExternal, showOpenDialog,
-  minimizeApp:   () => void
-  maximizeApp:   () => void
-  unmaximizeApp: () => void
+  minimizeApp:    () => void
+  maximizeApp:    () => void
+  unmaximizeApp:  () => void
+  onMaximize:     (cb: () => void) => void   // 主进程转发 maximize 事件
+  onUnmaximize:   (cb: () => void) => void   // 主进程转发 unmaximize 事件
   updater: { check, download, install, on, off }
 }
+```
+
+## WindowControls Props
+```
+confirmClose  Boolean  default:false  关闭是否需要二次确认
+confirmText   String   default:'确认退出两平米软件库？'
+showMaximize  Boolean  default:true   是否显示最大化按钮（登录页传 false）
 ```
 
 ## HTTP 响应规范
@@ -154,7 +166,7 @@ tmt-oss/tmt-library/
 - `Beta x.x.x` → 强制更新
 - 主版本或次版本变更 → 强制更新
 - 仅修订版变更 → 可选更新（红点提示）
-- 当前版本：`1.0.1`
+- 当前版本：`1.0.1`（package.json 以实际为准）
 
 ## 权限设计
 ```
@@ -172,7 +184,8 @@ rd:view / rd:edit
     "permissions": ["product:edit", ...],  // 所有角色权限码去重合并
     "created_at" }
   ```
-- username==='admin'：不可删除、不可禁用、不显示分配角色按钮
+- username==='admin' 或 'author'：不可删除、不可禁用、不显示分配角色按钮（后端 service 层拦截）
+- **author 账号**：开发者专用，admin 权限；用户列表仅 author 登录时可见；首页 `disabled:true` 的模块对 author 解锁显示
 
 ## usePermission composable
 ```javascript

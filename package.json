@@ -12,7 +12,8 @@
     "dist:win": "npm run dist -- --win",
     "dist:mac": "npm run build:python:mac && npm run build && electron-builder --mac",
     "release": "scripts\\release.bat",
-    "make-ico": "node scripts/make-ico.js"
+    "make-ico": "node scripts/make-ico.js",
+    "upload-release": "node scripts/upload-release.js"
   },
   "dependencies": {
     "@electron-toolkit/utils": "^4.0.0",
@@ -28,6 +29,7 @@
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^4.5.0",
+    "ali-oss": "^6.23.0",
     "electron": "^28.0.0",
     "electron-builder": "^24.0.0",
     "electron-vite": "^2.0.0",

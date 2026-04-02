@@ -24,9 +24,18 @@ def create_app() -> Flask:
         f"/{os.getenv('DB_NAME')}"
     )
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-    app.config["SQLALCHEMY_POOL_SIZE"]    = 10
-    app.config["SQLALCHEMY_POOL_RECYCLE"] = 1800
-    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True}
+    app.config["SQLALCHEMY_POOL_SIZE"]      = 5
+    app.config["SQLALCHEMY_MAX_OVERFLOW"]   = 10
+    app.config["SQLALCHEMY_POOL_RECYCLE"]   = 120   # 2 分钟，短于云环境 TCP 空闲超时
+    app.config["SQLALCHEMY_POOL_TIMEOUT"]   = 15
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+        "pool_pre_ping": True,
+        "connect_args": {
+            "connect_timeout": 10,   # 建连超时
+            "read_timeout":    30,   # 读超时，防止查询挂起
+            "write_timeout":   30,   # 写超时
+        },
+    }
 
     # ── 初始化扩展 ────────────────────────────────────
     db.init_app(app)

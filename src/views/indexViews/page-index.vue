@@ -137,8 +137,10 @@ const { isAdmin, canViewProduct, canViewShipping, canEditShipping, canViewAfters
 const userInfo    = JSON.parse(localStorage.getItem('user') || '{}')
 const userName    = computed(() => userInfo.display_name || userInfo.username || '游客')
 const userInitial = computed(() => (userName.value?.[0] ?? '?').toUpperCase())
+const isAuthor    = userInfo.username === 'author'
 
 // noPermission=true：无权限时禁用并显示"无权限"标签
+// author 用户可以看到所有模块（包括开发中）
 const modules = computed(() => [
   {
     key: 'product',
@@ -173,7 +175,7 @@ const modules = computed(() => [
     desc: '售后记录查询与分析',
     icon: '🔧',
     route: '/aftersale',
-    disabled: true,
+    disabled: !isAuthor,
     noPermission: false,
   },
 ])

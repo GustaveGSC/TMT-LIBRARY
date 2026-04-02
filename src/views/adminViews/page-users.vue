@@ -23,14 +23,15 @@ const users   = ref([])
 // ── 搜索关键词（实时过滤） ────────────────
 const keyword = ref('')
 
-// 本地实时过滤：匹配用户名或显示名称
+// 本地实时过滤：匹配用户名或显示名称；非 author 登录时隐藏 author 账号
 const filteredUsers = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
-  if (!kw) return users.value
-  return users.value.filter(u =>
-    u.username?.toLowerCase().includes(kw) ||
-    u.display_name?.toLowerCase().includes(kw)
-  )
+  return users.value.filter(u => {
+    if (u.username === 'author' && !isAuthorLogin) return false
+    if (!kw) return true
+    return u.username?.toLowerCase().includes(kw) ||
+           u.display_name?.toLowerCase().includes(kw)
+  })
 })
 
 // ── 新增/编辑弹窗状态 ────────────────────
@@ -55,10 +56,14 @@ const allRoles      = ref([])
 const selectedRoles = ref([])
 const currentRoles  = ref([])
 
-// ── 判断是否为 admin 用户 ─────────────────
-function isAdminUser(row) {
-  return row.roles?.includes('admin')
-}
+// ── 当前登录用户 ──────────────────────────
+const currentUser = JSON.parse(localStorage.getItem('user') || '{}')
+const isAuthorLogin = currentUser.username === 'author'
+
+// ── 判断是否为受保护用户（admin / author）──
+function isAdminUser(row)  { return row.roles?.includes('admin') }
+function isAuthorUser(row) { return row.username === 'author' }
+function isProtectedUser(row) { return row.username === 'admin' || row.username === 'author' }
 
 // ── 加载用户列表 ──────────────────────────
 async function loadUsers() {
@@ -281,7 +286,7 @@ onMounted(() => {
               <el-button size="small" text type="primary" @click="handleEdit(row)">编辑</el-button>
               <el-button size="small" text type="primary" @click="handleResetPassword(row)">重置密码</el-button>
               <el-button
-                v-if="!isAdminUser(row)"
+                v-if="!isProtectedUser(row)"
                 size="small" text type="primary"
                 @click="handleAssignRole(row)"
               >
