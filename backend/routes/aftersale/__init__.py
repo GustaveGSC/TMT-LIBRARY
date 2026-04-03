@@ -33,6 +33,50 @@ def get_product_code_suggestions():
     return _svc.get_product_code_suggestions(q).to_response()
 
 
+# ── 发货物料简称库 ─────────────────────────────────────────────────────────
+
+@aftersale_bp.get('/shipping-aliases')
+def get_shipping_aliases():
+    return _svc.get_shipping_aliases().to_response()
+
+
+@aftersale_bp.post('/shipping-aliases')
+def create_shipping_alias():
+    return _svc.create_shipping_alias(request.get_json() or {}).to_response()
+
+
+@aftersale_bp.put('/shipping-aliases/<int:alias_id>')
+def update_shipping_alias(alias_id):
+    return _svc.update_shipping_alias(alias_id, request.get_json() or {}).to_response()
+
+
+@aftersale_bp.delete('/shipping-aliases/<int:alias_id>')
+def delete_shipping_alias(alias_id):
+    return _svc.delete_shipping_alias(alias_id).to_response()
+
+
+# ── 售后物料简称库 ─────────────────────────────────────────────────────────
+
+@aftersale_bp.get('/return-aliases')
+def get_return_aliases():
+    return _svc.get_return_aliases().to_response()
+
+
+@aftersale_bp.post('/return-aliases')
+def create_return_alias():
+    return _svc.create_return_alias(request.get_json() or {}).to_response()
+
+
+@aftersale_bp.put('/return-aliases/<int:alias_id>')
+def update_return_alias(alias_id):
+    return _svc.update_return_alias(alias_id, request.get_json() or {}).to_response()
+
+
+@aftersale_bp.delete('/return-aliases/<int:alias_id>')
+def delete_return_alias(alias_id):
+    return _svc.delete_return_alias(alias_id).to_response()
+
+
 # ── 一级分类 ───────────────────────────────────────────────────────────────
 
 @aftersale_bp.get('/reason-categories')
@@ -80,6 +124,13 @@ def delete_reason(reason_id):
 @aftersale_bp.get('/reasons/<int:reason_id>/usage')
 def get_reason_usage(reason_id):
     return _svc.get_reason_usage(reason_id).to_response()
+
+
+# ── 产品型号推断 ──────────────────────────────────────────────────────────────
+
+@aftersale_bp.post('/suggest-product')
+def suggest_product():
+    return _svc.suggest_product(request.get_json() or {}).to_response()
 
 
 # ── 待处理订单 ──────────────────────────────────────────────────────────────

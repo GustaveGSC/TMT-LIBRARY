@@ -54,6 +54,40 @@ class AftersaleReason(db.Model):
         }
 
 
+class AftersaleShippingAlias(db.Model):
+    """发货物料简称库：可选的发货物料简称规范名称列表"""
+    __tablename__ = 'aftersale_shipping_alias'
+
+    id         = db.Column(db.Integer,     primary_key=True, autoincrement=True)
+    name       = db.Column(db.String(200), nullable=False, unique=True)
+    sort_order = db.Column(db.Integer,     nullable=False, default=0)
+    created_at = db.Column(db.DateTime,    nullable=False, default=now_cst)
+
+    def to_dict(self):
+        return {
+            'id':         self.id,
+            'name':       self.name,
+            'sort_order': self.sort_order,
+        }
+
+
+class AftersaleReturnAlias(db.Model):
+    """售后物料简称库：可选的售后物料简称规范名称列表"""
+    __tablename__ = 'aftersale_return_alias'
+
+    id         = db.Column(db.Integer,     primary_key=True, autoincrement=True)
+    name       = db.Column(db.String(200), nullable=False, unique=True)
+    sort_order = db.Column(db.Integer,     nullable=False, default=0)
+    created_at = db.Column(db.DateTime,    nullable=False, default=now_cst)
+
+    def to_dict(self):
+        return {
+            'id':         self.id,
+            'name':       self.name,
+            'sort_order': self.sort_order,
+        }
+
+
 class AftersaleProductAlias(db.Model):
     """物料组别简称：将一组产品代码映射为一个简称，用于售后处理中的简化展示"""
     __tablename__ = 'aftersale_product_alias'
@@ -95,10 +129,13 @@ class AftersaleCase(db.Model):
     shipping_materials = db.Column(db.JSON,        nullable=True)
     # 产生售后物料分配：本次售后需处理的物料 [{code, name, quantity}]
     aftersale_materials = db.Column(db.JSON,       nullable=True)
-    shipped_date       = db.Column(db.Date,        nullable=True)
+    shipped_date          = db.Column(db.Date,    nullable=True)
+    purchase_date         = db.Column(db.Date,    nullable=True)   # 用户填写的购买日期
+    days_since_purchase   = db.Column(db.Integer, nullable=True)   # 售后间隔天数 = 售后日期 - 购买日期
     operator           = db.Column(db.String(100), nullable=True)
     channel_name       = db.Column(db.String(200), nullable=True)
     province           = db.Column(db.String(50),  nullable=True)
+    city               = db.Column(db.String(100), nullable=True)
     status             = db.Column(
                            db.Enum('pending', 'confirmed', 'ignored'),
                            nullable=False, default='pending'
@@ -121,10 +158,13 @@ class AftersaleCase(db.Model):
             'operator':           self.operator,
             'channel_name':       self.channel_name,
             'province':           self.province,
+            'city':               self.city,
             'status':              self.status,
             'assigned_models':     self.assigned_models    or [],
             'shipping_materials':  self.shipping_materials  or [],
             'aftersale_materials': self.aftersale_materials or [],
+            'purchase_date':        self.purchase_date.strftime('%Y-%m-%d') if self.purchase_date else None,
+            'days_since_purchase':  self.days_since_purchase,
             'processed_at':        self.processed_at.strftime('%Y-%m-%d %H:%M:%S') if self.processed_at else None,
             'created_at':          self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
         }
@@ -134,30 +174,37 @@ class AftersaleCase(db.Model):
 
 
 class AftersaleCaseReason(db.Model):
-    """工单-原因关联，一个工单可拆分为多条原因记录"""
+    """工单-原因关联，一个工单可拆分为多条原因记录（每条对应一个型号+物料简称+原因）"""
     __tablename__ = 'aftersale_case_reason'
 
-    id                = db.Column(db.Integer,     primary_key=True, autoincrement=True)
-    case_id           = db.Column(db.Integer,     db.ForeignKey('aftersale_case.id', ondelete='CASCADE'), nullable=False)
-    reason_id         = db.Column(db.Integer,     db.ForeignKey('aftersale_reason.id'), nullable=True)
-    custom_reason     = db.Column(db.String(200), nullable=True)   # reason_id 为空时使用
+    id                       = db.Column(db.Integer,     primary_key=True, autoincrement=True)
+    case_id                  = db.Column(db.Integer,     db.ForeignKey('aftersale_case.id', ondelete='CASCADE'), nullable=False)
+    reason_id                = db.Column(db.Integer,     db.ForeignKey('aftersale_reason.id'), nullable=True)
+    custom_reason            = db.Column(db.String(200), nullable=True)   # reason_id 为空时使用
     # 本原因涉及的产品 codes 子集（来自 aftersale_case.products）
-    involved_products = db.Column(db.JSON,        nullable=True)
-    notes             = db.Column(db.Text,        nullable=True)
-    created_at        = db.Column(db.DateTime,    nullable=False, default=now_cst)
+    involved_products        = db.Column(db.JSON,        nullable=True)
+    notes                    = db.Column(db.Text,        nullable=True)
+    # 售后内容扩展字段（v2）
+    model_id                 = db.Column(db.Integer,     db.ForeignKey('product_model.id', ondelete='SET NULL'), nullable=True)
+    shipping_material_alias  = db.Column(db.String(200), nullable=True)   # 发货物料简称
+    aftersale_material_alias = db.Column(db.String(200), nullable=True)   # 售后物料简称
+    created_at               = db.Column(db.DateTime,    nullable=False, default=now_cst)
 
     def to_dict(self):
         cat_name = None
         if self.reason and self.reason.category_obj:
             cat_name = self.reason.category_obj.name
         return {
-            'id':                self.id,
-            'case_id':           self.case_id,
-            'reason_id':         self.reason_id,
-            'reason_name':       self.reason.name if self.reason else None,
-            'reason_category':   cat_name,
-            'custom_reason':     self.custom_reason,
-            'involved_products': self.involved_products or [],
-            'notes':             self.notes,
-            'created_at':        self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
+            'id':                       self.id,
+            'case_id':                  self.case_id,
+            'reason_id':                self.reason_id,
+            'reason_name':              self.reason.name if self.reason else None,
+            'reason_category':          cat_name,
+            'custom_reason':            self.custom_reason,
+            'involved_products':        self.involved_products or [],
+            'notes':                    self.notes,
+            'model_id':                 self.model_id,
+            'shipping_material_alias':  self.shipping_material_alias,
+            'aftersale_material_alias': self.aftersale_material_alias,
+            'created_at':               self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
         }

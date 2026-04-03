@@ -1,7 +1,10 @@
 from datetime import date
 from result import Result
 from database.repository.aftersale import AftersaleRepository
-from database.models.aftersale import AftersaleReasonCategory, AftersaleReason, AftersaleProductAlias
+from database.models.aftersale import (
+    AftersaleReasonCategory, AftersaleReason, AftersaleProductAlias,
+    AftersaleShippingAlias, AftersaleReturnAlias,
+)
 
 _repo = AftersaleRepository()
 
@@ -171,6 +174,70 @@ class AftersaleService:
         usage = _repo.get_reason_usage(reason_id)
         return Result.ok(data={'usage_count': usage})
 
+    # ── 发货物料简称库 ─────────────────────────────────────────────────────────
+
+    def get_shipping_aliases(self):
+        return Result.ok(data=[a.to_dict() for a in _repo.get_all_shipping_aliases()])
+
+    def create_shipping_alias(self, data):
+        name = (data.get('name') or '').strip()
+        if not name:
+            return Result.fail('简称不能为空')
+        if AftersaleShippingAlias.query.filter_by(name=name).first():
+            return Result.fail('该简称已存在')
+        obj = _repo.create_shipping_alias(name=name, sort_order=data.get('sort_order', 0))
+        return Result.ok(data=obj.to_dict())
+
+    def update_shipping_alias(self, alias_id, data):
+        name = (data.get('name') or '').strip()
+        if not name:
+            return Result.fail('简称不能为空')
+        existing = AftersaleShippingAlias.query.filter_by(name=name).first()
+        if existing and existing.id != alias_id:
+            return Result.fail('该简称已存在')
+        obj = _repo.update_shipping_alias(alias_id, name=name, sort_order=data.get('sort_order'))
+        if not obj:
+            return Result.fail('简称不存在')
+        return Result.ok(data=obj.to_dict())
+
+    def delete_shipping_alias(self, alias_id):
+        ok = _repo.delete_shipping_alias(alias_id)
+        if not ok:
+            return Result.fail('简称不存在')
+        return Result.ok()
+
+    # ── 售后物料简称库 ─────────────────────────────────────────────────────────
+
+    def get_return_aliases(self):
+        return Result.ok(data=[a.to_dict() for a in _repo.get_all_return_aliases()])
+
+    def create_return_alias(self, data):
+        name = (data.get('name') or '').strip()
+        if not name:
+            return Result.fail('简称不能为空')
+        if AftersaleReturnAlias.query.filter_by(name=name).first():
+            return Result.fail('该简称已存在')
+        obj = _repo.create_return_alias(name=name, sort_order=data.get('sort_order', 0))
+        return Result.ok(data=obj.to_dict())
+
+    def update_return_alias(self, alias_id, data):
+        name = (data.get('name') or '').strip()
+        if not name:
+            return Result.fail('简称不能为空')
+        existing = AftersaleReturnAlias.query.filter_by(name=name).first()
+        if existing and existing.id != alias_id:
+            return Result.fail('该简称已存在')
+        obj = _repo.update_return_alias(alias_id, name=name, sort_order=data.get('sort_order'))
+        if not obj:
+            return Result.fail('简称不存在')
+        return Result.ok(data=obj.to_dict())
+
+    def delete_return_alias(self, alias_id):
+        ok = _repo.delete_return_alias(alias_id)
+        if not ok:
+            return Result.fail('简称不存在')
+        return Result.ok()
+
     # ── 待处理订单 ──────────────────────────────────────────────────────────
 
     def get_pending_orders(self, page, page_size, search, date_start, date_end):
@@ -222,6 +289,14 @@ class AftersaleService:
             except ValueError:
                 pass
 
+        # 解析购买日期
+        purchase_date = None
+        if data.get('purchase_date'):
+            try:
+                purchase_date = date.fromisoformat(data['purchase_date'])
+            except ValueError:
+                pass
+
         case = _repo.confirm_case(
             order_no=order_no,
             products=data.get('products', []),
@@ -235,6 +310,8 @@ class AftersaleService:
             assigned_models=data.get('assigned_models'),
             shipping_materials=data.get('shipping_materials'),
             aftersale_materials=data.get('aftersale_materials'),
+            city=data.get('city'),
+            purchase_date=purchase_date,
         )
         return Result.ok(data=case.to_dict(include_reasons=True))
 
@@ -256,6 +333,14 @@ class AftersaleService:
             return Result.fail('订单号不能为空')
         case = _repo.ignore_case(order_no)
         return Result.ok(data=case.to_dict())
+
+    # ── 产品型号推断 ────────────────────────────────────────────────────────
+
+    def suggest_product(self, data):
+        product_codes   = data.get('product_codes', [])
+        purchase_date   = data.get('purchase_date')
+        result = _repo.suggest_product(product_codes, purchase_date)
+        return Result.ok(data=result)
 
     # ── 自动匹配 ────────────────────────────────────────────────────────────
 

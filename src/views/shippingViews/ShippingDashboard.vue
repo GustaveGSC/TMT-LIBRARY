@@ -1259,13 +1259,15 @@ function buildYoyOption(items) {
 
   const YEAR_COLORS = ['#c4883a', '#4a8fc0', '#6ab47a', '#9c6fba', '#e07070', '#f0a030', '#50c0c0']
 
-  const series = years.map((yr, idx) => {
+  // 柱状系列：每年一组
+  const barSeries = years.map((yr, idx) => {
     const clr  = YEAR_COLORS[idx % YEAR_COLORS.length]
     // 缺失期号填 0（确保每年序列长度与 X 轴一致）
     const data = periodOrder.map(k => yearMap.get(yr)?.get(k) ?? 0)
     return {
       name: `${yr}年`,
       type: 'bar',
+      yAxisIndex: 0,
       data,
       itemStyle: { color: clr, borderRadius: [2, 2, 0, 0] },
       label: {
@@ -1274,6 +1276,46 @@ function buildYoyOption(items) {
       },
     }
   })
+
+  // 同比增长率折线系列：相邻两年之间，每个期号计算一个增长率
+  const RATE_COLORS = ['#9c6fba', '#50c0c0', '#e07c00', '#e07070']
+  const rateSeries = []
+  if (years.length >= 2) {
+    for (let i = 0; i < years.length - 1; i++) {
+      const fromYear  = years[i]
+      const toYear    = years[i + 1]
+      const rateColor = RATE_COLORS[i % RATE_COLORS.length]
+      const rateData  = periodOrder.map(k => {
+        const from = yearMap.get(fromYear)?.get(k) ?? 0
+        const to   = yearMap.get(toYear)?.get(k) ?? 0
+        if (from === 0) return null
+        return Math.round((to - from) / from * 1000) / 10   // 保留 1 位小数
+      })
+      rateSeries.push({
+        name: `${fromYear.slice(2)}→${toYear.slice(2)}增长率`,
+        type: 'line',
+        yAxisIndex: 1,
+        data: rateData,
+        smooth: false,
+        connectNulls: false,
+        symbol: 'circle',
+        symbolSize: 7,
+        lineStyle: { color: rateColor, width: 2, type: 'dashed' },
+        itemStyle: { color: rateColor, borderWidth: 2, borderColor: '#fff' },
+        label: {
+          show: true,
+          position: 'top',
+          fontFamily: FONT,
+          fontSize: 11,
+          fontWeight: '600',
+          color: rateColor,
+          formatter: p => p.value == null ? '' : (p.value >= 0 ? `▲${p.value}%` : `▼${Math.abs(p.value)}%`),
+        },
+      })
+    }
+  }
+
+  const hasRateLine = rateSeries.length > 0
 
   const titleText = `${buildChartTitle(label)} · 同比`
   return {
@@ -1305,27 +1347,41 @@ function buildYoyOption(items) {
         let s = `<div style="font-family:${FONT};font-size:14px;min-width:160px">`
         s += `<div style="margin-bottom:4px;font-weight:600;color:#3a3028">${periodLabel}</div>`
         for (const p of params) {
-          if (p.value != null) s += row(p.marker, p.seriesName, p.value)
+          if (p.value == null) continue
+          // 增长率系列后缀 %
+          const isRate   = p.seriesName.includes('增长率')
+          const display  = isRate ? `${p.value >= 0 ? '▲' : '▼'}${Math.abs(p.value)}%` : p.value
+          s += row(p.marker, p.seriesName, display)
         }
         return s + '</div>'
       },
     },
-    grid: { top: 116, left: 60, right: 30, bottom: 50 },
+    grid: { top: 116, left: 60, right: hasRateLine ? 70 : 30, bottom: 50 },
     xAxis: {
       type: 'category', data: xLabels,
       axisLabel: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13 },
       axisLine: { lineStyle: { color: '#e0d4c0' } },
       axisTick: { lineStyle: { color: '#e0d4c0' } },
     },
-    yAxis: {
-      type: 'value', name: '数量（PCS）',
-      nameTextStyle: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13 },
-      axisLabel: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13 },
-      splitLine: { lineStyle: { color: '#f0e8d8' } },
-      axisLine: { show: true, lineStyle: { color: '#e0d4c0' } },
-      axisTick: { show: true, lineStyle: { color: '#e0d4c0' } },
-    },
-    series,
+    yAxis: [
+      {
+        type: 'value', name: '数量（PCS）',
+        nameTextStyle: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13 },
+        axisLabel: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13 },
+        splitLine: { lineStyle: { color: '#f0e8d8' } },
+        axisLine: { show: true, lineStyle: { color: '#e0d4c0' } },
+        axisTick: { show: true, lineStyle: { color: '#e0d4c0' } },
+      },
+      ...(hasRateLine ? [{
+        type: 'value', name: '同比增长率',
+        nameTextStyle: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13 },
+        axisLabel: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13, formatter: '{value}%' },
+        splitLine: { show: false },
+        axisLine: { show: true, lineStyle: { color: '#e0d4c0' } },
+        axisTick: { show: true, lineStyle: { color: '#e0d4c0' } },
+      }] : []),
+    ],
+    series: [...barSeries, ...rateSeries],
   }
 }
 

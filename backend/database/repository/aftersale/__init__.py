@@ -5,6 +5,7 @@ from database.models.aftersale import (
     AftersaleReasonCategory, AftersaleReason,
     AftersaleCase, AftersaleCaseReason,
     AftersaleProductAlias,
+    AftersaleShippingAlias, AftersaleReturnAlias,
 )
 from database.models.shipping import ShippingRecord, ShippingOperatorType
 
@@ -193,6 +194,7 @@ class AftersaleRepository:
                 func.min(ShippingRecord.channel_name).label('channel_name'),
                 func.min(ShippingRecord.operator).label('operator'),
                 func.min(ShippingRecord.province).label('province'),
+                func.min(ShippingRecord.city).label('city'),
                 func.min(ShippingRecord.seller_remark).label('seller_remark'),
                 func.min(ShippingRecord.buyer_remark).label('buyer_remark'),
                 func.count(ShippingRecord.id).label('line_count'),
@@ -229,6 +231,7 @@ class AftersaleRepository:
                 'channel_name':       row.channel_name,
                 'operator':           row.operator,
                 'province':           row.province,
+                'city':               row.city,
                 'seller_remark':      row.seller_remark,
                 'buyer_remark':       row.buyer_remark,
                 'line_count':         row.line_count,
@@ -316,10 +319,11 @@ class AftersaleRepository:
 
     def confirm_case(self, order_no, products, seller_remark, buyer_remark,
                      shipped_date, operator, channel_name, province, reasons_data,
-                     assigned_models=None, shipping_materials=None, aftersale_materials=None):
+                     assigned_models=None, shipping_materials=None, aftersale_materials=None,
+                     city=None, purchase_date=None):
         """
         创建或更新工单（status→confirmed），批量写入 reasons。
-        reasons_data: [{reason_id?, custom_reason?, involved_products?, notes?}]
+        reasons_data: [{reason_id?, custom_reason?, model_id?, shipping_material_alias?, aftersale_material_alias?}]
         """
         case = AftersaleCase.query.filter_by(ecommerce_order_no=order_no).first()
         if not case:
@@ -332,6 +336,7 @@ class AftersaleRepository:
                 operator=operator,
                 channel_name=channel_name,
                 province=province,
+                city=city,
             )
             db.session.add(case)
             db.session.flush()
@@ -343,6 +348,14 @@ class AftersaleRepository:
             case.operator      = operator
             case.channel_name  = channel_name
             case.province      = province
+            case.city          = city
+        case.purchase_date = purchase_date
+
+        # 自动计算售后间隔天数（售后日期 - 购买日期），两者均有才计算
+        if shipped_date and purchase_date:
+            case.days_since_purchase = (shipped_date - purchase_date).days
+        else:
+            case.days_since_purchase = None
 
         case.assigned_models     = assigned_models    or []
         case.shipping_materials  = shipping_materials  or []
@@ -355,11 +368,14 @@ class AftersaleRepository:
         reason_ids_used = set()
         for rd in reasons_data:
             cr = AftersaleCaseReason(
-                case_id           = case.id,
-                reason_id         = rd.get('reason_id'),
-                custom_reason     = rd.get('custom_reason'),
-                involved_products = rd.get('involved_products'),
-                notes             = rd.get('notes'),
+                case_id                  = case.id,
+                reason_id                = rd.get('reason_id'),
+                custom_reason            = rd.get('custom_reason'),
+                involved_products        = rd.get('involved_products'),
+                notes                    = rd.get('notes'),
+                model_id                 = rd.get('model_id'),
+                shipping_material_alias  = rd.get('shipping_material_alias') or None,
+                aftersale_material_alias = rd.get('aftersale_material_alias') or None,
             )
             db.session.add(cr)
             if rd.get('reason_id'):
@@ -399,11 +415,14 @@ class AftersaleRepository:
         new_reason_ids = set()
         for rd in reasons_data:
             cr = AftersaleCaseReason(
-                case_id           = case_id,
-                reason_id         = rd.get('reason_id'),
-                custom_reason     = rd.get('custom_reason'),
-                involved_products = rd.get('involved_products'),
-                notes             = rd.get('notes'),
+                case_id                  = case_id,
+                reason_id                = rd.get('reason_id'),
+                custom_reason            = rd.get('custom_reason'),
+                involved_products        = rd.get('involved_products'),
+                notes                    = rd.get('notes'),
+                model_id                 = rd.get('model_id'),
+                shipping_material_alias  = rd.get('shipping_material_alias') or None,
+                aftersale_material_alias = rd.get('aftersale_material_alias') or None,
             )
             db.session.add(cr)
             if rd.get('reason_id'):
@@ -654,3 +673,244 @@ class AftersaleRepository:
             .all()
         ]
         return {'channels': channels, 'provinces': provinces, 'categories': categories}
+
+    def suggest_product(self, product_codes, purchase_date_str=None):
+        """
+        根据发货产品代码列表 + 购买日期，综合两个来源推断最可能的产品型号：
+
+        来源 A（基础，权重 +1/产品）：
+          product_finished.code → product_model → series → category
+          若购买日期已知且 listed_yymm 晚于购买月份，该型号标记为日期不符
+
+        来源 B（历史，权重 +2/工单）：
+          已确认的 aftersale_case（含相同产品代码）的 case_reason.model_id
+          历史记录权重更高，反映实际处理经验
+
+        最终排序：日期符合 > 综合得分
+        返回 {category_id, series_id, model_id, ...} 或 None
+        """
+        if not product_codes:
+            return None
+
+        from collections import defaultdict
+        from sqlalchemy import or_
+        from database.models.product.category import ProductCategory, ProductSeries, ProductModel
+        from database.models.product.finished import ProductFinished
+
+        # purchase_date → YYYY-MM，与 listed_yymm 做字符串比较
+        purchase_ym = None
+        if purchase_date_str:
+            try:
+                from datetime import date as _date
+                pd = _date.fromisoformat(purchase_date_str)
+                purchase_ym = f"{pd.year}-{pd.month:02d}"
+            except (ValueError, AttributeError):
+                pass
+
+        # 每个 model_id 的综合信息
+        # {model_id: {'score': int, 'date_ok': bool, 'meta': row}}
+        model_score = defaultdict(lambda: {'score': 0, 'date_ok': True, 'meta': None})
+
+        # ── 来源 A：product_finished ──────────────────────────────────────
+        finished_rows = (
+            db.session.query(
+                ProductFinished.listed_yymm,
+                ProductModel.id.label('model_id'),
+                ProductModel.name.label('model_name'),
+                ProductSeries.id.label('series_id'),
+                ProductSeries.name.label('series_name'),
+                ProductCategory.id.label('category_id'),
+                ProductCategory.name.label('category_name'),
+            )
+            .join(ProductModel,    ProductModel.id    == ProductFinished.model_id)
+            .join(ProductSeries,   ProductSeries.id   == ProductModel.series_id)
+            .join(ProductCategory, ProductCategory.id == ProductSeries.category_id)
+            .filter(ProductFinished.code.in_(product_codes))
+            .filter(ProductFinished.status != 'ignored')
+            .filter(ProductFinished.model_id.isnot(None))
+            .all()
+        )
+        for row in finished_rows:
+            mid = row.model_id
+            model_score[mid]['score'] += 1
+            model_score[mid]['meta']   = row
+            if purchase_ym and row.listed_yymm and row.listed_yymm > purchase_ym:
+                model_score[mid]['date_ok'] = False
+
+        # ── 来源 B：历史已确认工单的 case_reason.model_id ────────────────
+        # 用 JSON_SEARCH 匹配 aftersale_case.products[*].code 包含任意 product_code
+        code_filters = [
+            db.func.json_search(
+                AftersaleCase.products, 'one', code, None, '$[*].code'
+            ).isnot(None)
+            for code in product_codes
+        ]
+        history_rows = (
+            db.session.query(
+                AftersaleCaseReason.model_id.label('model_id'),
+                ProductModel.name.label('model_name'),
+                ProductSeries.id.label('series_id'),
+                ProductSeries.name.label('series_name'),
+                ProductCategory.id.label('category_id'),
+                ProductCategory.name.label('category_name'),
+            )
+            .join(AftersaleCase,   AftersaleCase.id   == AftersaleCaseReason.case_id)
+            .join(ProductModel,    ProductModel.id    == AftersaleCaseReason.model_id)
+            .join(ProductSeries,   ProductSeries.id   == ProductModel.series_id)
+            .join(ProductCategory, ProductCategory.id == ProductSeries.category_id)
+            .filter(AftersaleCase.status == 'confirmed')
+            .filter(AftersaleCaseReason.model_id.isnot(None))
+            .filter(or_(*code_filters))
+            .all()
+        )
+        for row in history_rows:
+            mid = row.model_id
+            model_score[mid]['score'] += 2   # 历史记录权重更高
+            if not model_score[mid]['meta']:
+                model_score[mid]['meta'] = row
+
+        # ── 历史简称 & 原因统计（共用 code_filters）────────────────────
+        # 三个字段各自按频次取最高，来源均为相同产品代码的历史确认工单
+
+        def _top_alias(field):
+            """按频次取 AftersaleCaseReason 某简称字段的最高值"""
+            cnt = {}
+            rows = (
+                db.session.query(field)
+                .join(AftersaleCase, AftersaleCase.id == AftersaleCaseReason.case_id)
+                .filter(AftersaleCase.status == 'confirmed')
+                .filter(field.isnot(None))
+                .filter(field != '')
+                .filter(or_(*code_filters))
+                .all()
+            )
+            for (val,) in rows:
+                v = (val or '').strip()
+                if v:
+                    cnt[v] = cnt.get(v, 0) + 1
+            return max(cnt, key=cnt.get) if cnt else None
+
+        suggested_shipping_alias  = _top_alias(AftersaleCaseReason.shipping_material_alias)
+        suggested_aftersale_alias = _top_alias(AftersaleCaseReason.aftersale_material_alias)
+
+        # 历史原因：取 reason_id 出现最多的一条，并附带其 category_id
+        reason_cnt = {}
+        reason_rows = (
+            db.session.query(
+                AftersaleCaseReason.reason_id,
+                AftersaleReason.category_id,
+            )
+            .join(AftersaleCase,   AftersaleCase.id   == AftersaleCaseReason.case_id)
+            .join(AftersaleReason, AftersaleReason.id == AftersaleCaseReason.reason_id)
+            .filter(AftersaleCase.status == 'confirmed')
+            .filter(AftersaleCaseReason.reason_id.isnot(None))
+            .filter(or_(*code_filters))
+            .all()
+        )
+        for row in reason_rows:
+            key = (row.reason_id, row.category_id)
+            reason_cnt[key] = reason_cnt.get(key, 0) + 1
+
+        suggested_reason_id          = None
+        suggested_reason_category_id = None
+        if reason_cnt:
+            best_key = max(reason_cnt, key=reason_cnt.get)
+            suggested_reason_id, suggested_reason_category_id = best_key
+
+        # ── 组装返回 ─────────────────────────────────────────────────────
+        suggestions = {
+            'suggested_shipping_alias':  suggested_shipping_alias,
+            'suggested_aftersale_alias': suggested_aftersale_alias,
+            'suggested_reason_id':          suggested_reason_id,
+            'suggested_reason_category_id': suggested_reason_category_id,
+        }
+
+        if not model_score:
+            # 没有找到型号匹配，但仍可返回辅助建议
+            has_any = any(v is not None for v in suggestions.values())
+            return suggestions if has_any else None
+
+        # 排序：日期符合 > 综合得分
+        ranked = sorted(
+            model_score.values(),
+            key=lambda x: (x['date_ok'], x['score']),
+            reverse=True,
+        )
+        meta = ranked[0]['meta']
+        return {
+            'category_id':   meta.category_id,
+            'series_id':     meta.series_id,
+            'model_id':      meta.model_id,
+            'category_name': meta.category_name,
+            'series_name':   meta.series_name,
+            'model_name':    meta.model_name,
+            **suggestions,
+        }
+
+    # ── 发货物料简称库 ─────────────────────────────────────────────────────────
+
+    def get_all_shipping_aliases(self):
+        return (
+            AftersaleShippingAlias.query
+            .order_by(AftersaleShippingAlias.sort_order.asc(),
+                      AftersaleShippingAlias.id.asc())
+            .all()
+        )
+
+    def create_shipping_alias(self, name, sort_order=0):
+        obj = AftersaleShippingAlias(name=name, sort_order=sort_order)
+        db.session.add(obj)
+        db.session.commit()
+        return obj
+
+    def update_shipping_alias(self, alias_id, name, sort_order=None):
+        obj = AftersaleShippingAlias.query.get(alias_id)
+        if not obj:
+            return None
+        obj.name = name
+        if sort_order is not None:
+            obj.sort_order = sort_order
+        db.session.commit()
+        return obj
+
+    def delete_shipping_alias(self, alias_id):
+        obj = AftersaleShippingAlias.query.get(alias_id)
+        if not obj:
+            return False
+        db.session.delete(obj)
+        db.session.commit()
+        return True
+
+    # ── 售后物料简称库 ─────────────────────────────────────────────────────────
+
+    def get_all_return_aliases(self):
+        return (
+            AftersaleReturnAlias.query
+            .order_by(AftersaleReturnAlias.sort_order.asc(),
+                      AftersaleReturnAlias.id.asc())
+            .all()
+        )
+
+    def create_return_alias(self, name, sort_order=0):
+        obj = AftersaleReturnAlias(name=name, sort_order=sort_order)
+        db.session.add(obj)
+        db.session.commit()
+        return obj
+
+    def update_return_alias(self, alias_id, name, sort_order=None):
+        obj = AftersaleReturnAlias.query.get(alias_id)
+        if not obj:
+            return None
+        obj.name = name
+        if sort_order is not None:
+            obj.sort_order = sort_order
+        db.session.commit()
+        return obj
+
+    def delete_return_alias(self, alias_id):
+        obj = AftersaleReturnAlias.query.get(alias_id)
+        if not obj:
+            return False
+        db.session.delete(obj)
+        db.session.commit()
+        return True

@@ -1,8 +1,8 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watchEffect } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Delete, Setting } from '@element-plus/icons-vue'
+import { Plus, Delete, Setting, ArrowDown } from '@element-plus/icons-vue'
 import http from '@/api/http.js'
 import { usePermission } from '@/composables/usePermission.js'
 import AftersaleReasonLib from './AftersaleReasonLib.vue'
@@ -20,70 +20,73 @@ const orders      = ref([])
 const totalOrders = ref(0)
 const page        = ref(1)
 const PAGE_SIZE   = 30
-const loadingList = ref(false)   // 初次加载
-const loadingMore = ref(false)   // 懒加载追加
+const loadingList = ref(false)
+const loadingMore = ref(false)
 const hasMore     = computed(() => orders.value.length < totalOrders.value)
 
 // 懒加载哨兵元素
-const sentinel    = ref(null)
-let   observer    = null
+const sentinel = ref(null)
+let   observer = null
 
 // 当前工单
 const currentOrder  = ref(null)
-const autoMatches   = ref([])
-const loadingMatch  = ref(false)
 const saving        = ref(false)
 const ignoring      = ref(false)
 
-// 原因分配行（当前工单的编辑状态）
-// [{reason_id, reason_name, custom_reason, involved_products: [], notes}]
-const reasonRows    = ref([])
+// 当前工单日期编辑状态
+const aftersaleDate = ref(null)   // 售后日期（来自 shipped_date，可编辑）
+const purchaseDate  = ref(null)   // 购买日期（用户手动填写）
 
-// 原因库弹窗
-const showReasonLib   = ref(false)
-// 物料简称弹窗
-const showAliasLib    = ref(false)
-// 物料简称列表
-const productAliases  = ref([])   // [{id, alias, product_codes:[]}]
+// 弹窗
+const showReasonLib = ref(false)
+const showAliasLib  = ref(false)
 
-// 售后产品分配 ─ 品类树（el-cascader 数据源）
-const categoryTree    = ref([])
-const cascaderOpts    = computed(() => categoryTree.value.map(cat => ({
-  value:    cat.id,
-  label:    cat.name,
-  children: (cat.series || []).map(s => ({
-    value:    s.id,
-    label:    s.name,
-    children: (s.models || []).map(m => ({
-      value: m.id,
-      label: `${m.code} ${m.name}`,
-    })),
-  })),
-})))
+// 物料简称列表（用于发货物料别名合并显示）
+const productAliases = ref([])   // [{id, alias, product_codes:[]}]
 
-// 当前工单的三项分配（编辑态）
-// selectedModelPaths: [[cat_id, series_id, model_id], ...] — cascader 多选值
-const selectedModelPaths  = ref([])
-const shippingMaterials   = ref([])   // string[] — 发货物料分配
-const aftersaleMaterials  = ref([])   // [{code, name, quantity}] — 售后物料分配
+// 发货物料简称库（下拉候选）
+const shippingAliasOptions = ref([])   // [{id, name}]
+// 售后物料简称库（下拉候选）
+const returnAliasOptions   = ref([])   // [{id, name}]
 
-// 售后物料新行输入
-const amCodeInput     = ref('')
-const amSuggestions   = ref([])
-let   amSuggestTimer  = null
-// 原因选项分组（从后端加载）
-// [{category_id, category_name, reasons:[{id, name, ...}]}]
-const reasonGroups  = ref([])
-// 扁平化原因列表（用于 id→name 查找）
-const reasonOptions = computed(() => reasonGroups.value.flatMap(g => g.reasons))
+// 品类树（三级联动，缓存）
+const categoryTree = ref([])
+
+// 一级原因分类列表（所有分类，含空分类）
+const reasonCategories = ref([])   // [{id, name, sort_order}]
+// 原因按分类分组（含二级原因列表）
+const reasonGroups = ref([])       // [{category_id, category_name, reasons:[{id,name,...}]}]
+
+// 售后内容列表
+// 每项：{ category_id, series_id, model_id,
+//         shipping_material_alias, aftersale_material_alias,
+//         reason_category_id, reason_id, custom_reason }
+const contentItems = ref([])
+
+// 产品匹配依据（选单后填充，用于底部说明面板）
+const matchDebug     = ref(null)   // null | { source, text, category_name, ... }
+const showMatchDebug = ref(true)   // 展开/折叠控制
+
+// ── 计算属性 ──────────────────────────────────────
+
+// 品类选项（产品库三级联动第一级）
+const categoryOptions = computed(() =>
+  categoryTree.value.map(c => ({ value: c.id, label: c.name }))
+)
+
+// 当前工单「发货物料」别名合并显示（只读）
+const resolvedProducts = computed(() => {
+  if (!currentOrder.value?.products?.length) return []
+  return resolveProducts(currentOrder.value.products)
+})
 
 // ── 生命周期 ──────────────────────────────────────
-onMounted(() => {
-  loadOrders()
-  loadReasonOptions()
-  loadAliases()
-  loadCategoryTree()
+onMounted(async () => {
   initObserver()
+  // 先并发加载匹配所需的基础数据，再加载订单列表
+  // 避免 selectOrder 运行时 categoryTree / productAliases / reasonGroups 尚未就绪
+  await Promise.all([loadCategoryTree(), loadAliases(), loadReasonOptions()])
+  loadOrders()
 })
 
 onUnmounted(() => {
@@ -92,9 +95,7 @@ onUnmounted(() => {
 
 // ── 方法 ──────────────────────────────────────────
 
-// 初始化 IntersectionObserver，监听哨兵元素进入视口时追加加载
-// 使用 watchEffect 确保 sentinel DOM 元素就绪后再开始观察
-import { watchEffect } from 'vue'
+// 初始化 IntersectionObserver，监听哨兵进入视口时追加加载
 function initObserver() {
   observer = new IntersectionObserver(
     (entries) => {
@@ -104,7 +105,6 @@ function initObserver() {
     },
     { threshold: 0.1 }
   )
-  // sentinel ref 在 onMounted 后已绑定
   watchEffect(() => {
     if (sentinel.value) observer.observe(sentinel.value)
   })
@@ -121,7 +121,6 @@ async function loadOrders() {
     if (res.success) {
       orders.value      = res.data.items
       totalOrders.value = res.data.total
-      // 自动选第一条
       if (!currentOrder.value && orders.value.length > 0) {
         selectOrder(orders.value[0])
       }
@@ -149,44 +148,55 @@ async function loadMore() {
   }
 }
 
-// 加载品类树（供售后产品分配 cascader 使用，缓存即可，不随订单变化）
+// 加载品类树（三级联动数据源）
 async function loadCategoryTree() {
   const res = await http.get('/api/category/tree')
   if (res.success) categoryTree.value = res.data
 }
 
-// 加载物料简称
+// 加载物料简称（产品别名库 + 发货简称库 + 售后简称库）
 async function loadAliases() {
-  const res = await http.get('/api/aftersale/product-aliases')
-  if (res.success) productAliases.value = res.data
+  const [prodRes, shipRes, retRes] = await Promise.all([
+    http.get('/api/aftersale/product-aliases'),
+    http.get('/api/aftersale/shipping-aliases'),
+    http.get('/api/aftersale/return-aliases'),
+  ])
+  if (prodRes.success) productAliases.value      = prodRes.data
+  if (shipRes.success) shippingAliasOptions.value = shipRes.data
+  if (retRes.success)  returnAliasOptions.value   = retRes.data
+}
+
+// 同时加载原因分类（全部）和原因分组（含二级）
+async function loadReasonOptions() {
+  const [catRes, reasonRes] = await Promise.all([
+    http.get('/api/aftersale/reason-categories'),
+    http.get('/api/aftersale/reasons'),
+  ])
+  if (catRes.success)    reasonCategories.value = catRes.data
+  if (reasonRes.success) reasonGroups.value     = reasonRes.data
 }
 
 /**
- * 解析订单物料：将能匹配别名的产品组合并为别名，剩余产品单独显示。
+ * 解析订单物料：将能匹配别名的产品合并为别名，剩余单独显示。
  * 返回 [{type:'alias', alias, codes:[...]}, {type:'product', code, name, quantity}]
- * 按别名包含代码数量降序尝试（优先匹配更大的组），每个代码只归属一个别名。
  */
 function resolveProducts(products) {
   if (!products?.length) return []
-  const codeSet  = new Set(products.map(p => p.code))
+  const codeSet   = new Set(products.map(p => p.code))
   const usedCodes = new Set()
   const result    = []
 
-  // 按品号数量从多到少排序，优先匹配更大的组
   const sortedAliases = [...productAliases.value].sort(
     (a, b) => b.product_codes.length - a.product_codes.length
   )
   for (const a of sortedAliases) {
     const codes = a.product_codes
     if (!codes.length) continue
-    // 别名中的所有品号都在订单里，且没有被其他别名占用
     if (codes.every(c => codeSet.has(c) && !usedCodes.has(c))) {
       codes.forEach(c => usedCodes.add(c))
       result.push({ type: 'alias', alias: a.alias, codes })
     }
   }
-
-  // 剩余未匹配的单品
   for (const p of products) {
     if (!usedCodes.has(p.code)) {
       result.push({ type: 'product', ...p })
@@ -196,156 +206,165 @@ function resolveProducts(products) {
 }
 
 /**
- * 当前工单的「涉及产品」选择项：
- * - 匹配到的别名（选后存 alias 名称）
- * - 未被别名覆盖的单品（选后存 product_code）
+ * 从备注文本中尝试识别购买日期，返回 'YYYY-MM-DD' 或 null。
+ * 匹配顺序（优先级从高到低）：
+ *   1. YYYY-MM-DD / YYYY/MM/DD / YYYY.MM.DD
+ *   2. YYYY年M月D日
+ *   3. YY-MM-DD / YY/MM/DD（自动补 20xx）
+ *   4. YYYYMMDD（8位纯数字）
  */
-const involvedOptions = computed(() => {
-  if (!currentOrder.value) return []
-  const resolved = resolveProducts(currentOrder.value.products)
-  return resolved.map(item =>
-    item.type === 'alias'
-      ? { value: item.alias, label: `${item.alias}（${item.codes.join('、')}）`, isAlias: true }
-      : { value: item.code, label: `${item.code} ${item.name}`, isAlias: false }
-  )
-})
+function parsePurchaseDateFromRemark(text) {
+  if (!text) return null
 
-// 加载原因选项（按分类分组）
-async function loadReasonOptions() {
-  const res = await http.get('/api/aftersale/reasons')
-  if (res.success) {
-    reasonGroups.value = res.data
+  // YYYY-MM-DD / YYYY/MM/DD / YYYY.MM.DD
+  let m = text.match(/(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/)
+  if (m) {
+    const [, y, mo, d] = m
+    return `${y}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}`
   }
+
+  // YYYY年M月D日
+  m = text.match(/(\d{4})年(\d{1,2})月(\d{1,2})日?/)
+  if (m) {
+    const [, y, mo, d] = m
+    return `${y}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}`
+  }
+
+  // YY-MM-DD / YY/MM/DD
+  m = text.match(/(\d{2})[-\/](\d{1,2})[-\/](\d{1,2})/)
+  if (m) {
+    const [, y, mo, d] = m
+    return `20${y}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}`
+  }
+
+  // YYYYMMDD（8位纯数字，月份和日期做基本合法性检查）
+  m = text.match(/\b(\d{4})(\d{2})(\d{2})\b/)
+  if (m) {
+    const [, y, mo, d] = m
+    if (+mo >= 1 && +mo <= 12 && +d >= 1 && +d <= 31) {
+      return `${y}-${mo}-${d}`
+    }
+  }
+
+  return null
 }
 
-// 选中某个待处理订单
+// 选中某个待处理订单：自动创建第一条售后内容并推断型号
 async function selectOrder(order) {
-  currentOrder.value       = order
-  reasonRows.value         = []
-  autoMatches.value        = []
-  selectedModelPaths.value = []
-  shippingMaterials.value  = []
-  aftersaleMaterials.value = []
-  if (order?.seller_remark) {
-    triggerAutoMatch(order.seller_remark)
-  }
-}
+  currentOrder.value  = order
+  aftersaleDate.value = order.shipped_date || null
+  purchaseDate.value  = parsePurchaseDateFromRemark(order.seller_remark)
+  matchDebug.value    = null
 
-// 自动匹配
-async function triggerAutoMatch(text) {
-  if (!text) return
-  loadingMatch.value = true
-  try {
-    const res = await http.post('/api/aftersale/auto-match', { text })
-    if (res.success) autoMatches.value = res.data
-  } finally {
-    loadingMatch.value = false
-  }
-}
+  // 先放一条空内容占位
+  const firstItem = makeEmptyItem()
+  contentItems.value = [firstItem]
 
-// 点击建议芯片：添加到 reasonRows
-function applyMatch(match) {
-  // 已存在则不重复添加
-  if (reasonRows.value.some(r => r.reason_id === match.reason_id)) return
-  reasonRows.value.push({
-    reason_id:         match.reason_id,
-    reason_name:       match.name,
-    custom_reason:     '',
-    involved_products: [],
-    notes:             '',
-  })
-}
+  const orderNo   = order.ecommerce_order_no
+  const debugText = [order.buyer_remark, order.seller_remark].filter(Boolean).join(' ')
 
-// 添加空白原因行
-function addReasonRow() {
-  reasonRows.value.push({
-    reason_id:         null,
-    reason_name:       '',
-    custom_reason:     '',
-    involved_products: [],
-    notes:             '',
-  })
-}
-
-// 删除原因行
-function removeReasonRow(idx) {
-  reasonRows.value.splice(idx, 1)
-}
-
-// 原因下拉选中
-function onReasonSelect(idx, reasonId) {
-  const opt = reasonOptions.value.find(r => r.id === reasonId)
-  if (opt) {
-    reasonRows.value[idx].reason_id   = opt.id
-    reasonRows.value[idx].reason_name = opt.name
-  }
-}
-
-// 确认保存当前工单
-async function confirmCase() {
-  if (!currentOrder.value) return
-  if (reasonRows.value.length === 0) {
-    ElMessage.warning('请至少添加一条售后原因')
-    return
-  }
-  saving.value = true
-  try {
-    const reasons = reasonRows.value.map(r => ({
-      reason_id:         r.reason_id || null,
-      custom_reason:     r.custom_reason || '',
-      involved_products: r.involved_products || [],
-      notes:             r.notes || '',
-    }))
-    const res = await http.post('/api/aftersale/cases', {
-      ecommerce_order_no:  currentOrder.value.ecommerce_order_no,
-      products:            currentOrder.value.products,
-      seller_remark:       currentOrder.value.seller_remark,
-      buyer_remark:        currentOrder.value.buyer_remark,
-      shipped_date:        currentOrder.value.shipped_date,
-      operator:            currentOrder.value.operator,
-      channel_name:        currentOrder.value.channel_name,
-      province:            currentOrder.value.province,
-      reasons,
-      assigned_models:     buildAssignedModels(selectedModelPaths.value),
-      shipping_materials:  shippingMaterials.value,
-      aftersale_materials: aftersaleMaterials.value.filter(r => r.code.trim()),
+  // ── 来源1：产品代码 + 历史工单（后端） ──────────────
+  let apiResult = null   // 原始 API 返回（含 suggested_shipping_alias）
+  if (order.products?.length) {
+    const res = await http.post('/api/aftersale/suggest-product', {
+      product_codes: order.products.map(p => p.code),
+      purchase_date: purchaseDate.value || null,
     })
-    if (res.success) {
-      ElMessage.success('已确认')
-      removeCurrentFromList()
-      emit('case-confirmed')
-    } else {
-      ElMessage.error(res.message || '保存失败')
-    }
-  } finally {
-    saving.value = false
+    if (res.success && res.data) apiResult = res.data
   }
-}
+  // API 型号匹配（需有 category_id 才算匹配到型号）
+  const apiMatch = apiResult?.category_id ? apiResult : null
 
-// 忽略当前工单
-async function ignoreCase() {
-  if (!currentOrder.value) return
-  try {
-    await ElMessageBox.confirm('确认将该订单标记为「忽略」？', '忽略工单', {
-      confirmButtonText: '忽略',
-      cancelButtonText:  '取消',
-      type:              'warning',
-    })
-  } catch {
-    return
+  // ── 来源2：买家留言 + 商家备注 文本匹配（前端） ──────
+  const textMatch = matchTextToModel(order.buyer_remark, order.seller_remark)
+
+  // 防止切换工单太快导致覆盖
+  if (currentOrder.value?.ecommerce_order_no !== orderNo) return
+  const item = contentItems.value[0]
+  if (!item) return
+
+  // ── 发货物料简称自动匹配 ────────────────────────────
+  // 优先级1：物料简称库（前端直接按产品代码匹配）
+  const resolvedForAlias = resolveProducts(order.products)
+  const aliasLibMatch    = resolvedForAlias.find(r => r.type === 'alias')
+  // 优先级2：历史工单最常用简称（来自 API）
+  const historyAlias = apiResult?.suggested_shipping_alias || null
+
+  const shippingAlias = aliasLibMatch?.alias || historyAlias || ''
+  const aliasSource   = aliasLibMatch ? 'library' : (historyAlias ? 'history' : null)
+  if (shippingAlias) item.shipping_material_alias = shippingAlias
+
+  // 售后物料简称：来自历史工单
+  const aftersaleAlias = apiResult?.suggested_aftersale_alias || null
+  if (aftersaleAlias) item.aftersale_material_alias = aftersaleAlias
+
+  // 售后原因：来自历史工单（最频繁的 reason_id + category_id）
+  const suggestedReasonId  = apiResult?.suggested_reason_id          || null
+  const suggestedCategoryId = apiResult?.suggested_reason_category_id || null
+  if (suggestedReasonId) {
+    item.reason_category_id = suggestedCategoryId
+    item.reason_id          = suggestedReasonId
   }
-  ignoring.value = true
-  try {
-    const res = await http.post(`/api/aftersale/cases/${encodeURIComponent(currentOrder.value.ecommerce_order_no)}/ignore`)
-    if (res.success) {
-      ElMessage.success('已忽略')
-      removeCurrentFromList()
-      emit('case-confirmed')
-    } else {
-      ElMessage.error(res.message)
+
+  // ── 填充型号 + 构建匹配依据 ──────────────────────────
+  if (apiMatch) {
+    // API 匹配到（产品代码/历史工单）→ 直接置信 high
+    item.category_id = apiMatch.category_id
+    item.series_id   = apiMatch.series_id
+    item.model_id    = apiMatch.model_id
+    item.confidence  = 'high'
+    const names = resolveModelNames(apiMatch.category_id, apiMatch.series_id, apiMatch.model_id)
+    matchDebug.value = {
+      source:        'api',
+      text:          debugText,
+      category_name: names.category_name,
+      series_name:   names.series_name,
+      model_name:    names.model_name,
+      model_code:    names.model_code,
+      score:                  null,
+      confidence:             'high',
+      candidates:             [],
+      alias_source:           aliasSource,
+      alias_value:            shippingAlias || null,
+      aftersale_alias_value:  aftersaleAlias,
+      suggested_reason_id:    suggestedReasonId,
+      suggested_category_id:  suggestedCategoryId,
     }
-  } finally {
-    ignoring.value = false
+  } else if (textMatch) {
+    // 仅文本匹配 → 根据分数设置置信度
+    item.category_id = textMatch.category_id
+    item.series_id   = textMatch.series_id
+    item.model_id    = textMatch.model_id
+    item.confidence  = scoreToConfidence(textMatch.score)
+    matchDebug.value = {
+      source:                 'text',
+      text:                   debugText,
+      category_name:          textMatch.category_name,
+      series_name:            textMatch.series_name,
+      model_name:             textMatch.model_name,
+      model_code:             textMatch.model_code,
+      score:                  textMatch.score,
+      confidence:             scoreToConfidence(textMatch.score),
+      candidates:             textMatch.candidates || [],
+      alias_source:           aliasSource,
+      alias_value:            shippingAlias || null,
+      aftersale_alias_value:  aftersaleAlias,
+      suggested_reason_id:    suggestedReasonId,
+      suggested_category_id:  suggestedCategoryId,
+    }
+  } else {
+    // 型号无匹配 → 保持空白
+    matchDebug.value = {
+      source:                 null,
+      text:                   debugText,
+      confidence:             null,
+      candidates:             [],
+      alias_source:           aliasSource,
+      alias_value:            shippingAlias || null,
+      aftersale_alias_value:  aftersaleAlias,
+      suggested_reason_id:    suggestedReasonId,
+      suggested_category_id:  suggestedCategoryId,
+    }
   }
 }
 
@@ -359,18 +378,21 @@ function removeCurrentFromList() {
     totalOrders.value = Math.max(0, totalOrders.value - 1)
   }
   const next = orders.value[idx] || orders.value[idx - 1] || null
-  currentOrder.value       = next
-  reasonRows.value         = []
-  autoMatches.value        = []
-  selectedModelPaths.value = []
-  shippingMaterials.value  = []
-  aftersaleMaterials.value = []
-  if (next?.seller_remark) triggerAutoMatch(next.seller_remark)
+  if (next) {
+    selectOrder(next)
+  } else {
+    currentOrder.value  = null
+    contentItems.value  = []
+    aftersaleDate.value = null
+    purchaseDate.value  = null
+    matchDebug.value    = null
+  }
 }
 
-// 原因库更新后刷新选项
+// 原因库更新后刷新（同时刷新两个简称库，原因库弹窗现在也管理它们）
 function onReasonLibUpdated() {
   loadReasonOptions()
+  loadAliases()
 }
 
 // 物料简称更新后刷新
@@ -378,64 +400,372 @@ function onAliasUpdated() {
   loadAliases()
 }
 
+// ── 售后内容项操作 ──────────────────────────────────
+
+// 创建一条空白售后内容对象（confidence: null 表示用户手动添加）
+function makeEmptyItem() {
+  return {
+    category_id:              null,
+    series_id:                null,
+    model_id:                 null,
+    shipping_material_alias:  '',
+    aftersale_material_alias: '',
+    reason_category_id:       null,
+    reason_id:                null,
+    custom_reason:            '',
+    confidence:               null,   // null | 'high' | 'medium' | 'low'
+  }
+}
+
+// 新增一条空白售后内容（手动添加，不带置信度标记）
+function addContentItem() {
+  contentItems.value.push(makeEmptyItem())
+}
+
+// 删除指定索引的售后内容
+function removeContentItem(idx) {
+  contentItems.value.splice(idx, 1)
+}
+
+// 品类变更时重置下级
+function onCategoryChange(item) {
+  item.series_id = null
+  item.model_id  = null
+}
+
+// 系列变更时重置型号
+function onSeriesChange(item) {
+  item.model_id = null
+}
+
+// 原因一级分类变更时重置二级
+function onReasonCategoryChange(item) {
+  item.reason_id = null
+}
+
+// ── 产品型号文本匹配 ────────────────────────────────
+
+// 根据 ID 从品类树中解析名称（用于依据面板）
+function resolveModelNames(category_id, series_id, model_id) {
+  const cat    = categoryTree.value.find(c => c.id === category_id)
+  const series = cat?.series?.find(s => s.id === series_id)
+  const model  = series?.models?.find(m => m.id === model_id)
+  return {
+    category_name: cat?.name    || '',
+    series_name:   series?.name || '',
+    model_name:    model?.name  || '',
+    model_code:    model?.model_code || '',
+  }
+}
+
 /**
- * 将 cascader 选中路径 [[cat_id, series_id, model_id], ...] 转为
- * [{model_id, model_code, model_name, series_name, category_name}]
+ * 计算 text 与 name 的相似度（0~1）。
+ * 规则：完全包含 → 1.0；text 包含 name → 0.9；
+ *       找 name 中最长的、在 text 中出现的连续子串，长度比 → 部分分。
+ * 对中文字符无需分词，直接滑窗匹配。
  */
-function buildAssignedModels(paths) {
-  const result = []
-  for (const [catId, seriesId, modelId] of paths) {
-    const cat    = categoryTree.value.find(c => c.id === catId)
-    const series = cat?.series?.find(s => s.id === seriesId)
-    const model  = series?.models?.find(m => m.id === modelId)
-    if (model) {
-      result.push({
-        model_id:      model.id,
-        model_code:    model.model_code,
-        model_name:    model.name,
-        series_name:   series.name,
-        category_name: cat.name,
-      })
+function calcMatchScore(text, name) {
+  if (!text || !name) return 0
+  const t = text.toLowerCase()
+  const n = name.toLowerCase()
+  if (t === n)         return 1.0
+  if (t.includes(n))   return 1.0
+  if (n.includes(t))   return 0.9
+
+  // 提取纯汉字后再比较，消除"（V1.1）"等版本号对评分的干扰
+  // 例如：text="明睿 2022.6.1"，name="明睿（V1.1）" → tCn="明睿", nCn="明睿" → match
+  const tCn = t.replace(/[^\u4e00-\u9fff]/g, '')
+  const nCn = n.replace(/[^\u4e00-\u9fff]/g, '')
+  if (tCn && nCn && tCn.includes(nCn)) {
+    // 汉字部分匹配后，再检查名称里的版本号是否也出现在文本中
+    // 例如 "2.2骑士" → 匹配 "骑士（V2.2）"(0.95) 优先于 "骑士（V2.1）"(0.9)
+    // 用独立边界正则避免 "11.1" 误匹配 "1.1"
+    const verM = n.match(/[vV](\d+\.\d+)/)
+    if (verM) {
+      const escaped = verM[1].replace('.', '\\.')
+      if (new RegExp(`(?<!\\d)${escaped}(?!\\d)`).test(t)) return 0.95
+    }
+    return 0.9
+  }
+
+  // 找最长公共连续子串（n 中出现在 t 里的）
+  let maxLen = 0
+  outer: for (let len = n.length - 1; len >= 2; len--) {
+    for (let i = 0; i <= n.length - len; i++) {
+      if (t.includes(n.slice(i, i + len))) {
+        maxLen = len
+        break outer
+      }
     }
   }
-  return result
+  return maxLen >= 2 ? maxLen / n.length : 0
 }
 
-// ── 售后物料行操作 ──────────────────────────────────────────────────────────
+/**
+ * 对品类树中每个系列/型号与备注文本打分，返回最佳匹配。
+ * 策略：
+ *   1. 对每个系列，取系列名与文本的分值（seriesScore）
+ *   2. 在该系列的型号中，取型号名/model_code 与文本的最高分值（modelScore）
+ *   3. 取 max(seriesScore*0.8, modelScore) 作为该系列的最终分
+ *   4. 若系列分最高但无具体型号匹配，默认选第一个型号，分值打 0.7 折
+ *
+ * 返回 { category_id, series_id, model_id, score } 或 null
+ */
+function matchTextToModel(remark1, remark2) {
+  const text = [remark1, remark2].filter(Boolean).join(' ')
+  if (!text.trim() || !categoryTree.value.length) return null
 
-function addAftersaleMaterial() {
-  aftersaleMaterials.value.push({ code: '', name: '', quantity: 1 })
+  let bestScore  = 0
+  let bestResult = null
+  const allCandidates = []
+
+  for (const cat of categoryTree.value) {
+    for (const series of (cat.series || [])) {
+      if (!series.models?.length) continue
+
+      // 系列分：系列名 + 系列代码
+      const seriesScore = Math.max(
+        calcMatchScore(text, series.name),
+        calcMatchScore(text, series.code) * 0.6,
+      )
+
+      // 在系列内找最佳型号
+      let bestModelScore = 0
+      let bestModel      = series.models[0]
+      for (const model of series.models) {
+        const s = Math.max(
+          calcMatchScore(text, model.name),
+          calcMatchScore(text, model.code)       * 0.5,
+          calcMatchScore(text, model.model_code) * 0.5,
+        )
+        if (s > bestModelScore) { bestModelScore = s; bestModel = model }
+      }
+
+      // 本系列最终得分
+      let totalScore    = Math.max(seriesScore * 0.8, bestModelScore)
+      let selectedModel = bestModel
+
+      // 系列分更高但型号无明显匹配 → 选第一个型号，降分
+      if (seriesScore * 0.8 > bestModelScore && bestModelScore < 0.3) {
+        totalScore    = seriesScore * 0.7
+        selectedModel = series.models[0]
+      }
+
+      // 收集所有得分 > 0.05 的候选，供依据面板展示
+      if (totalScore > 0.05) {
+        allCandidates.push({
+          category_id:   cat.id,
+          category_name: cat.name,
+          series_id:     series.id,
+          series_name:   series.name,
+          model_id:      selectedModel.id,
+          model_name:    selectedModel.name,
+          model_code:    selectedModel.model_code || '',
+          score:         totalScore,
+        })
+      }
+
+      if (totalScore > bestScore) {
+        bestScore  = totalScore
+        bestResult = {
+          category_id:   cat.id,
+          category_name: cat.name,
+          series_id:     series.id,
+          series_name:   series.name,
+          model_id:      selectedModel.id,
+          model_name:    selectedModel.name,
+          model_code:    selectedModel.model_code || '',
+          score:         totalScore,
+        }
+      }
+    }
+  }
+
+  if (bestScore <= 0.1) return null
+
+  // 候选按分数降序，最多保留 5 条
+  allCandidates.sort((a, b) => b.score - a.score)
+  bestResult.candidates = allCandidates.slice(0, 5)
+  return bestResult
 }
 
-function removeAftersaleMaterial(idx) {
-  aftersaleMaterials.value.splice(idx, 1)
+/**
+ * 将 0~1 的匹配分转为置信等级。
+ * API（产品代码/历史工单）匹配到的直接视为 'high'。
+ */
+function scoreToConfidence(score) {
+  if (score >= 0.6) return 'high'
+  if (score >= 0.3) return 'medium'
+  return 'low'
 }
 
-// 品号输入防抖建议
-function onAmCodeInput(val, idx) {
-  clearTimeout(amSuggestTimer)
-  if (!val?.trim()) { amSuggestions.value = []; return }
-  amSuggestTimer = setTimeout(async () => {
-    const res = await http.get('/api/aftersale/product-code-suggestions', { params: { q: val } })
-    if (res.success) amSuggestions.value = res.data.map(s => ({ ...s, _idx: idx }))
-  }, 300)
+// 根据 reason_id 从 reasonGroups 中查找原因名称及一级分类名
+function resolveReasonName(reason_id, category_id) {
+  for (const group of reasonGroups.value) {
+    const r = group.reasons?.find(r => r.id === reason_id)
+    if (r) return { reason_name: r.name, category_name: group.category_name }
+  }
+  // 找不到时尝试用 reasonCategories 拿分类名
+  const cat = reasonCategories.value.find(c => c.id === category_id)
+  return { reason_name: null, category_name: cat?.name || null }
 }
 
-// 从建议中选中品号（自动填充品名）
-function applyAmSuggestion(s) {
-  const row = aftersaleMaterials.value[s._idx]
-  if (row) { row.code = s.code; row.name = s.name || row.name }
-  amSuggestions.value = []
+// ── 三级联动计算 ────────────────────────────────────
+
+// 给定 item，返回可选的系列列表（含 code + name）
+function seriesOptionsForItem(item) {
+  if (!item.category_id) return []
+  const cat = categoryTree.value.find(c => c.id === item.category_id)
+  return (cat?.series || []).map(s => ({
+    value: s.id,
+    label: s.name,
+    code:  s.code,
+  }))
 }
 
-// 置信度 bar 宽度
-function confBar(conf) {
-  return Math.round((conf || 0) * 100) + '%'
+// 给定 item，返回可选的型号列表
+function modelOptionsForItem(item) {
+  if (!item.category_id || !item.series_id) return []
+  const cat    = categoryTree.value.find(c => c.id === item.category_id)
+  const series = cat?.series?.find(s => s.id === item.series_id)
+  return (series?.models || []).map(m => ({
+    value: m.id,
+    label: `${m.model_code} ${m.name}`,
+  }))
 }
 
-// 来源标签
-function srcLabel(src) {
-  return src === 'keyword' ? '关键词' : '历史'
+// 给定 item，返回该一级分类下的二级原因列表
+function reasonOptionsForItem(item) {
+  if (!item.reason_category_id) return []
+  const group = reasonGroups.value.find(g => g.category_id === item.reason_category_id)
+  return (group?.reasons || []).map(r => ({ value: r.id, label: r.name }))
+}
+
+// ── 一级原因分类新增 ────────────────────────────────
+
+async function addReasonCategory(item) {
+  let name
+  try {
+    const { value } = await ElMessageBox.prompt('', '新增原因分类', {
+      confirmButtonText: '添加',
+      cancelButtonText:  '取消',
+      inputPlaceholder:  '请输入分类名称',
+      inputPattern:      /\S+/,
+      inputErrorMessage: '名称不能为空',
+    })
+    name = value?.trim()
+  } catch {
+    return
+  }
+  if (!name) return
+
+  const res = await http.post('/api/aftersale/reason-categories', { name })
+  if (res.success) {
+    ElMessage.success('分类已创建')
+    await loadReasonOptions()
+    // 自动选中新建的分类
+    item.reason_category_id = res.data.id
+    item.reason_id          = null
+  } else {
+    ElMessage.error(res.message || '创建失败')
+  }
+}
+
+// ── 确认 / 忽略 ────────────────────────────────────
+
+async function confirmCase() {
+  if (!currentOrder.value) return
+  if (contentItems.value.length === 0) {
+    ElMessage.warning('请至少添加一条售后内容')
+    return
+  }
+  saving.value = true
+  try {
+    const reasons = contentItems.value.map(item => ({
+      reason_id:                item.reason_id || null,
+      custom_reason:            item.custom_reason || '',
+      model_id:                 item.model_id || null,
+      shipping_material_alias:  item.shipping_material_alias || '',
+      aftersale_material_alias: item.aftersale_material_alias || '',
+      involved_products:        [],
+      notes:                    '',
+    }))
+
+    // 提前收集自定义原因（确认后 contentItems 会被清空）
+    const customToSave = contentItems.value
+      .filter(item => !item.reason_id && item.custom_reason.trim())
+      .map(item => ({
+        name:        item.custom_reason.trim(),
+        category_id: item.reason_category_id || null,
+      }))
+
+    const res = await http.post('/api/aftersale/cases', {
+      ecommerce_order_no: currentOrder.value.ecommerce_order_no,
+      products:           currentOrder.value.products,
+      seller_remark:      currentOrder.value.seller_remark,
+      buyer_remark:       currentOrder.value.buyer_remark,
+      shipped_date:       aftersaleDate.value,
+      purchase_date:      purchaseDate.value || null,
+      city:               currentOrder.value.city || null,
+      operator:           currentOrder.value.operator,
+      channel_name:       currentOrder.value.channel_name,
+      province:           currentOrder.value.province,
+      reasons,
+      assigned_models:     [],
+      shipping_materials:  [],
+      aftersale_materials: [],
+    })
+    if (res.success) {
+      ElMessage.success('已确认')
+      removeCurrentFromList()
+      emit('case-confirmed')
+      // 将自定义原因异步写入原因库（重名自动跳过）
+      if (customToSave.length) saveCustomReasonsToLib(customToSave)
+    } else {
+      ElMessage.error(res.message || '保存失败')
+    }
+  } finally {
+    saving.value = false
+  }
+}
+
+// 将自定义原因列表逐条写入原因库，写入后刷新选项
+async function saveCustomReasonsToLib(items) {
+  let savedCount = 0
+  for (const item of items) {
+    const res = await http.post('/api/aftersale/reasons', item)
+    if (res.success) savedCount++
+    // 重名（已存在）直接跳过，不报错
+  }
+  if (savedCount > 0) loadReasonOptions()
+}
+
+async function ignoreCase() {
+  if (!currentOrder.value) return
+  try {
+    await ElMessageBox.confirm('确认将该订单标记为「忽略」？', '忽略工单', {
+      confirmButtonText: '忽略',
+      cancelButtonText:  '取消',
+      type:              'warning',
+    })
+  } catch {
+    return
+  }
+  ignoring.value = true
+  try {
+    const res = await http.post(
+      `/api/aftersale/cases/${encodeURIComponent(currentOrder.value.ecommerce_order_no)}/ignore`
+    )
+    if (res.success) {
+      ElMessage.success('已忽略')
+      removeCurrentFromList()
+      emit('case-confirmed')
+    } else {
+      ElMessage.error(res.message)
+    }
+  } finally {
+    ignoring.value = false
+  }
 }
 </script>
 
@@ -443,7 +773,6 @@ function srcLabel(src) {
   <div class="process-wrap">
     <!-- ── 左侧待处理队列 ─────────────────────── -->
     <aside class="order-queue">
-      <!-- 队列头 -->
       <div class="queue-header">
         <div class="queue-title">
           待处理
@@ -461,7 +790,6 @@ function srcLabel(src) {
         </div>
       </div>
 
-      <!-- 订单卡片列表 -->
       <div v-loading="loadingList" class="order-list">
         <div
           v-for="order in orders"
@@ -483,7 +811,6 @@ function srcLabel(src) {
           </div>
         </div>
 
-        <!-- 懒加载哨兵 + 加载提示 -->
         <div ref="sentinel" class="load-sentinel">
           <span v-if="loadingMore" class="load-more-hint">加载中…</span>
           <span v-else-if="!hasMore && orders.length > 0" class="load-more-hint">已全部加载</span>
@@ -507,22 +834,31 @@ function srcLabel(src) {
         <div class="case-header">
           <div class="case-order-no">{{ currentOrder.ecommerce_order_no }}</div>
           <div class="case-meta-row">
-            <span class="meta-item"><span class="meta-label">日期</span>{{ currentOrder.shipped_date || '—' }}</span>
-            <span class="meta-item"><span class="meta-label">渠道</span>{{ currentOrder.channel_name || '—' }}</span>
-            <span class="meta-item"><span class="meta-label">操作人</span>{{ currentOrder.operator || '—' }}</span>
-            <span class="meta-item"><span class="meta-label">省份</span>{{ currentOrder.province || '—' }}</span>
+            <span class="meta-item">
+              <span class="meta-label">日期</span>{{ currentOrder.shipped_date || '—' }}
+            </span>
+            <span class="meta-item">
+              <span class="meta-label">渠道</span>{{ currentOrder.channel_name || '—' }}
+            </span>
+            <span class="meta-item">
+              <span class="meta-label">操作人</span>{{ currentOrder.operator || '—' }}
+            </span>
+            <span class="meta-item">
+              <span class="meta-label">省市</span>
+              {{ [currentOrder.province, currentOrder.city].filter(Boolean).join(' · ') || '—' }}
+            </span>
           </div>
         </div>
 
         <!-- 工单内容（可滚动） -->
         <div class="case-body">
-          <!-- 物料列表（别名合并显示） -->
+
+          <!-- 发货物料（只读） -->
           <section class="case-section">
             <div class="section-title">发货物料</div>
             <div class="products-grid">
-              <!-- 匹配到别名的组 -->
               <div
-                v-for="item in resolveProducts(currentOrder.products)"
+                v-for="item in resolvedProducts"
                 :key="item.type === 'alias' ? item.alias : item.code"
                 class="product-chip"
                 :class="{ 'product-chip--alias': item.type === 'alias' }"
@@ -541,229 +877,331 @@ function srcLabel(src) {
             </div>
           </section>
 
-          <!-- 备注区 -->
+          <!-- 买家留言 + 商家备注（只读） -->
           <section class="case-section remarks-section">
             <div class="remark-block">
-              <div class="remark-label">商家备注（seller_remark）</div>
-              <div class="remark-text">{{ currentOrder.seller_remark || '（无）' }}</div>
-            </div>
-            <div class="remark-block">
-              <div class="remark-label">买家留言（buyer_remark）</div>
+              <div class="remark-label">买家留言</div>
               <div class="remark-text">{{ currentOrder.buyer_remark || '（无）' }}</div>
             </div>
-          </section>
-
-          <!-- ── 售后产品分配 ────────────────────────── -->
-          <section class="case-section">
-            <div class="section-title">售后产品分配</div>
-            <el-cascader
-              v-model="selectedModelPaths"
-              :options="cascaderOpts"
-              :props="{ multiple: true, checkStrictly: false, emitPath: true }"
-              placeholder="选择品类 / 系列 / 型号（可多选）"
-              filterable
-              clearable
-              collapse-tags
-              collapse-tags-tooltip
-              style="width:100%"
-            />
-          </section>
-
-          <!-- ── 发货物料分配 ────────────────────────── -->
-          <section class="case-section">
-            <div class="section-title">发货物料分配</div>
-            <el-select
-              v-model="shippingMaterials"
-              multiple
-              clearable
-              collapse-tags
-              collapse-tags-tooltip
-              placeholder="选择本次售后涉及的发货物料（可选）"
-              style="width:100%"
-            >
-              <el-option
-                v-for="opt in involvedOptions"
-                :key="opt.value"
-                :value="opt.value"
-                :label="opt.label"
-              >
-                <span v-if="opt.isAlias" class="opt-alias-badge">简称</span>
-                <span>{{ opt.label }}</span>
-              </el-option>
-            </el-select>
-          </section>
-
-          <!-- ── 产生售后物料分配 ────────────────────── -->
-          <section class="case-section">
-            <div class="section-title">
-              产生售后物料分配
-              <button class="btn-add-reason" @click="addAftersaleMaterial">
-                <el-icon><Plus /></el-icon> 添加物料
-              </button>
+            <div class="remark-block">
+              <div class="remark-label">商家备注</div>
+              <div class="remark-text">{{ currentOrder.seller_remark || '（无）' }}</div>
             </div>
+          </section>
 
-            <div v-if="aftersaleMaterials.length === 0" class="reason-empty">
-              点击「添加物料」录入本次售后需处理的物料
-            </div>
-
-            <div
-              v-for="(row, idx) in aftersaleMaterials"
-              :key="idx"
-              class="am-row"
-            >
-              <!-- 品号（带建议下拉） -->
-              <div class="am-code-wrap">
-                <el-input
-                  v-model="row.code"
-                  placeholder="品号"
-                  size="small"
-                  class="am-code"
-                  @input="(v) => onAmCodeInput(v, idx)"
-                />
-                <!-- 品号建议列表 -->
-                <div
-                  v-if="amSuggestions.length && amSuggestions[0]._idx === idx"
-                  class="am-suggestions"
-                >
-                  <div
-                    v-for="s in amSuggestions"
-                    :key="s.code"
-                    class="am-sug-item"
-                    @click="applyAmSuggestion(s)"
-                  >
-                    <span class="sug-code">{{ s.code }}</span>
-                    <span class="sug-name">{{ s.name }}</span>
-                  </div>
-                </div>
-              </div>
-              <el-input v-model="row.name"     placeholder="品名" size="small" class="am-name" />
-              <el-input-number
-                v-model="row.quantity"
-                :min="1" :step="1"
-                size="small"
-                controls-position="right"
-                class="am-qty"
+          <!-- 日期确认区 -->
+          <section class="case-section dates-section">
+            <div class="date-field">
+              <span class="date-label">售后日期</span>
+              <el-date-picker
+                v-model="aftersaleDate"
+                type="date"
+                value-format="YYYY-MM-DD"
+                placeholder="选择售后日期"
+                class="date-picker"
               />
-              <button class="btn-del-reason" title="删除此行" @click="removeAftersaleMaterial(idx)">
-                <el-icon><Delete /></el-icon>
-              </button>
+            </div>
+            <div class="date-field">
+              <span class="date-label">购买日期</span>
+              <el-date-picker
+                v-model="purchaseDate"
+                type="date"
+                value-format="YYYY-MM-DD"
+                placeholder="根据备注填写购买日期"
+                class="date-picker"
+              />
             </div>
           </section>
 
-          <!-- 自动匹配建议 -->
-          <section v-if="autoMatches.length > 0 || loadingMatch" class="case-section">
-            <div class="section-title">
-              自动匹配建议
-              <span v-if="loadingMatch" class="matching-hint">匹配中…</span>
-            </div>
-            <div class="match-chips">
-              <div
-                v-for="m in autoMatches"
-                :key="m.reason_id"
-                class="match-chip"
-                :class="{ applied: reasonRows.some(r => r.reason_id === m.reason_id) }"
-                :title="`来源：${srcLabel(m.source)}，置信度 ${Math.round(m.confidence * 100)}%`"
-                @click="applyMatch(m)"
-              >
-                <span class="chip-name">{{ m.name }}</span>
-                <span class="chip-src">{{ srcLabel(m.source) }}</span>
-                <span class="chip-bar-wrap">
-                  <span class="chip-bar" :style="{ width: confBar(m.confidence) }"></span>
-                </span>
-              </div>
-            </div>
-          </section>
-
-          <!-- 原因分配区 -->
+          <!-- 售后内容列表 -->
           <section class="case-section">
             <div class="section-title">
-              售后原因分配
-              <button v-if="canEditAftersale" class="btn-add-reason" @click="addReasonRow">
-                <el-icon><Plus /></el-icon> 添加原因
+              售后内容
+              <button v-if="canEditAftersale" class="btn-add-content" @click="addContentItem">
+                <el-icon><Plus /></el-icon> 添加
               </button>
             </div>
 
-            <div v-if="reasonRows.length === 0" class="reason-empty">
-              点击「添加原因」或直接点击上方匹配建议
+            <div v-if="contentItems.length === 0" class="content-empty">
+              点击「添加」填写本次售后的具体内容
             </div>
 
-            <div v-for="(row, idx) in reasonRows" :key="idx" class="reason-row">
-              <!-- 原因选择 -->
-              <div class="reason-row-top">
-                <el-select
-                  v-model="row.reason_id"
-                  placeholder="选择原因"
-                  clearable
-                  filterable
-                  class="reason-select"
-                  @change="(val) => onReasonSelect(idx, val)"
-                >
-                  <el-option-group
-                    v-for="group in reasonGroups"
-                    :key="group.category_id"
-                    :label="group.category_name"
-                  >
-                    <el-option
-                      v-for="opt in group.reasons"
-                      :key="opt.id"
-                      :value="opt.id"
-                      :label="opt.name"
-                    />
-                  </el-option-group>
-                </el-select>
-                <span class="or-text">或</span>
-                <el-input
-                  v-model="row.custom_reason"
-                  placeholder="自定义原因（不选库中原因时填写）"
-                  class="custom-reason-input"
-                />
-                <button class="btn-del-reason" title="删除此行" @click="removeReasonRow(idx)">
+            <!-- 每条售后内容卡片 -->
+            <div
+              v-for="(item, idx) in contentItems"
+              :key="idx"
+              class="content-item"
+            >
+              <!-- 卡片序号 + 删除按钮 -->
+              <div class="item-header">
+                <span class="item-index"># {{ idx + 1 }}</span>
+                <button class="btn-del-item" title="删除此条" @click="removeContentItem(idx)">
                   <el-icon><Delete /></el-icon>
                 </button>
               </div>
 
-              <!-- 涉及产品多选（别名+单品） -->
-              <div class="reason-row-bottom">
-                <span class="sub-label">涉及产品</span>
+              <!-- 售后产品：三级联动（置信度外框） -->
+              <div class="item-row">
+                <span class="item-label">售后产品</span>
+                <div class="product-selects" :class="item.confidence ? `conf-${item.confidence}` : ''"
+                  :title="item.confidence === 'low' ? '匹配置信度低，请人工确认' : item.confidence === 'medium' ? '匹配置信度一般，请确认是否正确' : ''"
+                >
+                  <el-select
+                    v-model="item.category_id"
+                    placeholder="品类"
+                    clearable
+                    @change="onCategoryChange(item)"
+                  >
+                    <el-option
+                      v-for="opt in categoryOptions"
+                      :key="opt.value"
+                      :value="opt.value"
+                      :label="opt.label"
+                    />
+                  </el-select>
+                  <el-select
+                    v-model="item.series_id"
+                    placeholder="系列"
+                    clearable
+                    filterable
+                    :disabled="!item.category_id"
+                    @change="onSeriesChange(item)"
+                  >
+                    <el-option
+                      v-for="opt in seriesOptionsForItem(item)"
+                      :key="opt.value"
+                      :value="opt.value"
+                      :label="`${opt.code} ${opt.label}`"
+                    />
+                  </el-select>
+                  <el-select
+                    v-model="item.model_id"
+                    placeholder="型号"
+                    clearable
+                    filterable
+                    :disabled="!item.series_id"
+                  >
+                    <el-option
+                      v-for="opt in modelOptionsForItem(item)"
+                      :key="opt.value"
+                      :value="opt.value"
+                      :label="opt.label"
+                    />
+                  </el-select>
+                </div>
+              </div>
+
+              <!-- 发货物料简称 -->
+              <div class="item-row">
+                <span class="item-label">发货物料简称</span>
                 <el-select
-                  v-model="row.involved_products"
-                  multiple
+                  v-model="item.shipping_material_alias"
+                  placeholder="选择发货物料简称"
                   clearable
-                  placeholder="选择涉及的产品/简称（可选）"
-                  class="products-select"
+                  filterable
+                  allow-create
+                  style="width:100%"
                 >
                   <el-option
-                    v-for="opt in involvedOptions"
-                    :key="opt.value"
-                    :value="opt.value"
-                    :label="opt.label"
-                  >
-                    <span v-if="opt.isAlias" class="opt-alias-badge">简称</span>
-                    <span>{{ opt.label }}</span>
-                  </el-option>
+                    v-for="opt in shippingAliasOptions"
+                    :key="opt.id"
+                    :value="opt.name"
+                    :label="opt.name"
+                  />
                 </el-select>
-                <span class="sub-label" style="margin-left:12px">备注</span>
-                <el-input
-                  v-model="row.notes"
-                  placeholder="可选备注"
-                  class="notes-input"
-                />
+              </div>
+
+              <!-- 售后物料简称 -->
+              <div class="item-row">
+                <span class="item-label">售后物料简称</span>
+                <el-select
+                  v-model="item.aftersale_material_alias"
+                  placeholder="选择出问题的物料简称"
+                  clearable
+                  filterable
+                  allow-create
+                  style="width:100%"
+                >
+                  <el-option
+                    v-for="opt in returnAliasOptions"
+                    :key="opt.id"
+                    :value="opt.name"
+                    :label="opt.name"
+                  />
+                </el-select>
+              </div>
+
+              <!-- 售后原因：两级 -->
+              <div class="item-row">
+                <span class="item-label">售后原因</span>
+                <div class="reason-row-inner">
+                  <!-- 一级分类 + 新增按钮 -->
+                  <div class="reason-cat-wrap">
+                    <el-select
+                      v-model="item.reason_category_id"
+                      placeholder="原因分类"
+                      clearable
+                      class="reason-cat-select"
+                      @change="onReasonCategoryChange(item)"
+                    >
+                      <el-option
+                        v-for="cat in reasonCategories"
+                        :key="cat.id"
+                        :value="cat.id"
+                        :label="cat.name"
+                      />
+                    </el-select>
+                    <el-tooltip content="新增原因分类" placement="top">
+                      <button class="btn-add-cat" title="新增原因分类" @click="addReasonCategory(item)">
+                        <el-icon><Plus /></el-icon>
+                      </button>
+                    </el-tooltip>
+                  </div>
+                  <!-- 二级原因 -->
+                  <el-select
+                    v-model="item.reason_id"
+                    placeholder="具体原因"
+                    clearable
+                    filterable
+                    :disabled="!item.reason_category_id"
+                    class="reason-select"
+                  >
+                    <el-option
+                      v-for="r in reasonOptionsForItem(item)"
+                      :key="r.value"
+                      :value="r.value"
+                      :label="r.label"
+                    />
+                  </el-select>
+                  <span class="or-text">或</span>
+                  <el-input
+                    v-model="item.custom_reason"
+                    placeholder="自定义原因"
+                    class="custom-reason-input"
+                  />
+                </div>
               </div>
             </div>
           </section>
+
+          <!-- 产品匹配依据面板 -->
+          <section v-if="matchDebug" class="case-section match-debug-section">
+            <div class="section-title match-debug-title" @click="showMatchDebug = !showMatchDebug">
+              <span>产品匹配依据</span>
+              <el-icon class="toggle-icon" :class="{ 'is-expanded': showMatchDebug }">
+                <ArrowDown />
+              </el-icon>
+            </div>
+
+            <div v-if="showMatchDebug" class="match-debug-body">
+
+              <!-- 匹配来源 -->
+              <div class="debug-row">
+                <span class="debug-key">来源</span>
+                <span
+                  class="source-badge"
+                  :class="matchDebug.source === 'api' ? 'src-api' : matchDebug.source === 'text' ? 'src-text' : 'src-none'"
+                >
+                  {{ matchDebug.source === 'api' ? '产品代码 / 历史工单' : matchDebug.source === 'text' ? '文本相似度匹配' : '未找到匹配' }}
+                </span>
+              </div>
+
+              <!-- 参与匹配的文本 -->
+              <div v-if="matchDebug.text" class="debug-row debug-row--top">
+                <span class="debug-key">匹配文本</span>
+                <span class="debug-text-val">{{ matchDebug.text }}</span>
+              </div>
+
+              <!-- 最佳匹配结果 -->
+              <div v-if="matchDebug.source" class="debug-row">
+                <span class="debug-key">匹配结果</span>
+                <div class="debug-result">
+                  <span class="result-path">
+                    {{ matchDebug.category_name }}
+                    <span class="path-sep">›</span>
+                    {{ matchDebug.series_name }}
+                    <span class="path-sep">›</span>
+                    <span class="result-model">{{ matchDebug.model_code }} {{ matchDebug.model_name }}</span>
+                  </span>
+                  <span class="conf-badge" :class="`conf-${matchDebug.confidence}`">
+                    {{ matchDebug.confidence === 'high' ? '高置信' : matchDebug.confidence === 'medium' ? '中置信' : '低置信' }}
+                  </span>
+                  <span v-if="matchDebug.score !== null" class="score-num">
+                    {{ Math.round(matchDebug.score * 100) }} 分
+                  </span>
+                </div>
+              </div>
+
+              <!-- 候选排名（仅文本匹配时） -->
+              <div v-if="matchDebug.source === 'text' && matchDebug.candidates?.length" class="debug-row debug-row--top">
+                <span class="debug-key">候选排名</span>
+                <div class="candidates-list">
+                  <div
+                    v-for="(c, i) in matchDebug.candidates"
+                    :key="i"
+                    class="candidate-item"
+                    :class="{ 'is-best': i === 0 }"
+                  >
+                    <span class="cand-rank">{{ i + 1 }}</span>
+                    <span class="cand-path">{{ c.category_name }} › {{ c.series_name }}</span>
+                    <div class="cand-bar-wrap">
+                      <div class="cand-bar" :style="{ width: `${Math.round(c.score * 100)}%` }" />
+                    </div>
+                    <span class="cand-score">{{ Math.round(c.score * 100) }}</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 发货物料简称匹配 -->
+              <div v-if="matchDebug.alias_value" class="debug-row">
+                <span class="debug-key">发货简称</span>
+                <div class="debug-result">
+                  <span class="result-model">{{ matchDebug.alias_value }}</span>
+                  <span class="source-badge" :class="matchDebug.alias_source === 'library' ? 'src-api' : 'src-text'">
+                    {{ matchDebug.alias_source === 'library' ? '简称库匹配' : '历史工单' }}
+                  </span>
+                </div>
+              </div>
+
+              <!-- 售后物料简称匹配 -->
+              <div v-if="matchDebug.aftersale_alias_value" class="debug-row">
+                <span class="debug-key">售后简称</span>
+                <div class="debug-result">
+                  <span class="result-model">{{ matchDebug.aftersale_alias_value }}</span>
+                  <span class="source-badge src-text">历史工单</span>
+                </div>
+              </div>
+
+              <!-- 售后原因匹配 -->
+              <div v-if="matchDebug.suggested_reason_id" class="debug-row">
+                <span class="debug-key">售后原因</span>
+                <div class="debug-result">
+                  <span class="result-path">
+                    {{ resolveReasonName(matchDebug.suggested_reason_id, matchDebug.suggested_category_id).category_name }}
+                    <span class="path-sep">›</span>
+                    <span class="result-model">{{ resolveReasonName(matchDebug.suggested_reason_id, matchDebug.suggested_category_id).reason_name }}</span>
+                  </span>
+                  <span class="source-badge src-text">历史工单</span>
+                </div>
+              </div>
+
+              <!-- 无匹配提示 -->
+              <div v-if="!matchDebug.source && !matchDebug.alias_value" class="debug-no-match">
+                买家留言和商家备注中未找到与产品库相似的内容，请手动选择型号
+              </div>
+              <div v-else-if="!matchDebug.source" class="debug-no-match">
+                未找到型号匹配，请手动选择
+              </div>
+
+            </div>
+          </section>
+
         </div><!-- /case-body -->
 
         <!-- 底部操作栏 -->
-        <div class="case-footer" v-if="canEditAftersale">
-          <el-button
-            :loading="ignoring"
-            @click="ignoreCase"
-          >忽略</el-button>
-          <el-button
-            type="primary"
-            :loading="saving"
-            @click="confirmCase"
-          >确认</el-button>
+        <div v-if="canEditAftersale" class="case-footer">
+          <el-button :loading="ignoring" @click="ignoreCase">忽略</el-button>
+          <el-button type="primary" :loading="saving" @click="confirmCase">确认</el-button>
         </div>
       </template>
     </div><!-- /work-area -->
@@ -830,17 +1268,14 @@ function srcLabel(src) {
 .order-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
 .order-card {
-  padding: 10px 10px;
+  padding: 10px;
   border-radius: 8px;
   cursor: pointer;
   border: 1px solid transparent;
   transition: all 0.15s;
   margin-bottom: 4px;
 }
-.order-card:hover {
-  background: var(--bg);
-  border-color: var(--border);
-}
+.order-card:hover { background: var(--bg); border-color: var(--border); }
 .order-card.active {
   background: #fff7ed;
   border-color: var(--accent);
@@ -852,39 +1287,29 @@ function srcLabel(src) {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   margin-bottom: 4px;
 }
-.order-meta {
-  font-size: 11px; color: var(--text-muted);
-  display: flex; gap: 4px;
-}
+.order-meta { font-size: 11px; color: var(--text-muted); display: flex; gap: 4px; }
 .sep { color: var(--border); }
 
 .queue-empty {
   text-align: center; padding: 40px 0;
   font-size: 13px; color: var(--text-muted);
 }
-
 .load-sentinel {
   height: 32px; display: flex;
   align-items: center; justify-content: center;
 }
-.load-more-hint {
-  font-size: 11px; color: var(--text-muted);
-}
+.load-more-hint { font-size: 11px; color: var(--text-muted); }
 
 /* ── 右侧工作区 ────────────────────────────────── */
 .work-area {
-  flex: 1; display: flex; flex-direction: column;
-  overflow: hidden;
+  flex: 1; display: flex; flex-direction: column; overflow: hidden;
 }
-
 .work-empty {
   flex: 1; display: flex; flex-direction: column;
   align-items: center; justify-content: center;
   gap: 12px; color: var(--text-muted); font-size: 14px;
 }
-.work-empty-icon {
-  font-size: 36px; color: #6ab47a;
-}
+.work-empty-icon { font-size: 36px; color: #6ab47a; }
 
 /* 工单信息栏 */
 .case-header {
@@ -897,41 +1322,25 @@ function srcLabel(src) {
   font-size: 14px; font-weight: 700; color: var(--text-primary);
   margin-bottom: 6px;
 }
-.case-meta-row {
-  display: flex; gap: 20px; flex-wrap: wrap;
-}
-.meta-item {
-  font-size: 12px; color: var(--text-secondary);
-}
-.meta-label {
-  font-size: 11px; color: var(--text-muted);
-  margin-right: 4px;
-}
+.case-meta-row { display: flex; gap: 20px; flex-wrap: wrap; }
+.meta-item { font-size: 12px; color: var(--text-secondary); }
+.meta-label { font-size: 11px; color: var(--text-muted); margin-right: 4px; }
 
 /* 工单内容（可滚动） */
-.case-body {
-  flex: 1; overflow-y: auto; padding: 16px 20px;
-}
+.case-body { flex: 1; overflow-y: auto; padding: 16px 20px; }
 .case-body::-webkit-scrollbar { width: 4px; }
 .case-body::-webkit-scrollbar-track { background: transparent; }
 .case-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
-.case-section {
-  margin-bottom: 20px;
-}
+.case-section { margin-bottom: 20px; }
 .section-title {
   font-size: 12px; font-weight: 600; color: var(--text-secondary);
   letter-spacing: 0.05em; margin-bottom: 10px;
   display: flex; align-items: center; gap: 10px;
 }
-.matching-hint {
-  font-size: 11px; font-weight: 400; color: var(--text-muted);
-}
 
-/* 物料 */
-.products-grid {
-  display: flex; flex-wrap: wrap; gap: 6px;
-}
+/* 发货物料芯片 */
+.products-grid { display: flex; flex-wrap: wrap; gap: 6px; }
 .product-chip {
   padding: 4px 10px;
   background: #f5f0e8; border: 1px solid var(--border);
@@ -941,11 +1350,7 @@ function srcLabel(src) {
 .p-code { font-weight: 600; color: var(--text-primary); }
 .p-name { color: var(--text-secondary); }
 .p-qty  { color: var(--accent); font-weight: 600; }
-
-/* 别名芯片样式 */
-.product-chip--alias {
-  background: #fff7ed; border-color: var(--accent);
-}
+.product-chip--alias { background: #fff7ed; border-color: var(--accent); }
 .p-alias-badge {
   font-size: 9px; padding: 1px 4px;
   background: var(--accent); color: #fff;
@@ -953,24 +1358,14 @@ function srcLabel(src) {
 }
 .p-alias-name { font-weight: 600; color: var(--accent); }
 
-.opt-alias-badge {
-  font-size: 10px; padding: 1px 4px;
-  background: var(--accent); color: #fff;
-  border-radius: 3px; margin-right: 6px;
-}
-
-/* 备注 */
-.remarks-section {
-  display: flex; gap: 16px;
-}
+/* 备注区 */
+.remarks-section { display: flex; gap: 16px; }
 .remark-block {
   flex: 1;
   background: #faf7f2; border: 1px solid var(--border);
   border-radius: 8px; padding: 10px 12px;
 }
-.remark-label {
-  font-size: 11px; color: var(--text-muted); margin-bottom: 6px;
-}
+.remark-label { font-size: 11px; color: var(--text-muted); margin-bottom: 6px; }
 .remark-text {
   font-size: 12px; color: var(--text-primary);
   line-height: 1.6; white-space: pre-wrap;
@@ -979,42 +1374,21 @@ function srcLabel(src) {
 .remark-text::-webkit-scrollbar { width: 3px; }
 .remark-text::-webkit-scrollbar-thumb { background: var(--border); }
 
-/* 自动匹配芯片 */
-.match-chips {
-  display: flex; flex-wrap: wrap; gap: 8px;
+/* 日期确认区 */
+.dates-section {
+  display: flex; gap: 20px; align-items: center;
+  background: #faf7f2; border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 14px;
 }
-.match-chip {
-  padding: 6px 12px;
-  background: #fff; border: 1px solid var(--border);
-  border-radius: 20px; cursor: pointer;
-  display: flex; align-items: center; gap: 8px;
-  transition: all 0.15s; font-size: 12px;
+.date-field { display: flex; align-items: center; gap: 8px; }
+.date-label {
+  font-size: 12px; color: var(--text-secondary);
+  white-space: nowrap; flex-shrink: 0;
 }
-.match-chip:hover {
-  border-color: var(--accent); background: #fff7ed;
-}
-.match-chip.applied {
-  border-color: var(--accent); background: #fff7ed;
-  opacity: 0.6;
-}
-.chip-name  { font-weight: 600; color: var(--text-primary); }
-.chip-src   {
-  font-size: 10px; color: #fff;
-  background: var(--text-muted); border-radius: 3px;
-  padding: 1px 4px;
-}
-.chip-bar-wrap {
-  width: 40px; height: 4px;
-  background: var(--border); border-radius: 2px; overflow: hidden;
-}
-.chip-bar {
-  display: block; height: 100%;
-  background: var(--accent); border-radius: 2px;
-  transition: width 0.3s;
-}
+.date-picker { width: 160px; }
 
-/* 原因分配 */
-.btn-add-reason {
+/* 售后内容区 */
+.btn-add-content {
   padding: 3px 10px;
   border: 1px dashed var(--accent); border-radius: 6px;
   background: transparent; color: var(--accent);
@@ -1022,46 +1396,209 @@ function srcLabel(src) {
   display: flex; align-items: center; gap: 4px;
   transition: all 0.15s;
 }
-.btn-add-reason:hover { background: #fff7ed; }
+.btn-add-content:hover { background: #fff7ed; }
 
-.reason-empty {
-  font-size: 12px; color: var(--text-muted);
-  padding: 12px 0;
-}
+.content-empty { font-size: 12px; color: var(--text-muted); padding: 12px 0; }
 
-.reason-row {
+/* 售后内容卡片 */
+.content-item {
   background: #faf7f2; border: 1px solid var(--border);
-  border-radius: 8px; padding: 10px 12px;
+  border-radius: 10px; padding: 0 14px 12px;
   margin-bottom: 10px;
 }
-.reason-row-top {
-  display: flex; align-items: center; gap: 8px;
-  margin-bottom: 8px;
-}
-.reason-select  { width: 180px; }
-.or-text { font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
-.custom-reason-input { flex: 1; }
 
-.btn-del-reason {
-  width: 26px; height: 26px; flex-shrink: 0;
+/* 卡片头：序号 + 删除 */
+.item-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 0 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 10px;
+}
+.item-index {
+  font-size: 11px; font-weight: 700;
+  color: var(--accent); letter-spacing: 0.04em;
+}
+.btn-del-item {
+  width: 24px; height: 24px;
   border: 1px solid #f0c0c0; border-radius: 6px;
   background: transparent; color: #d05a3c;
   cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s; flex-shrink: 0;
+}
+.btn-del-item:hover { background: #fff0ee; }
+
+/* 每行 */
+.item-row {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 8px;
+}
+.item-row:last-child { margin-bottom: 0; }
+
+/* 行标签（左对齐固定宽度） */
+.item-label {
+  font-size: 11px; color: var(--text-muted);
+  flex-shrink: 0; white-space: nowrap;
+  width: 76px; text-align: right;
+}
+
+/* 三级联动 */
+.product-selects { display: flex; gap: 6px; flex: 1; min-width: 0; }
+.product-selects :deep(.el-select) { flex: 1; min-width: 0; }
+
+/* 售后原因行 */
+.reason-row-inner {
+  display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0;
+}
+.reason-cat-wrap { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.reason-cat-select { width: 130px; }
+
+/* 一级原因新增按钮 */
+.btn-add-cat {
+  width: 24px; height: 24px; flex-shrink: 0;
+  border: 1px dashed var(--accent); border-radius: 6px;
+  background: transparent; color: var(--accent);
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
   transition: all 0.15s;
 }
-.btn-del-reason:hover { background: #fff0ee; }
+.btn-add-cat:hover { background: #fff7ed; }
 
-.reason-row-bottom {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+.reason-select { width: 150px; flex-shrink: 0; }
+.or-text { font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
+.custom-reason-input { flex: 1; min-width: 0; }
+
+/* 产品匹配置信度外框 */
+.product-selects.conf-low :deep(.el-input__wrapper) {
+  box-shadow: 0 0 0 1px #d05a3c !important;
 }
-.sub-label { font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
-.products-select { width: 240px; }
-.notes-input { flex: 1; }
+.product-selects.conf-medium :deep(.el-input__wrapper) {
+  box-shadow: 0 0 0 1px #e09050 !important;
+}
 
-.opt-category {
+/* ── 产品匹配依据面板 ──────────────────────────────── */
+.match-debug-section { margin-top: 4px; }
+
+.match-debug-title {
+  cursor: pointer; user-select: none;
+  justify-content: space-between;
+}
+.match-debug-title:hover { color: var(--accent); }
+
+.toggle-icon {
+  font-size: 12px; color: var(--text-muted);
+  transition: transform 0.2s;
+  transform: rotate(-90deg);
+}
+.toggle-icon.is-expanded { transform: rotate(0deg); }
+
+.match-debug-body {
+  background: #faf7f2; border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+
+.debug-row {
+  display: flex; align-items: flex-start; gap: 10px;
+}
+.debug-row--top { align-items: flex-start; }
+
+.debug-key {
+  font-size: 11px; color: var(--text-muted);
+  width: 56px; flex-shrink: 0; padding-top: 2px;
+  text-align: right;
+}
+
+/* 来源徽章 */
+.source-badge {
+  font-size: 11px; font-weight: 600;
+  padding: 2px 8px; border-radius: 4px;
+}
+.src-api  { background: #e8f5e9; color: #2e7d32; }
+.src-text { background: #e3f2fd; color: #1565c0; }
+.src-none { background: #f3e5f5; color: #6a1b9a; }
+
+/* 匹配文本 */
+.debug-text-val {
+  font-size: 11px; color: var(--text-secondary);
+  line-height: 1.6; flex: 1;
+  white-space: pre-wrap; word-break: break-all;
+  max-height: 60px; overflow-y: auto;
+}
+.debug-text-val::-webkit-scrollbar { width: 3px; }
+.debug-text-val::-webkit-scrollbar-thumb { background: var(--border); }
+
+/* 最佳结果行 */
+.debug-result {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: 1;
+}
+.result-path {
+  font-size: 12px; color: var(--text-primary);
+  display: flex; align-items: center; gap: 4px;
+}
+.path-sep { color: var(--text-muted); font-size: 11px; }
+.result-model { font-weight: 600; color: var(--accent); }
+
+/* 置信度徽章（依据面板内） */
+.conf-badge {
+  font-size: 10px; font-weight: 700;
+  padding: 1px 6px; border-radius: 4px; flex-shrink: 0;
+}
+.conf-badge.conf-high   { background: #e8f5e9; color: #2e7d32; }
+.conf-badge.conf-medium { background: #fff3e0; color: #e65100; }
+.conf-badge.conf-low    { background: #fce4ec; color: #b71c1c; }
+
+.score-num {
+  font-size: 11px; color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 候选排名列表 */
+.candidates-list { flex: 1; display: flex; flex-direction: column; gap: 5px; }
+
+.candidate-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 8px; border-radius: 6px;
+  background: #fff; border: 1px solid transparent;
+}
+.candidate-item.is-best {
+  border-color: var(--accent);
+  background: #fff7ed;
+}
+
+.cand-rank {
+  font-size: 10px; font-weight: 700;
+  color: var(--text-muted);
+  width: 14px; flex-shrink: 0; text-align: center;
+}
+.candidate-item.is-best .cand-rank { color: var(--accent); }
+
+.cand-path {
+  font-size: 11px; color: var(--text-secondary);
+  flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.cand-bar-wrap {
+  width: 80px; height: 6px;
+  background: #ede8dc; border-radius: 3px;
+  overflow: hidden; flex-shrink: 0;
+}
+.cand-bar {
+  height: 100%; border-radius: 3px;
+  background: var(--accent);
+  transition: width 0.3s;
+  min-width: 2px;
+}
+
+.cand-score {
   font-size: 10px; color: var(--text-muted);
-  margin-right: 6px; background: #f5f0e8;
-  padding: 1px 4px; border-radius: 3px;
+  width: 24px; text-align: right; flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 无匹配提示 */
+.debug-no-match {
+  font-size: 12px; color: var(--text-muted);
+  padding: 4px 0;
 }
 
 /* 底部操作栏 */
@@ -1071,37 +1608,5 @@ function srcLabel(src) {
   background: rgba(255,255,255,0.7);
   display: flex; justify-content: flex-end; gap: 10px;
   flex-shrink: 0;
-}
-
-/* 产生售后物料分配 */
-.am-row {
-  display: flex; align-items: center; gap: 6px;
-  margin-bottom: 6px;
-}
-.am-code-wrap {
-  position: relative; width: 140px; flex-shrink: 0;
-}
-.am-code { width: 100%; }
-.am-name { flex: 1; min-width: 0; }
-.am-qty  { width: 100px; flex-shrink: 0; }
-
-.am-suggestions {
-  position: absolute; top: 100%; left: 0; right: 0; z-index: 20;
-  background: #fff; border: 1px solid var(--border);
-  border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.08);
-  max-height: 150px; overflow-y: auto; margin-top: 2px;
-}
-.am-sug-item {
-  display: flex; align-items: center; gap: 8px;
-  padding: 6px 10px; cursor: pointer; transition: background 0.12s;
-}
-.am-sug-item:hover { background: #faf7f2; }
-.am-sug-item .sug-code {
-  font-family: monospace; font-size: 12px;
-  font-weight: 600; color: var(--text-primary); flex-shrink: 0;
-}
-.am-sug-item .sug-name {
-  font-size: 11px; color: var(--text-muted);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 </style>
