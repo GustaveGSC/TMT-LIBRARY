@@ -12,30 +12,34 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue', 'updated'])
 
 // ── 响应式状态 ────────────────────────────────────
-const loading      = ref(false)
-const submitting   = ref(false)
+const loading    = ref(false)
+const submitting = ref(false)
 
 // 当前激活的 Tab
 const activeTab = ref('reasons')
 
 // ── 售后原因库状态 ─────────────────────────────────
-const categories   = ref([])
-const activeCatId  = ref(null)
-const groups       = ref([])
-const editingCat   = ref(null)   // null | { id: number|null, name: string }
-const reasonForm   = ref(null)   // null | {id?, name, keywords, sort_order, category_id}
-const reasonError  = ref('')
-const kwInput      = ref('')
+const categories  = ref([])
+const activeCatId = ref(null)
+const groups      = ref([])
+const editingCat  = ref(null)   // null | { id: number|null, name: string }
+const reasonForm  = ref(null)   // null | { id?, name, keywords, sort_order, category_id }
+const reasonError = ref('')
+const kwInput     = ref('')
 
 // ── 发货物料简称库状态 ─────────────────────────────
 const shippingAliases = ref([])
-const editingShipping = ref(null)   // null | { id: number|null, name: string, sort_order: number }
+// editingShipping: { id, name, product_codes: string[], sort_order }
+const editingShipping = ref(null)
 const shippingError   = ref('')
+const shipCodeInput   = ref('')   // 产品代码输入框
 
 // ── 售后物料简称库状态 ─────────────────────────────
-const returnAliases   = ref([])
-const editingReturn   = ref(null)   // null | { id: number|null, name: string, sort_order: number }
-const returnError     = ref('')
+const returnAliases  = ref([])
+// editingReturn: { id, name, keywords: string[], sort_order }
+const editingReturn  = ref(null)
+const returnError    = ref('')
+const retKwInput     = ref('')    // 商家备注片段输入框
 
 // 是否显示弹窗
 const visible = computed({
@@ -53,15 +57,14 @@ const currentReasons = computed(() => {
 watch(visible, (v) => {
   if (v) {
     loadAll()
-    editingCat.value     = null
-    reasonForm.value     = null
-    editingShipping.value = null
-    editingReturn.value  = null
+    editingCat.value          = null
+    reasonForm.value          = null
+    editingShipping.value     = null
+    editingReturn.value       = null
   }
 })
 
 // ── 加载方法 ──────────────────────────────────────
-
 async function loadAll() {
   loading.value = true
   try {
@@ -87,8 +90,8 @@ async function loadAll() {
 // ── 一级分类操作 ───────────────────────────────────
 
 function startNewCategory() {
-  editingCat.value  = { id: null, name: '' }
-  reasonForm.value  = null
+  editingCat.value = { id: null, name: '' }
+  reasonForm.value = null
 }
 
 function startEditCategory(cat) {
@@ -232,8 +235,7 @@ async function deleteReason(reason) {
   }
 }
 
-// ── 关键词 tag 工具 ────────────────────────────────
-
+// ── 关键词 tag 工具（原因库关键词）────────────────────
 function kws(str) {
   return (str || '').split(',').map(s => s.trim()).filter(Boolean)
 }
@@ -259,17 +261,40 @@ function onKwConfirm() {
 // ── 发货物料简称操作 ───────────────────────────────
 
 function startNewShipping() {
-  editingShipping.value = { id: null, name: '', sort_order: 0 }
+  editingShipping.value = { id: null, name: '', product_codes: [], sort_order: 0 }
   shippingError.value   = ''
+  shipCodeInput.value   = ''
 }
 
 function startEditShipping(item) {
-  editingShipping.value = { id: item.id, name: item.name, sort_order: item.sort_order || 0 }
-  shippingError.value   = ''
+  editingShipping.value = {
+    id:            item.id,
+    name:          item.name,
+    product_codes: [...(item.product_codes || [])],
+    sort_order:    item.sort_order || 0,
+  }
+  shippingError.value = ''
+  shipCodeInput.value = ''
 }
 
 function cancelShipping() {
   editingShipping.value = null
+}
+
+function addShipCode() {
+  const code = (shipCodeInput.value || '').trim().toUpperCase()
+  if (!code || !editingShipping.value) return
+  if (!editingShipping.value.product_codes.includes(code)) {
+    editingShipping.value.product_codes = [...editingShipping.value.product_codes, code]
+  }
+  shipCodeInput.value = ''
+}
+
+function removeShipCode(idx) {
+  if (!editingShipping.value) return
+  const list = [...editingShipping.value.product_codes]
+  list.splice(idx, 1)
+  editingShipping.value.product_codes = list
 }
 
 async function submitShipping() {
@@ -279,7 +304,11 @@ async function submitShipping() {
 
   submitting.value = true
   try {
-    const payload = { name, sort_order: Number(editingShipping.value.sort_order) || 0 }
+    const payload = {
+      name,
+      product_codes: editingShipping.value.product_codes,
+      sort_order:    Number(editingShipping.value.sort_order) || 0,
+    }
     const isNew = editingShipping.value.id === null
     const res = isNew
       ? await http.post('/api/aftersale/shipping-aliases', payload)
@@ -319,17 +348,40 @@ async function deleteShipping(item) {
 // ── 售后物料简称操作 ───────────────────────────────
 
 function startNewReturn() {
-  editingReturn.value = { id: null, name: '', sort_order: 0 }
+  editingReturn.value = { id: null, name: '', keywords: [], sort_order: 0 }
   returnError.value   = ''
+  retKwInput.value    = ''
 }
 
 function startEditReturn(item) {
-  editingReturn.value = { id: item.id, name: item.name, sort_order: item.sort_order || 0 }
-  returnError.value   = ''
+  editingReturn.value = {
+    id:       item.id,
+    name:     item.name,
+    keywords: [...(item.keywords || [])],
+    sort_order: item.sort_order || 0,
+  }
+  returnError.value = ''
+  retKwInput.value  = ''
 }
 
 function cancelReturn() {
   editingReturn.value = null
+}
+
+function addReturnKw() {
+  const kw = (retKwInput.value || '').trim()
+  if (!kw || !editingReturn.value) return
+  if (!editingReturn.value.keywords.includes(kw)) {
+    editingReturn.value.keywords = [...editingReturn.value.keywords, kw]
+  }
+  retKwInput.value = ''
+}
+
+function removeReturnKw(idx) {
+  if (!editingReturn.value) return
+  const list = [...editingReturn.value.keywords]
+  list.splice(idx, 1)
+  editingReturn.value.keywords = list
 }
 
 async function submitReturn() {
@@ -339,7 +391,11 @@ async function submitReturn() {
 
   submitting.value = true
   try {
-    const payload = { name, sort_order: Number(editingReturn.value.sort_order) || 0 }
+    const payload = {
+      name,
+      keywords:   editingReturn.value.keywords,
+      sort_order: Number(editingReturn.value.sort_order) || 0,
+    }
     const isNew = editingReturn.value.id === null
     const res = isNew
       ? await http.post('/api/aftersale/return-aliases', payload)
@@ -375,13 +431,14 @@ async function deleteReturn(item) {
     ElMessage.error(res.message || '删除失败')
   }
 }
+
 </script>
 
 <template>
   <el-dialog
     v-model="visible"
     title="原因库 & 简称库管理"
-    width="780px"
+    width="820px"
     :close-on-click-modal="false"
     destroy-on-close
   >
@@ -389,21 +446,9 @@ async function deleteReturn(item) {
 
       <!-- ── Tab 切换 ──────────────────────────────── -->
       <div class="lib-tabs">
-        <button
-          class="lib-tab"
-          :class="{ active: activeTab === 'reasons' }"
-          @click="activeTab = 'reasons'"
-        >售后原因库</button>
-        <button
-          class="lib-tab"
-          :class="{ active: activeTab === 'shipping' }"
-          @click="activeTab = 'shipping'"
-        >发货物料简称</button>
-        <button
-          class="lib-tab"
-          :class="{ active: activeTab === 'return' }"
-          @click="activeTab = 'return'"
-        >售后物料简称</button>
+        <button class="lib-tab" :class="{ active: activeTab === 'reasons' }"  @click="activeTab = 'reasons'">售后原因库</button>
+        <button class="lib-tab" :class="{ active: activeTab === 'shipping' }" @click="activeTab = 'shipping'">发货物料简称</button>
+        <button class="lib-tab" :class="{ active: activeTab === 'return' }"   @click="activeTab = 'return'">售后物料简称</button>
       </div>
 
       <!-- ── 售后原因库 Tab ─────────────────────────── -->
@@ -417,14 +462,8 @@ async function deleteReturn(item) {
           </div>
 
           <div v-if="editingCat && editingCat.id === null" class="cat-inline-form">
-            <el-input
-              v-model="editingCat.name"
-              size="small"
-              placeholder="分类名称"
-              autofocus
-              @keyup.enter="submitCategory"
-              @keyup.escape="cancelEditCategory"
-            />
+            <el-input v-model="editingCat.name" size="small" placeholder="分类名称" autofocus
+              @keyup.enter="submitCategory" @keyup.escape="cancelEditCategory" />
             <button class="btn-inline-ok" title="确认" :disabled="submitting" @click="submitCategory">
               <el-icon><Check /></el-icon>
             </button>
@@ -434,23 +473,13 @@ async function deleteReturn(item) {
           </div>
 
           <div class="cat-list">
-            <div
-              v-for="cat in categories"
-              :key="cat.id"
-              class="cat-item"
+            <div v-for="cat in categories" :key="cat.id" class="cat-item"
               :class="{ active: activeCatId === cat.id }"
               @click="activeCatId = cat.id; reasonForm = null; editingCat = null"
             >
               <template v-if="editingCat && editingCat.id === cat.id">
-                <el-input
-                  v-model="editingCat.name"
-                  size="small"
-                  style="flex:1"
-                  autofocus
-                  @click.stop
-                  @keyup.enter="submitCategory"
-                  @keyup.escape="cancelEditCategory"
-                />
+                <el-input v-model="editingCat.name" size="small" style="flex:1" autofocus
+                  @click.stop @keyup.enter="submitCategory" @keyup.escape="cancelEditCategory" />
                 <button class="btn-inline-ok" title="确认" :disabled="submitting" @click.stop="submitCategory">
                   <el-icon><Check /></el-icon>
                 </button>
@@ -460,9 +489,7 @@ async function deleteReturn(item) {
               </template>
               <template v-else>
                 <span class="cat-name">{{ cat.name }}</span>
-                <span class="cat-count">
-                  {{ groups.find(g => g.category_id === cat.id)?.reasons?.length || 0 }}
-                </span>
+                <span class="cat-count">{{ groups.find(g => g.category_id === cat.id)?.reasons?.length || 0 }}</span>
                 <div class="cat-actions">
                   <button class="btn-tiny" title="重命名" @click.stop="startEditCategory(cat)">
                     <el-icon><Edit /></el-icon>
@@ -482,17 +509,12 @@ async function deleteReturn(item) {
         <!-- 中列：二级原因列表 -->
         <div class="col-reasons">
           <div class="col-header">
-            <span class="col-title">
-              {{ categories.find(c => c.id === activeCatId)?.name || '二级原因' }}
-            </span>
+            <span class="col-title">{{ categories.find(c => c.id === activeCatId)?.name || '二级原因' }}</span>
             <button v-if="activeCatId !== null" class="btn-add" title="新建原因" @click="startNewReason">＋</button>
           </div>
 
           <div class="reason-list">
-            <div
-              v-for="r in currentReasons"
-              :key="r.id"
-              class="reason-item"
+            <div v-for="r in currentReasons" :key="r.id" class="reason-item"
               :class="{ editing: reasonForm?.id === r.id }"
             >
               <div class="reason-item-left">
@@ -537,40 +559,26 @@ async function deleteReturn(item) {
             </div>
 
             <div class="form-row">
-              <label class="form-label">关键词</label>
-              <div class="kw-editor">
-                <div class="kw-tags">
-                  <el-tag
-                    v-for="(kw, i) in kws(reasonForm.keywords)"
-                    :key="i"
-                    closable
-                    size="small"
-                    @close="removeKeyword(i)"
-                  >{{ kw }}</el-tag>
+              <label class="form-label">关键词
+                <span class="form-label-hint">用于自动匹配商家备注</span>
+              </label>
+              <div class="tag-editor">
+                <div class="tag-list">
+                  <el-tag v-for="(kw, i) in kws(reasonForm.keywords)" :key="i"
+                    closable size="small" @close="removeKeyword(i)">{{ kw }}</el-tag>
                 </div>
-                <el-input
-                  v-model="kwInput"
-                  size="small"
-                  placeholder="输入关键词回车添加"
-                  style="margin-top:6px"
-                  @keyup.enter="onKwConfirm"
-                />
-                <div class="kw-hint">用于自动匹配 seller_remark</div>
+                <el-input v-model="kwInput" size="small" placeholder="输入关键词，回车添加"
+                  style="margin-top:6px" @keyup.enter="onKwConfirm" />
               </div>
             </div>
 
             <div class="form-row">
               <label class="form-label">排序</label>
-              <el-input-number
-                v-model="reasonForm.sort_order"
-                :min="0" :step="1"
-                controls-position="right"
-                style="width:100px"
-              />
+              <el-input-number v-model="reasonForm.sort_order" :min="0" :step="1"
+                controls-position="right" style="width:100px" />
             </div>
 
             <div v-if="reasonError" class="form-error">{{ reasonError }}</div>
-
             <div class="form-actions">
               <el-button size="small" @click="cancelReason">取消</el-button>
               <el-button size="small" type="primary" :loading="submitting" @click="submitReason">
@@ -597,18 +605,18 @@ async function deleteReturn(item) {
           </div>
 
           <div class="alias-list">
-            <div
-              v-for="item in shippingAliases"
-              :key="item.id"
-              class="alias-item"
+            <div v-for="item in shippingAliases" :key="item.id" class="alias-item"
               :class="{ editing: editingShipping?.id === item.id }"
+              @click="startEditShipping(item)"
             >
-              <span class="alias-name">{{ item.name }}</span>
+              <div class="alias-item-main">
+                <span class="alias-name">{{ item.name }}</span>
+                <span class="alias-meta">
+                  {{ item.product_codes?.length ? item.product_codes.length + ' 个产品代码' : '暂无绑定' }}
+                </span>
+              </div>
               <div class="alias-actions">
-                <button class="btn-tiny" title="编辑" @click="startEditShipping(item)">
-                  <el-icon><Edit /></el-icon>
-                </button>
-                <button class="btn-tiny btn-del" title="删除" @click="deleteShipping(item)">
+                <button class="btn-tiny btn-del" title="删除" @click.stop="deleteShipping(item)">
                   <el-icon><Delete /></el-icon>
                 </button>
               </div>
@@ -630,25 +638,31 @@ async function deleteReturn(item) {
 
             <div class="form-row">
               <label class="form-label">简称名称 <span class="required">*</span></label>
-              <el-input
-                v-model="editingShipping.name"
-                placeholder="如：拉链头套件"
-                @keyup.enter="submitShipping"
-              />
+              <el-input v-model="editingShipping.name" placeholder="如：拉链头套件" @keyup.enter="submitShipping" />
+            </div>
+
+            <div class="form-row">
+              <label class="form-label">绑定产品代码
+                <span class="form-label-hint">工单提交时自动关联，也可手动维护</span>
+              </label>
+              <div class="tag-editor">
+                <div class="tag-list">
+                  <el-tag v-for="(code, i) in editingShipping.product_codes" :key="i"
+                    closable size="small" type="info" @close="removeShipCode(i)">{{ code }}</el-tag>
+                  <span v-if="!editingShipping.product_codes.length" class="tag-empty">暂无</span>
+                </div>
+                <el-input v-model="shipCodeInput" size="small" placeholder="输入产品代码，回车添加"
+                  style="margin-top:6px" @keyup.enter="addShipCode" />
+              </div>
             </div>
 
             <div class="form-row">
               <label class="form-label">排序</label>
-              <el-input-number
-                v-model="editingShipping.sort_order"
-                :min="0" :step="1"
-                controls-position="right"
-                style="width:100px"
-              />
+              <el-input-number v-model="editingShipping.sort_order" :min="0" :step="1"
+                controls-position="right" style="width:100px" />
             </div>
 
             <div v-if="shippingError" class="form-error">{{ shippingError }}</div>
-
             <div class="form-actions">
               <el-button size="small" @click="cancelShipping">取消</el-button>
               <el-button size="small" type="primary" :loading="submitting" @click="submitShipping">
@@ -659,8 +673,8 @@ async function deleteReturn(item) {
 
           <div v-else class="form-placeholder">
             <div class="placeholder-icon">🚚</div>
-            <div>点击「＋」新建，或点击列表中的编辑按钮</div>
-            <div class="placeholder-hint">这里维护发货物料的规范简称，在处理售后工单时可下拉选择</div>
+            <div>点击「＋」新建，或点击左侧列表项编辑</div>
+            <div class="placeholder-hint">维护发货物料的规范简称；处理工单时可下拉选择，<br>选择后自动将订单产品代码关联到该简称</div>
           </div>
         </div>
       </div>
@@ -676,18 +690,18 @@ async function deleteReturn(item) {
           </div>
 
           <div class="alias-list">
-            <div
-              v-for="item in returnAliases"
-              :key="item.id"
-              class="alias-item"
+            <div v-for="item in returnAliases" :key="item.id" class="alias-item"
               :class="{ editing: editingReturn?.id === item.id }"
+              @click="startEditReturn(item)"
             >
-              <span class="alias-name">{{ item.name }}</span>
+              <div class="alias-item-main">
+                <span class="alias-name">{{ item.name }}</span>
+                <span class="alias-meta">
+                  {{ item.keywords?.length ? item.keywords.length + ' 条备注匹配' : '暂无关键词' }}
+                </span>
+              </div>
               <div class="alias-actions">
-                <button class="btn-tiny" title="编辑" @click="startEditReturn(item)">
-                  <el-icon><Edit /></el-icon>
-                </button>
-                <button class="btn-tiny btn-del" title="删除" @click="deleteReturn(item)">
+                <button class="btn-tiny btn-del" title="删除" @click.stop="deleteReturn(item)">
                   <el-icon><Delete /></el-icon>
                 </button>
               </div>
@@ -709,25 +723,31 @@ async function deleteReturn(item) {
 
             <div class="form-row">
               <label class="form-label">简称名称 <span class="required">*</span></label>
-              <el-input
-                v-model="editingReturn.name"
-                placeholder="如：拉链头"
-                @keyup.enter="submitReturn"
-              />
+              <el-input v-model="editingReturn.name" placeholder="如：拉链头" @keyup.enter="submitReturn" />
+            </div>
+
+            <div class="form-row">
+              <label class="form-label">备注关键词
+                <span class="form-label-hint">工单提交时从商家备注自动采集，也可手动维护</span>
+              </label>
+              <div class="tag-editor">
+                <div class="tag-list">
+                  <el-tag v-for="(kw, i) in editingReturn.keywords" :key="i"
+                    closable size="small" type="warning" @close="removeReturnKw(i)">{{ kw }}</el-tag>
+                  <span v-if="!editingReturn.keywords.length" class="tag-empty">暂无</span>
+                </div>
+                <el-input v-model="retKwInput" size="small" placeholder="输入备注片段，回车添加"
+                  style="margin-top:6px" @keyup.enter="addReturnKw" />
+              </div>
             </div>
 
             <div class="form-row">
               <label class="form-label">排序</label>
-              <el-input-number
-                v-model="editingReturn.sort_order"
-                :min="0" :step="1"
-                controls-position="right"
-                style="width:100px"
-              />
+              <el-input-number v-model="editingReturn.sort_order" :min="0" :step="1"
+                controls-position="right" style="width:100px" />
             </div>
 
             <div v-if="returnError" class="form-error">{{ returnError }}</div>
-
             <div class="form-actions">
               <el-button size="small" @click="cancelReturn">取消</el-button>
               <el-button size="small" type="primary" :loading="submitting" @click="submitReturn">
@@ -738,11 +758,12 @@ async function deleteReturn(item) {
 
           <div v-else class="form-placeholder">
             <div class="placeholder-icon">🔧</div>
-            <div>点击「＋」新建，或点击列表中的编辑按钮</div>
-            <div class="placeholder-hint">这里维护出现问题的物料规范简称，在处理售后工单时可下拉选择</div>
+            <div>点击「＋」新建，或点击左侧列表项编辑</div>
+            <div class="placeholder-hint">维护出现问题的物料规范简称；工单提交后商家备注<br>会自动采集为关键词，用于下次自动匹配</div>
           </div>
         </div>
       </div>
+
 
     </div>
   </el-dialog>
@@ -800,7 +821,7 @@ async function deleteReturn(item) {
 }
 
 .alias-list-col {
-  width: 280px;
+  width: 260px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -811,6 +832,7 @@ async function deleteReturn(item) {
   flex: 1;
   overflow-y: auto;
   min-width: 0;
+  padding-left: 2px;
 }
 .alias-form-col::-webkit-scrollbar { width: 4px; }
 .alias-form-col::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
@@ -828,15 +850,29 @@ async function deleteReturn(item) {
   justify-content: space-between;
   padding: 8px 8px;
   border-radius: 6px;
+  cursor: pointer;
   transition: background 0.15s;
 }
 .alias-item:hover { background: var(--bg); }
 .alias-item.editing { background: #fff7ed; }
 
+.alias-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
 .alias-name {
   font-size: 13px;
   color: var(--text-primary);
-  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.alias-meta {
+  font-size: 10px;
+  color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -848,14 +884,34 @@ async function deleteReturn(item) {
 }
 .alias-item:hover .alias-actions { display: flex; }
 
+/* ── tag 编辑器（关键词/代码列表）─────────────────── */
+.tag-editor {
+  background: #faf7f2;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 24px;
+}
+.tag-empty {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 22px;
+}
+
+/* ── 通用 ────────────────────────────────────────── */
 .placeholder-hint {
   font-size: 11px;
   color: var(--text-muted);
   margin-top: 4px;
-  line-height: 1.5;
+  line-height: 1.6;
+  text-align: center;
 }
 
-/* ── 通用列标题 ──────────────────────────────────── */
 .col-header {
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 10px; flex-shrink: 0;
@@ -984,14 +1040,11 @@ async function deleteReturn(item) {
   display: block; font-size: 12px; color: var(--text-secondary);
   margin-bottom: 5px;
 }
-.required { color: #d05a3c; }
-
-.kw-editor {
-  background: #faf7f2; border: 1px solid var(--border);
-  border-radius: 8px; padding: 8px 10px;
+.form-label-hint {
+  font-size: 10px; color: var(--text-muted);
+  font-weight: normal; margin-left: 4px;
 }
-.kw-tags { display: flex; flex-wrap: wrap; gap: 4px; min-height: 24px; }
-.kw-hint { font-size: 10px; color: var(--text-muted); margin-top: 4px; }
+.required { color: #d05a3c; }
 
 .form-error { color: #d05a3c; font-size: 12px; margin-bottom: 10px; }
 .form-actions {

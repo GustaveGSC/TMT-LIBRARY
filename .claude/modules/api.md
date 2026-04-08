@@ -82,19 +82,35 @@ POST   /api/shipping/chart-data                       # 图表聚合数据，bod
 
 GET    /api/aftersale/pending                         # 待处理订单列表（动态查询，尚未建工单的售后操作人订单）
 GET    /api/aftersale/pending/count                   # 待处理订单数量
-GET    /api/aftersale/cases                           # 已处理工单列表（分页+筛选：status/date/reason/channel/province）
+GET    /api/aftersale/cases                           # 工单列表（分页+服务端排序）
+                                                      #   params: page/size/status/date_start/date_end/order_no/
+                                                      #           channel_name/province/city/district/
+                                                      #           reason_category/reason_name/
+                                                      #           shipping_alias/return_alias/model_code/
+                                                      #           sort_by/sort_order(asc|desc)
+                                                      #   返回：{total, items[]} items 不含 reasons（两阶段加载）
+GET    /api/aftersale/cases/reasons                   # 批量获取指定工单的原因详情（selectinload，无N+1）
+                                                      #   params: ids（逗号分隔的 case id 列表）
+                                                      #   返回：{ "case_id": [reason...] } 字典
 GET    /api/aftersale/cases/:id                       # 单条工单详情（含 reasons）
 POST   /api/aftersale/cases                           # 确认/创建工单（body: {order_no, products, remarks, reasons[]}）
 PUT    /api/aftersale/cases/:id                       # 更新工单 reasons
 POST   /api/aftersale/cases/:order_no/ignore          # 标记为忽略
+GET    /api/aftersale/filter-options                  # 表格筛选选项（raw SQL DISTINCT，懒加载）
+                                                      #   返回：{channels, provinces, cities, districts,
+                                                      #          reason_categories, reason_names,
+                                                      #          shipping_aliases, return_aliases, model_codes}
 POST   /api/aftersale/auto-match                      # body: {text} → 两阶段匹配（关键词库+历史相似度），返回 Top5 建议
 GET    /api/aftersale/reasons                         # 原因库（按 category 聚合）
 POST   /api/aftersale/reasons                         # 创建原因
 PUT    /api/aftersale/reasons/:id                     # 更新原因
 DELETE /api/aftersale/reasons/:id                     # 删除原因
 GET    /api/aftersale/reasons/:id/usage               # 查询使用次数
+GET    /api/aftersale/reason-categories               # 所有一级分类
+GET    /api/aftersale/shipping-aliases                # 发货物料简称列表
+GET    /api/aftersale/return-aliases                  # 售后物料简称列表
 GET    /api/aftersale/stats                           # 统计摘要（pending/confirmed/ignored 数量 + Top5 原因）
-GET    /api/aftersale/chart-options                   # 筛选选项（channels/provinces/categories）
+GET    /api/aftersale/chart-options                   # 图表筛选选项（channels/provinces/categories）
 POST   /api/aftersale/chart-data                      # 图表聚合数据，body: {group_by('reason'|'channel'|'province'|'month'), date_start?, ...}
 ```
 

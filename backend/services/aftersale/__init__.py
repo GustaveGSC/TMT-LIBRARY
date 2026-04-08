@@ -2,8 +2,9 @@ from datetime import date
 from result import Result
 from database.repository.aftersale import AftersaleRepository
 from database.models.aftersale import (
-    AftersaleReasonCategory, AftersaleReason, AftersaleProductAlias,
+    AftersaleReasonCategory, AftersaleReason,
     AftersaleShippingAlias, AftersaleReturnAlias,
+    AftersaleCase, AftersaleCaseReason,
 )
 
 _repo = AftersaleRepository()
@@ -52,51 +53,6 @@ class AftersaleService:
             return Result.fail('分类不存在')
         return Result.ok()
 
-    # ── 物料简称 ───────────────────────────────────────────────────────────────
-
-    def get_aliases(self):
-        aliases = _repo.get_all_aliases()
-        return Result.ok(data=[a.to_dict() for a in aliases])
-
-    def create_alias(self, data):
-        alias = (data.get('alias') or '').strip()
-        if not alias:
-            return Result.fail('简称不能为空')
-        codes = [c.strip() for c in (data.get('product_codes') or []) if str(c).strip()]
-        if not codes:
-            return Result.fail('至少填写一个产品代码')
-        if AftersaleProductAlias.query.filter_by(alias=alias).first():
-            return Result.fail('该简称已存在')
-        obj = _repo.create_alias(alias=alias, product_codes=codes,
-                                  sort_order=data.get('sort_order', 0))
-        return Result.ok(data=obj.to_dict())
-
-    def update_alias(self, alias_id, data):
-        alias = (data.get('alias') or '').strip()
-        if not alias:
-            return Result.fail('简称不能为空')
-        codes = [c.strip() for c in (data.get('product_codes') or []) if str(c).strip()]
-        if not codes:
-            return Result.fail('至少填写一个产品代码')
-        # 名称唯一性校验（排除自身）
-        existing = AftersaleProductAlias.query.filter_by(alias=alias).first()
-        if existing and existing.id != alias_id:
-            return Result.fail('该简称已存在')
-        obj = _repo.update_alias(alias_id=alias_id, alias=alias, product_codes=codes,
-                                  sort_order=data.get('sort_order'))
-        if not obj:
-            return Result.fail('简称不存在')
-        return Result.ok(data=obj.to_dict())
-
-    def delete_alias(self, alias_id):
-        ok = _repo.delete_alias(alias_id)
-        if not ok:
-            return Result.fail('简称不存在')
-        return Result.ok()
-
-    def get_product_code_suggestions(self, q=None):
-        items = _repo.get_product_code_suggestions(q)
-        return Result.ok(data=items)
 
     # ── 二级原因 ───────────────────────────────────────────────────────────────
 
@@ -185,7 +141,9 @@ class AftersaleService:
             return Result.fail('简称不能为空')
         if AftersaleShippingAlias.query.filter_by(name=name).first():
             return Result.fail('该简称已存在')
-        obj = _repo.create_shipping_alias(name=name, sort_order=data.get('sort_order', 0))
+        codes = [c.strip() for c in (data.get('product_codes') or []) if str(c).strip()]
+        obj = _repo.create_shipping_alias(name=name, product_codes=codes,
+                                          sort_order=data.get('sort_order', 0))
         return Result.ok(data=obj.to_dict())
 
     def update_shipping_alias(self, alias_id, data):
@@ -195,7 +153,9 @@ class AftersaleService:
         existing = AftersaleShippingAlias.query.filter_by(name=name).first()
         if existing and existing.id != alias_id:
             return Result.fail('该简称已存在')
-        obj = _repo.update_shipping_alias(alias_id, name=name, sort_order=data.get('sort_order'))
+        codes = [c.strip() for c in (data.get('product_codes') or []) if str(c).strip()]
+        obj = _repo.update_shipping_alias(alias_id, name=name, product_codes=codes,
+                                          sort_order=data.get('sort_order'))
         if not obj:
             return Result.fail('简称不存在')
         return Result.ok(data=obj.to_dict())
@@ -217,7 +177,9 @@ class AftersaleService:
             return Result.fail('简称不能为空')
         if AftersaleReturnAlias.query.filter_by(name=name).first():
             return Result.fail('该简称已存在')
-        obj = _repo.create_return_alias(name=name, sort_order=data.get('sort_order', 0))
+        kws = [k.strip() for k in (data.get('keywords') or []) if str(k).strip()]
+        obj = _repo.create_return_alias(name=name, keywords=kws,
+                                        sort_order=data.get('sort_order', 0))
         return Result.ok(data=obj.to_dict())
 
     def update_return_alias(self, alias_id, data):
@@ -227,7 +189,9 @@ class AftersaleService:
         existing = AftersaleReturnAlias.query.filter_by(name=name).first()
         if existing and existing.id != alias_id:
             return Result.fail('该简称已存在')
-        obj = _repo.update_return_alias(alias_id, name=name, sort_order=data.get('sort_order'))
+        kws = [k.strip() for k in (data.get('keywords') or []) if str(k).strip()]
+        obj = _repo.update_return_alias(alias_id, name=name, keywords=kws,
+                                        sort_order=data.get('sort_order'))
         if not obj:
             return Result.fail('简称不存在')
         return Result.ok(data=obj.to_dict())
@@ -254,19 +218,50 @@ class AftersaleService:
     # ── 工单 ────────────────────────────────────────────────────────────────
 
     def get_cases(self, page, page_size, status, date_start, date_end,
-                  reason_id, channel_name, province, search):
+                  reason_id, channel_name, province, city, district,
+                  reason_category, reason_name, shipping_alias, return_alias,
+                  model_code=None, search=None, sort_by=None, sort_order='desc'):
         items, total = _repo.get_cases(
             page=page, page_size=page_size,
             status=status, date_start=date_start, date_end=date_end,
             reason_id=reason_id, channel_name=channel_name,
-            province=province, search=search,
+            province=province, city=city, district=district,
+            reason_category=reason_category, reason_name=reason_name,
+            shipping_alias=shipping_alias, return_alias=return_alias,
+            model_code=model_code, search=search,
+            sort_by=sort_by, sort_order=sort_order,
         )
         return Result.ok(data={
-            'items':     [c.to_dict(include_reasons=True) for c in items],
+            'items':     [c.to_dict(include_reasons=False) for c in items],
             'total':     total,
             'page':      page,
             'page_size': page_size,
         })
+
+    def get_cases_reasons(self, case_ids):
+        """批量返回指定工单的 reasons，用于前端两阶段加载"""
+        if not case_ids:
+            return Result.ok(data={})
+        from sqlalchemy.orm import selectinload
+        cases = (
+            AftersaleCase.query
+            .filter(AftersaleCase.id.in_(case_ids))
+            .options(
+                selectinload(AftersaleCase.case_reasons)
+                .selectinload(AftersaleCaseReason.reason)
+                .selectinload(AftersaleReason.category_obj),
+                selectinload(AftersaleCase.case_reasons)
+                .selectinload(AftersaleCaseReason.product_model),
+            )
+            .all()
+        )
+        return Result.ok(data={
+            str(c.id): [r.to_dict() for r in c.case_reasons]
+            for c in cases
+        })
+
+    def get_filter_options(self):
+        return Result.ok(data=_repo.get_filter_options())
 
     def get_case(self, case_id):
         case = _repo.get_case_by_id(case_id)
@@ -311,6 +306,7 @@ class AftersaleService:
             shipping_materials=data.get('shipping_materials'),
             aftersale_materials=data.get('aftersale_materials'),
             city=data.get('city'),
+            district=data.get('district'),
             purchase_date=purchase_date,
         )
         return Result.ok(data=case.to_dict(include_reasons=True))
@@ -337,9 +333,10 @@ class AftersaleService:
     # ── 产品型号推断 ────────────────────────────────────────────────────────
 
     def suggest_product(self, data):
-        product_codes   = data.get('product_codes', [])
-        purchase_date   = data.get('purchase_date')
-        result = _repo.suggest_product(product_codes, purchase_date)
+        product_codes = data.get('product_codes', [])
+        purchase_date = data.get('purchase_date')
+        seller_remark = data.get('seller_remark')
+        result = _repo.suggest_product(product_codes, purchase_date, seller_remark)
         return Result.ok(data=result)
 
     # ── 自动匹配 ────────────────────────────────────────────────────────────

@@ -5,33 +5,6 @@ aftersale_bp = Blueprint('aftersale', __name__)
 _svc = AftersaleService()
 
 
-# ── 物料简称 ───────────────────────────────────────────────────────────────
-
-@aftersale_bp.get('/product-aliases')
-def get_product_aliases():
-    return _svc.get_aliases().to_response()
-
-
-@aftersale_bp.post('/product-aliases')
-def create_product_alias():
-    return _svc.create_alias(request.get_json() or {}).to_response()
-
-
-@aftersale_bp.put('/product-aliases/<int:alias_id>')
-def update_product_alias(alias_id):
-    return _svc.update_alias(alias_id, request.get_json() or {}).to_response()
-
-
-@aftersale_bp.delete('/product-aliases/<int:alias_id>')
-def delete_product_alias(alias_id):
-    return _svc.delete_alias(alias_id).to_response()
-
-
-@aftersale_bp.get('/product-code-suggestions')
-def get_product_code_suggestions():
-    q = request.args.get('q')
-    return _svc.get_product_code_suggestions(q).to_response()
-
 
 # ── 发货物料简称库 ─────────────────────────────────────────────────────────
 
@@ -162,11 +135,37 @@ def get_cases():
     reason_id  = request.args.get('reason_id', type=int)
     channel    = request.args.get('channel_name')
     province   = request.args.get('province')
-    search     = request.args.get('search')
+    search          = request.args.get('search')
+    city            = request.args.get('city')
+    district        = request.args.get('district')
+    reason_category = request.args.get('reason_category')
+    reason_name     = request.args.get('reason_name')
+    shipping_alias  = request.args.get('shipping_alias')
+    return_alias    = request.args.get('return_alias')
+    model_code      = request.args.get('model_code')
+    sort_by         = request.args.get('sort_by')
+    sort_order      = request.args.get('sort_order', 'desc')
     return _svc.get_cases(
         page, page_size, status, date_start, date_end,
-        reason_id, channel, province, search,
+        reason_id, channel, province, city, district,
+        reason_category, reason_name, shipping_alias, return_alias,
+        model_code, search, sort_by=sort_by, sort_order=sort_order,
     ).to_response()
+
+
+@aftersale_bp.get('/cases/reasons')
+def get_cases_reasons():
+    ids_str = request.args.get('ids', '')
+    try:
+        case_ids = [int(i) for i in ids_str.split(',') if i.strip()]
+    except ValueError:
+        case_ids = []
+    return _svc.get_cases_reasons(case_ids).to_response()
+
+
+@aftersale_bp.get('/filter-options')
+def get_filter_options():
+    return _svc.get_filter_options().to_response()
 
 
 @aftersale_bp.get('/cases/<int:case_id>')

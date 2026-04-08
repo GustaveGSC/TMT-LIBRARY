@@ -59,22 +59,55 @@ shipping_order_finished
 
 ## 售后数据
 ```
+aftersale_reason_category
+  id, name(UNIQUE VARCHAR 100), sort_order, created_at
+  # 售后原因一级分类
+
 aftersale_reason
-  id, name(UNIQUE), category(VARCHAR 50), keywords(TEXT, 逗号分隔),
-  sort_order(INT), use_count(INT 引用次数), created_at
+  id, name(UNIQUE VARCHAR 100), category_id(FK→aftersale_reason_category nullable),
+  keywords(TEXT, 逗号分隔), sort_order, use_count(引用次数), created_at
+  # 售后原因二级条目；category_id nullable 允许暂未归类
+
+aftersale_keyword_candidate
+  id, reason_id(FK→aftersale_reason CASCADE), keyword(VARCHAR 20), count(INT DEFAULT 1)
+  # UNIQUE(reason_id, keyword)
+  # 关键词候选池：提交工单时从 seller_remark 提取 n-gram 累计计数
+  # count >= 3（_KW_PROMOTE_THRESHOLD）时晋升到 aftersale_reason.keywords，并从候选池删除
+
+aftersale_shipping_alias
+  id, name(UNIQUE VARCHAR 200), product_codes(JSON 绑定产品代码列表), sort_order, created_at
+  # 发货物料简称库
+
+aftersale_return_alias
+  id, name(UNIQUE VARCHAR 200), keywords(JSON 商家备注片段列表), sort_order, created_at
+  # 售后物料简称库
 
 aftersale_case
-  id, ecommerce_order_no(UNIQUE), products(JSON [{code,name,quantity}]),
+  id, ecommerce_order_no(UNIQUE VARCHAR 100),
+  products(JSON [{code,name,quantity}]),       # 聚合该订单所有物料行
   seller_remark(TEXT), buyer_remark(TEXT),
-  shipped_date, operator, channel_name, province,
+  assigned_models(JSON [{model_id,model_code,model_name,series_name,category_name}]),
+  shipping_materials(JSON 别名或品号字符串列表),
+  aftersale_materials(JSON [{code,name,quantity}]),
+  shipped_date(DATE), purchase_date(DATE nullable),   # purchase_date 用户填写的购买日期
+  days_since_purchase(INT nullable),                  # 售后间隔天数 = 售后日期 - 购买日期
+  operator(VARCHAR 100), channel_name(VARCHAR 200),
+  province(VARCHAR 50), city(VARCHAR 100), district(VARCHAR 100),
   status(ENUM: pending/confirmed/ignored, DEFAULT pending),
   processed_at(DATETIME nullable), created_at, updated_at
   # 来源：shipping_record 中 operator 属于 aftersale 类型的记录，按 ecommerce_order_no 聚合
+  # 索引：ecommerce_order_no / shipped_date / status
 
 aftersale_case_reason
   id, case_id(FK→aftersale_case CASCADE), reason_id(FK→aftersale_reason nullable),
-  custom_reason(VARCHAR 200), involved_products(JSON nullable), notes(TEXT), created_at
-  # 一个工单可拆分为多条原因记录（对应 seller_remark 中的多类问题）
+  reason_category_id(FK→aftersale_reason_category SET NULL nullable),  # reason_id 为空时记录一级分类
+  custom_reason(VARCHAR 200),   # reason_id 为空时使用
+  involved_products(JSON nullable), notes(TEXT),
+  model_id(FK→product_model SET NULL nullable),
+  shipping_material_alias(VARCHAR 200 nullable),   # 发货物料简称
+  aftersale_material_alias(VARCHAR 200 nullable),  # 售后物料简称
+  created_at
+  # 一个工单可拆分为多条原因记录；to_dict() 会通过 selectinload 预取 reason/product_model
 ```
 
 ## 产品库
