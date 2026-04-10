@@ -9,6 +9,10 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import http from '@/api/http'
+import axios from 'axios'
+
+// 上传专用实例：不设 timeout，大文件传输时间不可预测
+const uploadHttp = axios.create({ timeout: 0, baseURL: 'http://127.0.0.1:8765' })
 import WindowControls from '@/components/common/WindowControls.vue'
 
 // ── 路由 ──────────────────────────────────
@@ -76,12 +80,13 @@ async function uploadToOss(file, onProgress) {
   const fd = new FormData()
   fd.append('file', file)
   fd.append('type', 'installer')
-  const res = await http.post('/api/version/upload', fd, {
+  const res = await uploadHttp.post('/api/version/upload', fd, {
     headers: { 'Content-Type': 'multipart/form-data' },
     onUploadProgress: e => onProgress(e.loaded / e.total),
   })
-  if (!res.success) throw new Error(res.message || '上传失败')
-  return res.data.url
+  const data = res.data
+  if (!data.success) throw new Error(data.message || '上传失败')
+  return data.data.url
 }
 
 async function handleSubmit() {

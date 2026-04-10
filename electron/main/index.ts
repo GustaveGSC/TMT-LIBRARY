@@ -59,7 +59,25 @@ ipcMain.on('quit-app', () => {
   app.quit()
 })
 
+// 清理上次更新遗留的安装包缓存（electron-updater pending 目录）
+function cleanUpdaterCache() {
+  try {
+    const pendingDir = path.join(
+      path.dirname(app.getPath('userData')),
+      `${app.getName()}-updater`,
+      'pending'
+    )
+    if (!fs.existsSync(pendingDir)) return
+    for (const file of fs.readdirSync(pendingDir)) {
+      if (/\.(exe|dmg|pkg|AppImage|deb|rpm)$/i.test(file)) {
+        fs.rmSync(path.join(pendingDir, file), { force: true })
+      }
+    }
+  } catch { /* 清理失败不影响启动 */ }
+}
+
 app.whenReady().then(async () => {
+  cleanUpdaterCache()
   if (app.isPackaged) await startPython()
   loginWin = createLoginWindow()
 })

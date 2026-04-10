@@ -7,6 +7,40 @@ import os
 
 version_bp = Blueprint('version', __name__)
 
+OSS_BASE_URL = os.getenv("OSS_BASE_URL", "").rstrip("/")
+OSS_PREFIX   = "tmt-library/releases/"   # 当前存放目录的 key 前缀
+
+
+def _url_to_key(url: str) -> str | None:
+    """将 OSS URL 还原为 bucket key，例如：
+    https://…/tmt-library/releases/xxx.exe  →  tmt-library/releases/xxx.exe"""
+    if not url or not OSS_BASE_URL:
+        return None
+    if url.startswith(OSS_BASE_URL + "/"):
+        return url[len(OSS_BASE_URL) + 1:]
+    return None
+
+
+def _archive_old_installers(bucket, old_version: AppVersion):
+    """把旧版本的 .exe / .dmg 文件移动到 releases/old/ 目录（copy + delete）。
+    yml 文件不归档，由新版本上传时直接覆盖即可。"""
+    urls = [old_version.download_url, old_version.mac_download_url]
+    for url in urls:
+        key = _url_to_key(url)
+        if not key:
+            continue
+        # 只处理安装包，跳过 yml
+        if key.endswith(".yml") or key.endswith(".yaml"):
+            continue
+        filename  = key[len(OSS_PREFIX):]          # 去掉前缀只保留文件名
+        dest_key  = f"{OSS_PREFIX}old/{filename}"
+        try:
+            bucket.copy_object(bucket.bucket_name, key, dest_key)
+            bucket.delete_object(key)
+        except Exception as e:
+            # 归档失败不阻断发布，仅打印警告
+            print(f"[warn] archive old installer failed: {key} → {dest_key}: {e}")
+
 
 @version_bp.get("/latest")
 def get_latest():
@@ -37,6 +71,15 @@ def create_version():
         return Result.fail("版本号不能为空").to_response()
     if not download_url and not mac_download_url:
         return Result.fail("至少需要上传 Windows 或 macOS 安装包之一").to_response()
+
+    # 归档旧版本安装包：取当前最新版本，将其 .exe/.dmg 移到 releases/old/
+    try:
+        latest = AppVersion.query.order_by(AppVersion.id.desc()).first()
+        if latest:
+            _archive_old_installers(get_bucket(), latest)
+    except Exception as e:
+        print(f"[warn] archive step error: {e}")
+
     return version_service.create(version, description, download_url, mac_download_url).to_response()
 
 
