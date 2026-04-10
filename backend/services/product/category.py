@@ -11,6 +11,44 @@ class CategoryService:
         categories = CategoryRepository.get_all_tree()
         return Result.ok(data=[c.to_dict(with_children=True) for c in categories])
 
+    def get_model_lifecycles(self) -> Result:
+        """
+        一次聚合查询，返回每个型号的生命周期范围：
+          { model_id: { listed_yymm, delisted_yymm } }
+        listed_yymm  = 该型号所有 SKU 中最早的上架年月
+        delisted_yymm = 若有任意 SKU 仍在销售（delisted_yymm IS NULL），则为 null；
+                        否则取最晚的下架年月（代表完全退市时间）
+        """
+        from database.base import db
+        from database.models.product.finished import ProductFinished
+        from sqlalchemy import func, case
+
+        rows = (
+            db.session.query(
+                ProductFinished.model_id,
+                func.min(ProductFinished.listed_yymm).label('listed_yymm'),
+                # 若任一 SKU 无下架日期，整体视为在售（null）
+                case(
+                    (func.sum(
+                        case((ProductFinished.delisted_yymm.is_(None), 1), else_=0)
+                    ) > 0, None),
+                    else_=func.max(ProductFinished.delisted_yymm),
+                ).label('delisted_yymm'),
+            )
+            .filter(ProductFinished.model_id.isnot(None))
+            .filter(ProductFinished.status != 'ignored')
+            .group_by(ProductFinished.model_id)
+            .all()
+        )
+        data = {
+            row.model_id: {
+                'listed_yymm':   row.listed_yymm,
+                'delisted_yymm': row.delisted_yymm,
+            }
+            for row in rows
+        }
+        return Result.ok(data=data)
+
     # ── Category ──────────────────────────────────────────────────────────
 
     def create_category(self, name: str, sort_order: int = 0) -> Result:

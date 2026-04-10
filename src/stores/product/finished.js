@@ -6,11 +6,17 @@ import { usePackagedStore } from './packaged'
 
 export const useFinishedStore = defineStore('product/finished', () => {
 
-  // ── 原始全量数据（从后端一次性拉取）──────────────
-  const rawItems  = ref([])
-  const loading   = ref(false)
-  const loaded    = ref(false)
-  const error     = ref('')
+  // ── 原始全量数据（从后端分批拉取）──────────────
+  const rawItems   = ref([])
+  const loading    = ref(false)   // 首批加载中
+  const loadingMore = ref(false)  // 后台继续加载中
+  const loaded     = ref(false)
+  const error      = ref('')
+  let   _loadGen   = 0            // 防止过期批次写入
+
+  // ── 禁用编码前缀（从编码规则接口同步）───────────
+  // 仅保存 finished 类型被禁用的前缀，用于全局过滤
+  const disabledPrefixes = ref([])   // string[]
 
   // ── 分页 ──────────────────────────────────────────
   const currentPage = ref(1)
@@ -37,6 +43,10 @@ export const useFinishedStore = defineStore('product/finished', () => {
 
   // ── 状态筛选 ───────────────────────────────────────
   const status = ref('')
+
+  // ── 生命周期筛选 ────────────────────────────────────
+  // '' = 全部  'listed' = 已上市  'delisted' = 已退市  'unknown' = 状态未知
+  const lifecycle = ref('')
 
   // ── 排序 ──────────────────────────────────────────
   const sortField = ref('')
@@ -67,13 +77,32 @@ export const useFinishedStore = defineStore('product/finished', () => {
     total_net_weight:   r => r.total_net_weight,
   }
 
+  // ── 排除禁用编码规则对应的成品 ─────────────────────
+  // activeItems：rawItems 中去掉编码前缀被禁用的成品
+  const activeItems = computed(() => {
+    const prefixes = disabledPrefixes.value
+    if (!prefixes.length) return rawItems.value
+    return rawItems.value.filter(r =>
+      !prefixes.some(p => (r.code || '').startsWith(p))
+    )
+  })
+
   // ── 前端计算：过滤 + 排序 → items ─────────────────
   const items = computed(() => {
-    let list = rawItems.value
+    let list = activeItems.value
 
     // 状态筛选
     if (status.value) {
       list = list.filter(r => r.status === status.value)
+    }
+
+    // 生命周期筛选
+    if (lifecycle.value === 'listed') {
+      list = list.filter(r => r.listed_yymm && !r.delisted_yymm)
+    } else if (lifecycle.value === 'delisted') {
+      list = list.filter(r => r.listed_yymm && r.delisted_yymm)
+    } else if (lifecycle.value === 'unknown') {
+      list = list.filter(r => !r.listed_yymm)
     }
 
     // 每列搜索
@@ -121,34 +150,109 @@ export const useFinishedStore = defineStore('product/finished', () => {
 
   // 过滤/排序条件变化时重置到第一页
   watch(
-    [() => ({ ...filters }), status, sortField, sortOrder],
+    [() => ({ ...filters }), status, lifecycle, sortField, sortOrder],
     () => { currentPage.value = 1 },
     { deep: true }
   )
 
-  // ── 从后端拉取全量数据（初始化时调用一次）────────
-  async function load() {
-    loading.value = true
-    error.value   = ''
+  // ── 从后端分批拉取数据 ────────────────────────────
+  // 第一批（200条）加载完立即 resolve，其余后台继续加载
+  const BATCH_SIZE = 200
+
+  // 拉取编码规则，提取 finished 类型被禁用的前缀
+  async function loadDisabledPrefixes() {
     try {
-      const res = await http.get('/api/product/finished', {
-        params: { page: 1, size: 99999 }
-      })
+      const res = await http.get('/api/erp-code-rules/')
       if (res.success) {
-        rawItems.value = res.data.items
-        loaded.value   = true
-      } else {
+        disabledPrefixes.value = (res.data || [])
+          .filter(r => r.type === 'finished' && r.is_disabled)
+          .map(r => r.prefix)
+      }
+    } catch (_) { /* 失败时不影响主流程 */ }
+  }
+
+  async function load() {
+    const gen = ++_loadGen   // 每次 load 递增，旧批次发现 gen 变化后自动停止
+    loading.value    = true
+    loadingMore.value = false
+    error.value      = ''
+    rawItems.value   = []
+
+    // 同步加载禁用前缀（与成品数据并行，失败不阻塞）
+    loadDisabledPrefixes()
+
+    try {
+      // 第一批：快速拿到首屏数据
+      const res = await http.get('/api/product/finished', {
+        params: { page: 1, size: BATCH_SIZE }
+      })
+      if (gen !== _loadGen) return   // 已被新的 load() 取代
+      if (!res.success) {
         error.value = res.message || '加载失败'
+        return
+      }
+      rawItems.value = res.data.items
+      loaded.value   = true
+      loading.value  = false
+
+      // 若还有更多，后台继续分批拉取
+      const serverTotal = res.data.total
+      if (rawItems.value.length < serverTotal) {
+        _loadRemaining(gen, serverTotal)
       }
     } catch (e) {
+      if (gen !== _loadGen) return
       error.value = e.message || '网络错误'
     } finally {
-      loading.value = false
+      if (gen === _loadGen) loading.value = false
     }
   }
 
-  // 保存后重新拉取（使 rawItems 更新，computed 自动刷新）
+  async function _loadRemaining(gen, total) {
+    loadingMore.value = true
+    try {
+      const totalPages = Math.ceil(total / BATCH_SIZE)
+      for (let page = 2; page <= totalPages; page++) {
+        if (gen !== _loadGen) return   // 已被新 load() 取代，放弃
+        const r = await http.get('/api/product/finished', {
+          params: { page, size: BATCH_SIZE }
+        })
+        if (gen !== _loadGen) return
+        if (!r.success) break
+        rawItems.value = [...rawItems.value, ...r.data.items]
+      }
+    } finally {
+      if (gen === _loadGen) loadingMore.value = false
+    }
+  }
+
+  // 保存后重新拉取（rawItems 更新后 computed 自动刷新）
   async function reload() { await load() }
+
+  // ── 局部刷新单行（保存后调用，不触发全量重载，不重置页码）────────
+  async function refreshItem(code) {
+    try {
+      // 用 code 精确搜索（LIKE '%code%'，size=20 足以覆盖同前缀短码）
+      const res = await http.get('/api/product/finished', {
+        params: { page: 1, size: 20, search_field: 'code', search_value: code }
+      })
+      if (!res.success) return
+      // 从结果中找到完全匹配的行
+      const updated = res.data.items.find(i => i.code === code)
+      if (!updated) return
+      const idx = rawItems.value.findIndex(i => i.code === code)
+      if (idx >= 0) {
+        // 原地替换，Vue 响应式会检测到变化，computed 自动刷新
+        rawItems.value = [
+          ...rawItems.value.slice(0, idx),
+          updated,
+          ...rawItems.value.slice(idx + 1),
+        ]
+      }
+    } catch (e) {
+      console.error('[refreshItem] 失败', e)
+    }
+  }
 
   // ── 搜索候选（从 rawItems 本地匹配，最多20条）────
   function getSuggestions(field, val) {
@@ -196,9 +300,11 @@ export const useFinishedStore = defineStore('product/finished', () => {
 
   // ── 重置（离开产品库时调用）──────────────────────
   function reset() {
-    rawItems.value  = []
-    loaded.value    = false
-    error.value     = ''
+    _loadGen++              // 令后台批次失效
+    rawItems.value   = []
+    loaded.value     = false
+    loadingMore.value = false
+    error.value      = ''
     status.value    = ''
     sortField.value = ''
     sortOrder.value = ''
@@ -217,12 +323,13 @@ export const useFinishedStore = defineStore('product/finished', () => {
   function resetPage() {}
 
   return {
-    rawItems,
+    rawItems, activeItems,
     items, pagedItems, total, currentPage, pageSize,
-    loading, loaded, error,
-    filters, status,
+    loading, loadingMore, loaded, error,
+    filters, status, lifecycle,
     sortField, sortOrder,
     selected, selectedPackaged,
-    load, reload, select, resetPage, reset, getSuggestions, getTopSuggestions, setSort,
+    load, reload, refreshItem, select, resetPage, reset, getSuggestions, getTopSuggestions, setSort,
+    disabledPrefixes, reloadDisabledPrefixes: loadDisabledPrefixes,
   }
 })

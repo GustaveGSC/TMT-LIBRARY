@@ -75,7 +75,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import http from '@/api/http'
@@ -92,13 +92,6 @@ const updateDialog   = ref(null)
 
 const updateType = ref('none')
 const latestInfo = ref(null)
-
-function onNotAvailable() {
-  ElMessageBox.alert('当前已是最新版本', '检查更新', {
-    confirmButtonText: '确定',
-    type: 'success',
-  })
-}
 
 onMounted(async () => {
   if (window.electronAPI) {
@@ -124,12 +117,6 @@ onMounted(async () => {
       }
     }
   } catch { }
-
-  window.electronAPI?.updater.on('updater:not-available', onNotAvailable)
-})
-
-onUnmounted(() => {
-  window.electronAPI?.updater.off('updater:not-available', onNotAvailable)
 })
 
 const { isAdmin, canViewProduct, canViewShipping, canEditShipping, canViewAftersale } = usePermission()
@@ -187,8 +174,11 @@ function handleEnter(mod) {
 
 async function handleUpdate() {
   if (updateType.value === 'none') {
-    // 已是最新，触发检查并用 toast 提示
-    await window.electronAPI?.updater.check()
+    // 已在 onMounted 完成检查，直接提示，无需再触发 Electron updater
+    ElMessageBox.alert('当前已是最新版本', '检查更新', {
+      confirmButtonText: '确定',
+      type: 'success',
+    })
     return
   }
   updateDialog.value?.open({

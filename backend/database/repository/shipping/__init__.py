@@ -407,10 +407,11 @@ class ShippingRepository:
                 db.session.commit()
 
     @staticmethod
-    def bulk_insert_order_finished(rows: List[Dict]):
+    def bulk_insert_order_finished(rows: List[Dict], progress_cb=None):
         """批量写入组合结果，分块 commit 避免大事务持锁超时"""
         chunk_size = 200
-        for i in range(0, len(rows), chunk_size):
+        total = len(rows)
+        for i in range(0, total, chunk_size):
             chunk = rows[i:i + chunk_size]
             objects = [
                 ShippingOrderFinished(
@@ -435,6 +436,8 @@ class ShippingRepository:
             ]
             db.session.bulk_save_objects(objects)
             db.session.commit()
+            if progress_cb:
+                progress_cb('saving', current=min(i + chunk_size, total), total=total)
 
     # ── 统计 ─────────────────────────────────────────
 
@@ -548,7 +551,12 @@ class ShippingRepository:
             for pname, cities in provinces_map.items()
         ]
 
-        # 活跃产品 ID（日期范围内有发货数据的品类/系列/型号）
+        # 活跃产品 ID（日期范围内有发货数据的品类/系列/型号，排除禁用编码规则对应的成品）
+        from database.models.product.erp_code_rules import ErpCodeRule
+        from sqlalchemy import not_, or_ as sa_or_
+        disabled_pfs = [
+            r.prefix for r in ErpCodeRule.query.filter_by(type='finished', is_disabled=True).all()
+        ]
         prod_q = db.session.query(
             ProductCategory.id.label('cat_id'),
             ProductSeries.id.label('ser_id'),
@@ -561,7 +569,20 @@ class ShippingRepository:
         ).join(ProductSeries,   ProductModel.series_id      == ProductSeries.id
         ).join(ProductCategory, ProductSeries.category_id   == ProductCategory.id
         ).filter(*base_filter)
+        if disabled_pfs:
+            prod_q = prod_q.filter(
+                not_(sa_or_(*[sof.finished_code.like(p + '%') for p in disabled_pfs]))
+            )
         prod_rows = _date_filter(prod_q).distinct().all()
+
+        # 数据库中实际的发货日期范围（不受筛选日期限制，查全表）
+        from sqlalchemy import func as sa_func
+        date_range_row = db.session.query(
+            sa_func.min(sof.shipped_date),
+            sa_func.max(sof.shipped_date),
+        ).filter(*base_filter).one()
+        min_date = date_range_row[0].strftime('%Y-%m-%d') if date_range_row[0] else None
+        max_date = date_range_row[1].strftime('%Y-%m-%d') if date_range_row[1] else None
 
         return {
             'channels':            channels,
@@ -569,6 +590,8 @@ class ShippingRepository:
             'active_category_ids': list({r.cat_id for r in prod_rows}),
             'active_series_ids':   list({r.ser_id for r in prod_rows}),
             'active_model_ids':    list({r.mod_id for r in prod_rows}),
+            'data_date_min':       min_date,
+            'data_date_max':       max_date,
         }
 
     @staticmethod
@@ -582,6 +605,8 @@ class ShippingRepository:
         from database.models.product.finished import ProductFinished
         from sqlalchemy import func, collate as sa_collate
 
+        from database.models.product.erp_code_rules import ErpCodeRule
+
         sof = ShippingOrderFinished
         group_by      = params.get('group_by', 'date')
         date_start    = params.get('date_start')
@@ -594,6 +619,11 @@ class ShippingRepository:
         category_ids  = params.get('category_ids') or []
         series_ids    = params.get('series_ids') or []
         model_ids     = params.get('model_ids') or []
+
+        # 禁用的 finished 类型编码前缀，查询时排除对应发货记录
+        disabled_prefixes = [
+            r.prefix for r in ErpCodeRule.query.filter_by(type='finished', is_disabled=True).all()
+        ]
 
         def _f(v):
             return float(v) if v is not None else 0.0
@@ -652,6 +682,12 @@ class ShippingRepository:
                 q = q.filter(sof.city.in_(cities))
             if districts:
                 q = q.filter(sof.district.in_(districts))
+            # 排除被禁用编码规则对应的发货记录
+            if disabled_prefixes:
+                from sqlalchemy import not_, or_ as sa_or_
+                q = q.filter(
+                    not_(sa_or_(*[sof.finished_code.like(p + '%') for p in disabled_prefixes]))
+                )
             return q
 
         # ── 分组维度 label 表达式 ─────────────────────────────

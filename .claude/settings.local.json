@@ -40,11 +40,24 @@
       "Bash(echo \"EXIT:$?\")",
       "Read(//c/Users/gusta/AppData/Local/Temp/claude/e--Project-tmt-library/9d1a0f4a-52fa-4923-af28-19380bb7af91/tasks/**)",
       "Bash(echo \"RC=$?\")",
-      "Read(//tmp/**)"
+      "Read(//tmp/**)",
+      "Bash(where ossutil:*)",
+      "Bash(where ossutil64:*)",
+      "Bash(node scripts/upload-release.js)",
+      "Bash(curl -s -X POST http://127.0.0.1:8765/api/version/ -H 'Content-Type: application/json' -d '{\"version\":\"1.0.1\",\"description\":\"窗口最大化适配，修复低分辨率下产品库概览页截断问题\",\"download_url\":\"https://tmt-oss.oss-cn-hangzhou.aliyuncs.com/tmt-library/releases/TMT%20Software%20Setup%201.0.1.exe\"}')",
+      "Bash(tasklist /FI \"IMAGENAME eq 两平米软件库.exe\")",
+      "Bash(tasklist /FI \"IMAGENAME eq backend.exe\")",
+      "Bash(find /e/Project/tmt-library -name \"*.py\" -type f -exec grep -l \"lifecycle\\\\|audit\\\\|tracking\\\\|history\" {} \\\\;)",
+      "Bash(ls e:/Project/tmt-library/backend/alter_tables*.py)",
+      "Bash(curl -s \"https://geo.datav.aliyun.com/areas_v3/bound/100000_full.json\" -o \"e:/Project/tmt-library/src/assets/maps/china-city.json\")",
+      "Bash(python3 -c ':*)",
+      "Bash(node -e ':*)"
     ],
     "additionalDirectories": [
       "\\tmp",
-      "e:\\Project\\tmt-library\\.claude"
+      "e:\\Project\\tmt-library\\.claude",
+      "e:\\Project\\tmt-library\\release\\win-unpacked",
+      "e:\\Project\\tmt-library\\backend"
     ]
   }
 }

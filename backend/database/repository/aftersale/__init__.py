@@ -443,7 +443,7 @@ class AftersaleRepository:
                 AftersaleReason.id.in_(reason_ids_used)
             ).update({'use_count': AftersaleReason.use_count + 1},
                      synchronize_session='fetch')
-            self._auto_update_reason_keywords(seller_remark, reason_ids_used)
+            self._auto_update_reason_keywords(seller_remark, reason_ids_used, buyer_remark)
 
         # 自动将简称写入/合并到简称库
         product_codes = [p.get('code') for p in (products or []) if p.get('code')]
@@ -501,7 +501,7 @@ class AftersaleRepository:
                 AftersaleReason.id.in_(new_reason_ids)
             ).update({'use_count': AftersaleReason.use_count + 1},
                      synchronize_session='fetch')
-            self._auto_update_reason_keywords(case.seller_remark, new_reason_ids)
+            self._auto_update_reason_keywords(case.seller_remark, new_reason_ids, case.buyer_remark)
 
         # 仅当参数非 None 时覆盖（None 表示调用方未传，保留原值）
         if assigned_models is not None:
@@ -589,17 +589,36 @@ class AftersaleRepository:
     # 每个原因最多保留关键词数
     _KW_MAX_TOTAL = 30
 
-    def _auto_update_reason_keywords(self, seller_remark, reason_ids):
+    @staticmethod
+    def _subtract_buyer_remark(seller_remark, buyer_remark):
+        """从商家备注中去掉买家留言里出现的内容，避免提取无关关键词。
+        若买家留言是商家备注的子串，直接替换为空；否则按词（分隔符切段）逐段去除。"""
+        if not buyer_remark or not seller_remark:
+            return seller_remark
+        # 情况1：买家留言完整包含在商家备注中，直接删除
+        if buyer_remark in seller_remark:
+            return seller_remark.replace(buyer_remark, ' ')
+        # 情况2：按分隔符切买家留言为段，逐段从商家备注中去除（>=4字的段才处理，避免误删）
+        buyer_segs = re.split(r'[，,。.！!？?、\s；;：:【】\[\]()（）""\'\'/\\|]+', buyer_remark)
+        result = seller_remark
+        for seg in buyer_segs:
+            seg = seg.strip()
+            if len(seg) >= 4 and seg in result:
+                result = result.replace(seg, ' ')
+        return result
+
+    def _auto_update_reason_keywords(self, seller_remark, reason_ids, buyer_remark=None):
         """
         提交工单时更新候选词频池，达到阈值的候选词晋升到原因 keywords。
         流程：
-          1. 提取 seller_remark 的 n-gram 候选词
+          1. 从 seller_remark 中去除 buyer_remark 重复内容，再提取 n-gram 候选词
           2. 对每个 reason_id，upsert aftersale_keyword_candidate（count+1）
           3. count >= 阈值 且 尚未在 keywords 中 → 晋升，并从候选池删除
         """
         if not seller_remark or not reason_ids:
             return
-        new_kws = self._extract_keywords_from_text(seller_remark)
+        effective_remark = self._subtract_buyer_remark(seller_remark, buyer_remark)
+        new_kws = self._extract_keywords_from_text(effective_remark)
         if not new_kws:
             return
 
@@ -680,11 +699,14 @@ class AftersaleRepository:
             .limit(500)
             .all()
         )
+        def _strip_num(t):
+            return re.sub(r'\d{4}[\.\-/]\d{1,2}[\.\-/]\d{1,2}', '', t).strip()  # 仅剥离日期
+
         for case in confirmed_cases:
             if not case.seller_remark:
                 continue
             ratio = difflib.SequenceMatcher(
-                None, text_lower, case.seller_remark.lower()
+                None, _strip_num(text_lower), _strip_num(case.seller_remark.lower())
             ).ratio()
             if ratio < 0.3:
                 continue
@@ -828,30 +850,35 @@ class AftersaleRepository:
         ]
         return {'channels': channels, 'provinces': provinces, 'categories': categories}
 
-    def suggest_product(self, product_codes, purchase_date_str=None, seller_remark=None):
+    def suggest_product(self, product_codes, purchase_date_str=None, seller_remark=None, buyer_remark=None):
         """
-        根据发货产品代码列表 + 购买日期，综合两个来源推断最可能的产品型号：
+        根据买家留言推断最可能的售后成品型号。
 
-        来源 A（基础，权重 +1/产品）：
-          product_finished.code → product_model → series → category
-          若购买日期已知且 listed_yymm 晚于购买月份，该型号标记为日期不符
+        发货物料代码（product_codes）只用于辅助字段（发货简称/历史原因），
+        不参与型号推断——因为多款成品共用相同物料，按物料代码匹配型号会产生误导。
 
-        来源 B（历史，权重 +2/工单）：
-          已确认的 aftersale_case（含相同产品代码）的 case_reason.model_id
-          历史记录权重更高，反映实际处理经验
+        来源（买家留言 → 型号名/系列名关键词匹配）：
+          精确匹配系列名 → +20；系列名/型号名包含买家留言 → +15；
+          买家留言包含系列名（≥2字） → +10；
+          买家留言包含 3 位尺寸数字（080/100/120）且型号名/代码含该数字 → 额外 +5
 
-        最终排序：日期符合 > 综合得分
-        返回 {category_id, series_id, model_id, ...} 或 None
+        最终排序：综合得分
+        返回 {category_id, series_id, model_id, ...} 或 None（买家留言为空时）
         """
-        if not product_codes:
-            return None
-
         from collections import defaultdict
         from sqlalchemy import or_
         from database.models.product.category import ProductCategory, ProductSeries, ProductModel
         from database.models.product.finished import ProductFinished
 
-        # purchase_date → YYYY-MM，与 listed_yymm 做字符串比较
+        # code_filters：用于辅助字段（简称/历史原因），不再用于型号推断
+        code_filters = [
+            db.func.json_search(
+                AftersaleCase.products, 'one', code, None, '$[*].code'
+            ).isnot(None)
+            for code in (product_codes or [])
+        ] if product_codes else []
+
+        # purchase_date → YYYY-MM，用于生命周期检查
         purchase_ym = None
         if purchase_date_str:
             try:
@@ -861,75 +888,146 @@ class AftersaleRepository:
             except (ValueError, AttributeError):
                 pass
 
+        # model_id → (listed_yymm, delisted_yymm) 映射（懒加载，Source C 后使用）
+        def _get_lifecycle_map():
+            rows = (
+                db.session.query(
+                    ProductFinished.model_id,
+                    ProductFinished.listed_yymm,
+                    ProductFinished.delisted_yymm,
+                )
+                .filter(ProductFinished.model_id.isnot(None))
+                .filter(ProductFinished.status != 'ignored')
+                .all()
+            )
+            lc = {}
+            for r in rows:
+                if r.model_id not in lc:
+                    lc[r.model_id] = (r.listed_yymm, r.delisted_yymm)
+            return lc
+
         # 每个 model_id 的综合信息
-        # {model_id: {'score': int, 'date_ok': bool, 'meta': row}}
-        model_score = defaultdict(lambda: {'score': 0, 'date_ok': True, 'meta': None})
+        # match_level: 2=系列+版本均命中，1=仅系列命中（无版本提示或版本未命中）
+        # 排序优先级：match_level > date_ok > score
+        model_score = defaultdict(lambda: {'score': 0.0, 'date_ok': True, 'meta': None, 'match_level': 1})
 
-        # ── 来源 A：product_finished ──────────────────────────────────────
-        finished_rows = (
-            db.session.query(
-                ProductFinished.listed_yymm,
-                ProductFinished.delisted_yymm,
-                ProductModel.id.label('model_id'),
-                ProductModel.name.label('model_name'),
-                ProductSeries.id.label('series_id'),
-                ProductSeries.name.label('series_name'),
-                ProductCategory.id.label('category_id'),
-                ProductCategory.name.label('category_name'),
-            )
-            .join(ProductModel,    ProductModel.id    == ProductFinished.model_id)
-            .join(ProductSeries,   ProductSeries.id   == ProductModel.series_id)
-            .join(ProductCategory, ProductCategory.id == ProductSeries.category_id)
-            .filter(ProductFinished.code.in_(product_codes))
-            .filter(ProductFinished.status != 'ignored')
-            .filter(ProductFinished.model_id.isnot(None))
-            .all()
-        )
-        for row in finished_rows:
-            mid = row.model_id
-            model_score[mid]['score'] += 1
-            model_score[mid]['meta']   = row
-            if purchase_ym:
-                # 购买日期早于上架日期 → 该型号尚未发布，不符合
-                if row.listed_yymm and row.listed_yymm > purchase_ym:
-                    model_score[mid]['date_ok'] = False
-                # 购买日期晚于下架日期 → 该型号已停售，不符合
-                # 无下架时间：视为当月退市（在售上限 = 当前年月）
-                effective_delisted = row.delisted_yymm or now_cst().strftime('%Y-%m')
+        # ── 来源 C：买家留言 → 产品名/系列名关键词匹配 ──────────────────────
+        # 买家留言通常直接写明产品名（如"梦境"），用于跨产品代码匹配正确的产品线。
+        # 优先级：系列名精确=买家留言 → +20；系列名/型号名包含买家留言 → +15；
+        #         买家留言包含系列名（≥2字） → +10
+        # 不依赖历史记录，只要产品库有对应数据即可命中
+        if buyer_remark and buyer_remark.strip():
+            br_lower = buyer_remark.strip().lower()
+            if len(br_lower) >= 2:
+                model_rows = (
+                    db.session.query(
+                        ProductModel.id.label('model_id'),
+                        ProductModel.name.label('model_name'),
+                        ProductModel.model_code.label('model_code'),
+                        ProductSeries.id.label('series_id'),
+                        ProductSeries.name.label('series_name'),
+                        ProductCategory.id.label('category_id'),
+                        ProductCategory.name.label('category_name'),
+                    )
+                    .join(ProductSeries,   ProductSeries.id   == ProductModel.series_id)
+                    .join(ProductCategory, ProductCategory.id == ProductSeries.category_id)
+                    .all()
+                )
+                # 尺寸归一化：将型号名中的 "x.x米" 转换为厘米数字字符串，方便与买家留言匹配
+                # 例如 "1.0米" → "100"，"0.8米" → "80"（080），"1.2米" → "120"
+                def _normalize_tokens(name):
+                    """提取型号名中的可匹配属性 token 列表（版本/尺寸/材料/颜色/手动/电动/型号版本等）"""
+                    tokens = []
+                    # 系列版本号：V3.1 → "3.1"
+                    for m in re.finditer(r'[Vv](\d+\.\d+)', name):
+                        tokens.append(m.group(1))
+                    # 尺寸：1.0米→"100"，0.8米→"080"，1.2米→"120"
+                    for m in re.finditer(r'(\d+(?:\.\d+)?)米', name):
+                        cm = round(float(m.group(1)) * 100)
+                        tokens.append(str(cm).zfill(3))   # 保留前导零如 "080"
+                        tokens.append(str(cm))             # 也匹配无前导零如 "80"
+                    # 型号版本字母：_A/_B/_C（出现在末尾），单独存放供外部比对
+                    m = re.search(r'[_\-]([A-Za-z])$', name.strip())
+                    if m:
+                        tokens.append('__variant__' + m.group(1).upper())
+                    # 其余中文词段（材料/颜色/驱动方式等，≥2字）
+                    for seg in re.findall(r'[\u4e00-\u9fff]{2,}', name):
+                        tokens.append(seg)
+                    return tokens
+
+                def _base_name(name):
+                    """去掉系列名中的版本号括号，如 '进取 (V3.1)' → '进取'"""
+                    return re.sub(r'\s*[\(（][Vv]\d.*', '', name).strip().lower()
+
+                # 买家留言中的独立字母（非V/v），代表型号版本（如A/B/C）
+                br_variant_letters = set(
+                    l.upper() for l in re.findall(r'(?<![A-Za-z])([A-UW-Za-uw-z])(?![A-Za-z])', buyer_remark)
+                )
+
+                for row in model_rows:
+                    sname      = (row.series_name or '').strip().lower()
+                    sname_base = _base_name(row.series_name or '')
+                    mname      = (row.model_name  or '').strip().lower()
+                    mid        = row.model_id
+                    if sname == br_lower:
+                        weight = 20
+                    elif sname_base and sname_base == br_lower:
+                        weight = 20
+                    elif sname and br_lower in sname:
+                        weight = 15
+                    elif br_lower in mname:
+                        weight = 15
+                    elif sname_base and len(sname_base) >= 2 and sname_base in br_lower:
+                        weight = 10
+                    elif sname and len(sname) >= 2 and sname in br_lower:
+                        weight = 10
+                    else:
+                        continue
+                    # 属性匹配加分：逐一检查型号名的属性 token 是否出现在买家留言中
+                    version_hit = False
+                    for tok in _normalize_tokens(row.model_name or ''):
+                        if tok.startswith('__variant__'):
+                            if tok[len('__variant__'):] in br_variant_letters:
+                                weight += 2
+                        elif tok in buyer_remark:
+                            weight += 2
+                            # 版本号 token（如 "3.1"）命中 → 升级 match_level
+                            if re.fullmatch(r'\d+\.\d+', tok):
+                                version_hit = True
+                    model_score[mid]['score'] += weight
+                    if version_hit:
+                        model_score[mid]['match_level'] = 2
+                    if not model_score[mid]['meta']:
+                        model_score[mid]['meta'] = row
+
+        # ── 生命周期惩罚 ──────────────────────────────────────────────────────────
+        # 规则：
+        # 1. 购买日期 > 退市日期 → 直接归零（型号已停售）
+        # 2. 上市日期 > 2024-01，且购买日期 < 上市日期 → 直接归零（型号尚未发布）
+        # 3. 上市日期 <= 2024-01，且购买日期 < 上市日期 → 扣 3 分（上市日期可能是数据录入起点，非真实发布日）
+        # 说明：发货数据从 2024-01 起有记录，所有当时有数据的型号均被设为 2024-01 上市
+        _DATA_START = '2024-01'
+        if purchase_ym and model_score:
+            lifecycle_map = _get_lifecycle_map()
+            current_ym = now_cst().strftime('%Y-%m')
+            for mid, v in model_score.items():
+                lc = lifecycle_map.get(mid)
+                if not lc:
+                    continue
+                listed_ym, delisted_ym = lc
+                effective_delisted = delisted_ym or current_ym
                 if effective_delisted < purchase_ym:
-                    model_score[mid]['date_ok'] = False
-
-        # ── 来源 B：历史已确认工单的 case_reason.model_id ────────────────
-        # 用 JSON_SEARCH 匹配 aftersale_case.products[*].code 包含任意 product_code
-        code_filters = [
-            db.func.json_search(
-                AftersaleCase.products, 'one', code, None, '$[*].code'
-            ).isnot(None)
-            for code in product_codes
-        ]
-        history_rows = (
-            db.session.query(
-                AftersaleCaseReason.model_id.label('model_id'),
-                ProductModel.name.label('model_name'),
-                ProductSeries.id.label('series_id'),
-                ProductSeries.name.label('series_name'),
-                ProductCategory.id.label('category_id'),
-                ProductCategory.name.label('category_name'),
-            )
-            .join(AftersaleCase,   AftersaleCase.id   == AftersaleCaseReason.case_id)
-            .join(ProductModel,    ProductModel.id    == AftersaleCaseReason.model_id)
-            .join(ProductSeries,   ProductSeries.id   == ProductModel.series_id)
-            .join(ProductCategory, ProductCategory.id == ProductSeries.category_id)
-            .filter(AftersaleCase.status == 'confirmed')
-            .filter(AftersaleCaseReason.model_id.isnot(None))
-            .filter(or_(*code_filters))
-            .all()
-        )
-        for row in history_rows:
-            mid = row.model_id
-            model_score[mid]['score'] += 2   # 历史记录权重更高
-            if not model_score[mid]['meta']:
-                model_score[mid]['meta'] = row
+                    # 规则1：已退市
+                    v['date_ok'] = False
+                    v['score']   = 0
+                elif listed_ym and purchase_ym < listed_ym:
+                    v['date_ok'] = False
+                    if listed_ym > _DATA_START:
+                        # 规则2：明确在 2024-01 后上市，购买日期更早 → 不可能
+                        v['score'] = 0
+                    else:
+                        # 规则3：上市日期可能只是数据起点，扣分但保留
+                        v['score'] = max(0, v['score'] - 3)
 
         # ── 历史简称 & 原因统计（共用 code_filters）────────────────────
         # 三个字段各自按频次取最高，来源均为相同产品代码的历史确认工单
@@ -999,14 +1097,56 @@ class AftersaleRepository:
             has_any = any(v is not None for v in suggestions.values())
             return suggestions if has_any else None
 
-        # 排序：日期符合 > 综合得分
+        # 排序：系列+版本匹配程度 > date_ok > 综合得分
         ranked = sorted(
-            model_score.values(),
-            key=lambda x: (x['date_ok'], x['score']),
+            model_score.items(),
+            key=lambda x: (x[1]['match_level'], x[1]['date_ok'], x[1]['score']),
             reverse=True,
         )
-        best   = ranked[0]
+        size_hints_debug = set(re.findall(r'\b(0\d{2}|1[012]\d)\b', buyer_remark or ''))
+        print(f'[suggest_debug] buyer_remark={buyer_remark!r} size_hints={size_hints_debug}')
+        for mid, v in ranked[:8]:
+            print(f'  model_id={mid} name={v["meta"].model_name if v["meta"] else "?"} code={getattr(v["meta"], "model_code", "?")} score={v["score"]:.2f} date_ok={v["date_ok"]}')
+        best   = ranked[0][1]
         meta   = best['meta']
+
+        # Top 5 候选（按系列分组，每个系列取最高分型号为代表，附带系列内所有型号明细）
+        series_data = {}
+        for mid, v in ranked:
+            m = v['meta']
+            if not m:
+                continue
+            sid = m.series_id
+            if sid not in series_data:
+                series_data[sid] = {
+                    'mid': mid, 'score': v['score'], 'meta': m,
+                    'date_ok': v['date_ok'], 'match_level': v['match_level'], 'models': []
+                }
+            series_data[sid]['models'].append({
+                'id':         mid,
+                'model_code': getattr(m, 'model_code', None),
+                'name':       m.model_name,
+                'score':      v['score'],
+                'date_ok':    v['date_ok'],
+            })
+        top_series = sorted(series_data.values(), key=lambda x: (x['match_level'], x['date_ok'], x['score']), reverse=True)[:5]
+        max_score  = top_series[0]['score'] if top_series else 1
+        candidates = [
+            {
+                'category_id':   s['meta'].category_id,
+                'series_id':     s['meta'].series_id,
+                'model_id':      s['mid'],
+                'category_name': s['meta'].category_name,
+                'series_name':   s['meta'].series_name,
+                'model_name':    s['meta'].model_name,
+                'model_code':    getattr(s['meta'], 'model_code', None),
+                'score':         round(s['score'] / max_score, 2),
+                'date_ok':       s['date_ok'],
+                'models':        sorted(s['models'], key=lambda x: -x['score']),
+            }
+            for s in top_series
+        ]
+
         return {
             'category_id':   meta.category_id,
             'series_id':     meta.series_id,
@@ -1014,7 +1154,8 @@ class AftersaleRepository:
             'category_name': meta.category_name,
             'series_name':   meta.series_name,
             'model_name':    meta.model_name,
-            'date_ok':       best['date_ok'],   # 购买日期是否在生命周期内
+            'date_ok':       best['date_ok'],
+            'candidates':    candidates,
             **suggestions,
         }
 

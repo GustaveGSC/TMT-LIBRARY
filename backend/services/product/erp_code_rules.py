@@ -40,6 +40,13 @@ class ErpCodeRuleService:
         rule = ErpCodeRuleRepository.update(rule, **kwargs)
         return Result.ok(data=rule.to_dict(), message='更新成功')
 
+    def toggle_disabled(self, rule_id: int) -> Result:
+        rule = ErpCodeRuleRepository.get_by_id(rule_id)
+        if not rule:
+            return Result.fail(f'规则 {rule_id} 不存在')
+        rule = ErpCodeRuleRepository.update(rule, is_disabled=not rule.is_disabled)
+        return Result.ok(data=rule.to_dict(), message='已' + ('禁用' if rule.is_disabled else '启用'))
+
     def delete(self, rule_id: int) -> Result:
         rule = ErpCodeRuleRepository.get_by_id(rule_id)
         if not rule:

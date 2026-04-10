@@ -1,12 +1,12 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import WindowControls from '@/components/common/WindowControls.vue'
 import ProductTable  from './ProductTable.vue'
 import ProductImage  from './ProductImage.vue'
 import ProductChart  from './ProductChart.vue'
-import { ArrowLeft, Upload, Setting, Folder, Collection, Memo } from '@element-plus/icons-vue'
+import { ArrowLeft, Upload, Setting, Folder, Collection, Memo, Timer } from '@element-plus/icons-vue'
 import { usePermission } from '@/composables/usePermission'
 import http from '@/api/http'
 
@@ -70,6 +70,15 @@ const showCategoryDialog = ref(false)
 const showTagDialog    = ref(false)
 const showParamDialog  = ref(false)
 
+// ── 生命周期更新状态 ──────────────────────────────
+const showLifecycleDialog = ref(false)
+const lifecycleRunning    = ref(false)
+const lifecycleCurrent    = ref(0)
+const lifecycleTotal      = ref(0)
+const lifecycleProgress   = computed(() =>
+  lifecycleTotal.value > 0 ? Math.round((lifecycleCurrent.value / lifecycleTotal.value) * 100) : 0
+)
+
 // ── 顶部导航配置 ──────────────────────────────────
 const navItems = [
   {
@@ -92,6 +101,62 @@ const overviewStats = ref({
 // 分类配色循环
 const CAT_COLORS = ['#c4883a', '#4a8fc0', '#6ab47a', '#9c6fba', '#e07070', '#70aacc', '#e0a040', '#7abcaa']
 const categoryStats = ref([])
+
+// ── 生命周期更新 ──────────────────────────────────
+async function handleLifecycleUpdate() {
+  if (lifecycleRunning.value) return
+  showLifecycleDialog.value = true
+  lifecycleRunning.value  = true
+  lifecycleCurrent.value  = 0
+  lifecycleTotal.value    = 0
+
+  try {
+    const { ElMessage } = await import('element-plus')
+    const res = await http.post('/api/product/lifecycle/update')
+    if (!res.success) {
+      ElMessage.error(res.message || '启动失败')
+      showLifecycleDialog.value = false
+      return
+    }
+    const taskId = res.data.task_id
+
+    await new Promise((resolve, reject) => {
+      const es = new EventSource(
+        `http://127.0.0.1:8765/api/product/lifecycle/progress/${taskId}`
+      )
+      es.onmessage = (event) => {
+        const data = JSON.parse(event.data)
+        if (data.step === 'processing') {
+          lifecycleCurrent.value = data.current
+          lifecycleTotal.value   = data.total
+        } else if (data.step === 'done') {
+          es.close()
+          const d = data.data
+          ElMessage.success(
+            `生命周期更新完成，共更新 ${d.updated} 条记录（${d.total_models} 个型号）`
+          )
+          showLifecycleDialog.value = false
+          resolve()
+        } else if (data.step === 'error') {
+          es.close()
+          ElMessage.error(data.message || '更新失败')
+          showLifecycleDialog.value = false
+          reject(new Error(data.message))
+        }
+      }
+      es.onerror = () => {
+        es.close()
+        ElMessage.error('连接中断，请重试')
+        showLifecycleDialog.value = false
+        reject(new Error('SSE 连接中断'))
+      }
+    })
+  } catch {
+    // ElMessage 已在内部处理
+  } finally {
+    lifecycleRunning.value = false
+  }
+}
 
 // ── 返回首页并还原窗口尺寸 ────────────────────────
 function handleBack() {
@@ -267,6 +332,13 @@ onMounted(async () => {
                 <div class="tool-btn-desc">维护成品参数键名与分组</div>
               </div>
             </button>
+            <button class="tool-btn" @click="handleLifecycleUpdate">
+              <div class="tool-btn-icon"><el-icon><Timer /></el-icon></div>
+              <div class="tool-btn-body">
+                <div class="tool-btn-title">更新生命周期</div>
+                <div class="tool-btn-desc">按发货数据推算上市/退市日期</div>
+              </div>
+            </button>
           </div>
         </div>
 
@@ -306,6 +378,31 @@ onMounted(async () => {
     <!-- ── 参数管理弹窗 ────────────────────────────── -->
     <el-dialog v-model="showParamDialog" title="参数管理" width="640" align-center :close-on-click-modal="false">
       <ProductParam />
+    </el-dialog>
+
+    <!-- ── 生命周期更新进度弹窗 ──────────────────────── -->
+    <el-dialog
+      v-model="showLifecycleDialog"
+      title="更新生命周期"
+      width="420"
+      align-center
+      :close-on-click-modal="false"
+      :show-close="false"
+    >
+      <div class="lifecycle-progress-body">
+        <div class="lifecycle-progress-tip">
+          正在根据发货数据推算各型号上市/退市日期，请稍候…
+        </div>
+        <el-progress
+          :percentage="lifecycleProgress"
+          :stroke-width="10"
+          :color="'#c4883a'"
+          style="width: 100%"
+        />
+        <div class="lifecycle-progress-text">
+          {{ lifecycleCurrent }} / {{ lifecycleTotal }} 个型号
+        </div>
+      </div>
     </el-dialog>
 
   </div>
@@ -519,6 +616,20 @@ onMounted(async () => {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 .page-loading-text { font-size: 13px; color: var(--text-muted); }
+
+/* ── 生命周期进度弹窗 ─────────────────────────── */
+.lifecycle-progress-body {
+  display: flex; flex-direction: column;
+  align-items: center; gap: 16px;
+  padding: 8px 0 4px;
+}
+.lifecycle-progress-tip {
+  font-size: 13px; color: var(--text-muted);
+  line-height: 1.6; text-align: center;
+}
+.lifecycle-progress-text {
+  font-size: 12px; color: var(--text-muted);
+}
 
 /* ── 弹窗占位 ─────────────────────────────────── */
 .dialog-placeholder {

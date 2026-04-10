@@ -11,8 +11,8 @@ import FinishedExpandRow from './FinishedExpandRow.vue'
 const finishedStore = useFinishedStore()
 const packagedStore = usePackagedStore()
 
-// storeToRefs 保证 sortField/sortOrder/status 响应式可读
-const { sortField, sortOrder, status } = storeToRefs(finishedStore)
+// storeToRefs 保证 sortField/sortOrder/status/lifecycle 响应式可读
+const { sortField, sortOrder, status, lifecycle } = storeToRefs(finishedStore)
 
 // ── 状态 tabs ─────────────────────────────────────
 const STATUS_TABS = [
@@ -20,6 +20,14 @@ const STATUS_TABS = [
   { value: 'unrecorded', label: '未录入'   },
   { value: 'recorded',   label: '已录入'   },
   { value: 'ignored',    label: '无需录入' },
+]
+
+// ── 生命周期 tabs ─────────────────────────────────
+const LIFECYCLE_TABS = [
+  { value: '',         label: '全部'     },
+  { value: 'listed',   label: '已上市'   },
+  { value: 'delisted', label: '已退市'   },
+  { value: 'unknown',  label: '状态未知' },
 ]
 
 // ── packaged 折叠 ─────────────────────────────────
@@ -218,9 +226,18 @@ watch(
             @click="status = t.value"
           >{{ t.label }}</button>
         </div>
+        <div class="status-tabs">
+          <button v-for="t in LIFECYCLE_TABS" :key="t.value"
+            class="tab-btn" :class="{ active: lifecycle === t.value }"
+            @click="lifecycle = t.value"
+          >{{ t.label }}</button>
+        </div>
       </div>
 
-      <div v-if="finishedStore.error" class="error-bar">{{ finishedStore.error }}</div>
+      <div v-if="finishedStore.error" class="error-bar">
+        {{ finishedStore.error }}
+        <button class="btn-retry" @click="finishedStore.load()">再试一次</button>
+      </div>
 
       <!-- 表格 -->
       <div class="table-wrap">
@@ -243,7 +260,7 @@ watch(
               <button class="reset-btn" @click.stop="resetFilters" title="重置筛选和排序">↺</button>
             </template>
             <template #default="{ row }">
-              <FinishedExpandRow :row="row" @saved="finishedStore.load()" />
+              <FinishedExpandRow :row="row" @saved="finishedStore.refreshItem(row.code)" />
             </template>
           </el-table-column>
 
@@ -458,6 +475,7 @@ watch(
           layout="total, sizes, prev, pager, next"
           background
         />
+        <span v-if="finishedStore.loadingMore" class="loading-more-hint">后台加载中…</span>
       </div>
     </div>
 
@@ -514,8 +532,16 @@ watch(
 .pg-bar {
   padding: 6px 12px;
   border-top: 1px solid var(--border);
-  display: flex; justify-content: flex-end;
+  display: flex; align-items: center; justify-content: flex-end; gap: 12px;
   flex-shrink: 0; background: var(--bg-table-hover);
+}
+.loading-more-hint {
+  font-size: 11px; color: var(--text-secondary);
+  animation: blink 1.2s ease-in-out infinite;
+}
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
 }
 
 .card-topbar {
@@ -533,7 +559,9 @@ watch(
 .tab-btn:hover  { background: var(--bg-table-header); color: var(--text-primary); }
 .tab-btn.active { background: var(--accent-bg); color: var(--accent); border-color: rgba(0,0,0,0.12); font-weight: 600; }
 .total-hint { font-size: 12px; color: var(--text-muted); }
-.error-bar  { padding: 6px 14px; font-size: 12px; color: #d05a3c; background: #fff5f3; border-bottom: 1px solid #ffd6cc; flex-shrink: 0; }
+.error-bar  { display: flex; align-items: center; gap: 10px; padding: 6px 14px; font-size: 12px; color: #d05a3c; background: #fff5f3; border-bottom: 1px solid #ffd6cc; flex-shrink: 0; }
+.btn-retry  { height: 22px; padding: 0 10px; border: 1px solid #d05a3c; border-radius: 5px; background: transparent; color: #d05a3c; font-size: 11px; font-family: inherit; cursor: pointer; transition: all 0.15s; white-space: nowrap; }
+.btn-retry:hover { background: #d05a3c; color: #fff; }
 
 .table-wrap { flex: 1; min-height: 0; overflow: hidden; }
 

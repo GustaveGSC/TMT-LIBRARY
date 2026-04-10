@@ -5,6 +5,7 @@ from flask import Flask
 from flask_cors import CORS
 from database.base import db
 from dotenv import load_dotenv
+from sqlalchemy.pool import NullPool
 
 # ── 环境变量加载（兼容打包后路径）────────────────────
 if getattr(sys, 'frozen', False):
@@ -24,12 +25,10 @@ def create_app() -> Flask:
         f"/{os.getenv('DB_NAME')}"
     )
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-    app.config["SQLALCHEMY_POOL_SIZE"]      = 5
-    app.config["SQLALCHEMY_MAX_OVERFLOW"]   = 10
-    app.config["SQLALCHEMY_POOL_RECYCLE"]   = 120   # 2 分钟，短于云环境 TCP 空闲超时
-    app.config["SQLALCHEMY_POOL_TIMEOUT"]   = 15
+    # 单用户桌面应用使用 NullPool：每次请求用完即释放连接，
+    # 彻底避免空闲连接被云端防火墙/NAT 静默关闭后复用失败的问题
     app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
-        "pool_pre_ping": True,
+        "poolclass": NullPool,
         "connect_args": {
             "connect_timeout": 10,   # 建连超时
             "read_timeout":    30,   # 读超时，防止查询挂起
@@ -52,6 +51,7 @@ def create_app() -> Flask:
     from routes.product.param import param_bp
     from routes.shipping import shipping_bp
     from routes.aftersale import aftersale_bp
+    from routes.product.lifecycle import lifecycle_bp
 
     app.register_blueprint(account_bp,        url_prefix="/api/account")
     app.register_blueprint(version_bp,        url_prefix="/api/version")
@@ -63,6 +63,7 @@ def create_app() -> Flask:
     app.register_blueprint(param_bp,          url_prefix="/api/product/params")
     app.register_blueprint(shipping_bp,       url_prefix="/api/shipping")
     app.register_blueprint(aftersale_bp,      url_prefix="/api/aftersale")
+    app.register_blueprint(lifecycle_bp,      url_prefix="/api/product/lifecycle")
 
     # ── 健康检查 ──────────────────────────────────────
     @app.get("/health")

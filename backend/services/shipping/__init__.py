@@ -10,6 +10,15 @@ from result import Result
 CST = timezone(timedelta(hours=8))
 def now_cst(): return datetime.now(CST).replace(tzinfo=None)
 
+# 直辖市省名集合：这些省的 city 字段统一填写为省名本身
+_MUNICIPALITY_PROVINCES = {'北京市', '天津市', '上海市', '重庆市'}
+
+def _normalize_city(province: str, city) -> str:
+    """直辖市 city 统一归一到省名（如北京市），避免出现区级名或 null"""
+    if province in _MUNICIPALITY_PROVINCES:
+        return province
+    return city
+
 # ── 必要列名（按列名匹配，与列顺序无关）─────────────
 _REQUIRED_COL_NAMES = {
     '电商主订单号', '单据日期', '渠道名称', '渠道商', '渠道商名称',
@@ -96,7 +105,7 @@ def _extract_row(row, col_map: Dict[str, int]) -> Dict:
         'quantity':           _parse_quantity(gc('数量')),
         'country':            _str(gc('国家'))          or None,
         'province':           _str(gc('省份'))          or None,
-        'city':               _str(gc('市区'))          or None,
+        'city':               _normalize_city(_str(gc('省份')) or '', _str(gc('市区')) or None),
         'district':           _str(gc('县区'))          or None,
         'street':             _str(gc('街道'))          or None,
         'address':            _str(gc('详细地址'))      or None,
@@ -275,6 +284,11 @@ def _resolve_orders(order_nos: List[str], progress_cb=None):
     from database.models.product.finished import ProductFinished, ProductPackaged
     from database.base import db
 
+    total_orders = len(order_nos)
+
+    if progress_cb:
+        progress_cb('preparing', message='正在加载产品库…', total=total_orders)
+
     # 加载所有有产成品关联的成品
     finished_list = ProductFinished.query.all()
     # finished_map: finished_code → (finished_name, frozenset of packaged codes)
@@ -291,9 +305,24 @@ def _resolve_orders(order_nos: List[str], progress_cb=None):
         reverse=True,
     )
 
-    # 获取各订单的产成品数据（发货）和销退数据
-    order_data   = shipping_repository.get_order_products(order_nos)
-    return_data  = shipping_repository.get_order_return_products(order_nos)
+    # 分批加载发货数据，每批推送一次进度
+    CHUNK = 2000
+    order_data: Dict = {}
+    for i in range(0, total_orders, CHUNK):
+        chunk = order_nos[i:i + CHUNK]
+        order_data.update(shipping_repository.get_order_products(chunk))
+        if progress_cb:
+            progress_cb('preparing', message='正在加载发货数据…',
+                        current=min(i + CHUNK, total_orders), total=total_orders)
+
+    # 分批加载销退数据
+    return_data: Dict = {}
+    for i in range(0, total_orders, CHUNK):
+        chunk = order_nos[i:i + CHUNK]
+        return_data.update(shipping_repository.get_order_return_products(chunk))
+        if progress_cb:
+            progress_cb('preparing', message='正在加载销退数据…',
+                        current=min(i + CHUNK, total_orders), total=total_orders)
 
     # 对每个订单预先跑一次贪心匹配，得到 {order_no: {finished_code: return_qty}}
     return_resolved: Dict[str, Dict] = {}
@@ -321,8 +350,8 @@ def _resolve_orders(order_nos: List[str], progress_cb=None):
     total_orders = len(order_data)
 
     for idx, (order_no, data) in enumerate(order_data.items()):
-        # 每处理 50 个订单推送一次进度
-        if progress_cb and idx % 50 == 0:
+        # 每处理 100 个订单推送一次进度
+        if progress_cb and idx % 100 == 0:
             progress_cb('resolving', current=idx, total=total_orders)
         remaining = dict(data['product_codes'])  # {product_code: qty}
         meta = data['meta']
@@ -357,7 +386,7 @@ def _resolve_orders(order_nos: List[str], progress_cb=None):
                 'channel_code':       meta.get('channel_code'),
                 'channel_org_name':   meta.get('channel_org_name'),
                 'province':           meta['province'],
-                'city':               meta.get('city'),
+                'city':               _normalize_city(meta['province'], meta.get('city')),
                 'district':           meta.get('district'),
                 'resolved_at':        resolved_at,
             })
@@ -380,13 +409,15 @@ def _resolve_orders(order_nos: List[str], progress_cb=None):
                     'channel_code':       meta.get('channel_code'),
                     'channel_org_name':   meta.get('channel_org_name'),
                     'province':           meta['province'],
+                    'city':               _normalize_city(meta['province'], meta.get('city')),
+                    'district':           meta.get('district'),
                     'resolved_at':        resolved_at,
                 })
 
     if progress_cb:
         progress_cb('resolving', current=total_orders, total=total_orders)
 
-    shipping_repository.bulk_insert_order_finished(to_insert)
+    shipping_repository.bulk_insert_order_finished(to_insert, progress_cb=progress_cb)
 
 
 def _get_finished_name(finished) -> str:
@@ -557,8 +588,6 @@ class ShippingService:
         """全量重新计算所有订单的成品组合"""
         all_order_nos = shipping_repository.get_all_order_nos()
         if all_order_nos:
-            if progress_cb:
-                progress_cb('resolving', current=0, total=len(all_order_nos))
             _resolve_orders(all_order_nos, progress_cb=progress_cb)
         return {'resolved': len(all_order_nos)}
 

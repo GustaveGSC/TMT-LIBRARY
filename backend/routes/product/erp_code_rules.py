@@ -27,6 +27,11 @@ def update_rule(rule_id: int):
     return erp_code_rule_service.update(rule_id, **body).to_response()
 
 
+@erp_code_rules_bp.patch('/<int:rule_id>/toggle-disabled')
+def toggle_disabled(rule_id: int):
+    return erp_code_rule_service.toggle_disabled(rule_id).to_response()
+
+
 @erp_code_rules_bp.delete('/<int:rule_id>')
 def delete_rule(rule_id: int):
     return erp_code_rule_service.delete(rule_id).to_response()

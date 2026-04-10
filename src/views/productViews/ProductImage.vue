@@ -11,14 +11,15 @@ const finishedStore = useFinishedStore()
 
 // ── 本地筛选（独立于表格视图的 store filters）────
 const searchText   = ref('')
-const filterMarket = ref('')   // '' | 'domestic' | 'foreign' | 'both'
+const filterMarket    = ref('')   // '' | 'domestic' | 'foreign' | 'both'
+const filterLifecycle = ref('')   // '' | 'listed' | 'delisted' | 'unknown'
 const filterSeries = ref([])   // 系列名称（多选）
 const sortBy       = ref('code') // 'code' | 'listed_yymm'
 
-// 系列选项（从全量数据提取）
+// 系列选项（从 activeItems 提取，已排除禁用编码规则对应的成品）
 const seriesOptions = computed(() => {
   const seen = new Set()
-  for (const r of finishedStore.rawItems) {
+  for (const r of finishedStore.activeItems) {
     if (r.status === 'unrecorded' || r.status === 'ignored') continue
     if (r.series_name) seen.add(r.series_name)
   }
@@ -26,6 +27,13 @@ const seriesOptions = computed(() => {
 })
 
 // ── 筛选选项 ────────────────────────────────────────
+const LIFECYCLE_TABS = [
+  { key: '',         label: '全部'     },
+  { key: 'listed',   label: '已上市'   },
+  { key: 'delisted', label: '已退市'   },
+  { key: 'unknown',  label: '状态未知' },
+]
+
 const MARKET_TABS = [
   { key: '',         label: '全部'   },
   { key: 'domestic', label: '内销'   },
@@ -33,12 +41,19 @@ const MARKET_TABS = [
   { key: 'both',     label: '内外销' },
 ]
 
-// ── 过滤后列表（直接读 rawItems，不影响表格视图 filters）
+// ── 过滤后列表（基于 activeItems，已排除禁用编码规则对应的成品）
 const filteredItems = computed(() => {
-  let list = finishedStore.rawItems
+  let list = finishedStore.activeItems
 
   // 始终过滤掉未录入和无需录入的成品
   list = list.filter(r => r.status !== 'unrecorded' && r.status !== 'ignored')
+  if (filterLifecycle.value === 'listed') {
+    list = list.filter(r => r.listed_yymm && !r.delisted_yymm)
+  } else if (filterLifecycle.value === 'delisted') {
+    list = list.filter(r => r.listed_yymm && r.delisted_yymm)
+  } else if (filterLifecycle.value === 'unknown') {
+    list = list.filter(r => !r.listed_yymm)
+  }
   if (filterMarket.value) {
     list = list.filter(r => r.market === filterMarket.value)
   }
@@ -143,6 +158,17 @@ onMounted(async () => {
       >
         <el-option v-for="s in seriesOptions" :key="s" :label="s" :value="s" />
       </el-select>
+
+      <!-- 生命周期筛选 -->
+      <div class="filter-tabs">
+        <button
+          v-for="tab in LIFECYCLE_TABS"
+          :key="tab.key"
+          class="filter-tab"
+          :class="{ active: filterLifecycle === tab.key }"
+          @click="filterLifecycle = tab.key"
+        >{{ tab.label }}</button>
+      </div>
 
       <!-- 市场筛选 -->
       <div class="filter-tabs">

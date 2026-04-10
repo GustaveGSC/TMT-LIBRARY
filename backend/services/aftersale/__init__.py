@@ -336,7 +336,8 @@ class AftersaleService:
         product_codes = data.get('product_codes', [])
         purchase_date = data.get('purchase_date')
         seller_remark = data.get('seller_remark')
-        result = _repo.suggest_product(product_codes, purchase_date, seller_remark)
+        buyer_remark  = data.get('buyer_remark')
+        result = _repo.suggest_product(product_codes, purchase_date, seller_remark, buyer_remark)
         return Result.ok(data=result)
 
     # ── 自动匹配 ────────────────────────────────────────────────────────────

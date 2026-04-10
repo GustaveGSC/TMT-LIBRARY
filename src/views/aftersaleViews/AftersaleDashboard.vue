@@ -196,6 +196,14 @@ function resetFilters() {
   provinces.value = []
   reasonCatId.value = null
 }
+
+// 外部调用刷新（工单确认后同步数据）
+async function refresh() {
+  await loadStats()
+  await loadChart()
+}
+
+defineExpose({ refresh })
 </script>
 
 <template>

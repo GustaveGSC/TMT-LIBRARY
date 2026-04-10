@@ -27,6 +27,7 @@ class ErpCodeRule(db.Model):
     prefix      = db.Column(db.String(64),  nullable=False)
     type        = db.Column(db.String(20),  nullable=False)
     description = db.Column(db.String(255), nullable=True)
+    is_disabled = db.Column(db.Boolean,     nullable=False, default=False)
     created_at  = db.Column(db.DateTime,    nullable=False, default=now_cst)
 
     __table_args__ = (
@@ -40,5 +41,6 @@ class ErpCodeRule(db.Model):
             'type':        self.type,
             'type_label':  TYPE_LABELS.get(self.type, self.type),
             'description': self.description,
+            'is_disabled': bool(self.is_disabled),
             'created_at':  self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
         }

@@ -16,6 +16,10 @@ const router = useRouter()
 const activeTab    = ref('process')   // 'process' | 'chart' | 'data'
 const pendingCount = ref(0)
 
+// 子组件引用（用于外部触发刷新）
+const dashboardRef = ref(null)
+const tableRef     = ref(null)
+
 // ── 生命周期 ──────────────────────────────────────
 onMounted(async () => {
   window.electronAPI?.maximizeApp?.()
@@ -33,9 +37,11 @@ async function loadPendingCount() {
   if (res.success) pendingCount.value = res.data.count
 }
 
-// 处理工单确认后更新待处理数
+// 处理工单确认后：更新待处理数 + 刷新图表和数据列表
 function onCaseConfirmed() {
   loadPendingCount()
+  dashboardRef.value?.refresh()
+  tableRef.value?.refresh()
 }
 </script>
 
@@ -72,8 +78,8 @@ function onCaseConfirmed() {
         v-show="activeTab === 'process'"
         @case-confirmed="onCaseConfirmed"
       />
-      <AftersaleDashboard v-show="activeTab === 'chart'" />
-      <AftersaleTable     v-show="activeTab === 'data'" />
+      <AftersaleDashboard ref="dashboardRef" v-show="activeTab === 'chart'" />
+      <AftersaleTable     ref="tableRef"     v-show="activeTab === 'data'" />
     </main>
 
   </div>

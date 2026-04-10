@@ -1,8 +1,12 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
 import { ref, onMounted, computed } from 'vue'
-import { WarningFilled, Plus, Delete, Edit } from '@element-plus/icons-vue'
+import { WarningFilled, Plus, Delete, Edit, VideoPause, VideoPlay } from '@element-plus/icons-vue'
 import http from '@/api/http'
+import { useFinishedStore } from '@/stores/product/finished'
+
+// ── Store ─────────────────────────────────────────
+const finishedStore = useFinishedStore()
 
 // ── 类型配置 ──────────────────────────────────────
 const TYPE_OPTIONS = [
@@ -22,8 +26,18 @@ const errorMsg = ref('')
 const filterType = ref('')
 
 const filteredRules = computed(() => {
-  if (!filterType.value) return rules.value
-  return rules.value.filter(r => r.type === filterType.value)
+  const list = filterType.value
+    ? rules.value.filter(r => r.type === filterType.value)
+    : rules.value
+  // 按说明排序（无说明的排到最后）
+  return [...list].sort((a, b) => {
+    const da = a.description || ''
+    const db = b.description || ''
+    if (!da && !db) return 0
+    if (!da) return 1
+    if (!db) return -1
+    return da.localeCompare(db, 'zh-CN')
+  })
 })
 
 // ── 新增/编辑表单 ──────────────────────────────────
@@ -95,6 +109,28 @@ async function handleSubmit() {
     formError.value = e.message || '网络错误'
   } finally {
     submitting.value = false
+  }
+}
+
+// ── 禁用/启用规则 ────────────────────────────────────
+const togglingId = ref(null)
+
+async function handleToggleDisabled(rule) {
+  togglingId.value = rule.id
+  try {
+    const res = await http.patch(`/api/erp-code-rules/${rule.id}/toggle-disabled`)
+    if (res.success) {
+      // 本地更新行状态
+      rule.is_disabled = res.data.is_disabled
+      // 通知 store 刷新禁用前缀，表格/图片/图表视图立即生效
+      finishedStore.reloadDisabledPrefixes()
+    } else {
+      errorMsg.value = res.message || '操作失败'
+    }
+  } catch (e) {
+    errorMsg.value = e.message || '网络错误'
+  } finally {
+    togglingId.value = null
   }
 }
 
@@ -170,22 +206,37 @@ onMounted(loadRules)
         <div class="rt-col col-actions"></div>
       </div>
       <div class="rules-table-body">
-        <div v-for="rule in filteredRules" :key="rule.id" class="rt-row">
+        <div
+          v-for="rule in filteredRules"
+          :key="rule.id"
+          class="rt-row"
+          :class="{ 'row-disabled': rule.is_disabled }"
+        >
           <div class="rt-col col-prefix">
-            <span class="prefix-tag">{{ rule.prefix }}</span>
+            <span class="prefix-tag" :class="{ 'prefix-disabled': rule.is_disabled }">{{ rule.prefix }}</span>
           </div>
           <div class="rt-col col-type">
             <span
               class="type-badge"
-              :style="{
+              :style="rule.is_disabled ? {} : {
                 color:       typeMap[rule.type]?.color,
                 background:  typeMap[rule.type]?.color + '18',
                 borderColor: typeMap[rule.type]?.color + '40',
               }"
+              :class="{ 'badge-disabled': rule.is_disabled }"
             >{{ rule.type_label }}</span>
           </div>
           <div class="rt-col col-desc">{{ rule.description || '—' }}</div>
           <div class="rt-col col-actions">
+            <button
+              class="btn-icon"
+              :class="rule.is_disabled ? 'btn-enable' : 'btn-disable'"
+              :title="rule.is_disabled ? '启用' : '禁用'"
+              :disabled="togglingId === rule.id"
+              @click="handleToggleDisabled(rule)"
+            >
+              <el-icon><VideoPlay v-if="rule.is_disabled" /><VideoPause v-else /></el-icon>
+            </button>
             <button class="btn-icon" title="编辑" @click="openEdit(rule)">
               <el-icon><Edit /></el-icon>
             </button>
@@ -334,7 +385,7 @@ onMounted(loadRules)
 .col-prefix  { width: 140px; flex-shrink: 0; }
 .col-type    { width: 80px;  flex-shrink: 0; }
 .col-desc    { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.col-actions { width: 64px;  flex-shrink: 0; display: flex; gap: 4px; justify-content: flex-end; padding-right: 0; }
+.col-actions { width: 94px;  flex-shrink: 0; display: flex; gap: 4px; justify-content: flex-end; padding-right: 0; }
 
 .rt-row {
   display: flex; align-items: center; min-height: 44px;
@@ -362,7 +413,19 @@ onMounted(loadRules)
 }
 .btn-icon:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
 .btn-icon.danger:hover { border-color: #d05a3c; color: #d05a3c; background: rgba(208,90,60,0.06); }
+.btn-icon.btn-disable:hover { border-color: #e09050; color: #e09050; background: rgba(196,136,58,0.06); }
+.btn-icon.btn-enable:hover  { border-color: #4a8fc0; color: #4a8fc0; background: rgba(74,143,192,0.06); }
 .btn-icon:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── 禁用行样式 ───────────────────────────────────── */
+.rt-row.row-disabled { opacity: 0.45; }
+.prefix-tag.prefix-disabled { text-decoration: line-through; }
+.type-badge.badge-disabled {
+  color: var(--text-muted);
+  background: var(--bg);
+  border-color: var(--border);
+  border: 1px solid;
+}
 
 /* ── 表单卡片 ─────────────────────────────────── */
 .form-card {

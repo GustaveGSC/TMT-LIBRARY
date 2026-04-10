@@ -228,6 +228,7 @@ function parsePurchaseDateFromRemark(text) {
 
 // 选中某个待处理订单：自动创建第一条售后内容并推断型号
 async function selectOrder(order) {
+  console.log('[selectOrder]', order.ecommerce_order_no, 'products:', order.products)
   currentOrder.value  = order
   aftersaleDate.value = order.shipped_date || null
   purchaseDate.value  = parsePurchaseDateFromRemark(order.seller_remark)
@@ -245,11 +246,12 @@ async function selectOrder(order) {
   let reasonCandidates = []     // auto-match 返回的原因候选列表
 
   await Promise.all([
-    order.products?.length
+    (order.buyer_remark?.trim() || order.products?.length)
       ? http.post('/api/aftersale/suggest-product', {
-          product_codes: order.products.map(p => p.code),
+          product_codes: order.products?.map(p => p.code) || [],
           purchase_date: purchaseDate.value || null,
           seller_remark: order.seller_remark || null,
+          buyer_remark:  order.buyer_remark  || null,
         }).then(r => { if (r.success && r.data) apiResult = r.data })
       : Promise.resolve(),
     debugText.trim()
@@ -324,7 +326,18 @@ async function selectOrder(order) {
       model_code:    names.model_code,
       score:                  null,
       confidence:             'high',
-      candidates:             [],
+      candidates:             (apiMatch.candidates || []).map(c => {
+        const seriesMax = c.models?.[0]?.score || 1
+        return {
+          ...c,
+          models: (c.models || []).map(m => ({
+            ...m,
+            score: m.score / seriesMax,
+            lifecycleOk:     m.date_ok !== false,
+            lifecycleStatus: m.date_ok === false ? 'too_early' : null,
+          })),
+        }
+      }),
       alias_source:           aliasSource,
       alias_value:            shippingAlias || null,
       aftersale_alias_value:  aftersaleAlias,
@@ -483,7 +496,7 @@ function calcMatchScore(text, name) {
   // 例如：text="明睿 2022.6.1"，name="明睿（V1.1）" → tCn="明睿", nCn="明睿" → match
   const tCn = t.replace(/[^\u4e00-\u9fff]/g, '')
   const nCn = n.replace(/[^\u4e00-\u9fff]/g, '')
-  if (tCn && nCn && tCn.includes(nCn)) {
+  if (tCn && nCn && nCn.length >= 2 && tCn.includes(nCn)) {
     // 汉字部分匹配后，再检查名称里的版本号是否也出现在文本中
     // 例如 "2.2骑士" → 匹配 "骑士（V2.2）"(0.95) 优先于 "骑士（V2.1）"(0.9)
     // 用独立边界正则避免 "11.1" 误匹配 "1.1"
@@ -551,6 +564,14 @@ function matchTextToModel(remark1, remark2) {
           calcMatchScore(text, model.code)       * 0.5,
           calcMatchScore(text, model.model_code) * 0.5,
         )
+        // 变体字母加成：型号末尾为单字母（如 -GN-B），且该字母以词首形式出现在文本中（如"B新款"）
+        const variantM = model.model_code?.match(/-([A-Z])$/i)
+        if (variantM) {
+          const letter = variantM[1]
+          if (new RegExp(`(^|[\\s（(【])${letter}(?=[\\u4e00-\\u9fff0-9])`, 'i').test(text)) {
+            s += 0.1
+          }
+        }
         // 生命周期调整：不论文本得分高低，只要有购买日期就参与计算
         // 无法从文本区分型号时（各型号文本分相同），生命周期是唯一区分依据
         let lifecycleOk = null      // null=无数据, true=在周期内, false=不符
@@ -1262,8 +1283,8 @@ async function ignoreCase() {
                 </div>
               </div>
 
-              <!-- 候选排名（仅文本匹配时） -->
-              <div v-if="matchDebug.source === 'text' && matchDebug.candidates?.length" class="debug-row debug-row--top">
+              <!-- 候选排名 -->
+              <div v-if="matchDebug.candidates?.length" class="debug-row debug-row--top">
                 <span class="debug-key">候选排名</span>
                 <div class="candidates-list">
                   <div
@@ -1630,9 +1651,10 @@ async function ignoreCase() {
 
 /* 售后内容卡片 */
 .content-item {
-  background: #faf7f2; border: 1px solid var(--border);
+  background: #ffffff; border: 1px solid #d8c8b0;
   border-radius: 10px; padding: 0 14px 12px;
   margin-bottom: 10px;
+  box-shadow: 0 2px 8px rgba(80,60,40,0.12);
 }
 
 /* 卡片头：序号 + 删除 */

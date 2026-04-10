@@ -130,6 +130,22 @@ async function ensureChinaMap() {
   }
 }
 
+/** 加载并注册全国城市级地图，返回 mapKey 或 null */
+async function ensureChinaCityMap() {
+  if (registeredMaps.has('china-city')) return 'china-city'
+  const loader = findLoader('china-city')
+  if (!loader) { ElMessage.error('城市地图数据未找到，请将 china-city.json 放入 src/assets/maps/ 目录'); return null }
+  try {
+    const mod = await loader()
+    echarts.registerMap('china-city', mod.default)
+    registeredMaps.add('china-city')
+    return 'china-city'
+  } catch {
+    ElMessage.error('城市地图数据加载失败')
+    return null
+  }
+}
+
 /** 加载并注册指定行政区划代码的省份地图，返回 mapKey 或 null */
 async function ensureProvinceMap(adcode) {
   if (registeredMaps.has(adcode)) return adcode
@@ -154,16 +170,19 @@ async function resolveMapKey() {
   const ok = await ensureChinaMap()
   if (!ok) return null
 
-  // 地域维度下，直接读取筛选中的省份（expandStrSel 处理自定义分组）
   if (groupBy.value === 'province') {
+    // 城市模式：加载全国城市级地图
+    if (cityMode.value) {
+      const key = await ensureChinaCityMap()
+      if (key) return key
+    }
+    // 筛选了单一省份：加载省份地图
     const provs = expandStrSel(filters.value.provinces)
     if (provs.length === 1) {
       const fullName = PROVINCE_NAME_MAP[provs[0]] ?? provs[0]
       const adcode   = PROVINCE_ADCODE[fullName]
-      console.log('[map] province selected:', provs[0], '→', fullName, '→ adcode:', adcode)
       if (adcode) {
         const key = await ensureProvinceMap(adcode)
-        console.log('[map] ensureProvinceMap result:', key)
         if (key) return key
       }
     }
@@ -178,6 +197,7 @@ const selectedPeriod = ref('month')
 const chartType      = ref('bar')    // 图表类型：bar/line/pie/map
 const comparisonMode = ref(null)     // 对比模式：null | 'yoy'（同比）| 'mom'（环比）
 const groupBy        = ref('product') // 数据聚合维度
+const cityMode       = ref(false)    // 城市模式：地域维度下直接按城市聚合并显示全国城市地图
 const dataMetric     = ref('actual') // 显示指标：quantity/return_quantity/actual
 
 // 当前维度下允许的图表类型 / 对比模式
@@ -277,6 +297,7 @@ const effectiveGroupBy = computed(() => {
     case 'channel':
       return effChannelNames().length === 1 ? 'channel_code' : 'channel'
     case 'province': {
+      if (cityMode.value) return 'city'   // 城市模式：始终按城市聚合
       if (effProvinces().length !== 1) return 'province'
       // 只有用户显式选定了唯一城市才下钻到县区；
       // effCities() 的自动推导仅用于后端过滤参数，不影响层级判断
@@ -303,6 +324,10 @@ const customGroups   = ref([])
 const activeGroupIds = ref([])   // 当前激活的分组 id（仅芯片状态，不写入 filters）
 const showGroupMgr   = ref(false)
 
+// 配置方案（一组激活分组的快照）
+const groupPresets    = ref([])   // [{ id, name, groupIds }]
+const newPresetName   = ref('')
+
 // 新建分组表单
 const newGroup = ref({
   name: '', dimension: 'product', level: 'category',
@@ -322,11 +347,26 @@ function loadGroupsFromStorage() {
 function saveGroupsToStorage() {
   localStorage.setItem('shipping_product_groups', JSON.stringify(customGroups.value))
 }
+function loadPresetsFromStorage() {
+  try {
+    const raw = localStorage.getItem('shipping_group_presets')
+    groupPresets.value = raw ? JSON.parse(raw) : []
+  } catch { groupPresets.value = [] }
+}
+function savePresetsToStorage() {
+  localStorage.setItem('shipping_group_presets', JSON.stringify(groupPresets.value))
+}
 
 // 按维度分组
 const productGroups = computed(() => customGroups.value.filter(g => g.dimension === 'product'))
 const channelGroups = computed(() => customGroups.value.filter(g => g.dimension === 'channel'))
 const regionGroups  = computed(() => customGroups.value.filter(g => g.dimension === 'region'))
+
+// 数据库实际发货日期范围文本
+const dateRangeText = computed(() => {
+  if (!dataDateMin.value || !dataDateMax.value) return ''
+  return `当前发货数据范围：${dataDateMin.value}～${dataDateMax.value}`
+})
 
 // ── 分组辅助函数 ──────────────────────────────────
 
@@ -519,6 +559,10 @@ const newGroupItemOptions = computed(() => {
     return (ch?.orgs || []).map(o => ({ value: o.code, label: `${o.code}  ${o.org_name}` }))
   }
   if (level === 'province') return provinceOptions.value.map(p => ({ value: p.name, label: p.name }))
+  // 城市模式下跨省选城市：展平所有省份的城市列表
+  if (level === 'city' && cityMode.value) {
+    return provinceOptions.value.flatMap(p => (p.cities || []).map(c => ({ value: c.name, label: `${p.name} / ${c.name}` })))
+  }
   const prov = provinceOptions.value.find(p => p.name === parentProvince)
   if (level === 'city') return (prov?.cities || []).map(c => ({ value: c.name, label: c.name }))
   const city = prov?.cities?.find(c => c.name === parentCity)
@@ -528,7 +572,7 @@ const newGroupItemOptions = computed(() => {
 const needParentCategory = computed(() => newGroup.value.dimension === 'product' && ['series','model'].includes(newGroup.value.level))
 const needParentSeries   = computed(() => newGroup.value.dimension === 'product' && newGroup.value.level === 'model')
 const needParentChannel  = computed(() => newGroup.value.dimension === 'channel' && newGroup.value.level === 'channel_code')
-const needParentProvince = computed(() => newGroup.value.dimension === 'region'  && ['city','district'].includes(newGroup.value.level))
+const needParentProvince = computed(() => newGroup.value.dimension === 'region'  && ['city','district'].includes(newGroup.value.level) && !(newGroup.value.level === 'city' && cityMode.value))
 const needParentCity     = computed(() => newGroup.value.dimension === 'region'  && newGroup.value.level === 'district')
 
 const itemSelectDisabled = computed(() => {
@@ -539,7 +583,7 @@ const itemSelectDisabled = computed(() => {
   }
   if (dimension === 'channel' && level === 'channel_code' && !parentChannelName) return true
   if (dimension === 'region') {
-    if (level === 'city'     && !parentProvince) return true
+    if (level === 'city'     && !parentProvince && !cityMode.value) return true
     if (level === 'district' && !parentCity)     return true
   }
   return false
@@ -581,8 +625,8 @@ function saveNewGroup() {
     }
   } else {
     items = selectedValues.map(v => ({ value: v, label: v }))
-    if (level === 'city')     parent_context = { province: parentProvince }
-    if (level === 'district') parent_context = { province: parentProvince, city: parentCity }
+    if (level === 'city' && !cityMode.value) parent_context = { province: parentProvince }
+    if (level === 'district')               parent_context = { province: parentProvince, city: parentCity }
   }
 
   customGroups.value.push({ id: crypto.randomUUID(), name: name.trim(), dimension, level, parent_context, items })
@@ -601,6 +645,34 @@ function deleteGroup(id) {
   activeGroupIds.value = activeGroupIds.value.filter(v => v !== id)
   _removeGroupFromFilters(id)
   saveGroupsToStorage()
+  // 同步清理配置方案中对该分组的引用
+  groupPresets.value.forEach(p => { p.groupIds = p.groupIds.filter(v => v !== id) })
+  savePresetsToStorage()
+}
+
+/** 将当前激活的分组保存为配置方案 */
+function savePreset() {
+  const name = newPresetName.value.trim()
+  if (!name) { ElMessage.warning('请输入方案名称'); return }
+  if (activeGroupIds.value.length === 0) { ElMessage.warning('当前没有激活的分组'); return }
+  groupPresets.value.push({ id: crypto.randomUUID(), name, groupIds: [...activeGroupIds.value] })
+  savePresetsToStorage()
+  newPresetName.value = ''
+  ElMessage.success('配置方案已保存')
+}
+
+/** 应用配置方案（批量激活分组，过滤已删除的分组） */
+function applyPreset(preset) {
+  const validIds = preset.groupIds.filter(id => customGroups.value.some(g => g.id === id))
+  activeGroupIds.value = validIds
+  renderChart()
+  ElMessage.success(`已应用方案「${preset.name}」`)
+}
+
+/** 删除配置方案 */
+function deletePreset(id) {
+  groupPresets.value = groupPresets.value.filter(p => p.id !== id)
+  savePresetsToStorage()
 }
 
 /** 判断分组芯片是否激活 */
@@ -652,6 +724,9 @@ const provinceOptions = ref([])
 const categoryTree    = ref([])
 // 当前日期范围内有数据的产品 ID 集合（null=未加载，{}=已加载可能为空）
 const activeProductIds = ref(null)
+// 数据库中实际的发货日期范围
+const dataDateMin = ref('')
+const dataDateMax = ref('')
 
 // 图表数据
 const summary    = ref({ quantity: 0, return_quantity: 0, actual_quantity: 0 })
@@ -674,6 +749,7 @@ let   resizeObs = null
 // ── 生命周期 ──────────────────────────────────────
 onMounted(async () => {
   loadGroupsFromStorage()
+  loadPresetsFromStorage()
   await loadOptions()       // 先加载选项（categoryTree 等），effectiveGroupBy 依赖它
   await loadChartData()     // 再加载图表，此时 effectiveGroupBy 已能正确推导层级
   initChart()
@@ -705,6 +781,63 @@ function resetFilters() {
     provinces: [], cities: [], districts: [],
     categoryIds: [], seriesIds: [], modelIds: [],
   }
+}
+
+/** 分组下钻：右击激活分组条目，展开分组成员的明细数据 */
+function drillDownGroup(group) {
+  const savedFilters = {
+    categoryIds:   [...filters.value.categoryIds],
+    seriesIds:     [...filters.value.seriesIds],
+    modelIds:      [...filters.value.modelIds],
+    channelNames:  [...filters.value.channelNames],
+    channelCodes:  [...filters.value.channelCodes],
+    provinces:     [...filters.value.provinces],
+    cities:        [...filters.value.cities],
+    districts:     [...filters.value.districts],
+  }
+  const savedActiveGroupIds = [...activeGroupIds.value]
+  drillStack.value.push({ label: group.name, savedFilters, savedActiveGroupIds })
+
+  // 下钻后把该分组移出激活列表，否则 mergeGroupedItems 会把成员重新合并回去
+  activeGroupIds.value = activeGroupIds.value.filter(id => id !== group.id)
+
+  const level = group.level
+  const pc = group.parent_context || {}
+  if (level === 'category') {
+    filters.value.categoryIds = group.items.map(i => i.id)
+    filters.value.seriesIds   = []
+    filters.value.modelIds    = []
+  } else if (level === 'series') {
+    // 保持父品类筛选，effectiveGroupBy 才能推导到 series 层
+    if (pc.category_id) filters.value.categoryIds = [pc.category_id]
+    filters.value.seriesIds = group.items.map(i => i.id)
+    filters.value.modelIds  = []
+  } else if (level === 'model') {
+    if (pc.category_id) filters.value.categoryIds = [pc.category_id]
+    if (pc.series_id)   filters.value.seriesIds   = [pc.series_id]
+    filters.value.modelIds = group.items.map(i => i.id)
+  } else if (level === 'channel') {
+    filters.value.channelNames = group.items.map(i => i.value)
+    filters.value.channelCodes = []
+  } else if (level === 'channel_code') {
+    // 保持父渠道筛选，effectiveGroupBy 才能推导到 channel_code 层
+    if (pc.channel_name) filters.value.channelNames = [pc.channel_name]
+    filters.value.channelCodes = group.items.map(i => i.value)
+  } else if (level === 'province') {
+    filters.value.provinces = group.items.map(i => i.value)
+    filters.value.cities    = []
+    filters.value.districts = []
+  } else if (level === 'city') {
+    // 跨省分组（city mode）不设 province 筛选；同省分组设父省
+    if (pc.province) filters.value.provinces = [pc.province]
+    filters.value.cities    = group.items.map(i => i.value)
+    filters.value.districts = []
+  } else if (level === 'district') {
+    if (pc.province) filters.value.provinces = [pc.province]
+    if (pc.city)     filters.value.cities    = [pc.city]
+    filters.value.districts = group.items.map(i => i.value)
+  }
+  loadChartData()
 }
 
 /** 下钻：右击柱子后进入下一层级，将当前筛选状态压入面包屑栈 */
@@ -760,7 +893,7 @@ function drillDown(label) {
  * - idx=i → 回到第 i 次下钻前保存的状态（即当时的第 i-1 层视图）
  */
 function drillBack(idx) {
-  const { savedFilters } = drillStack.value[idx]
+  const { savedFilters, savedActiveGroupIds } = drillStack.value[idx]
   Object.assign(filters.value, {
     categoryIds:  savedFilters.categoryIds,
     seriesIds:    savedFilters.seriesIds,
@@ -771,6 +904,7 @@ function drillBack(idx) {
     cities:       savedFilters.cities,
     districts:    savedFilters.districts,
   })
+  if (savedActiveGroupIds) activeGroupIds.value = savedActiveGroupIds
   drillStack.value = drillStack.value.slice(0, idx)
 }
 
@@ -793,6 +927,8 @@ async function loadOptions() {
         series:     optRes.data.active_series_ids   || [],
         models:     optRes.data.active_model_ids    || [],
       }
+      if (optRes.data.data_date_min) dataDateMin.value = optRes.data.data_date_min
+      if (optRes.data.data_date_max) dataDateMax.value = optRes.data.data_date_max
     }
     if (treeRes.success) { categoryTree.value = treeRes.data }
   } catch { ElMessage.error('加载筛选数据失败') }
@@ -842,10 +978,11 @@ function initChart() {
         params.event?.event?.preventDefault?.()
         if (params.componentType !== 'series' || !['bar', 'pie'].includes(params.seriesType)) return
         const label = params.name
-        const isCustomGroup = customGroups.value.some(
+        const hitGroup = customGroups.value.find(
           g => activeGroupIds.value.includes(g.id) && g.name === label
         )
-        if (!isCustomGroup) drillDown(label)
+        if (hitGroup) drillDownGroup(hitGroup)
+        else drillDown(label)
       })
       renderChart()
     } else {
@@ -919,16 +1056,17 @@ function mergeGroupedItems(items) {
 
 async function renderChart() {
   if (!chartInst) return
-  const items = mergeGroupedItems(chartItems.value)
   let opt
   if (groupBy.value === 'date') {
-    // 时间维度：由对比模式决定图表类型
+    const items = mergeGroupedItems(chartItems.value)
     opt = comparisonMode.value === 'mom' ? buildMomOption(items) : buildYoyOption(items)
   } else if (chartType.value === 'map') {
+    // 地图模式：传原始 items，由 buildMapOption 内部处理分组着色
     const mapKey = await resolveMapKey()
     if (!mapKey) return
-    opt = buildMapOption(items, mapKey)
+    opt = buildMapOption(chartItems.value, mapKey)
   } else {
+    const items = mergeGroupedItems(chartItems.value)
     opt = chartType.value === 'line' ? buildLineOption(items)
         : chartType.value === 'pie'  ? buildPieOption(items)
         : buildBarOption(items)
@@ -1052,6 +1190,7 @@ function buildBarOption(items) {
       })
     : []
 
+  const showDataLabel = labels.length <= 20  // 超过 20 项不在图表内显示数值
   const labelOpt = {
     interval: 0, hideOverlap: true,
     rotate: labels.length > 10 ? 30 : 0, color: '#7a5c3a', fontFamily: FONT, fontSize: 13,
@@ -1144,7 +1283,7 @@ function buildBarOption(items) {
       {
         name: label, type: 'bar', data: values, yAxisIndex: 0,
         itemStyle: { color: '#a8cce8', borderRadius: [2, 2, 0, 0] },
-        label: { show: true, position: 'top', color: '#2c2420', fontFamily: FONT, fontSize: 14, fontWeight: 'bold', formatter: '{c}' },
+        label: { show: showDataLabel, position: 'top', color: '#2c2420', fontFamily: FONT, fontSize: 14, fontWeight: 'bold', formatter: '{c}' },
       },
       // 销退指标时额外显示「销退率」折线（销退量 / 发货量）
       ...(isReturn ? [{
@@ -1153,7 +1292,7 @@ function buildBarOption(items) {
         lineStyle: { color: '#9c6fba', width: 2 },
         itemStyle: { color: '#9c6fba' },
         symbol: 'circle', symbolSize: 4,
-        label: { show: true, position: 'top', color: '#9c6fba', fontFamily: FONT, fontSize: 13, fontWeight: 'bold', formatter: p => `${p.value}%` },
+        label: { show: showDataLabel, position: 'top', color: '#9c6fba', fontFamily: FONT, fontSize: 13, fontWeight: 'bold', formatter: p => `${p.value}%` },
       }] : []),
       {
         name: '占比', type: 'line', data: pctData, yAxisIndex: 1,
@@ -1161,7 +1300,7 @@ function buildBarOption(items) {
         lineStyle: { color: '#e07c00', width: 2 },
         itemStyle: { color: '#e07c00' },
         symbol: 'circle', symbolSize: 4,
-        label: { show: true, position: 'top', color: '#e07c00', fontFamily: FONT, fontSize: 13, fontWeight: 'bold', formatter: p => `${p.value}%` },
+        label: { show: showDataLabel, position: 'top', color: '#e07c00', fontFamily: FONT, fontSize: 13, fontWeight: 'bold', formatter: p => `${p.value}%` },
       },
       {
         name: '累计占比', type: 'line', data: cumulData, yAxisIndex: 1,
@@ -1169,7 +1308,7 @@ function buildBarOption(items) {
         lineStyle: { color: '#e05050', width: 1.5, type: 'dashed' },
         itemStyle: { color: '#e05050' },
         symbol: 'circle', symbolSize: 4,
-        label: { show: true, position: 'top', color: '#c03030', fontFamily: FONT, fontSize: 13, fontWeight: 'bold', formatter: p => `${p.value}%` },
+        label: { show: showDataLabel, position: 'top', color: '#c03030', fontFamily: FONT, fontSize: 13, fontWeight: 'bold', formatter: p => `${p.value}%` },
       },
     ],
   }
@@ -1578,12 +1717,38 @@ function buildPieOption(items) {
 function buildMapOption(items, mapKey = 'china') {
   const { field, label } = METRIC_MAP[dataMetric.value]
   const titleText = buildChartTitle(label)
-  const isChina = mapKey === 'china'
-  const data = items.map(i => ({
-    name:  isChina ? (PROVINCE_NAME_MAP[i.label] ?? i.label) : i.label,
-    value: i[field] ?? 0,
-    originalName: i.label,
-  }))
+  const isChina    = mapKey === 'china'
+  const isCityMode = mapKey === 'china-city'
+
+  // city 模式下，计算激活分组的城市归属与合计值
+  const activeCityGroups = isCityMode
+    ? customGroups.value.filter(g => activeGroupIds.value.includes(g.id) && g.level === 'city')
+    : []
+  // 城市原始 label → { groupName, groupTotal, selfField }
+  const cityToGroup = new Map()
+  for (const g of activeCityGroups) {
+    const groupTotal = g.items.reduce((sum, it) => {
+      const found = items.find(i => i.label === it.value)
+      return sum + (found ? (found[field] ?? 0) : 0)
+    }, 0)
+    for (const it of g.items) {
+      cityToGroup.set(it.value, { groupName: g.name, groupTotal })
+    }
+  }
+
+  // 构建 data：分组成员共享分组合计值（→ 同色），非分组成员用自身值
+  const data = items.map(i => {
+    const mapName = isChina ? (PROVINCE_NAME_MAP[i.label] ?? i.label) : i.label
+    const gInfo   = cityToGroup.get(i.label)
+    return {
+      name:         mapName,
+      value:        gInfo ? gInfo.groupTotal : (i[field] ?? 0),
+      originalName: i.label,
+      selfValue:    i[field] ?? 0,
+      groupName:    gInfo ? gInfo.groupName  : null,
+      groupTotal:   gInfo ? gInfo.groupTotal : null,
+    }
+  })
   const maxVal = Math.max(...data.map(d => d.value), 1)
 
   return {
@@ -1606,11 +1771,24 @@ function buildMapOption(items, mapKey = 'china') {
       textStyle: { fontFamily: FONT, fontSize: 13 },
       formatter(params) {
         if (params.value == null || isNaN(params.value)) return `${params.name}：暂无数据`
-        const name = params.data?.originalName ?? params.name
-        return `<div style="font-family:${FONT};font-size:13px;min-width:140px">` +
+        const d = params.data
+        const W = `font-family:${FONT};font-size:13px;min-width:150px`
+        const ROW = `display:flex;justify-content:space-between;align-items:center;gap:20px;line-height:1.8`
+        if (d?.groupName) {
+          // 分组成员：显示分组合计 + 本城市自身值
+          return `<div style="${W}">` +
+            `<div style="font-weight:600;margin-bottom:2px;color:#c4883a">${d.groupName}</div>` +
+            `<div style="${ROW};margin-bottom:2px"><span>${label}合计</span><span style="font-weight:600">${d.groupTotal}</span></div>` +
+            `<div style="border-top:1px solid #e0d4c0;margin:4px 0"></div>` +
+            `<div style="color:#6b5e4e;margin-bottom:2px">${d.originalName}</div>` +
+            `<div style="${ROW}"><span>${label}</span><span style="font-weight:600">${d.selfValue}</span></div>` +
+            `</div>`
+        }
+        const name = d?.originalName ?? params.name
+        return `<div style="${W}">` +
           `<div style="font-weight:600;margin-bottom:4px">${name}</div>` +
-          `<div style="display:flex;justify-content:space-between;align-items:center;gap:20px;line-height:1.8">` +
-          `<span>${label}</span><span style="font-weight:600">${params.value}</span></div></div>`
+          `<div style="${ROW}"><span>${label}</span><span style="font-weight:600">${params.value}</span></div>` +
+          `</div>`
       },
     },
     visualMap: {
@@ -1625,8 +1803,8 @@ function buildMapOption(items, mapKey = 'china') {
       name: label, type: 'map', map: mapKey,
       roam: true,
       data,
-      label: { show: true, fontFamily: FONT, fontSize: 11, color: '#3a3028' },
-      emphasis:  { label: { show: true, fontFamily: FONT, fontSize: 12, fontWeight: 'bold' }, itemStyle: { areaColor: '#e09050' } },
+      label: { show: mapKey !== 'china-city', fontFamily: FONT, fontSize: 11, color: '#3a3028' },
+      emphasis:  { label: { show: mapKey !== 'china-city', fontFamily: FONT, fontSize: 12, fontWeight: 'bold' }, itemStyle: { areaColor: '#e09050' } },
       select:    { disabled: true },
       itemStyle: { areaColor: '#f5f0e8', borderColor: '#d4c4a8', borderWidth: 0.8 },
     }],
@@ -1883,6 +2061,28 @@ watch(groupBy, () => {
 
       <button class="btn-reset" @click="resetFilters">重置筛选</button>
 
+      <!-- ▌配置方案面板 -->
+      <div v-if="groupPresets.length > 0" class="section-group preset-panel">
+        <div class="preset-panel-hd">
+          <span class="section-title">配置方案</span>
+          <button
+            v-if="activeGroupIds.length > 0"
+            class="btn-clear-groups"
+            @click="activeGroupIds = []; renderChart()"
+            title="取消所有激活分组"
+          >清除分组</button>
+        </div>
+        <div class="preset-panel-bd">
+          <button
+            v-for="p in groupPresets"
+            :key="p.id"
+            class="preset-chip"
+            @click="applyPreset(p)"
+            :title="`应用方案「${p.name}」`"
+          >{{ p.name }}</button>
+        </div>
+      </div>
+
     </aside>
 
     <!-- ── 右侧内容区 ──────────────────────────────── -->
@@ -1973,12 +2173,20 @@ watch(groupBy, () => {
 
       <!-- 底部：类别选择 -->
       <div class="chart-footer">
-        <button v-for="opt in GROUP_BY_OPTIONS" :key="opt.value"
-          class="gb-btn" :class="{ active: groupBy === opt.value }"
-          @click="groupBy = opt.value; loadChartData()">
-          <img :src="opt.icon" width="28" height="28" :alt="opt.label" />
-          <span class="gb-label">{{ opt.label }}</span>
-        </button>
+        <div class="footer-placeholder">
+          <div v-if="groupBy === 'province'" class="footer-city-mode">
+            <el-switch v-model="cityMode" size="small" active-text="城市模式" active-color="#c4883a" @change="loadChartData()" />
+          </div>
+        </div>
+        <div class="footer-dims">
+          <button v-for="opt in GROUP_BY_OPTIONS" :key="opt.value"
+            class="gb-btn" :class="{ active: groupBy === opt.value }"
+            @click="if (opt.value !== 'province') cityMode = false; groupBy = opt.value; loadChartData()">
+            <img :src="opt.icon" width="28" height="28" :alt="opt.label" />
+            <span class="gb-label">{{ opt.label }}</span>
+          </button>
+        </div>
+        <div class="footer-date-range">{{ dateRangeText }}</div>
       </div>
 
     </div>
@@ -1986,7 +2194,28 @@ watch(groupBy, () => {
     <!-- ── 分组管理弹窗 ──────────────────────────────── -->
     <el-dialog v-model="showGroupMgr" title="管理自定义分组" width="520px" :close-on-click-modal="false">
 
+      <!-- 配置方案：仅保存操作，列表在面板外部显示 -->
+      <div class="mgr-divider">保存配置方案</div>
+      <div class="mgr-preset-save">
+        <el-input v-model="newPresetName" placeholder="输入方案名称" size="default" style="flex:1" @keyup.enter="savePreset" />
+        <button class="btn-save-group" @click="savePreset">保存当前激活分组</button>
+      </div>
+
+      <!-- 现有方案列表（支持删除） -->
+      <div v-if="groupPresets.length > 0" class="mgr-preset-list" style="margin-top:10px">
+        <div v-for="p in groupPresets" :key="p.id" class="mgr-preset-item">
+          <div class="mgr-preset-info">
+            <span class="mgr-preset-name">{{ p.name }}</span>
+            <span class="mgr-preset-meta">{{ p.groupIds.length }} 个分组</span>
+          </div>
+          <button class="mgr-del-btn" @click="deletePreset(p.id)" title="删除方案">
+            <el-icon><Delete /></el-icon>
+          </button>
+        </div>
+      </div>
+
       <!-- 现有分组列表 -->
+      <div class="mgr-divider" style="margin-top:16px">分组列表</div>
       <div class="mgr-group-list">
         <div v-if="customGroups.length === 0" class="mgr-empty">暂无分组，在下方新建</div>
         <div v-for="g in customGroups" :key="g.id" class="mgr-group-item">
@@ -2261,8 +2490,15 @@ watch(groupBy, () => {
 /* 底部类别选择 */
 .chart-footer {
   flex-shrink: 0;
-  display: flex; justify-content: center; gap: 4px;
+  display: flex; align-items: center; justify-content: space-between;
   padding: 2px 0;
+}
+.footer-placeholder { flex: 1; display: flex; align-items: center; padding-left: 8px; }
+.footer-city-mode { display: flex; align-items: center; }
+.footer-dims { display: flex; gap: 4px; }
+.footer-date-range {
+  flex: 1; display: flex; align-items: center; justify-content: flex-end;
+  font-size: 14px; color: #c0392b; white-space: nowrap; padding-right: 4px;
 }
 .gb-btn {
   display: flex; flex-direction: row; align-items: center; justify-content: center;
@@ -2294,6 +2530,41 @@ watch(groupBy, () => {
 .group-chip.is-active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 /* ── 分组管理弹窗 ─────────────────────────────── */
+.preset-panel { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.preset-panel-hd { display: flex; align-items: center; justify-content: space-between; }
+.preset-panel-bd { display: flex; flex-wrap: wrap; gap: 5px; }
+.btn-clear-groups {
+  height: 22px; padding: 0 8px;
+  border: 1px solid var(--border); border-radius: 5px;
+  background: transparent; color: var(--text-muted);
+  font-size: 11px; font-family: inherit;
+  cursor: pointer; transition: all 0.15s;
+}
+.btn-clear-groups:hover { border-color: #d05a3c; color: #d05a3c; }
+.preset-chip {
+  height: 26px; padding: 0 11px;
+  border: 1px solid var(--accent); border-radius: 13px;
+  background: rgba(196,136,58,0.08); color: var(--accent);
+  font-size: 12px; font-family: inherit;
+  cursor: pointer; transition: all 0.15s; white-space: nowrap;
+}
+.preset-chip:hover { background: var(--accent); color: #fff; }
+.mgr-preset-list { min-height: 32px; margin-bottom: 4px; }
+.mgr-preset-item { display: flex; align-items: center; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid var(--border); }
+.mgr-preset-item:last-child { border-bottom: none; }
+.mgr-preset-info { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 1; }
+.mgr-preset-name { font-size: 13px; color: var(--text-primary); font-weight: 500; }
+.mgr-preset-meta { font-size: 11px; color: var(--text-muted); }
+.mgr-preset-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.mgr-apply-btn {
+  height: 26px; padding: 0 10px;
+  border: 1px solid var(--accent); border-radius: 6px;
+  background: transparent; color: var(--accent);
+  font-size: 12px; font-family: inherit;
+  cursor: pointer; transition: all 0.15s;
+}
+.mgr-apply-btn:hover { background: var(--accent); color: #fff; }
+.mgr-preset-save { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .mgr-group-list { min-height: 32px; margin-bottom: 4px; }
 .mgr-empty { font-size: 12px; color: var(--text-muted); text-align: center; padding: 12px 0; }
 .mgr-group-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); }

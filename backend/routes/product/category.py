@@ -11,6 +11,12 @@ def get_tree():
     return category_service.get_tree().to_response()
 
 
+# ── 型号生命周期范围（聚合，用于前端匹配时的日期过滤）────────────────────────
+@category_bp.get('/model-lifecycles')
+def get_model_lifecycles():
+    return category_service.get_model_lifecycles().to_response()
+
+
 # ── Category CRUD ─────────────────────────────────────────────────────────
 @category_bp.post('/categories')
 def create_category():

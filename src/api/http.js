@@ -1,6 +1,6 @@
 import axios from 'axios'
 
-const http = axios.create({ timeout: 15000 })
+const http = axios.create({ timeout: 60000 })
 
 // 缓存 baseURL，避免每次请求都调用 IPC
 let baseURL = null

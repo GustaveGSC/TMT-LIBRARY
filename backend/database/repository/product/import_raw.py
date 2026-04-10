@@ -49,9 +49,13 @@ class ImportProductRepository:
             now = datetime.now(CST).replace(tzinfo=None)
             days_since_import = (now - latest).days
 
-        # 获取所有 type='finished' 的编码规则
-        finished_rules = ErpCodeRule.query.filter_by(type='finished').all()
+        # 获取所有 type='finished' 且未禁用的编码规则（禁用规则对应的成品不统计）
+        finished_rules = ErpCodeRule.query.filter_by(type='finished', is_disabled=False).all()
         prefix_desc = [(r.prefix, r.description or '') for r in finished_rules]
+        # 禁用规则的前缀集合，用于过滤 finished_count
+        disabled_prefixes = [
+            r.prefix for r in ErpCodeRule.query.filter_by(type='finished', is_disabled=True).all()
+        ]
 
         # 已标记为 ignored 的品号集合，统计时排除
         ignored_codes = {
@@ -86,9 +90,14 @@ class ImportProductRepository:
                         desc_unprocessed[desc] += 1
 
         # 待处理 = 成品总数(排除ignored) - product_finished 非ignored记录数
-        finished_count = ProductFinished.query.filter(
-            ProductFinished.status != 'ignored'
-        ).count()
+        # 同时排除禁用前缀对应的成品
+        finished_q = ProductFinished.query.filter(ProductFinished.status != 'ignored')
+        if disabled_prefixes:
+            from sqlalchemy import and_, not_, or_
+            finished_q = finished_q.filter(
+                not_(or_(*[ProductFinished.code.like(p + '%') for p in disabled_prefixes]))
+            )
+        finished_count = finished_q.count()
         unprocessed = max(0, total_finished - finished_count)
 
         categories = [

@@ -19,8 +19,15 @@ const activePage = ref('import')
 
 // ── 刷新全局数据 ────────────────────────────────────
 const resolving          = ref(false)
-const resolveProgress    = ref('')   // "123 / 4567 个订单"
 const showResolveConfirm = ref(false)
+const showResolveProgress  = ref(false)  // 进度 dialog
+const resolveCurrentOrder  = ref(0)      // 当前已处理订单数
+const resolveTotalOrders   = ref(0)      // 总订单数
+const resolvePrepareMsg    = ref('')     // 准备阶段说明文字
+const resolvePrepareCount  = ref(0)      // 准备阶段已加载数量
+const resolveSaving        = ref(false)  // 写入阶段
+const resolveSaveCurrent   = ref(0)
+const resolveSaveTotal     = ref(0)
 
 const navItems = [
   {
@@ -48,23 +55,42 @@ function handleBack() {
 
 async function handleResolveAll() {
   if (resolving.value) return
-  showResolveConfirm.value = false
-  resolving.value    = true
-  resolveProgress.value = ''
+  showResolveConfirm.value  = false
+  resolving.value           = true
+  resolveCurrentOrder.value = 0
+  resolveTotalOrders.value  = 0
+  resolvePrepareMsg.value   = '正在初始化…'
+  showResolveProgress.value = true
   try {
     const res = await http.post('/api/shipping/resolve-all')
-    if (!res.success) { ElMessage.error(res.message || '启动失败'); return }
+    if (!res.success) {
+      showResolveProgress.value = false
+      ElMessage.error(res.message || '启动失败')
+      return
+    }
     const taskId = res.data.task_id
 
     await new Promise((resolve, reject) => {
       const es = new EventSource(`http://127.0.0.1:8765/api/shipping/import/progress/${taskId}`)
       es.onmessage = (event) => {
         const data = JSON.parse(event.data)
-        if (data.step === 'resolving') {
-          resolveProgress.value = data.total ? `${data.current} / ${data.total} 个订单` : ''
+        if (data.step === 'preparing') {
+          resolvePrepareMsg.value   = data.message  ?? '正在准备数据…'
+          resolveTotalOrders.value  = data.total    ?? 0
+          resolvePrepareCount.value = data.current  ?? 0
+        } else if (data.step === 'resolving') {
+          resolvePrepareMsg.value   = ''
+          resolveSaving.value       = false
+          resolveCurrentOrder.value = data.current ?? 0
+          resolveTotalOrders.value  = data.total   ?? 0
+        } else if (data.step === 'saving') {
+          resolveSaving.value      = true
+          resolveSaveCurrent.value = data.current ?? 0
+          resolveSaveTotal.value   = data.total   ?? 0
         } else if (data.step === 'done') {
           es.close()
-          ElMessage.success(`全局数据刷新完成，共处理 ${data.data.resolved} 个订单`)
+          resolveCurrentOrder.value = data.data.resolved
+          resolveTotalOrders.value  = data.data.resolved
           resolve()
         } else if (data.step === 'error') {
           es.close()
@@ -77,8 +103,8 @@ async function handleResolveAll() {
   } catch {
     // ElMessage 已在内部处理
   } finally {
-    resolving.value       = false
-    resolveProgress.value = ''
+    resolving.value           = false
+    showResolveProgress.value = false
   }
 }
 </script>
@@ -115,13 +141,10 @@ async function handleResolveAll() {
 
       <div class="top-right">
         <button class="btn-resolve" :class="{ resolving }" :disabled="resolving" @click="showResolveConfirm = true">
-          <svg v-if="!resolving" class="resolve-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <svg class="resolve-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
           </svg>
-          <span v-if="!resolving">刷新全局数据</span>
-          <span v-else class="resolve-spin">↻</span>
-          <span v-if="resolving && resolveProgress" class="resolve-progress">{{ resolveProgress }}</span>
-          <span v-else-if="resolving">计算中…</span>
+          <span>刷新全局数据</span>
         </button>
       </div>
     </header>
@@ -140,6 +163,71 @@ async function handleResolveAll() {
         <el-button @click="showResolveConfirm = false">取消</el-button>
         <el-button type="primary" @click="handleResolveAll">确认刷新</el-button>
       </template>
+    </el-dialog>
+
+    <!-- ── 刷新进度弹窗 ──────────────────────────── -->
+    <el-dialog
+      v-model="showResolveProgress"
+      title="刷新全局数据"
+      width="420px"
+      :close-on-click-modal="false"
+      :close-on-press-escape="false"
+      :show-close="false"
+    >
+      <div class="progress-body">
+        <!-- 准备阶段：显示分批加载进度 -->
+        <template v-if="resolvePrepareMsg">
+          <div class="progress-label">
+            <span class="progress-prepare-msg">{{ resolvePrepareMsg }}</span>
+            <span class="progress-count">
+              {{ resolvePrepareCount.toLocaleString() }}
+              <span class="progress-sep">/</span>
+              {{ resolveTotalOrders > 0 ? resolveTotalOrders.toLocaleString() : '…' }}
+            </span>
+          </div>
+          <el-progress
+            :percentage="resolveTotalOrders > 0 ? Math.min(Math.round(resolvePrepareCount / resolveTotalOrders * 100), 99) : 0"
+            :stroke-width="10"
+            :color="'#c4883a'"
+            status=""
+          />
+        </template>
+        <!-- 计算阶段 -->
+        <template v-else-if="!resolveSaving">
+          <div class="progress-label">
+            <span>当前处理订单</span>
+            <span class="progress-count">
+              {{ resolveCurrentOrder.toLocaleString() }}
+              <span class="progress-sep">/</span>
+              {{ resolveTotalOrders > 0 ? resolveTotalOrders.toLocaleString() : '…' }}
+            </span>
+          </div>
+          <el-progress
+            :percentage="resolveTotalOrders > 0 ? Math.min(Math.round(resolveCurrentOrder / resolveTotalOrders * 100), 99) : 0"
+            :stroke-width="10"
+            :color="'#c4883a'"
+            status=""
+          />
+        </template>
+        <!-- 写入阶段 -->
+        <template v-else>
+          <div class="progress-label">
+            <span>正在写入数据库</span>
+            <span class="progress-count">
+              {{ resolveSaveCurrent.toLocaleString() }}
+              <span class="progress-sep">/</span>
+              {{ resolveSaveTotal > 0 ? resolveSaveTotal.toLocaleString() : '…' }}
+            </span>
+          </div>
+          <el-progress
+            :percentage="resolveSaveTotal > 0 ? Math.min(Math.round(resolveSaveCurrent / resolveSaveTotal * 100), 100) : 0"
+            :stroke-width="10"
+            :color="'#c4883a'"
+            status=""
+          />
+        </template>
+        <div class="progress-hint">请勿关闭窗口，计算完成后将自动关闭</div>
+      </div>
     </el-dialog>
 
     <!-- ── 主内容区 ────────────────────────────── -->
@@ -173,7 +261,7 @@ async function handleResolveAll() {
 /* ── 顶部栏 ───────────────────────────────────── */
 .top-bar {
   height: 50px; display: flex; align-items: center;
-  padding: 0 84px 0 14px;
+  padding: 0 120px 0 14px;
   background: rgba(255,255,255,0.65);
   border-bottom: 1px solid var(--border);
   backdrop-filter: blur(12px);
@@ -230,6 +318,25 @@ async function handleResolveAll() {
 
 .confirm-body {
   font-size: 13px; color: var(--text-primary); line-height: 1.7;
+}
+
+.progress-body {
+  padding: 8px 0 4px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.progress-label {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 13px; color: var(--text-muted);
+}
+.progress-count {
+  font-size: 16px; font-weight: 600; color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.progress-sep { margin: 0 4px; color: var(--text-muted); font-weight: 400; }
+.progress-prepare-msg { font-size: 13px; color: var(--text-primary); }
+.progress-count-small { font-size: 12px; color: var(--text-muted); }
+.progress-hint {
+  font-size: 12px; color: var(--text-muted); text-align: center;
 }
 
 /* ── 主内容区 ─────────────────────────────────── */

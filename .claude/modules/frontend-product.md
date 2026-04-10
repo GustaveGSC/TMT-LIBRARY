@@ -8,6 +8,14 @@ src/stores/product/
 └── packaged.js   # 产成品store
 ```
 
+### finished.js 数据加载（渐进式分批）
+- `load()` 只 await 第一批（`BATCH_SIZE=200`），设 `loaded=true` 后 resolve → `ensureTableData` 快速完成，表格立即渲染
+- `_loadRemaining(gen, total)` 后台无感知地加载第2页起剩余数据，`rawItems` 响应式追加，computed 自动刷新
+- `_loadGen` 计数器：每次 `load()` 递增；`_loadRemaining` 每批前检查 `gen === _loadGen`，防止旧批次写入
+- `reset()` 时递增 `_loadGen` 令进行中的后台批次放弃
+- 新增 `loadingMore: ref(false)` — 后台加载期间为 true，ProductTable 分页栏右侧显示「后台加载中…」呼吸动画
+- 过滤/排序/搜索建议仍基于 `rawItems`（客户端计算），后台加载完成后命中率逐步提升
+
 ## page-product.vue 说明
 - `onMounted`：调用 `maximizeApp()`
 - 返回按钮：先 `unmaximizeApp()` 再 `router.back()`

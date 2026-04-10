@@ -3,7 +3,7 @@ productName: TMT Software
 copyright: Copyright © 2025 TMT
 
 directories:
-  output: release
+  output: release1.0.2
 
 files:
   - out/**/*                # electron-vite 构建产物
