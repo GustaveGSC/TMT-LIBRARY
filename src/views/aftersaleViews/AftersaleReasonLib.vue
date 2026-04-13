@@ -33,6 +33,7 @@ const shippingAliases = ref([])
 const editingShipping = ref(null)
 const shippingError   = ref('')
 const shipCodeInput   = ref('')   // 产品代码输入框
+const shippingSearch  = ref('')   // 发货简称搜索词
 
 // ── 售后物料简称库状态 ─────────────────────────────
 const returnAliases  = ref([])
@@ -40,6 +41,12 @@ const returnAliases  = ref([])
 const editingReturn  = ref(null)
 const returnError    = ref('')
 const retKwInput     = ref('')    // 商家备注片段输入框
+const returnSearch   = ref('')    // 售后简称搜索词
+
+// ── 发货物料匹配过滤词状态 ─────────────────────────
+const ignoreTerms    = ref([])    // [{id, term}]
+const ignoreInput    = ref('')    // 输入框
+const ignoreLoading  = ref(false)
 
 // 是否显示弹窗
 const visible = computed({
@@ -53,6 +60,26 @@ const currentReasons = computed(() => {
   return g ? g.reasons : []
 })
 
+const filteredShippingAliases = computed(() => {
+  const q = (shippingSearch.value || '').trim().toLowerCase()
+  if (!q) return shippingAliases.value
+  return shippingAliases.value.filter(item => {
+    const name = (item.name || '').toLowerCase()
+    const kws = (item.keywords || []).join(' ').toLowerCase()
+    return name.includes(q) || kws.includes(q)
+  })
+})
+
+const filteredReturnAliases = computed(() => {
+  const q = (returnSearch.value || '').trim().toLowerCase()
+  if (!q) return returnAliases.value
+  return returnAliases.value.filter(item => {
+    const name = (item.name || '').toLowerCase()
+    const kws = (item.keywords || []).join(' ').toLowerCase()
+    return name.includes(q) || kws.includes(q)
+  })
+})
+
 // ── Watch ─────────────────────────────────────────
 watch(visible, (v) => {
   if (v) {
@@ -61,6 +88,8 @@ watch(visible, (v) => {
     reasonForm.value          = null
     editingShipping.value     = null
     editingReturn.value       = null
+    shippingSearch.value      = ''
+    returnSearch.value        = ''
   }
 })
 
@@ -68,16 +97,18 @@ watch(visible, (v) => {
 async function loadAll() {
   loading.value = true
   try {
-    const [catRes, reasonRes, shipRes, retRes] = await Promise.all([
+    const [catRes, reasonRes, shipRes, retRes, ignoreRes] = await Promise.all([
       http.get('/api/aftersale/reason-categories'),
       http.get('/api/aftersale/reasons'),
       http.get('/api/aftersale/shipping-aliases'),
       http.get('/api/aftersale/return-aliases'),
+      http.get('/api/aftersale/shipping-ignore-terms'),
     ])
-    if (catRes.success)    categories.value    = catRes.data
-    if (reasonRes.success) groups.value        = reasonRes.data
-    if (shipRes.success)   shippingAliases.value = shipRes.data
-    if (retRes.success)    returnAliases.value   = retRes.data
+    if (catRes.success)     categories.value      = catRes.data
+    if (reasonRes.success)  groups.value          = reasonRes.data
+    if (shipRes.success)    shippingAliases.value  = shipRes.data
+    if (retRes.success)     returnAliases.value    = retRes.data
+    if (ignoreRes.success)  ignoreTerms.value      = ignoreRes.data
 
     if (activeCatId.value === null && categories.value.length > 0) {
       activeCatId.value = categories.value[0].id
@@ -261,17 +292,17 @@ function onKwConfirm() {
 // ── 发货物料简称操作 ───────────────────────────────
 
 function startNewShipping() {
-  editingShipping.value = { id: null, name: '', product_codes: [], sort_order: 0 }
+  editingShipping.value = { id: null, name: '', keywords: [], sort_order: 0 }
   shippingError.value   = ''
   shipCodeInput.value   = ''
 }
 
 function startEditShipping(item) {
   editingShipping.value = {
-    id:            item.id,
-    name:          item.name,
-    product_codes: [...(item.product_codes || [])],
-    sort_order:    item.sort_order || 0,
+    id:        item.id,
+    name:      item.name,
+    keywords:  [...(item.keywords || [])],
+    sort_order: item.sort_order || 0,
   }
   shippingError.value = ''
   shipCodeInput.value = ''
@@ -282,19 +313,19 @@ function cancelShipping() {
 }
 
 function addShipCode() {
-  const code = (shipCodeInput.value || '').trim().toUpperCase()
-  if (!code || !editingShipping.value) return
-  if (!editingShipping.value.product_codes.includes(code)) {
-    editingShipping.value.product_codes = [...editingShipping.value.product_codes, code]
+  const kw = (shipCodeInput.value || '').trim()
+  if (!kw || !editingShipping.value) return
+  if (!editingShipping.value.keywords.includes(kw)) {
+    editingShipping.value.keywords = [...editingShipping.value.keywords, kw]
   }
   shipCodeInput.value = ''
 }
 
 function removeShipCode(idx) {
   if (!editingShipping.value) return
-  const list = [...editingShipping.value.product_codes]
+  const list = [...editingShipping.value.keywords]
   list.splice(idx, 1)
-  editingShipping.value.product_codes = list
+  editingShipping.value.keywords = list
 }
 
 async function submitShipping() {
@@ -306,8 +337,8 @@ async function submitShipping() {
   try {
     const payload = {
       name,
-      product_codes: editingShipping.value.product_codes,
-      sort_order:    Number(editingShipping.value.sort_order) || 0,
+      keywords:   editingShipping.value.keywords,
+      sort_order: Number(editingShipping.value.sort_order) || 0,
     }
     const isNew = editingShipping.value.id === null
     const res = isNew
@@ -432,6 +463,36 @@ async function deleteReturn(item) {
   }
 }
 
+// ── 过滤词操作 ────────────────────────────────────
+
+async function addIgnoreTerm() {
+  const term = (ignoreInput.value || '').trim()
+  if (!term) return
+  ignoreLoading.value = true
+  try {
+    const res = await http.post('/api/aftersale/shipping-ignore-terms', { term })
+    if (res.success) {
+      ignoreTerms.value.push(res.data)
+      ignoreInput.value = ''
+      emit('updated')
+    } else {
+      ElMessage.error(res.message || '添加失败')
+    }
+  } finally {
+    ignoreLoading.value = false
+  }
+}
+
+async function deleteIgnoreTerm(item) {
+  const res = await http.delete(`/api/aftersale/shipping-ignore-terms/${item.id}`)
+  if (res.success) {
+    ignoreTerms.value = ignoreTerms.value.filter(t => t.id !== item.id)
+    emit('updated')
+  } else {
+    ElMessage.error(res.message || '删除失败')
+  }
+}
+
 </script>
 
 <template>
@@ -449,6 +510,7 @@ async function deleteReturn(item) {
         <button class="lib-tab" :class="{ active: activeTab === 'reasons' }"  @click="activeTab = 'reasons'">售后原因库</button>
         <button class="lib-tab" :class="{ active: activeTab === 'shipping' }" @click="activeTab = 'shipping'">发货物料简称</button>
         <button class="lib-tab" :class="{ active: activeTab === 'return' }"   @click="activeTab = 'return'">售后物料简称</button>
+        <button class="lib-tab" :class="{ active: activeTab === 'ignore' }"   @click="activeTab = 'ignore'">过滤词</button>
       </div>
 
       <!-- ── 售后原因库 Tab ─────────────────────────── -->
@@ -600,19 +662,26 @@ async function deleteReturn(item) {
         <!-- 左列：简称列表 -->
         <div class="alias-list-col">
           <div class="col-header">
-            <span class="col-title">发货物料简称（{{ shippingAliases.length }}）</span>
+            <span class="col-title">发货物料简称（{{ filteredShippingAliases.length }}/{{ shippingAliases.length }}）</span>
             <button class="btn-add" title="新建简称" @click="startNewShipping">＋</button>
           </div>
+          <el-input
+            v-model="shippingSearch"
+            size="small"
+            clearable
+            class="alias-search"
+            placeholder="搜索简称/关键词"
+          />
 
           <div class="alias-list">
-            <div v-for="item in shippingAliases" :key="item.id" class="alias-item"
+            <div v-for="item in filteredShippingAliases" :key="item.id" class="alias-item"
               :class="{ editing: editingShipping?.id === item.id }"
               @click="startEditShipping(item)"
             >
               <div class="alias-item-main">
                 <span class="alias-name">{{ item.name }}</span>
                 <span class="alias-meta">
-                  {{ item.product_codes?.length ? item.product_codes.length + ' 个产品代码' : '暂无绑定' }}
+                  {{ item.keywords?.length ? item.keywords.length + ' 个关键词' : '暂无关键词' }}
                 </span>
               </div>
               <div class="alias-actions">
@@ -621,8 +690,11 @@ async function deleteReturn(item) {
                 </button>
               </div>
             </div>
-            <div v-if="shippingAliases.length === 0" class="col-empty">
+            <div v-if="!shippingAliases.length" class="col-empty">
               暂无简称，点击右上角「＋」添加
+            </div>
+            <div v-else-if="!filteredShippingAliases.length" class="col-empty">
+              未找到匹配简称
             </div>
           </div>
         </div>
@@ -642,16 +714,16 @@ async function deleteReturn(item) {
             </div>
 
             <div class="form-row">
-              <label class="form-label">绑定产品代码
-                <span class="form-label-hint">工单提交时自动关联，也可手动维护</span>
+              <label class="form-label">物料名称关键词
+                <span class="form-label-hint">工单提交时自动积累，也可手动维护；匹配发货物料的 name 字段</span>
               </label>
               <div class="tag-editor">
                 <div class="tag-list">
-                  <el-tag v-for="(code, i) in editingShipping.product_codes" :key="i"
-                    closable size="small" type="info" @close="removeShipCode(i)">{{ code }}</el-tag>
-                  <span v-if="!editingShipping.product_codes.length" class="tag-empty">暂无</span>
+                  <el-tag v-for="(kw, i) in editingShipping.keywords" :key="i"
+                    closable size="small" type="info" @close="removeShipCode(i)">{{ kw }}</el-tag>
+                  <span v-if="!editingShipping.keywords.length" class="tag-empty">暂无</span>
                 </div>
-                <el-input v-model="shipCodeInput" size="small" placeholder="输入产品代码，回车添加"
+                <el-input v-model="shipCodeInput" size="small" placeholder="输入物料名称关键词，回车添加"
                   style="margin-top:6px" @keyup.enter="addShipCode" />
               </div>
             </div>
@@ -685,12 +757,19 @@ async function deleteReturn(item) {
         <!-- 左列：简称列表 -->
         <div class="alias-list-col">
           <div class="col-header">
-            <span class="col-title">售后物料简称（{{ returnAliases.length }}）</span>
+            <span class="col-title">售后物料简称（{{ filteredReturnAliases.length }}/{{ returnAliases.length }}）</span>
             <button class="btn-add" title="新建简称" @click="startNewReturn">＋</button>
           </div>
+          <el-input
+            v-model="returnSearch"
+            size="small"
+            clearable
+            class="alias-search"
+            placeholder="搜索简称/关键词"
+          />
 
           <div class="alias-list">
-            <div v-for="item in returnAliases" :key="item.id" class="alias-item"
+            <div v-for="item in filteredReturnAliases" :key="item.id" class="alias-item"
               :class="{ editing: editingReturn?.id === item.id }"
               @click="startEditReturn(item)"
             >
@@ -706,8 +785,11 @@ async function deleteReturn(item) {
                 </button>
               </div>
             </div>
-            <div v-if="returnAliases.length === 0" class="col-empty">
+            <div v-if="!returnAliases.length" class="col-empty">
               暂无简称，点击右上角「＋」添加
+            </div>
+            <div v-else-if="!filteredReturnAliases.length" class="col-empty">
+              未找到匹配简称
             </div>
           </div>
         </div>
@@ -761,6 +843,39 @@ async function deleteReturn(item) {
             <div>点击「＋」新建，或点击左侧列表项编辑</div>
             <div class="placeholder-hint">维护出现问题的物料规范简称；工单提交后商家备注<br>会自动采集为关键词，用于下次自动匹配</div>
           </div>
+        </div>
+      </div>
+
+      <!-- ── 过滤词 Tab ────────────────────────────── -->
+      <div v-if="activeTab === 'ignore'" class="ignore-lib">
+        <div class="col-header">
+          <span class="col-title">物料匹配过滤词（{{ ignoreTerms.length }}）</span>
+        </div>
+        <div class="ignore-desc">
+          发货物料名称包含以下词时，该物料跳过简称自动匹配与学习（如「半成品」「定制件」「其他」）
+        </div>
+
+        <!-- 输入新词 -->
+        <div class="ignore-input-row">
+          <el-input
+            v-model="ignoreInput"
+            placeholder="输入过滤词，回车添加"
+            size="small"
+            style="flex:1"
+            @keyup.enter="addIgnoreTerm"
+          />
+          <el-button size="small" type="primary" :loading="ignoreLoading" @click="addIgnoreTerm">添加</el-button>
+        </div>
+
+        <!-- 词列表 -->
+        <div class="ignore-tags">
+          <div v-for="item in ignoreTerms" :key="item.id" class="ignore-tag-item">
+            <span class="ignore-tag-text">{{ item.term }}</span>
+            <button class="btn-tiny btn-del" title="删除" @click="deleteIgnoreTerm(item)">
+              <el-icon><Delete /></el-icon>
+            </button>
+          </div>
+          <div v-if="ignoreTerms.length === 0" class="col-empty">暂无过滤词</div>
         </div>
       </div>
 
@@ -840,6 +955,9 @@ async function deleteReturn(item) {
 .alias-list {
   flex: 1;
   overflow-y: auto;
+}
+.alias-search {
+  margin-bottom: 8px;
 }
 .alias-list::-webkit-scrollbar { width: 4px; }
 .alias-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
@@ -1059,4 +1177,28 @@ async function deleteReturn(item) {
   text-align: center; padding: 20px;
 }
 .placeholder-icon { font-size: 28px; opacity: 0.4; }
+
+/* ── 过滤词 Tab ──────────────────────────────────── */
+.ignore-lib {
+  flex: 1; display: flex; flex-direction: column; gap: 10px; padding: 4px 0;
+  overflow: hidden;
+}
+.ignore-desc {
+  font-size: 11px; color: var(--text-muted); line-height: 1.5;
+  padding: 6px 10px; background: #faf7f2; border-radius: 6px;
+  border: 1px solid var(--border-color);
+}
+.ignore-input-row {
+  display: flex; gap: 8px; align-items: center;
+}
+.ignore-tags {
+  flex: 1; overflow-y: auto; display: flex; flex-wrap: wrap;
+  gap: 6px; align-content: flex-start; padding: 4px 0;
+}
+.ignore-tag-item {
+  display: flex; align-items: center; gap: 4px;
+  background: #fff3e0; border: 1px solid #f5c078; border-radius: 8px;
+  padding: 3px 8px 3px 10px; font-size: 12px; color: var(--text-primary);
+}
+.ignore-tag-text { line-height: 1.4; }
 </style>

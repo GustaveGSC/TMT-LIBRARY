@@ -14,22 +14,32 @@
 - **原因分配行**：每行含原因下拉（从原因库选）/ 自定义原因输入 / 涉及产品多选 / 备注输入；支持添加多行（拆分多原因）
 - 确认 → `POST /api/aftersale/cases`；忽略 → `POST /api/aftersale/cases/:order_no/ignore`
 - 需要 `aftersale:edit` 权限才显示确认/忽略/添加原因按钮
-- **关键词自动积累**：确认工单时，若原因行有 `reason_id`（原因库条目），自动从 seller_remark 提取 n-gram 写入 `aftersale_keyword_candidate`；同一词达到阈值（3次）后晋升到 `aftersale_reason.keywords`；自定义原因不参与
+- **关键词自动积累**：确认工单时，若原因行有 `reason_id`（原因库条目），自动从 seller_remark 提取 n-gram 写入 `aftersale_keyword_candidate`；同一词达到阈值（**2次**）后晋升到 `aftersale_reason.keywords`；自定义原因不参与
+- **发货/售后物料简称内联新增**：两个简称 el-select 均支持直接输入新简称，输入内容不在列表中时显示「名称 + 橙色「新」tag」选项，选中后调 POST API 创建并自动回填 id（与具体原因 select 呈现一致）
+- **发货简称匹配算法**：keywords 兼容存储物料名称/物料代码；候选计算与匹配按绝对命中数优先（主键），覆盖率（matched/len(kws)）仅作次级排序，避免单关键词简称因覆盖率虚高误胜
+- **发货简称自动学习（两级 + 单 key）**：确认工单成功后，对每个 `shipping_alias_id` 仅新增 1 个关键词。①一级：简称名称匹配当前工单物料（code/name 任一 `includes`）；②一级无命中时，从已有 keywords 提取公共模式并过滤 ignore terms 后再匹配。学习写回优先物料 `name`（缺失回退 `code`）；新简称首次且两级均未命中时兜底绑定 1 个 key；多内容面板时优先使用该项勾选物料（`_selectedProducts`）
 
 ## AftersaleReasonLib.vue 说明
 - 从 AftersaleProcess.vue 顶部「原因库」按钮打开（el-dialog）
 - 3个 Tab：售后原因库 / 发货物料简称 / 售后物料简称（已移除物料组别简称 Tab）
+- 发货简称/售后简称列表支持搜索（按简称名与关键词过滤，显示“过滤结果/总数”）
 - 原因支持：新增 / 编辑 / 删除（删除时查询使用次数，usage>0 时二次确认）
 - 关键词以 tag 形式编辑，回车添加，逗号分隔存储；关键词也会由系统自动积累（见上）
 - 更新后 emit('updated') 触发 AftersaleProcess 刷新原因选项
 
 ## AftersaleDashboard.vue 说明
-- 布局：左侧筛选面板（210px）+ 右侧图表区
-- 筛选：日期范围 / 渠道多选 / 省份多选 / 原因分类
-- 左侧统计卡片：待处理 / 已处理 / 已忽略 + Top5 常见原因
-- 4个维度 Tab：原因分布 / 渠道分布 / 地域分布 / 时间趋势
-- 原因/渠道/地域 → 柱图或饼图可切换；时间趋势 → 面积折线图（按月）
-- 底部数据明细表（前10条，含占比计算）
+- 布局：左侧筛选面板（260px，style 参考 ShippingDashboard）+ 右侧图表区（待实现）
+- 筛选面板：6个可折叠区块，每个区块联动更新候选选项
+  - 时间选择：日期范围 + 快捷短语
+  - 产品选择：品类 → 系列 → 型号（三级联动，品类/系列选中后下一级才可用）
+  - 售后原因选择：原因分类（一级）→ 具体原因（二级）
+  - 发货物料选择：发货物料简称 + 售后物料简称（两个独立 select）
+  - 渠道选择：渠道名称多选
+  - 地域选择：省份 → 城市（两级）
+- **联动逻辑**：任一维度筛选变化 → debounce 300ms → POST /api/aftersale/chart-filter-options
+  - 对每个维度，接口返回 "应用其他维度过滤后" 该维度的可用候选 id/名称
+  - 前端 computed 将 available 集合与静态候选数据交叉，过滤不可用选项
+- 静态数据（挂载时加载一次）：/api/category/tree、/api/aftersale/reasons、/api/aftersale/shipping-aliases、/api/aftersale/return-aliases
 
 ## AftersaleTable.vue 说明
 

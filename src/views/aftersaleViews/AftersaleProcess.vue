@@ -34,7 +34,6 @@ const ignoring      = ref(false)
 
 // 当前工单日期编辑状态
 const aftersaleDate = ref(null)   // 售后日期（来自 shipped_date，可编辑）
-const purchaseDate  = ref(null)   // 购买日期（用户手动填写）
 
 // 弹窗
 const showReasonLib = ref(false)
@@ -42,9 +41,11 @@ const showReasonLib = ref(false)
 // 物料简称列表（用于发货物料别名合并显示）
 
 // 发货物料简称库（下拉候选）
-const shippingAliasOptions = ref([])   // [{id, name}]
+const shippingAliasOptions = ref([])   // [{id, name, keywords}]
 // 售后物料简称库（下拉候选）
-const returnAliasOptions   = ref([])   // [{id, name}]
+const returnAliasOptions   = ref([])   // [{id, name, keywords}]
+// 发货物料匹配过滤词（物料名称含这些词时跳过简称匹配）
+const shippingIgnoreTerms  = ref([])   // [{id, term}]
 
 // 品类树（三级联动，缓存）
 const categoryTree = ref([])
@@ -59,8 +60,8 @@ const reasonGroups = ref([])       // [{category_id, category_name, reasons:[{id
 
 // 售后内容列表
 // 每项：{ category_id, series_id, model_id,
-//         shipping_material_alias, aftersale_material_alias,
-//         reason_category_id, reason_id, custom_reason }
+//         shipping_alias_id, return_alias_id,
+//         reason_category_id, reason_id }
 const contentItems = ref([])
 
 // 产品匹配依据（选单后填充，用于底部说明面板）
@@ -77,6 +78,27 @@ const categoryOptions = computed(() =>
 
 // 当前工单「发货物料」列表（只读）
 const resolvedProducts = computed(() => currentOrder.value?.products || [])
+
+// 是否有多个售后内容面板（决定是否显示物料勾选区）
+const multipleItems = computed(() => contentItems.value.length >= 2)
+
+// 提交按钮可用条件：所有内容项必填字段均已填写
+const canConfirm = computed(() => {
+  if (!contentItems.value.length) return false
+  return contentItems.value.every(item => {
+    const hasReason = !!(item.reason_id || item.custom_reason?.trim())
+    const hasProducts = !multipleItems.value || item._selectedProducts?.length > 0
+    return !!(
+      item.model_id &&
+      item.shipping_alias_id &&
+      item.return_alias_id &&
+      item.reason_category_id &&
+      hasReason &&
+      item.purchase_date &&
+      hasProducts
+    )
+  })
+})
 
 // ── 生命周期 ──────────────────────────────────────
 onMounted(async () => {
@@ -158,17 +180,20 @@ async function loadCategoryTree() {
     modelLifecycles.value = lcRes.value.data
 }
 
-// 加载物料简称（发货简称库 + 售后简称库）
+// 加载物料简称（发货简称库 + 售后简称库 + 过滤词）
 // 使用 allSettled 确保任一请求失败不会阻断其他加载
 async function loadAliases() {
-  const [shipRes, retRes] = await Promise.allSettled([
+  const [shipRes, retRes, ignoreRes] = await Promise.allSettled([
     http.get('/api/aftersale/shipping-aliases'),
     http.get('/api/aftersale/return-aliases'),
+    http.get('/api/aftersale/shipping-ignore-terms'),
   ])
   if (shipRes.status === 'fulfilled' && shipRes.value?.success)
     shippingAliasOptions.value = shipRes.value.data
   if (retRes.status === 'fulfilled' && retRes.value?.success)
     returnAliasOptions.value   = retRes.value.data
+  if (ignoreRes.status === 'fulfilled' && ignoreRes.value?.success)
+    shippingIgnoreTerms.value  = ignoreRes.value.data
 }
 
 // 同时加载原因分类（全部）和原因分组（含二级）
@@ -228,14 +253,16 @@ function parsePurchaseDateFromRemark(text) {
 
 // 选中某个待处理订单：自动创建第一条售后内容并推断型号
 async function selectOrder(order) {
-  console.log('[selectOrder]', order.ecommerce_order_no, 'products:', order.products)
   currentOrder.value  = order
   aftersaleDate.value = order.shipped_date || null
-  purchaseDate.value  = parsePurchaseDateFromRemark(order.seller_remark)
   matchDebug.value    = null
 
-  // 先放一条空内容占位
+  // 从商家备注解析购买日期（仅用于初始推断，存入第一条内容项）
+  const parsedPurchaseDate = parsePurchaseDateFromRemark(order.seller_remark)
+
+  // 先放一条空内容占位，并预填购买日期
   const firstItem = makeEmptyItem()
+  firstItem.purchase_date = parsedPurchaseDate
   contentItems.value = [firstItem]
 
   const orderNo   = order.ecommerce_order_no
@@ -245,26 +272,30 @@ async function selectOrder(order) {
   let apiResult        = null   // 原始 API 返回（含 suggested_shipping_alias）
   let reasonCandidates = []     // auto-match 返回的原因候选列表
 
-  await Promise.all([
-    (order.buyer_remark?.trim() || order.products?.length)
-      ? http.post('/api/aftersale/suggest-product', {
-          product_codes: order.products?.map(p => p.code) || [],
-          purchase_date: purchaseDate.value || null,
-          seller_remark: order.seller_remark || null,
-          buyer_remark:  order.buyer_remark  || null,
-        }).then(r => { if (r.success && r.data) apiResult = r.data })
-      : Promise.resolve(),
-    debugText.trim()
-      ? http.post('/api/aftersale/auto-match', { text: debugText })
-          .then(r => { if (r.success) reasonCandidates = r.data || [] })
-      : Promise.resolve(),
-  ])
+  try {
+    await Promise.all([
+      (order.buyer_remark?.trim() || order.products?.length)
+        ? http.post('/api/aftersale/suggest-product', {
+            products:      order.products || [],
+            purchase_date: parsedPurchaseDate || null,
+            seller_remark: order.seller_remark || null,
+            buyer_remark:  order.buyer_remark  || null,
+          }).then(r => { if (r.success && r.data) apiResult = r.data })
+        : Promise.resolve(),
+      debugText.trim()
+        ? http.post('/api/aftersale/auto-match', { text: debugText })
+            .then(r => { if (r.success) reasonCandidates = r.data || [] })
+        : Promise.resolve(),
+    ])
+  } catch (e) {
+    console.warn('[selectOrder] API error, proceeding without suggestions', e)
+  }
 
   // API 型号匹配（需有 category_id 才算匹配到型号）
   const apiMatch = apiResult?.category_id ? apiResult : null
 
   // ── 来源2：买家留言 + 商家备注 文本匹配（前端） ──────
-  const textMatch = matchTextToModel(order.buyer_remark, order.seller_remark)
+  const textMatch = matchTextToModel(order.buyer_remark, order.seller_remark, parsedPurchaseDate)
 
   // ── 简称候选（前端实时计算）────────────────────────
   const shippingAliasCandidates = computeShippingAliasCandidates(order.products)
@@ -276,14 +307,19 @@ async function selectOrder(order) {
   if (!item) return
 
   // ── 发货物料简称自动匹配（来自历史工单）────────────────
-  const historyAlias  = apiResult?.suggested_shipping_alias || null
-  const shippingAlias = historyAlias || ''
-  const aliasSource   = historyAlias ? 'history' : null
-  if (shippingAlias) item.shipping_material_alias = shippingAlias
+  const historyShippingId   = apiResult?.suggested_shipping_alias_id || null
+  const historyShippingName = historyShippingId
+    ? (shippingAliasOptions.value.find(o => o.id === historyShippingId)?.name || null)
+    : null
+  const aliasSource = historyShippingId ? 'history' : null
+  if (historyShippingId) item.shipping_alias_id = historyShippingId
 
   // 售后物料简称：来自历史工单
-  const aftersaleAlias = apiResult?.suggested_aftersale_alias || null
-  if (aftersaleAlias) item.aftersale_material_alias = aftersaleAlias
+  const historyReturnId   = apiResult?.suggested_return_alias_id || null
+  const historyReturnName = historyReturnId
+    ? (returnAliasOptions.value.find(o => o.id === historyReturnId)?.name || null)
+    : null
+  if (historyReturnId) item.return_alias_id = historyReturnId
 
   // 售后原因：来自历史工单（最频繁的 reason_id + category_id）
   const suggestedReasonId  = apiResult?.suggested_reason_id          || null
@@ -300,11 +336,10 @@ async function selectOrder(order) {
     const dateOk = apiMatch.date_ok !== false
     let dateReason = null
     if (!dateOk && apiMatch.model_id) {
-      const buyYm = purchaseDate.value ? purchaseDate.value.slice(0, 7) : null
+      const buyYm = parsedPurchaseDate ? parsedPurchaseDate.slice(0, 7) : null
       if (buyYm) {
         const lc = modelLifecycles.value[apiMatch.model_id]
         if (lc) {
-          const currentYm = new Date().toISOString().slice(0, 7)
           const tooEarly  = lc.listed_yymm && buyYm < lc.listed_yymm
           dateReason = tooEarly ? 'too_early' : 'too_late'
         }
@@ -339,8 +374,8 @@ async function selectOrder(order) {
         }
       }),
       alias_source:           aliasSource,
-      alias_value:            shippingAlias || null,
-      aftersale_alias_value:  aftersaleAlias,
+      alias_value:            historyShippingName,
+      aftersale_alias_value:  historyReturnName,
       suggested_reason_id:    suggestedReasonId,
       suggested_category_id:  suggestedCategoryId,
       shipping_alias_candidates: shippingAliasCandidates,
@@ -364,8 +399,8 @@ async function selectOrder(order) {
       confidence:             scoreToConfidence(textMatch.score),
       candidates:             textMatch.candidates || [],
       alias_source:           aliasSource,
-      alias_value:            shippingAlias || null,
-      aftersale_alias_value:  aftersaleAlias,
+      alias_value:            historyShippingName,
+      aftersale_alias_value:  historyReturnName,
       suggested_reason_id:    suggestedReasonId,
       suggested_category_id:  suggestedCategoryId,
       shipping_alias_candidates: shippingAliasCandidates,
@@ -380,8 +415,8 @@ async function selectOrder(order) {
       confidence:             null,
       candidates:             [],
       alias_source:           aliasSource,
-      alias_value:            shippingAlias || null,
-      aftersale_alias_value:  aftersaleAlias,
+      alias_value:            historyShippingName,
+      aftersale_alias_value:  historyReturnName,
       suggested_reason_id:    suggestedReasonId,
       suggested_category_id:  suggestedCategoryId,
       shipping_alias_candidates: shippingAliasCandidates,
@@ -407,7 +442,6 @@ function removeCurrentFromList() {
     currentOrder.value  = null
     contentItems.value  = []
     aftersaleDate.value = null
-    purchaseDate.value  = null
     matchDebug.value    = null
   }
 }
@@ -428,12 +462,20 @@ function makeEmptyItem() {
     category_id:              null,
     series_id:                null,
     model_id:                 null,
-    shipping_material_alias:  '',
-    aftersale_material_alias: '',
-    reason_category_id:       null,
-    reason_id:                null,
-    custom_reason:            '',
-    confidence:               null,   // null | 'high' | 'medium' | 'low'
+    shipping_alias_id:  null,
+    return_alias_id:    null,
+    reason_category_id: null,
+    reason_id:          null,
+    custom_reason:      '',
+    confidence:         null,   // null | 'high' | 'medium' | 'low'
+    purchase_date:      null,   // 该条内容的购买日期（每条可不同）
+    // 内部：reason select 当前输入文字（用于显示「新」选项）
+    _reasonQuery:      '',
+    // 内部：发货/售后物料简称 select 当前输入文字（用于显示「新增」选项）
+    _shippingQuery:    '',
+    _returnQuery:      '',
+    // 内部：多面板时该内容对应的发货物料 code 列表
+    _selectedProducts: [],
   }
 }
 
@@ -460,7 +502,76 @@ function onSeriesChange(item) {
 
 // 原因一级分类变更时重置二级
 function onReasonCategoryChange(item) {
-  item.reason_id = null
+  item.reason_id     = null
+  item.custom_reason = ''
+}
+
+// 发货物料简称 select 变更：若选中值为字符串（新增），调 API 创建后回填 id
+async function onShippingAliasChange(item, val) {
+  if (val === null || val === undefined || val === '') {
+    item.shipping_alias_id = null
+    return
+  }
+  // 已是数字 id → 直接赋值
+  if (typeof val === 'number') {
+    item.shipping_alias_id = val
+    return
+  }
+  // 字符串 → 新增
+  const name = String(val).trim()
+  if (!name) return
+  const res = await http.post('/api/aftersale/shipping-aliases', { name })
+  if (res.success) {
+    shippingAliasOptions.value.push(res.data)
+    item.shipping_alias_id = res.data.id
+  } else {
+    ElMessage.error(res.message || '新增发货物料简称失败')
+    item.shipping_alias_id = null
+  }
+  item._shippingQuery = ''
+}
+
+// 售后物料简称 select 变更：若选中值为字符串（新增），调 API 创建后回填 id
+async function onReturnAliasChange(item, val) {
+  if (val === null || val === undefined || val === '') {
+    item.return_alias_id = null
+    return
+  }
+  if (typeof val === 'number') {
+    item.return_alias_id = val
+    return
+  }
+  const name = String(val).trim()
+  if (!name) return
+  const res = await http.post('/api/aftersale/return-aliases', { name })
+  if (res.success) {
+    returnAliasOptions.value.push(res.data)
+    item.return_alias_id = res.data.id
+  } else {
+    ElMessage.error(res.message || '新增售后物料简称失败')
+    item.return_alias_id = null
+  }
+  item._returnQuery = ''
+}
+
+// 具体原因 select 变更：值在原因库中 → 库原因；否则 → 自定义原因
+function onReasonChange(item, val) {
+  if (val === null || val === undefined || val === '') {
+    item.reason_id     = null
+    item.custom_reason = ''
+    return
+  }
+  // 收集当前分类下所有原因 ID（兼容 number 和 string 类型传值）
+  const group = reasonGroups.value.find(g => g.category_id === item.reason_category_id)
+  const knownIds = (group?.reasons || []).map(r => r.id)
+  const numVal = Number(val)
+  if (!isNaN(numVal) && knownIds.includes(numVal)) {
+    item.reason_id     = numVal
+    item.custom_reason = ''
+  } else {
+    item.reason_id     = null
+    item.custom_reason = String(val)
+  }
 }
 
 // ── 产品型号文本匹配 ────────────────────────────────
@@ -531,7 +642,7 @@ function calcMatchScore(text, name) {
  *
  * 返回 { category_id, series_id, model_id, score } 或 null
  */
-function matchTextToModel(remark1, remark2) {
+function matchTextToModel(remark1, remark2, purchaseDateStr = null) {
   const text = [remark1, remark2].filter(Boolean).join(' ')
   if (!text.trim() || !categoryTree.value.length) return null
 
@@ -551,7 +662,7 @@ function matchTextToModel(remark1, remark2) {
 
       // 在系列内找最佳型号（考虑文本分 + 生命周期）
       // 购买日期的年月（YYYY-MM），用于生命周期过滤
-      const buyYm = purchaseDate.value ? purchaseDate.value.slice(0, 7) : null
+      const buyYm = purchaseDateStr ? purchaseDateStr.slice(0, 7) : null
 
       const currentYm = new Date().toISOString().slice(0, 7)
       let bestModelScore = 0
@@ -664,28 +775,33 @@ function scoreToConfidence(score) {
 // ── 简称候选计算（前端实时，复用已加载的简称库数据）───────────
 
 /**
- * 按产品代码覆盖率给发货物料简称打分，返回 Top5 候选。
- * score = 订单产品代码与简称绑定代码的交集数 / 简称绑定代码总数
+ * 按关键词命中数给发货物料简称打分，返回 Top5 候选。
+ * 绝对命中数优先（主键），覆盖率（matched/len(kws)）仅作次级排序。
+ * 兼容历史数据：keywords 可能是物料名称或物料代码，二者都参与命中。
  */
 function computeShippingAliasCandidates(products) {
   if (!products?.length || !shippingAliasOptions.value.length) return []
-  const orderCodes = new Set(products.map(p => p.code))
+  const productTexts = new Set(
+    products
+      .flatMap(p => [p.code, p.name])
+      .map(v => (v || '').toLowerCase().trim())
+      .filter(Boolean)
+  )
   return shippingAliasOptions.value
     .map(alias => {
-      const bound = alias.product_codes || []
-      if (!bound.length) return null
-      const matched = bound.filter(c => orderCodes.has(c))
+      const kws = alias.keywords || []
+      if (!kws.length) return null
+      const matched = kws.filter(k => productTexts.has((k || '').toLowerCase().trim()))
       if (!matched.length) return null
-      const score = matched.length / bound.length
-      return { id: alias.id, name: alias.name, score, matched_codes: matched }
+      const score = matched.length / kws.length
+      return { id: alias.id, name: alias.name, score, matched_count: matched.length, matched_keywords: matched }
     })
     .filter(Boolean)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 5)
+    .sort((a, b) => (b.matched_count - a.matched_count) || (b.score - a.score))
 }
 
 /**
- * 按关键词与商家备注的文本相似度给售后物料简称打分，返回 Top5 候选。
+ * 按关键词与商家备注的文本相似度给售后物料简称打分，返回所有匹配候选。
  * 取该简称所有关键词中最高的 calcMatchScore，阈值 0.3。
  */
 function computeReturnAliasCandidates(sellerRemark) {
@@ -709,17 +825,28 @@ function computeReturnAliasCandidates(sellerRemark) {
     })
     .filter(Boolean)
     .sort((a, b) => b.score - a.score)
-    .slice(0, 5)
+}
+
+// ── 生命周期文字格式化 ───────────────────────────────
+// 将 modelLifecycles 里的 YYYY-MM 格式化为 YY.MM，返回 "上市~退市" 或 "上市~在售"
+function lifecycleText(modelId) {
+  const lc = modelLifecycles.value[modelId]
+  if (!lc) return null
+  const fmt = s => s ? s.slice(2).replace('-', '.') : null   // "2021-03" → "21.03"
+  const start = fmt(lc.listed_yymm)
+  const end   = fmt(lc.delisted_yymm)
+  if (!start && !end) return null
+  return `${start || '?'}~${end || '在售'}`
 }
 
 // ── 候选一键应用 ────────────────────────────────────
 
-function applyShippingAlias(name) {
-  if (contentItems.value[0]) contentItems.value[0].shipping_material_alias = name
+function applyShippingAlias(id) {
+  if (contentItems.value[0]) contentItems.value[0].shipping_alias_id = id
 }
 
-function applyReturnAlias(name) {
-  if (contentItems.value[0]) contentItems.value[0].aftersale_material_alias = name
+function applyReturnAlias(id) {
+  if (contentItems.value[0]) contentItems.value[0].return_alias_id = id
 }
 
 function applyModelCandidate(c) {
@@ -828,6 +955,142 @@ async function addReasonCategory(item) {
 
 // ── 确认 / 忽略 ────────────────────────────────────
 
+/**
+ * 从 keywords 列表中提取公共模式，返回去重后的有效模式列表（长度≥2）。
+ * "_" 作为分隔符：每条 keyword 先按 "_" 切分为 token，
+ * 统计各 token 在多少条 keyword 中出现，保留出现 ≥2 次的 token 作为模式。
+ * token 首尾的括号、空格等无意义字符会被去除。
+ * 短模式若已被更长模式包含则去除，避免冗余。
+ * 例：["原材料_木器_榉木_活动桌面板","原材料_木器_桦木_活动桌面板"] → ["活动桌面板","原材料","木器","桦木"]
+ */
+function extractKeywordPatterns(strs, minLen = 2) {
+  if (strs.length < 2) return []
+
+  // 将每条 keyword 按 _ 切分，清洗首尾无意义字符，统计各 token 出现次数
+  const countMap = new Map()
+  for (const str of strs) {
+    const tokens = new Set(
+      str.split('_')
+        .map(t => t.replace(/^[\s（()）\-]+|[\s（()）\-]+$/g, '').toLowerCase())
+        .filter(t => t.length >= minLen)
+    )
+    for (const token of tokens) {
+      countMap.set(token, (countMap.get(token) || 0) + 1)
+    }
+  }
+
+  // 保留出现 ≥2 次的 token，按长度降序排列
+  const candidates = [...countMap.entries()]
+    .filter(([, cnt]) => cnt >= 2)
+    .map(([token]) => token)
+    .sort((a, b) => b.length - a.length)
+
+  // 去除已被更长模式包含的短模式
+  return candidates.filter((p, i) => !candidates.slice(0, i).some(longer => longer.includes(p)))
+}
+
+/**
+ * 发货物料简称自动学习（两级匹配）。
+ *
+ * 一级：用简称名称过滤当前工单产品（code/name 任一包含）。
+ * 二级：一级无命中时，从该简称已有 keywords 推导公共模式，再匹配当前工单产品。
+ * 两级均无命中则跳过，不修改 keywords。
+ *
+ * 重要：每次确认仅绑定 1 个 key，且优先写物料名称（name），避免新学习关键词被写成 code。
+ */
+async function learnShippingAliasKeywords(products, items) {
+  if (!products?.length || !items?.length) return
+  const aliasIds = [...new Set(items.map(i => i.shipping_alias_id).filter(Boolean))]
+  if (!aliasIds.length) return
+
+  const ignoreTerms  = shippingIgnoreTerms.value.map(t => t.term.toLowerCase())
+  const productEntries = products
+    .map(p => ({
+      code: (p.code || '').trim(),
+      name: (p.name || '').trim(),
+      quantity: Number(p.quantity) || 0,
+      codeLower: (p.code || '').toLowerCase().trim(),
+      nameLower: (p.name || '').toLowerCase().trim(),
+    }))
+    .filter(p => p.code || p.name)
+  const bindKey = (p) => p.name || p.code || ''
+  const pickOneKey = (entries) => {
+    if (!entries.length) return null
+    const sorted = [...entries].sort((a, b) => b.quantity - a.quantity)
+    return bindKey(sorted[0]) || null
+  }
+  const productByCode = new Map(productEntries.map(p => [p.code, p]))
+  const aliasScopedProducts = new Map()
+  for (const item of items) {
+    if (!item.shipping_alias_id) continue
+    const scoped = (multipleItems.value && item._selectedProducts?.length)
+      ? item._selectedProducts.map(code => productByCode.get(code)).filter(Boolean)
+      : productEntries
+    if (!scoped.length) continue
+    if (!aliasScopedProducts.has(item.shipping_alias_id)) aliasScopedProducts.set(item.shipping_alias_id, new Map())
+    const dedup = aliasScopedProducts.get(item.shipping_alias_id)
+    scoped.forEach(p => dedup.set(`${p.code}__${p.name}`, p))
+  }
+
+  for (const aliasId of aliasIds) {
+    const aliasOpt = shippingAliasOptions.value.find(o => o.id === aliasId)
+    if (!aliasOpt) continue
+
+    const existing = aliasOpt.keywords || []
+    const scopedEntries = [...(aliasScopedProducts.get(aliasId)?.values() || [])]
+    if (!scopedEntries.length) continue
+
+    // 一级：简称名称与产品代码或产品名称的包含匹配
+    const namePat = (aliasOpt.name || '').toLowerCase()
+    let newKey = namePat
+      ? pickOneKey(
+          scopedEntries
+          .filter(p =>
+            p.codeLower.includes(namePat) ||
+            p.nameLower.includes(namePat)
+          )
+        )
+      : null
+
+    // 二级：一级无命中时，从已有 keywords 提取公共模式，再剔除含过滤词的模式，用剩余模式匹配
+    if (!newKey && existing.length) {
+      const rawPatterns = extractKeywordPatterns(existing)
+      let patterns = rawPatterns
+      if (ignoreTerms.length) {
+        patterns = rawPatterns.filter(p => !ignoreTerms.some(t => p.toLowerCase().includes(t)))
+      }
+      console.log(`[简称学习] alias="${aliasOpt.name}" 原始子串:`, rawPatterns, '过滤后:', patterns)
+      if (patterns.length) {
+        newKey = pickOneKey(
+          scopedEntries
+          .filter(p =>
+            patterns.some(pt =>
+              p.codeLower.includes(pt) || p.nameLower.includes(pt)
+            )
+          )
+        )
+      }
+    }
+
+    // 兜底：新简称首次学习且两级匹配均未命中时，直接绑定当前工单物料键
+    // 绑定键优先使用 name；name 缺失时回退到 code，避免出现“新简称无任何 key”。
+    if (!newKey && !existing.length) {
+      newKey = pickOneKey(scopedEntries)
+    }
+    if (!newKey) continue
+
+    const merged = [...new Set([...existing, newKey])]
+    if (merged.length === existing.length && existing.includes(newKey)) continue
+
+    const r = await http.put(`/api/aftersale/shipping-aliases/${aliasId}`, {
+      name:       aliasOpt.name,
+      keywords:   merged,
+      sort_order: aliasOpt.sort_order || 0,
+    })
+    if (r.success) aliasOpt.keywords = merged
+  }
+}
+
 async function confirmCase() {
   if (!currentOrder.value) return
   if (contentItems.value.length === 0) {
@@ -836,25 +1099,36 @@ async function confirmCase() {
   }
   saving.value = true
   try {
+    // 提交前：将自定义原因写入原因库，成功则回填 reason_id
+    for (const item of contentItems.value) {
+      if (!item.reason_id && item.custom_reason?.trim()) {
+        const r = await http.post('/api/aftersale/reasons', {
+          name:        item.custom_reason.trim(),
+          category_id: item.reason_category_id || null,
+        })
+        if (r.success) {
+          item.reason_id     = r.data.id
+          item.custom_reason = ''
+        }
+        // 重名：查找已有的原因 ID
+        else {
+          const existing = reasonGroups.value
+            .flatMap(g => g.reasons || [])
+            .find(r => r.name === item.custom_reason.trim())
+          if (existing) { item.reason_id = existing.id; item.custom_reason = '' }
+        }
+      }
+    }
+
     const reasons = contentItems.value.map(item => ({
       reason_id:                item.reason_id || null,
       // reason_id 为空时传一级分类，供后端存储 reason_category_id
       reason_category_id:       item.reason_id ? null : (item.reason_category_id || null),
-      custom_reason:            item.custom_reason || '',
-      model_id:                 item.model_id || null,
-      shipping_material_alias:  item.shipping_material_alias || '',
-      aftersale_material_alias: item.aftersale_material_alias || '',
-      involved_products:        [],
-      notes:                    '',
+      model_id:          item.model_id         || null,
+      shipping_alias_id: item.shipping_alias_id || null,
+      return_alias_id:   item.return_alias_id   || null,
+      purchase_date:            item.purchase_date || null,
     }))
-
-    // 提前收集自定义原因（确认后 contentItems 会被清空）
-    const customToSave = contentItems.value
-      .filter(item => !item.reason_id && item.custom_reason.trim())
-      .map(item => ({
-        name:        item.custom_reason.trim(),
-        category_id: item.reason_category_id || null,
-      }))
 
     const res = await http.post('/api/aftersale/cases', {
       ecommerce_order_no: currentOrder.value.ecommerce_order_no,
@@ -862,40 +1136,27 @@ async function confirmCase() {
       seller_remark:      currentOrder.value.seller_remark,
       buyer_remark:       currentOrder.value.buyer_remark,
       shipped_date:       aftersaleDate.value,
-      purchase_date:      purchaseDate.value || null,
       city:               currentOrder.value.city || null,
       district:           currentOrder.value.district || null,
       operator:           currentOrder.value.operator,
       channel_name:       currentOrder.value.channel_name,
       province:           currentOrder.value.province,
       reasons,
-      assigned_models:     [],
-      shipping_materials:  [],
-      aftersale_materials: [],
     })
     if (res.success) {
       ElMessage.success('已确认')
+      // 发货物料简称自动学习：用简称名称前缀过滤当前工单产品代码，合并写入 alias keywords
+      await learnShippingAliasKeywords(currentOrder.value.products, contentItems.value)
       removeCurrentFromList()
       emit('case-confirmed')
-      // 将自定义原因异步写入原因库（重名自动跳过）
-      if (customToSave.length) saveCustomReasonsToLib(customToSave)
+      // 刷新原因库选项（可能新增了原因）
+      loadReasonOptions()
     } else {
       ElMessage.error(res.message || '保存失败')
     }
   } finally {
     saving.value = false
   }
-}
-
-// 将自定义原因列表逐条写入原因库，写入后刷新选项
-async function saveCustomReasonsToLib(items) {
-  let savedCount = 0
-  for (const item of items) {
-    const res = await http.post('/api/aftersale/reasons', item)
-    if (res.success) savedCount++
-    // 重名（已存在）直接跳过，不报错
-  }
-  if (savedCount > 0) loadReasonOptions()
 }
 
 async function ignoreCase() {
@@ -1049,16 +1310,6 @@ async function ignoreCase() {
                 class="date-picker"
               />
             </div>
-            <div class="date-field">
-              <span class="date-label">购买日期</span>
-              <el-date-picker
-                v-model="purchaseDate"
-                type="date"
-                value-format="YYYY-MM-DD"
-                placeholder="根据备注填写购买日期"
-                class="date-picker"
-              />
-            </div>
           </section>
 
           <!-- 售后内容列表 -->
@@ -1143,17 +1394,28 @@ async function ignoreCase() {
               <div class="item-row">
                 <span class="item-label">发货物料简称</span>
                 <el-select
-                  v-model="item.shipping_material_alias"
-                  placeholder="选择发货物料简称"
+                  :model-value="item.shipping_alias_id"
+                  placeholder="选择或输入新简称"
                   clearable
                   filterable
-                  allow-create
+                  :filter-method="q => { item._shippingQuery = q }"
                   style="width:100%"
+                  @change="onShippingAliasChange(item, $event)"
+                  @visible-change="v => { if (!v) item._shippingQuery = '' }"
                 >
                   <el-option
-                    v-for="opt in shippingAliasOptions"
+                    v-if="item._shippingQuery && !shippingAliasOptions.some(o => o.name === item._shippingQuery)"
+                    :value="item._shippingQuery"
+                    :label="item._shippingQuery"
+                    class="new-create-option"
+                  >
+                    <span>{{ item._shippingQuery }}</span>
+                    <el-tag size="small" type="warning" style="margin-left:6px">新</el-tag>
+                  </el-option>
+                  <el-option
+                    v-for="opt in shippingAliasOptions.filter(o => !item._shippingQuery || o.name.toLowerCase().includes(item._shippingQuery.toLowerCase()))"
                     :key="opt.id"
-                    :value="opt.name"
+                    :value="opt.id"
                     :label="opt.name"
                   />
                 </el-select>
@@ -1163,17 +1425,28 @@ async function ignoreCase() {
               <div class="item-row">
                 <span class="item-label">售后物料简称</span>
                 <el-select
-                  v-model="item.aftersale_material_alias"
-                  placeholder="选择出问题的物料简称"
+                  :model-value="item.return_alias_id"
+                  placeholder="选择或输入新简称"
                   clearable
                   filterable
-                  allow-create
+                  :filter-method="q => { item._returnQuery = q }"
                   style="width:100%"
+                  @change="onReturnAliasChange(item, $event)"
+                  @visible-change="v => { if (!v) item._returnQuery = '' }"
                 >
                   <el-option
-                    v-for="opt in returnAliasOptions"
+                    v-if="item._returnQuery && !returnAliasOptions.some(o => o.name === item._returnQuery)"
+                    :value="item._returnQuery"
+                    :label="item._returnQuery"
+                    class="new-create-option"
+                  >
+                    <span>{{ item._returnQuery }}</span>
+                    <el-tag size="small" type="warning" style="margin-left:6px">新</el-tag>
+                  </el-option>
+                  <el-option
+                    v-for="opt in returnAliasOptions.filter(o => !item._returnQuery || o.name.toLowerCase().includes(item._returnQuery.toLowerCase()))"
                     :key="opt.id"
-                    :value="opt.name"
+                    :value="opt.id"
                     :label="opt.name"
                   />
                 </el-select>
@@ -1205,29 +1478,64 @@ async function ignoreCase() {
                       </button>
                     </el-tooltip>
                   </div>
-                  <!-- 二级原因 -->
+                  <!-- 二级原因（支持直接输入自定义原因） -->
                   <el-select
-                    v-model="item.reason_id"
-                    placeholder="具体原因"
+                    :model-value="item.reason_id ?? (item.custom_reason || null)"
+                    placeholder="具体原因或自定义输入"
                     clearable
                     filterable
+                    :filter-method="q => { item._reasonQuery = q }"
                     :disabled="!item.reason_category_id"
                     class="reason-select"
+                    @change="onReasonChange(item, $event)"
+                    @visible-change="v => { if (!v) item._reasonQuery = '' }"
                   >
                     <el-option
-                      v-for="r in reasonOptionsForItem(item)"
+                      v-if="item._reasonQuery && !reasonOptionsForItem(item).some(r => r.label === item._reasonQuery)"
+                      :value="item._reasonQuery"
+                      :label="item._reasonQuery"
+                      class="new-create-option"
+                    >
+                      <span>{{ item._reasonQuery }}</span>
+                      <el-tag size="small" type="warning" style="margin-left:6px">新</el-tag>
+                    </el-option>
+                    <el-option
+                      v-for="r in reasonOptionsForItem(item).filter(r => !item._reasonQuery || r.label.toLowerCase().includes(item._reasonQuery.toLowerCase()))"
                       :key="r.value"
                       :value="r.value"
                       :label="r.label"
                     />
                   </el-select>
-                  <span class="or-text">或</span>
-                  <el-input
-                    v-model="item.custom_reason"
-                    placeholder="自定义原因"
-                    class="custom-reason-input"
-                  />
                 </div>
+              </div>
+
+              <!-- 购买日期（每条内容单独填写） -->
+              <div class="item-row">
+                <span class="item-label">购买日期</span>
+                <el-date-picker
+                  v-model="item.purchase_date"
+                  type="date"
+                  value-format="YYYY-MM-DD"
+                  placeholder="根据备注填写购买日期"
+                  style="width:100%"
+                />
+              </div>
+
+              <!-- 发货物料分配（多面板时显示） -->
+              <div v-if="multipleItems" class="item-row item-row--products">
+                <span class="item-label">发货物料</span>
+                <el-checkbox-group v-model="item._selectedProducts" class="item-products-check">
+                  <el-checkbox
+                    v-for="p in resolvedProducts"
+                    :key="p.code"
+                    :value="p.code"
+                    class="product-checkbox"
+                  >
+                    <span class="p-code">{{ p.code }}</span>
+                    <span class="p-name">{{ p.name }}</span>
+                    <span class="p-qty">×{{ p.quantity }}</span>
+                  </el-checkbox>
+                </el-checkbox-group>
               </div>
             </div>
           </section>
@@ -1303,6 +1611,7 @@ async function ignoreCase() {
                         {{ c.category_name }} › {{ c.series_name }}
                         <span v-if="c.model_code || c.model_name" class="cand-model">
                           › {{ c.model_code || c.model_name }}
+                          <span v-if="lifecycleText(c.model_id)" class="cand-lc-text">{{ lifecycleText(c.model_id) }}</span>
                         </span>
                       </span>
                       <div class="cand-bar-wrap">
@@ -1330,6 +1639,7 @@ async function ignoreCase() {
                         title="点击应用此型号"
                       >
                         <span class="model-detail-code">{{ m.model_code || m.name }}</span>
+                        <span v-if="lifecycleText(m.id)" class="cand-lc-text" :class="m.lifecycleOk === false ? 'lc-fail-text' : ''">{{ lifecycleText(m.id) }}</span>
                         <span
                           v-if="m.lifecycleOk !== null"
                           class="model-lc-badge"
@@ -1362,12 +1672,12 @@ async function ignoreCase() {
                     :key="c.id"
                     class="candidate-item alias-candidate"
                     :class="{ 'is-best': i === 0 && !matchDebug.alias_value }"
-                    @click="applyShippingAlias(c.name)"
+                    @click="applyShippingAlias(c.id)"
                     title="点击应用"
                   >
                     <span class="cand-rank">{{ i + 1 }}</span>
                     <span class="cand-path">{{ c.name }}</span>
-                    <span class="cand-matched-hint">{{ c.matched_codes.join('、') }}</span>
+                    <span class="cand-matched-hint">{{ (c.matched_codes || []).join('、') }}</span>
                     <div class="cand-bar-wrap">
                       <div class="cand-bar" :style="{ width: `${Math.round(c.score * 100)}%` }" />
                     </div>
@@ -1391,7 +1701,7 @@ async function ignoreCase() {
                     :key="c.id"
                     class="candidate-item alias-candidate"
                     :class="{ 'is-best': i === 0 && !matchDebug.aftersale_alias_value }"
-                    @click="applyReturnAlias(c.name)"
+                    @click="applyReturnAlias(c.id)"
                     title="点击应用"
                   >
                     <span class="cand-rank">{{ i + 1 }}</span>
@@ -1461,7 +1771,7 @@ async function ignoreCase() {
         <!-- 底部操作栏 -->
         <div v-if="canEditAftersale" class="case-footer">
           <el-button :loading="ignoring" @click="ignoreCase">忽略</el-button>
-          <el-button type="primary" :loading="saving" @click="confirmCase">确认</el-button>
+          <el-button type="primary" :loading="saving" :disabled="!canConfirm" @click="confirmCase">确认</el-button>
         </div>
       </template>
     </div><!-- /work-area -->
@@ -1607,6 +1917,21 @@ async function ignoreCase() {
 .p-name { color: var(--text-secondary); }
 .p-qty  { color: var(--accent); font-weight: 600; }
 
+/* 内容项：发货物料勾选区 */
+.item-row--products { align-items: flex-start; }
+.item-products-check {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 4px 0;
+}
+:deep(.product-checkbox) {
+  height: auto; margin: 0;
+  display: flex; align-items: center;
+}
+:deep(.product-checkbox .el-checkbox__label) {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px;
+}
+
 /* 备注区 */
 .remarks-section { display: flex; gap: 16px; }
 .remark-block {
@@ -1712,9 +2037,11 @@ async function ignoreCase() {
 }
 .btn-add-cat:hover { background: #fff7ed; }
 
-.reason-select { width: 150px; flex-shrink: 0; }
-.or-text { font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
-.custom-reason-input { flex: 1; min-width: 0; }
+.reason-select { flex: 1; min-width: 0; }
+
+/* 自定义创建选项布局 */
+:deep(.new-create-option) { display: flex; align-items: center; }
+
 
 /* 产品匹配置信度外框 */
 .product-selects.conf-low :deep(.el-input__wrapper) {
@@ -1831,6 +2158,8 @@ async function ignoreCase() {
 }
 .lc-ok   { background: #e8f5e9; color: #2e7d32; }
 .lc-fail { background: #fce4ec; color: #b71c1c; }
+.cand-lc-text { font-size: 10px; color: var(--text-muted); flex-shrink: 0; }
+.cand-lc-text.lc-fail-text { color: #b71c1c; }
 
 .lifecycle-warn {
   font-size: 10px; font-weight: 600;
@@ -1923,3 +2252,4 @@ async function ignoreCase() {
   flex-shrink: 0;
 }
 </style>
+
