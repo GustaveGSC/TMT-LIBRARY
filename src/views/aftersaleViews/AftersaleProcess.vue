@@ -319,6 +319,8 @@ async function selectOrder(order) {
   const historyReturnName = historyReturnId
     ? (returnAliasOptions.value.find(o => o.id === historyReturnId)?.name || null)
     : null
+  const returnAliasSource = apiResult?.suggested_return_alias_source || (historyReturnId ? 'history' : null)
+  const returnAliasScore  = apiResult?.suggested_return_alias_score ?? null
   if (historyReturnId) item.return_alias_id = historyReturnId
 
   // 售后原因：来自历史工单（最频繁的 reason_id + category_id）
@@ -376,6 +378,8 @@ async function selectOrder(order) {
       alias_source:           aliasSource,
       alias_value:            historyShippingName,
       aftersale_alias_value:  historyReturnName,
+      aftersale_alias_source: returnAliasSource,
+      aftersale_alias_score:  returnAliasScore,
       suggested_reason_id:    suggestedReasonId,
       suggested_category_id:  suggestedCategoryId,
       shipping_alias_candidates: shippingAliasCandidates,
@@ -401,6 +405,8 @@ async function selectOrder(order) {
       alias_source:           aliasSource,
       alias_value:            historyShippingName,
       aftersale_alias_value:  historyReturnName,
+      aftersale_alias_source: returnAliasSource,
+      aftersale_alias_score:  returnAliasScore,
       suggested_reason_id:    suggestedReasonId,
       suggested_category_id:  suggestedCategoryId,
       shipping_alias_candidates: shippingAliasCandidates,
@@ -417,6 +423,8 @@ async function selectOrder(order) {
       alias_source:           aliasSource,
       alias_value:            historyShippingName,
       aftersale_alias_value:  historyReturnName,
+      aftersale_alias_source: returnAliasSource,
+      aftersale_alias_score:  returnAliasScore,
       suggested_reason_id:    suggestedReasonId,
       suggested_category_id:  suggestedCategoryId,
       shipping_alias_candidates: shippingAliasCandidates,
@@ -1693,7 +1701,15 @@ async function ignoreCase() {
                   <!-- 已采纳的简称 -->
                   <div v-if="matchDebug.aftersale_alias_value" class="debug-result" style="margin-bottom:4px">
                     <span class="result-model">{{ matchDebug.aftersale_alias_value }}</span>
-                    <span class="source-badge src-text">历史工单</span>
+                    <span
+                      class="source-badge"
+                      :class="matchDebug.aftersale_alias_source === 'library' ? 'src-api' : 'src-text'"
+                    >
+                      {{ matchDebug.aftersale_alias_source === 'library' ? '简称库匹配' : '历史工单' }}
+                    </span>
+                    <span v-if="matchDebug.aftersale_alias_score !== null" class="cand-score">
+                      {{ Math.round(matchDebug.aftersale_alias_score * 100) }}
+                    </span>
                   </div>
                   <!-- 候选列表 -->
                   <div
@@ -1744,13 +1760,19 @@ async function ignoreCase() {
                     <span class="cand-path">
                       <span v-if="c.category_name" class="cand-cat">{{ c.category_name }} › </span>{{ c.name }}
                     </span>
+                    <span
+                      v-if="c.matched_keywords?.length"
+                      class="cand-matched-hint"
+                    >{{ c.matched_keywords.join('、') }}</span>
                     <span class="source-badge" :class="c.source === 'keyword' ? 'src-api' : 'src-text'" style="flex-shrink:0">
                       {{ c.source === 'keyword' ? '关键词' : '历史' }}
                     </span>
+                    <span class="cand-score" :title="`关键词:${Math.round((c.keyword_score || 0) * 100)} 历史:${Math.round((c.history_score || 0) * 100)}`">
+                      {{ Math.round((c.total_score ?? c.confidence ?? 0) * 100) }}
+                    </span>
                     <div class="cand-bar-wrap">
-                      <div class="cand-bar" :style="{ width: `${Math.round(c.confidence * 100)}%` }" />
+                      <div class="cand-bar" :style="{ width: `${Math.round((c.total_score ?? c.confidence ?? 0) * 100)}%` }" />
                     </div>
-                    <span class="cand-score">{{ Math.round(c.confidence * 100) }}</span>
                   </div>
                 </div>
               </div>

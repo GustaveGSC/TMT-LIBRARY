@@ -38,13 +38,13 @@ function cellValue(row, key) {
     case 'order_no':        return row.ecommerce_order_no || ''
     case 'model':           return [(r0?.model_code || ''), (r0?.model_name || '')].filter(Boolean).join(' ')
     case 'reason_category': return r0?.reason_category || ''
-    case 'reason_name':     return r0?.reason_name || r0?.custom_reason || ''
+    case 'reason_name':     return r0?.reason_name || ''
     case 'channel':         return row.channel_name || ''
     case 'province':        return row.province || ''
     case 'city':            return row.city || ''
     case 'district':        return row.district || ''
-    case 'shipping_alias':  return r0?.shipping_material_alias || ''
-    case 'return_alias':    return r0?.aftersale_material_alias || ''
+    case 'shipping_alias':  return r0?.shipping_alias_name || ''
+    case 'return_alias':    return r0?.return_alias_name   || ''
     default:                return ''
   }
 }
@@ -215,6 +215,12 @@ function toggleExpand(row) {
 
 function firstReason(row, field) { return row.reasons?.[0]?.[field] ?? null }
 function extraCount(row) { return (row.reasons?.length || 0) - 1 }
+
+function minDaysSincePurchase(row) {
+  if (!row.reasons?.length) return null
+  const vals = row.reasons.map(r => r.days_since_purchase).filter(v => v != null)
+  return vals.length ? Math.min(...vals) : null
+}
 
 defineExpose({ refresh: loadData })
 </script>
@@ -389,7 +395,10 @@ defineExpose({ refresh: loadData })
             <div class="th-fph" />
           </template>
           <template #default="{ row }">
-            <span v-if="row.days_since_purchase != null">{{ row.days_since_purchase }}</span>
+            <template v-if="row.reasons">
+              <span v-if="minDaysSincePurchase(row) != null">{{ minDaysSincePurchase(row) }}</span>
+              <span v-else class="empty-val">—</span>
+            </template>
             <span v-else class="empty-val">—</span>
           </template>
         </el-table-column>
@@ -478,13 +487,13 @@ defineExpose({ refresh: loadData })
                 placeholder="筛选..." class="th-sel" :teleported="true"
                 @visible-change="onFilterDropdownOpen" @change="onColFilterChange" @clear="onColFilterChange"
               >
-                <el-option v-for="v in filterOptions.shipping_aliases" :key="v" :value="v" :label="v" />
+                <el-option v-for="v in filterOptions.shipping_aliases" :key="v.id" :value="v.id" :label="v.name" />
               </el-select>
             </div>
           </template>
           <template #default="{ row }">
             <div class="cell-with-badge">
-              <span>{{ firstReason(row, 'shipping_material_alias') || '—' }}</span>
+              <span>{{ firstReason(row, 'shipping_alias') || '—' }}</span>
               <span v-if="extraCount(row) > 0" class="multi-badge">+{{ extraCount(row) }}</span>
             </div>
           </template>
@@ -500,13 +509,13 @@ defineExpose({ refresh: loadData })
                 placeholder="筛选..." class="th-sel" :teleported="true"
                 @visible-change="onFilterDropdownOpen" @change="onColFilterChange" @clear="onColFilterChange"
               >
-                <el-option v-for="v in filterOptions.return_aliases" :key="v" :value="v" :label="v" />
+                <el-option v-for="v in filterOptions.return_aliases" :key="v.id" :value="v.id" :label="v.name" />
               </el-select>
             </div>
           </template>
           <template #default="{ row }">
             <div class="cell-with-badge">
-              <span>{{ firstReason(row, 'aftersale_material_alias') || '—' }}</span>
+              <span>{{ firstReason(row, 'return_alias') || '—' }}</span>
               <span v-if="extraCount(row) > 0" class="multi-badge">+{{ extraCount(row) }}</span>
             </div>
           </template>
@@ -523,7 +532,7 @@ defineExpose({ refresh: loadData })
         :total="total"
         :page-sizes="[20, 50, 100]"
         layout="total, sizes, prev, pager, next"
-        small
+        size="small"
         @current-change="onPageChange"
         @size-change="onSizeChange"
       />

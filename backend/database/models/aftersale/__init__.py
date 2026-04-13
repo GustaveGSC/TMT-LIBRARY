@@ -70,21 +70,21 @@ class AftersaleKeywordCandidate(db.Model):
 
 
 class AftersaleShippingAlias(db.Model):
-    """发货物料简称库：规范名称 + 绑定的产品代码列表（用于自动匹配）"""
+    """发货物料简称库：规范名称 + 物料名称关键词列表（用于自动匹配）"""
     __tablename__ = 'aftersale_shipping_alias'
 
-    id            = db.Column(db.Integer,     primary_key=True, autoincrement=True)
-    name          = db.Column(db.String(200), nullable=False, unique=True)
-    product_codes = db.Column(db.JSON,        nullable=True)   # 绑定的产品代码列表
-    sort_order    = db.Column(db.Integer,     nullable=False, default=0)
-    created_at    = db.Column(db.DateTime,    nullable=False, default=now_cst)
+    id         = db.Column(db.Integer,     primary_key=True, autoincrement=True)
+    name       = db.Column(db.String(200), nullable=False, unique=True)
+    keywords   = db.Column(db.JSON,        nullable=True)   # 物料名称关键词列表
+    sort_order = db.Column(db.Integer,     nullable=False, default=0)
+    created_at = db.Column(db.DateTime,    nullable=False, default=now_cst)
 
     def to_dict(self):
         return {
-            'id':            self.id,
-            'name':          self.name,
-            'product_codes': self.product_codes or [],
-            'sort_order':    self.sort_order,
+            'id':        self.id,
+            'name':      self.name,
+            'keywords':  self.keywords or [],
+            'sort_order': self.sort_order,
         }
 
 
@@ -108,6 +108,117 @@ class AftersaleReturnAlias(db.Model):
 
 
 
+class AftersaleShippingIgnoreTerm(db.Model):
+    """发货物料匹配过滤词：物料名称包含这些词时跳过简称匹配"""
+    __tablename__ = 'aftersale_shipping_ignore_term'
+
+    id         = db.Column(db.Integer,     primary_key=True, autoincrement=True)
+    term       = db.Column(db.String(100), nullable=False, unique=True)
+    created_at = db.Column(db.DateTime,    nullable=False, default=now_cst)
+
+    def to_dict(self):
+        return {'id': self.id, 'term': self.term}
+
+
+class AftersaleReasonStopword(db.Model):
+    """售后原因词典：停用词（用于关键词学习/匹配降噪）"""
+    __tablename__ = 'aftersale_reason_stopword'
+
+    id         = db.Column(db.Integer,     primary_key=True, autoincrement=True)
+    term       = db.Column(db.String(100), nullable=False, unique=True)
+    enabled    = db.Column(db.Boolean,     nullable=False, default=True)
+    sort_order = db.Column(db.Integer,     nullable=False, default=0)
+    created_at = db.Column(db.DateTime,    nullable=False, default=now_cst)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'term': self.term,
+            'enabled': bool(self.enabled),
+            'sort_order': self.sort_order,
+        }
+
+
+class AftersaleReasonFaultTerm(db.Model):
+    """售后原因词典：故障核心词（命中后提升原因区分度）"""
+    __tablename__ = 'aftersale_reason_fault_term'
+
+    id         = db.Column(db.Integer,     primary_key=True, autoincrement=True)
+    term       = db.Column(db.String(100), nullable=False, unique=True)
+    enabled    = db.Column(db.Boolean,     nullable=False, default=True)
+    sort_order = db.Column(db.Integer,     nullable=False, default=0)
+    created_at = db.Column(db.DateTime,    nullable=False, default=now_cst)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'term': self.term,
+            'enabled': bool(self.enabled),
+            'sort_order': self.sort_order,
+        }
+
+
+class AftersaleReasonComponentTerm(db.Model):
+    """售后原因词典：部件词（与核心词组合提升召回）"""
+    __tablename__ = 'aftersale_reason_component_term'
+
+    id         = db.Column(db.Integer,     primary_key=True, autoincrement=True)
+    term       = db.Column(db.String(100), nullable=False, unique=True)
+    enabled    = db.Column(db.Boolean,     nullable=False, default=True)
+    sort_order = db.Column(db.Integer,     nullable=False, default=0)
+    created_at = db.Column(db.DateTime,    nullable=False, default=now_cst)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'term': self.term,
+            'enabled': bool(self.enabled),
+            'sort_order': self.sort_order,
+        }
+
+
+class AftersaleReasonShortKeepTerm(db.Model):
+    """售后原因词典：短词保留（≤2 字时默认视为泛词，在此表中的词除外）"""
+    __tablename__ = 'aftersale_reason_short_keep_term'
+
+    id         = db.Column(db.Integer,     primary_key=True, autoincrement=True)
+    term       = db.Column(db.String(100), nullable=False, unique=True)
+    enabled    = db.Column(db.Boolean,     nullable=False, default=True)
+    sort_order = db.Column(db.Integer,     nullable=False, default=0)
+    created_at = db.Column(db.DateTime,    nullable=False, default=now_cst)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'term': self.term,
+            'enabled': bool(self.enabled),
+            'sort_order': self.sort_order,
+        }
+
+
+class AftersaleReasonSynonymRule(db.Model):
+    """售后原因词典：同义词归一规则（pattern -> replacement）"""
+    __tablename__ = 'aftersale_reason_synonym_rule'
+
+    id          = db.Column(db.Integer,     primary_key=True, autoincrement=True)
+    pattern     = db.Column(db.String(200), nullable=False, unique=True)
+    replacement = db.Column(db.String(100), nullable=False)
+    is_regex    = db.Column(db.Boolean,     nullable=False, default=True)
+    enabled     = db.Column(db.Boolean,     nullable=False, default=True)
+    sort_order  = db.Column(db.Integer,     nullable=False, default=0)
+    created_at  = db.Column(db.DateTime,    nullable=False, default=now_cst)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'pattern': self.pattern,
+            'replacement': self.replacement,
+            'is_regex': bool(self.is_regex),
+            'enabled': bool(self.enabled),
+            'sort_order': self.sort_order,
+        }
+
+
 class AftersaleCase(db.Model):
     """售后工单，每个电商订单号一条，聚合该订单所有物料"""
     __tablename__ = 'aftersale_case'
@@ -123,15 +234,8 @@ class AftersaleCase(db.Model):
     products           = db.Column(db.JSON,        nullable=True)
     seller_remark      = db.Column(db.Text,        nullable=True)
     buyer_remark       = db.Column(db.Text,        nullable=True)
-    # 售后产品分配：来自产品库的型号 [{model_id, model_code, model_name, series_name, category_name}]
-    assigned_models    = db.Column(db.JSON,        nullable=True)
-    # 发货物料分配：订单发货物料中涉及本次售后的条目（别名或品号字符串列表）
-    shipping_materials = db.Column(db.JSON,        nullable=True)
-    # 产生售后物料分配：本次售后需处理的物料 [{code, name, quantity}]
-    aftersale_materials = db.Column(db.JSON,       nullable=True)
+
     shipped_date          = db.Column(db.Date,    nullable=True)
-    purchase_date         = db.Column(db.Date,    nullable=True)   # 用户填写的购买日期
-    days_since_purchase   = db.Column(db.Integer, nullable=True)   # 售后间隔天数 = 售后日期 - 购买日期
     operator           = db.Column(db.String(100), nullable=True)
     channel_name       = db.Column(db.String(200), nullable=True)
     province           = db.Column(db.String(50),  nullable=True)
@@ -162,11 +266,8 @@ class AftersaleCase(db.Model):
             'city':               self.city,
             'district':           self.district,
             'status':              self.status,
-            'assigned_models':     self.assigned_models    or [],
-            'shipping_materials':  self.shipping_materials  or [],
-            'aftersale_materials': self.aftersale_materials or [],
-            'purchase_date':        self.purchase_date.strftime('%Y-%m-%d') if self.purchase_date else None,
-            'days_since_purchase':  self.days_since_purchase,
+
+
             'processed_at':        self.processed_at.strftime('%Y-%m-%d %H:%M:%S') if self.processed_at else None,
             'created_at':          self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
         }
@@ -183,18 +284,17 @@ class AftersaleCaseReason(db.Model):
     case_id                  = db.Column(db.Integer,     db.ForeignKey('aftersale_case.id', ondelete='CASCADE'), nullable=False)
     reason_id                = db.Column(db.Integer,     db.ForeignKey('aftersale_reason.id'), nullable=True)
     reason_category_id       = db.Column(db.Integer,     db.ForeignKey('aftersale_reason_category.id', ondelete='SET NULL'), nullable=True)  # reason_id 为空时的一级分类
-    custom_reason            = db.Column(db.String(200), nullable=True)   # reason_id 为空时使用
-    # 本原因涉及的产品 codes 子集（来自 aftersale_case.products）
-    involved_products        = db.Column(db.JSON,        nullable=True)
-    notes                    = db.Column(db.Text,        nullable=True)
     # 售后内容扩展字段（v2）
-    model_id                 = db.Column(db.Integer,     db.ForeignKey('product_model.id', ondelete='SET NULL'), nullable=True)
-    shipping_material_alias  = db.Column(db.String(200), nullable=True)   # 发货物料简称
-    aftersale_material_alias = db.Column(db.String(200), nullable=True)   # 售后物料简称
-    created_at               = db.Column(db.DateTime,    nullable=False, default=now_cst)
+    model_id          = db.Column(db.Integer, db.ForeignKey('product_model.id',           ondelete='SET NULL'), nullable=True)
+    shipping_alias_id = db.Column(db.Integer, db.ForeignKey('aftersale_shipping_alias.id', ondelete='SET NULL'), nullable=True)
+    return_alias_id   = db.Column(db.Integer, db.ForeignKey('aftersale_return_alias.id',   ondelete='SET NULL'), nullable=True)
+    purchase_date       = db.Column(db.Date,    nullable=True)   # 该条内容的购买日期（每条可不同）
+    days_since_purchase = db.Column(db.Integer, nullable=True)   # 售后间隔天数 = shipped_date - purchase_date
+    created_at        = db.Column(db.DateTime, nullable=False, default=now_cst)
 
-    # 关联型号（product_model），用于 to_dict 返回 model_code / model_name
-    product_model = db.relationship('ProductModel', foreign_keys=[model_id], lazy='select')
+    product_model    = db.relationship('ProductModel',          foreign_keys=[model_id],          lazy='select')
+    shipping_alias   = db.relationship('AftersaleShippingAlias', foreign_keys=[shipping_alias_id], lazy='select')
+    return_alias_obj = db.relationship('AftersaleReturnAlias',   foreign_keys=[return_alias_id],   lazy='select')
 
     def to_dict(self):
         # 一级分类：优先从 reason_id 取，fallback 到 reason_category_id 直接关联
@@ -206,19 +306,20 @@ class AftersaleCaseReason(db.Model):
             if cat:
                 cat_name = cat.name
         return {
-            'id':                       self.id,
-            'case_id':                  self.case_id,
-            'reason_id':                self.reason_id,
-            'reason_category_id':       self.reason_category_id,
-            'reason_name':              self.reason.name if self.reason else None,
-            'reason_category':          cat_name,
-            'custom_reason':            self.custom_reason,
-            'involved_products':        self.involved_products or [],
-            'notes':                    self.notes,
-            'model_id':                 self.model_id,
-            'model_code':               self.product_model.model_code if self.product_model else None,
-            'model_name':               self.product_model.name       if self.product_model else None,
-            'shipping_material_alias':  self.shipping_material_alias,
-            'aftersale_material_alias': self.aftersale_material_alias,
-            'created_at':               self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
+            'id':                  self.id,
+            'case_id':             self.case_id,
+            'reason_id':           self.reason_id,
+            'reason_category_id':  self.reason_category_id,
+            'reason_name':         self.reason.name if self.reason else None,
+            'reason_category':     cat_name,
+            'model_id':            self.model_id,
+            'model_code':          self.product_model.model_code if self.product_model else None,
+            'model_name':          self.product_model.name       if self.product_model else None,
+            'shipping_alias_id':   self.shipping_alias_id,
+            'shipping_alias_name': self.shipping_alias.name   if self.shipping_alias   else None,
+            'return_alias_id':     self.return_alias_id,
+            'return_alias_name':   self.return_alias_obj.name if self.return_alias_obj else None,
+            'purchase_date':         self.purchase_date.strftime('%Y-%m-%d') if self.purchase_date else None,
+            'days_since_purchase':   self.days_since_purchase,
+            'created_at':          self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
         }

@@ -188,6 +188,35 @@ def ignore_case(order_no):
     return _svc.ignore_case(order_no).to_response()
 
 
+# ── 发货物料匹配过滤词 ───────────────────────────────────────────────────────
+
+@aftersale_bp.get('/shipping-ignore-terms')
+def get_ignore_terms():
+    return _svc.get_ignore_terms().to_response()
+
+
+@aftersale_bp.post('/shipping-ignore-terms')
+def create_ignore_term():
+    return _svc.create_ignore_term(request.get_json() or {}).to_response()
+
+
+@aftersale_bp.delete('/shipping-ignore-terms/<int:term_id>')
+def delete_ignore_term(term_id):
+    return _svc.delete_ignore_term(term_id).to_response()
+
+
+# ── 售后原因关键词词典（标准档）──────────────────────────────────────────────
+
+@aftersale_bp.get('/reason-keyword-rules')
+def get_reason_keyword_rules():
+    return _svc.get_reason_keyword_rules().to_response()
+
+
+@aftersale_bp.put('/reason-keyword-rules')
+def update_reason_keyword_rules():
+    return _svc.update_reason_keyword_rules(request.get_json() or {}).to_response()
+
+
 # ── 自动匹配 ────────────────────────────────────────────────────────────────
 
 @aftersale_bp.post('/auto-match')
@@ -206,6 +235,11 @@ def get_stats():
 @aftersale_bp.get('/chart-options')
 def get_chart_options():
     return _svc.get_chart_options().to_response()
+
+
+@aftersale_bp.post('/chart-filter-options')
+def get_cross_filter_options():
+    return _svc.get_cross_filter_options(request.get_json() or {}).to_response()
 
 
 @aftersale_bp.post('/chart-data')

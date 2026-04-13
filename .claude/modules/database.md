@@ -58,56 +58,75 @@ shipping_order_finished
 ```
 
 ## 售后数据
+（与 `backend/database/models/aftersale/__init__.py` 一致；**词典表**首次可用 `backend/create_reason_keyword_rules.py` 建表并写入种子数据。）
+
 ```
 aftersale_reason_category
   id, name(UNIQUE VARCHAR 100), sort_order, created_at
   # 售后原因一级分类
 
 aftersale_reason
-  id, name(UNIQUE VARCHAR 100), category_id(FK→aftersale_reason_category nullable),
-  keywords(TEXT, 逗号分隔), sort_order, use_count(引用次数), created_at
-  # 售后原因二级条目；category_id nullable 允许暂未归类
+  id, name(UNIQUE VARCHAR 100), category_id(FK→aftersale_reason_category, SET NULL),
+  keywords(TEXT逗号分隔), sort_order, use_count, created_at
+  # 二级原因；category_id 可为空
 
 aftersale_keyword_candidate
-  id, reason_id(FK→aftersale_reason CASCADE), keyword(VARCHAR 20), count(INT DEFAULT 1)
+  id, reason_id(FK→aftersale_reason CASCADE), keyword(VARCHAR 20), count(DEFAULT 1)
   # UNIQUE(reason_id, keyword)
-  # 关键词候选池：提交工单时从 seller_remark 提取 n-gram 累计计数
-  # count >= 3（_KW_PROMOTE_THRESHOLD）时晋升到 aftersale_reason.keywords，并从候选池删除
+  # 确认工单时从备注提取候选词累计 count；晋升需 count ≥ 阈值且质量分达标等（见仓库 _auto_update_reason_keywords），并受跨原因热点词抑制；晋升后写入 aftersale_reason.keywords 并删除候选行
 
 aftersale_shipping_alias
-  id, name(UNIQUE VARCHAR 200), product_codes(JSON 绑定产品代码列表), sort_order, created_at
-  # 发货物料简称库
+  id, name(UNIQUE VARCHAR 200), keywords(JSON 物料名/代码关键词列表), sort_order, created_at
+  # 发货物料简称；匹配与学习逻辑见 frontend-aftersale.md
 
 aftersale_return_alias
   id, name(UNIQUE VARCHAR 200), keywords(JSON 商家备注片段列表), sort_order, created_at
-  # 售后物料简称库
+  # 售后物料简称
+
+aftersale_shipping_ignore_term
+  id, term(UNIQUE VARCHAR 100), created_at
+  # 发货物料名包含该词时跳过简称匹配与学习
+
+aftersale_reason_stopword
+  id, term(UNIQUE VARCHAR 100), enabled, sort_order, created_at
+  # 原因词典：停用词（enabled 为假不参与加载）
+
+aftersale_reason_fault_term
+  id, term(UNIQUE VARCHAR 100), enabled, sort_order, created_at
+  # 原因词典：故障核心词
+
+aftersale_reason_component_term
+  id, term(UNIQUE VARCHAR 100), enabled, sort_order, created_at
+  # 原因词典：部件词
+
+aftersale_reason_short_keep_term
+  id, term(UNIQUE VARCHAR 100), enabled, sort_order, created_at
+  # 原因词典：短词保留（≤2 字默认视为泛词，在此表中的词除外）
+
+aftersale_reason_synonym_rule
+  id, pattern(UNIQUE VARCHAR 200), replacement(VARCHAR 100),
+  is_regex(BOOL), enabled, sort_order, created_at
+  # 同义词归一；pattern 可为多个别名字面量用 | 拼接（前端「原因词典」如此生成）
 
 aftersale_case
   id, ecommerce_order_no(UNIQUE VARCHAR 100),
-  products(JSON [{code,name,quantity}]),       # 聚合该订单所有物料行
+  products(JSON 物料行列表，元素含 code/name/quantity 等),
   seller_remark(TEXT), buyer_remark(TEXT),
-  assigned_models(JSON [{model_id,model_code,model_name,series_name,category_name}]),
-  shipping_materials(JSON 别名或品号字符串列表),
-  aftersale_materials(JSON [{code,name,quantity}]),
-  shipped_date(DATE), purchase_date(DATE nullable),   # purchase_date 用户填写的购买日期
-  days_since_purchase(INT nullable),                  # 售后间隔天数 = 售后日期 - 购买日期
-  operator(VARCHAR 100), channel_name(VARCHAR 200),
-  province(VARCHAR 50), city(VARCHAR 100), district(VARCHAR 100),
-  status(ENUM: pending/confirmed/ignored, DEFAULT pending),
-  processed_at(DATETIME nullable), created_at, updated_at
-  # 来源：shipping_record 中 operator 属于 aftersale 类型的记录，按 ecommerce_order_no 聚合
-  # 索引：ecommerce_order_no / shipped_date / status
+  shipped_date(DATE), operator, channel_name, province, city, district,
+  status(ENUM pending|confirmed|ignored, DEFAULT pending),
+  processed_at(DATETIME), created_at, updated_at
+  # 索引：ix_aftersale_case_order_no / shipped_date / status
 
 aftersale_case_reason
-  id, case_id(FK→aftersale_case CASCADE), reason_id(FK→aftersale_reason nullable),
-  reason_category_id(FK→aftersale_reason_category SET NULL nullable),  # reason_id 为空时记录一级分类
-  custom_reason(VARCHAR 200),   # reason_id 为空时使用
-  involved_products(JSON nullable), notes(TEXT),
-  model_id(FK→product_model SET NULL nullable),
-  shipping_material_alias(VARCHAR 200 nullable),   # 发货物料简称
-  aftersale_material_alias(VARCHAR 200 nullable),  # 售后物料简称
+  id, case_id(FK→aftersale_case CASCADE),
+  reason_id(FK→aftersale_reason nullable),
+  reason_category_id(FK→aftersale_reason_category SET NULL),
+  model_id(FK→product_model SET NULL),
+  shipping_alias_id(FK→aftersale_shipping_alias SET NULL),
+  return_alias_id(FK→aftersale_return_alias SET NULL),
+  purchase_date(DATE), days_since_purchase(INT),
   created_at
-  # 一个工单可拆分为多条原因记录；to_dict() 会通过 selectinload 预取 reason/product_model
+  # 一条工单多条原因行；发/售后简称为 ID 外键，非纯文本冗余列
 ```
 
 ## 产品库

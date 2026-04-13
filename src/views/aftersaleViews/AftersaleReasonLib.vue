@@ -47,6 +47,22 @@ const returnSearch   = ref('')    // 售后简称搜索词
 const ignoreTerms    = ref([])    // [{id, term}]
 const ignoreInput    = ref('')    // 输入框
 const ignoreLoading  = ref(false)
+const ruleSaving     = ref(false)
+const reasonRuleForm = ref({
+  stopwords: [],
+  fault_terms: [],
+  component_terms: [],
+  short_keep_terms: [],
+  synonyms: [],
+  newStopword: '',
+  newFaultTerm: '',
+  newComponentTerm: '',
+  newShortKeepTerm: '',
+  newSynonymAlias: '',
+  newSynonymAliases: [],
+  newReplacement: '',
+  newIsRegex: true,
+})
 
 // 是否显示弹窗
 const visible = computed({
@@ -97,24 +113,170 @@ watch(visible, (v) => {
 async function loadAll() {
   loading.value = true
   try {
-    const [catRes, reasonRes, shipRes, retRes, ignoreRes] = await Promise.all([
+    const [catRes, reasonRes, shipRes, retRes, ignoreRes, rulesRes] = await Promise.all([
       http.get('/api/aftersale/reason-categories'),
       http.get('/api/aftersale/reasons'),
       http.get('/api/aftersale/shipping-aliases'),
       http.get('/api/aftersale/return-aliases'),
       http.get('/api/aftersale/shipping-ignore-terms'),
+      http.get('/api/aftersale/reason-keyword-rules'),
     ])
     if (catRes.success)     categories.value      = catRes.data
     if (reasonRes.success)  groups.value          = reasonRes.data
     if (shipRes.success)    shippingAliases.value  = shipRes.data
     if (retRes.success)     returnAliases.value    = retRes.data
     if (ignoreRes.success)  ignoreTerms.value      = ignoreRes.data
+    if (rulesRes.success)   setReasonRuleForm(rulesRes.data)
 
     if (activeCatId.value === null && categories.value.length > 0) {
       activeCatId.value = categories.value[0].id
     }
   } finally {
     loading.value = false
+  }
+}
+
+function setReasonRuleForm(data) {
+  reasonRuleForm.value.stopwords = [...new Set((data?.stopwords || []).map(s => (s || '').trim()).filter(Boolean))]
+  reasonRuleForm.value.fault_terms = [...new Set((data?.fault_terms || []).map(s => (s || '').trim()).filter(Boolean))]
+  reasonRuleForm.value.component_terms = [...new Set((data?.component_terms || []).map(s => (s || '').trim()).filter(Boolean))]
+  reasonRuleForm.value.short_keep_terms = [...new Set((data?.short_keep_terms || []).map(s => (s || '').trim()).filter(Boolean))]
+  reasonRuleForm.value.synonyms = (data?.synonyms || [])
+    .map(s => ({
+      pattern: (s.pattern || '').trim(),
+      replacement: (s.replacement || '').trim(),
+      is_regex: s.is_regex !== false,
+    }))
+    .filter(s => s.pattern && s.replacement)
+}
+
+function addRuleTerm(field, inputField) {
+  const term = (reasonRuleForm.value[inputField] || '').trim()
+  if (!term) return
+  if (!reasonRuleForm.value[field].includes(term)) {
+    reasonRuleForm.value[field].push(term)
+  }
+  reasonRuleForm.value[inputField] = ''
+}
+
+function removeRuleTerm(field, idx) {
+  reasonRuleForm.value[field].splice(idx, 1)
+}
+
+async function editRuleTerm(field, idx) {
+  const current = reasonRuleForm.value[field]?.[idx] || ''
+  try {
+    const { value } = await ElMessageBox.prompt('', '编辑词条', {
+      inputValue: current,
+      inputPlaceholder: '请输入词条',
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputPattern: /\S+/,
+      inputErrorMessage: '词条不能为空',
+    })
+    const next = (value || '').trim()
+    if (!next) return
+    reasonRuleForm.value[field].splice(idx, 1, next)
+    reasonRuleForm.value[field] = [...new Set(reasonRuleForm.value[field])]
+  } catch {}
+}
+
+function addSynonymRule() {
+  const aliases = [...new Set(
+    (reasonRuleForm.value.newSynonymAliases || [])
+      .map(s => (s || '').trim())
+      .filter(Boolean)
+  )]
+  const pattern = aliases.join('|')
+  const replacement = (reasonRuleForm.value.newReplacement || '').trim()
+  if (!pattern || !replacement) return
+  reasonRuleForm.value.synonyms.push({
+    pattern,
+    replacement,
+    is_regex: reasonRuleForm.value.newIsRegex,
+  })
+  reasonRuleForm.value.newSynonymAlias = ''
+  reasonRuleForm.value.newSynonymAliases = []
+  reasonRuleForm.value.newReplacement = ''
+}
+
+function removeSynonymRule(idx) {
+  reasonRuleForm.value.synonyms.splice(idx, 1)
+}
+
+function addSynonymAlias() {
+  const alias = (reasonRuleForm.value.newSynonymAlias || '').trim()
+  if (!alias) return
+  if (!reasonRuleForm.value.newSynonymAliases.includes(alias)) {
+    reasonRuleForm.value.newSynonymAliases.push(alias)
+  }
+  reasonRuleForm.value.newSynonymAlias = ''
+}
+
+function removeSynonymAlias(idx) {
+  reasonRuleForm.value.newSynonymAliases.splice(idx, 1)
+}
+
+async function editSynonymRule(idx) {
+  const row = reasonRuleForm.value.synonyms[idx]
+  if (!row) return
+  try {
+    const { value: aliasesVal } = await ElMessageBox.prompt('', '编辑同义词别名（逗号分隔）', {
+      inputValue: (row.pattern || '').split('|').join(','),
+      inputPlaceholder: '例如：红,粉色,浅粉',
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputPattern: /\S+/,
+      inputErrorMessage: '别名不能为空',
+    })
+    const aliases = [...new Set(
+      (aliasesVal || '')
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
+    )]
+    if (!aliases.length) return
+    const { value: replacementVal } = await ElMessageBox.prompt('', '编辑归一词', {
+      inputValue: row.replacement || '',
+      inputPlaceholder: '例如：红色',
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputPattern: /\S+/,
+      inputErrorMessage: '归一词不能为空',
+    })
+    const pattern = aliases.join('|')
+    const replacement = (replacementVal || '').trim()
+    if (!pattern || !replacement) return
+    reasonRuleForm.value.synonyms.splice(idx, 1, { pattern, replacement, is_regex: row.is_regex !== false })
+  } catch {}
+}
+
+async function saveReasonRules() {
+  ruleSaving.value = true
+  try {
+    const payload = {
+      stopwords: [...new Set(reasonRuleForm.value.stopwords.map(s => s.trim()).filter(Boolean))],
+      fault_terms: [...new Set(reasonRuleForm.value.fault_terms.map(s => s.trim()).filter(Boolean))],
+      component_terms: [...new Set(reasonRuleForm.value.component_terms.map(s => s.trim()).filter(Boolean))],
+      short_keep_terms: [...new Set(reasonRuleForm.value.short_keep_terms.map(s => s.trim()).filter(Boolean))],
+      synonyms: reasonRuleForm.value.synonyms
+        .map(s => ({
+          pattern: (s.pattern || '').trim(),
+          replacement: (s.replacement || '').trim(),
+          is_regex: s.is_regex !== false,
+        }))
+        .filter(s => s.pattern && s.replacement),
+    }
+    const res = await http.put('/api/aftersale/reason-keyword-rules', payload)
+    if (res.success) {
+      setReasonRuleForm(res.data)
+      ElMessage.success('原因词典已保存')
+      emit('updated')
+    } else {
+      ElMessage.error(res.message || '保存失败')
+    }
+  } finally {
+    ruleSaving.value = false
   }
 }
 
@@ -500,6 +662,7 @@ async function deleteIgnoreTerm(item) {
     v-model="visible"
     title="原因库 & 简称库管理"
     width="820px"
+    draggable
     :close-on-click-modal="false"
     destroy-on-close
   >
@@ -511,6 +674,7 @@ async function deleteIgnoreTerm(item) {
         <button class="lib-tab" :class="{ active: activeTab === 'shipping' }" @click="activeTab = 'shipping'">发货物料简称</button>
         <button class="lib-tab" :class="{ active: activeTab === 'return' }"   @click="activeTab = 'return'">售后物料简称</button>
         <button class="lib-tab" :class="{ active: activeTab === 'ignore' }"   @click="activeTab = 'ignore'">过滤词</button>
+        <button class="lib-tab" :class="{ active: activeTab === 'reasonRules' }" @click="activeTab = 'reasonRules'">原因词典</button>
       </div>
 
       <!-- ── 售后原因库 Tab ─────────────────────────── -->
@@ -879,6 +1043,157 @@ async function deleteIgnoreTerm(item) {
         </div>
       </div>
 
+      <!-- ── 原因词典 Tab ────────────────────────────── -->
+      <div v-if="activeTab === 'reasonRules'" class="rule-lib">
+        <div class="col-header">
+          <span class="col-title">售后原因关键词词典</span>
+        </div>
+        <div class="ignore-desc">
+          规则实时加载于当前管理弹窗。词条支持直接新增/删除；同义词支持配置正则模式开关。
+        </div>
+
+        <div class="rule-grid">
+          <div class="rule-card">
+            <label class="form-label">停用词（stopwords）</label>
+            <div class="rule-input-row">
+              <el-input v-model="reasonRuleForm.newStopword" size="small" placeholder="如：补偿" @keyup.enter="addRuleTerm('stopwords', 'newStopword')" />
+              <el-button size="small" @click="addRuleTerm('stopwords', 'newStopword')">添加</el-button>
+            </div>
+            <div class="rule-tags">
+              <el-tag
+                v-for="(t, i) in reasonRuleForm.stopwords"
+                :key="`sw-${i}-${t}`"
+                closable
+                size="small"
+                title="点击编辑"
+                @click="editRuleTerm('stopwords', i)"
+                @close="removeRuleTerm('stopwords', i)"
+              >{{ t }}</el-tag>
+              <span v-if="!reasonRuleForm.stopwords.length" class="tag-empty">暂无</span>
+            </div>
+          </div>
+
+          <div class="rule-card">
+            <label class="form-label">故障核心词（fault_terms）</label>
+            <div class="rule-input-row">
+              <el-input v-model="reasonRuleForm.newFaultTerm" size="small" placeholder="如：开裂" @keyup.enter="addRuleTerm('fault_terms', 'newFaultTerm')" />
+              <el-button size="small" @click="addRuleTerm('fault_terms', 'newFaultTerm')">添加</el-button>
+            </div>
+            <div class="rule-tags">
+              <el-tag
+                v-for="(t, i) in reasonRuleForm.fault_terms"
+                :key="`ft-${i}-${t}`"
+                closable
+                size="small"
+                type="danger"
+                title="点击编辑"
+                @click="editRuleTerm('fault_terms', i)"
+                @close="removeRuleTerm('fault_terms', i)"
+              >{{ t }}</el-tag>
+              <span v-if="!reasonRuleForm.fault_terms.length" class="tag-empty">暂无</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="rule-card">
+          <label class="form-label">部件词（component_terms）</label>
+          <div class="rule-input-row">
+            <el-input v-model="reasonRuleForm.newComponentTerm" size="small" placeholder="如：后固定板" @keyup.enter="addRuleTerm('component_terms', 'newComponentTerm')" />
+            <el-button size="small" @click="addRuleTerm('component_terms', 'newComponentTerm')">添加</el-button>
+          </div>
+          <div class="rule-tags">
+            <el-tag
+              v-for="(t, i) in reasonRuleForm.component_terms"
+              :key="`ct-${i}-${t}`"
+              closable
+              size="small"
+              type="warning"
+              title="点击编辑"
+              @click="editRuleTerm('component_terms', i)"
+              @close="removeRuleTerm('component_terms', i)"
+            >{{ t }}</el-tag>
+            <span v-if="!reasonRuleForm.component_terms.length" class="tag-empty">暂无</span>
+          </div>
+        </div>
+
+        <div class="rule-card">
+          <label class="form-label">短词保留（short_keep_terms）</label>
+          <div class="ignore-desc" style="margin-bottom:8px">
+            长度 ≤2 的词条默认当作泛词；在此维护的短词仍参与质量分与匹配（如：椅套、气杆）
+          </div>
+          <div class="rule-input-row">
+            <el-input v-model="reasonRuleForm.newShortKeepTerm" size="small" placeholder="如：气杆" @keyup.enter="addRuleTerm('short_keep_terms', 'newShortKeepTerm')" />
+            <el-button size="small" @click="addRuleTerm('short_keep_terms', 'newShortKeepTerm')">添加</el-button>
+          </div>
+          <div class="rule-tags">
+            <el-tag
+              v-for="(t, i) in reasonRuleForm.short_keep_terms"
+              :key="`sk-${i}-${t}`"
+              closable
+              size="small"
+              type="success"
+              title="点击编辑"
+              @click="editRuleTerm('short_keep_terms', i)"
+              @close="removeRuleTerm('short_keep_terms', i)"
+            >{{ t }}</el-tag>
+            <span v-if="!reasonRuleForm.short_keep_terms.length" class="tag-empty">暂无</span>
+          </div>
+        </div>
+
+        <div class="rule-card">
+          <label class="form-label">同义词规则（synonyms）</label>
+          <div class="synonym-input-grid">
+            <div class="synonym-alias-wrap">
+              <div class="rule-input-row">
+                <el-input
+                  v-model="reasonRuleForm.newSynonymAlias"
+                  size="small"
+                  placeholder="输入别名词（如：粉色）"
+                  @keyup.enter="addSynonymAlias"
+                />
+                <el-button size="small" @click="addSynonymAlias">加入别名</el-button>
+              </div>
+              <div class="rule-tags">
+                <el-tag
+                  v-for="(a, i) in reasonRuleForm.newSynonymAliases"
+                  :key="`new-alias-${i}-${a}`"
+                  closable
+                  size="small"
+                  @close="removeSynonymAlias(i)"
+                >{{ a }}</el-tag>
+                <span v-if="!reasonRuleForm.newSynonymAliases.length" class="tag-empty">先添加别名词条</span>
+              </div>
+            </div>
+            <el-input v-model="reasonRuleForm.newReplacement" size="small" placeholder="归一结果（如：红色）" @keyup.enter="addSynonymRule" />
+            <el-select v-model="reasonRuleForm.newIsRegex" size="small" style="width:120px">
+              <el-option :value="true" label="正则" />
+              <el-option :value="false" label="文本" />
+            </el-select>
+            <el-button size="small" @click="addSynonymRule">添加规则</el-button>
+          </div>
+          <div class="synonym-list">
+            <div v-for="(s, i) in reasonRuleForm.synonyms" :key="`syn-${i}-${s.pattern}`" class="synonym-item">
+              <span class="synonym-pattern">{{ (s.pattern || '').split('|').join(' / ') }}</span>
+              <span class="path-sep">→</span>
+              <span class="synonym-replacement">{{ s.replacement }}</span>
+              <span class="source-badge" :class="s.is_regex ? 'src-api' : 'src-text'">{{ s.is_regex ? '正则' : '文本' }}</span>
+              <button class="btn-tiny" title="编辑" @click="editSynonymRule(i)">
+                <el-icon><Edit /></el-icon>
+              </button>
+              <button class="btn-tiny btn-del" @click="removeSynonymRule(i)">
+                <el-icon><Delete /></el-icon>
+              </button>
+            </div>
+            <div v-if="!reasonRuleForm.synonyms.length" class="col-empty">暂无同义词规则</div>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <el-button size="small" :loading="loading" @click="loadAll">刷新</el-button>
+          <el-button size="small" type="primary" :loading="ruleSaving" @click="saveReasonRules">保存词典</el-button>
+        </div>
+      </div>
+
 
     </div>
   </el-dialog>
@@ -1201,4 +1516,90 @@ async function deleteIgnoreTerm(item) {
   padding: 3px 8px 3px 10px; font-size: 12px; color: var(--text-primary);
 }
 .ignore-tag-text { line-height: 1.4; }
+
+/* ── 原因词典 Tab ─────────────────────────────────── */
+.rule-lib {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+.rule-lib::-webkit-scrollbar { width: 4px; }
+.rule-lib::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.rule-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.rule-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  background: #faf7f2;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.rule-input-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 0;
+}
+.rule-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 30px;
+  max-height: 120px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.rule-tags::-webkit-scrollbar { width: 4px; }
+.rule-tags::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.rule-tags::-webkit-scrollbar-track { background: transparent; }
+.rule-card .form-label {
+  margin-bottom: 0;
+}
+.synonym-input-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 120px auto;
+  gap: 8px;
+  margin-bottom: 0;
+}
+.synonym-alias-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.synonym-alias-wrap .rule-input-row { margin-bottom: 0; }
+.synonym-list {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  max-height: 220px;
+  overflow: auto;
+}
+.synonym-list::-webkit-scrollbar { width: 4px; }
+.synonym-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.synonym-list::-webkit-scrollbar-track { background: transparent; }
+.synonym-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px dashed var(--border);
+}
+.synonym-item:last-child { border-bottom: none; }
+.synonym-pattern {
+  flex: 1;
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.synonym-replacement {
+  min-width: 80px;
+  color: var(--accent);
+  font-size: 12px;
+}
 </style>

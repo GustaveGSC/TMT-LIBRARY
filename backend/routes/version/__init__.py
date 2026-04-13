@@ -11,7 +11,7 @@ OSS_BASE_URL = os.getenv("OSS_BASE_URL", "").rstrip("/")
 OSS_PREFIX   = "tmt-library/releases/"   # 当前存放目录的 key 前缀
 
 
-def _url_to_key(url: str) -> str | None:
+def _url_to_key(url: str):
     """将 OSS URL 还原为 bucket key，例如：
     https://…/tmt-library/releases/xxx.exe  →  tmt-library/releases/xxx.exe"""
     if not url or not OSS_BASE_URL:
@@ -65,8 +65,8 @@ def create_version():
     body             = request.get_json() or {}
     version          = body.get("version",          "").strip()
     description      = body.get("description",      "")
-    download_url     = body.get("download_url",     "").strip() or None
-    mac_download_url = body.get("mac_download_url", "").strip() or None
+    download_url     = (body.get("download_url")     or "").strip() or None
+    mac_download_url = (body.get("mac_download_url") or "").strip() or None
     if not version:
         return Result.fail("版本号不能为空").to_response()
     if not download_url and not mac_download_url:
@@ -92,7 +92,7 @@ def upload_file():
     key      = f"tmt-library/releases/{filename}"
     try:
         bucket   = get_bucket()
-        bucket.put_object(key, file.read())
+        bucket.put_object(key, file.stream)
         base_url = os.getenv("OSS_BASE_URL", "").rstrip("/")
         return Result.ok(data={"url": f"{base_url}/{key}", "key": key}).to_response()
     except Exception as e:

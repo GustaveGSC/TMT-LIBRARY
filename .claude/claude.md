@@ -1,13 +1,13 @@
 # 两平米软件库 · 项目上下文
 
 ## 维护规范
-架构/功能/接口/数据库变更时必须同步更新本文件及相关模块文件。
+架构/功能/接口/数据库变更时必须同步更新**对应模块文档**（`.claude/modules/*.md`）。本文件只保留全项目共识、路径索引与设计规范，**不要把具体功能的实现细节、接口字段、表结构全文写进本文件**——那些内容写在对应 module 里，需要时再打开。
 模块文档位于 `.claude/modules/`，按需读取：
 - `database.md` — 数据库表结构
 - `api.md` — 后端接口列表
 - `frontend-product.md` — 产品库前端
 - `frontend-data-mgmt.md` — 数据管理 & 发货图表
-- `frontend-aftersale.md` — 售后数据前端
+- `frontend-aftersale.md` — 售后数据（前端面板、简称/原因词典配置入口、与后端的交互说明）
 - `frontend-admin.md` — 管理页注意事项
 
 ## 技术栈
@@ -23,9 +23,10 @@ electron/main/index.ts   # 主进程、IPC、updater 生命周期
 electron/main/window.ts  # 登录窗 420×640 / 主窗 800×600，frame:false，bg:#ede8dc
 electron/main/python.ts  # Flask 子进程，退出用 spawnSync taskkill
 src/api/http.js          # axios baseURL:127.0.0.1:8765，拦截器已解一层 res.data
-src/routers/index.js     # Hash路由：/login /index /product /shipping /data-mgmt /admin/*
+src/routers/index.js     # Hash路由：/login /index /product /shipping /data-mgmt /aftersale /admin/*
 src/styles/themes.css    # 全局CSS变量（勿硬编码颜色）
-backend/app.py           # Flask工厂，POOL_SIZE=5 MAX_OVERFLOW=10 POOL_RECYCLE=120s
+backend/app.py           # Flask 工厂；SQLAlchemy NullPool + connect/read/write 超时（见源码）
+backend/create_reason_keyword_rules.py  # 售后「原因词典」相关表初始化与种子数据（表结构见 database.md）
 backend/result.py        # Result.ok/fail → { success, message, data }
 ```
 
@@ -85,5 +86,5 @@ const { isAdmin, can, canEditProduct, canViewProduct, canDeleteProduct } = usePe
 ## 版本规则
 - `Beta x.x.x` 或主/次版本变更 → 强制更新
 - 仅修订版变更 → 可选更新（红点提示）
-- 当前版本：`1.0.2`（以 package.json 为准）
+- 当前版本：`1.0.3`（以 package.json 为准）
 - OSS上传 key 格式：`tmt-library/releases/{filename}`（含前缀）

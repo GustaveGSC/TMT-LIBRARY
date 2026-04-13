@@ -141,8 +141,8 @@ class AftersaleService:
             return Result.fail('简称不能为空')
         if AftersaleShippingAlias.query.filter_by(name=name).first():
             return Result.fail('该简称已存在')
-        codes = [c.strip() for c in (data.get('product_codes') or []) if str(c).strip()]
-        obj = _repo.create_shipping_alias(name=name, product_codes=codes,
+        keywords = [k.strip() for k in (data.get('keywords') or []) if str(k).strip()]
+        obj = _repo.create_shipping_alias(name=name, keywords=keywords,
                                           sort_order=data.get('sort_order', 0))
         return Result.ok(data=obj.to_dict())
 
@@ -153,8 +153,8 @@ class AftersaleService:
         existing = AftersaleShippingAlias.query.filter_by(name=name).first()
         if existing and existing.id != alias_id:
             return Result.fail('该简称已存在')
-        codes = [c.strip() for c in (data.get('product_codes') or []) if str(c).strip()]
-        obj = _repo.update_shipping_alias(alias_id, name=name, product_codes=codes,
+        keywords = [k.strip() for k in (data.get('keywords') or []) if str(k).strip()]
+        obj = _repo.update_shipping_alias(alias_id, name=name, keywords=keywords,
                                           sort_order=data.get('sort_order'))
         if not obj:
             return Result.fail('简称不存在')
@@ -284,14 +284,6 @@ class AftersaleService:
             except ValueError:
                 pass
 
-        # 解析购买日期
-        purchase_date = None
-        if data.get('purchase_date'):
-            try:
-                purchase_date = date.fromisoformat(data['purchase_date'])
-            except ValueError:
-                pass
-
         case = _repo.confirm_case(
             order_no=order_no,
             products=data.get('products', []),
@@ -302,12 +294,8 @@ class AftersaleService:
             channel_name=data.get('channel_name'),
             province=data.get('province'),
             reasons_data=reasons_data,
-            assigned_models=data.get('assigned_models'),
-            shipping_materials=data.get('shipping_materials'),
-            aftersale_materials=data.get('aftersale_materials'),
             city=data.get('city'),
             district=data.get('district'),
-            purchase_date=purchase_date,
         )
         return Result.ok(data=case.to_dict(include_reasons=True))
 
@@ -333,11 +321,12 @@ class AftersaleService:
     # ── 产品型号推断 ────────────────────────────────────────────────────────
 
     def suggest_product(self, data):
-        product_codes = data.get('product_codes', [])
+        products      = data.get('products', [])
+        product_codes = [p.get('code') for p in products if p.get('code')]
         purchase_date = data.get('purchase_date')
         seller_remark = data.get('seller_remark')
         buyer_remark  = data.get('buyer_remark')
-        result = _repo.suggest_product(product_codes, purchase_date, seller_remark, buyer_remark)
+        result = _repo.suggest_product(product_codes, purchase_date, seller_remark, buyer_remark, products)
         return Result.ok(data=result)
 
     # ── 自动匹配 ────────────────────────────────────────────────────────────
@@ -354,20 +343,100 @@ class AftersaleService:
         stats = _repo.get_stats()
         return Result.ok(data=stats)
 
+    def get_cross_filter_options(self, data: dict):
+        max_days = data.get('max_days_since_purchase')
+        filters = {
+            'date_start':               data.get('date_start'),
+            'date_end':                 data.get('date_end'),
+            'max_days_since_purchase':  int(max_days) if max_days is not None else None,
+            'channel_names':            data.get('channel_names') or [],
+            'provinces':                data.get('provinces') or [],
+            'cities':                   data.get('cities') or [],
+            'category_ids':             data.get('category_ids') or [],
+            'series_ids':               data.get('series_ids') or [],
+            'model_ids':                data.get('model_ids') or [],
+            'reason_ids':               data.get('reason_ids') or [],
+            'reason_category_ids':      data.get('reason_category_ids') or [],
+            'shipping_alias_ids':       data.get('shipping_alias_ids') or [],
+            'return_alias_ids':         data.get('return_alias_ids') or [],
+        }
+        opts = _repo.get_cross_filter_options(filters)
+        return Result.ok(data=opts)
+
     def get_chart_options(self):
         opts = _repo.get_chart_options()
         return Result.ok(data=opts)
 
     def get_chart_data(self, data):
         group_by = data.get('group_by', 'reason')
-        if group_by not in ('reason', 'channel', 'province', 'month'):
+        if group_by not in ('product', 'reason', 'shipping_alias', 'channel', 'province'):
             return Result.fail('group_by 参数无效')
-        result = _repo.get_chart_data(
-            group_by=group_by,
-            date_start=data.get('date_start'),
-            date_end=data.get('date_end'),
-            channel_names=data.get('channel_names'),
-            provinces=data.get('provinces'),
-            category_id=data.get('category_id'),
-        )
+        max_days = data.get('max_days_since_purchase')
+        filters = {
+            'group_by':                group_by,
+            'date_start':              data.get('date_start'),
+            'date_end':                data.get('date_end'),
+            'max_days_since_purchase': int(max_days) if max_days is not None else None,
+            'channel_names':           data.get('channel_names') or [],
+            'provinces':               data.get('provinces') or [],
+            'cities':                  data.get('cities') or [],
+            'category_ids':            data.get('category_ids') or [],
+            'series_ids':              data.get('series_ids') or [],
+            'model_ids':               data.get('model_ids') or [],
+            'reason_ids':              data.get('reason_ids') or [],
+            'reason_category_ids':     data.get('reason_category_ids') or [],
+            'shipping_alias_ids':      data.get('shipping_alias_ids') or [],
+            'return_alias_ids':        data.get('return_alias_ids') or [],
+        }
+        result = _repo.get_chart_data(filters)
         return Result.ok(data=result)
+
+    # ── 发货物料匹配过滤词 ────────────────────────────────────────────────────
+
+    def get_ignore_terms(self):
+        return Result.ok(data=[t.to_dict() for t in _repo.get_all_ignore_terms()])
+
+    def create_ignore_term(self, data):
+        term = (data.get('term') or '').strip()
+        if not term:
+            return Result.fail('过滤词不能为空')
+        from database.models.aftersale import AftersaleShippingIgnoreTerm
+        if AftersaleShippingIgnoreTerm.query.filter_by(term=term).first():
+            return Result.fail('该过滤词已存在')
+        obj = _repo.create_ignore_term(term=term)
+        return Result.ok(data=obj.to_dict())
+
+    def delete_ignore_term(self, term_id):
+        ok = _repo.delete_ignore_term(term_id)
+        if not ok:
+            return Result.fail('过滤词不存在')
+        return Result.ok()
+
+    # ── 售后原因关键词词典（标准档）────────────────────────────────────────────
+
+    def get_reason_keyword_rules(self):
+        return Result.ok(data=_repo.get_reason_keyword_rules())
+
+    def update_reason_keyword_rules(self, data):
+        stopwords = data.get('stopwords') or []
+        fault_terms = data.get('fault_terms') or []
+        component_terms = data.get('component_terms') or []
+        if 'short_keep_terms' not in data:
+            short_keep_terms = _repo.get_reason_keyword_rules().get('short_keep_terms', [])
+        else:
+            short_keep_terms = data.get('short_keep_terms')
+            if not isinstance(short_keep_terms, list):
+                return Result.fail('short_keep_terms 必须为数组')
+        synonyms = data.get('synonyms') or []
+        if not isinstance(stopwords, list) or not isinstance(fault_terms, list) or not isinstance(component_terms, list):
+            return Result.fail('词典字段必须为数组')
+        if not isinstance(synonyms, list):
+            return Result.fail('synonyms 必须为数组')
+        _repo.replace_reason_keyword_rules(
+            stopwords=stopwords,
+            fault_terms=fault_terms,
+            component_terms=component_terms,
+            synonyms=synonyms,
+            short_keep_terms=short_keep_terms,
+        )
+        return Result.ok(data=_repo.get_reason_keyword_rules())

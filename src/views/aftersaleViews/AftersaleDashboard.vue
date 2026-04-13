@@ -1,501 +1,1193 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
-import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue' // nextTick 仍用于 drillDown/drillBack
+import { ArrowDown, ArrowLeft, ArrowRight, Setting } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import http from '@/api/http.js'
 
+// ── 常量 ──────────────────────────────────────────
+const FONT = "'Microsoft YaHei UI','Microsoft YaHei','PingFang SC',sans-serif"
+
+const DATE_SHORTCUTS = [
+  { text: '从2024年起', value: () => [new Date('2024-01-01'), new Date()] },
+  { text: '一年内',    value: () => { const s = new Date(); s.setFullYear(s.getFullYear() - 1); return [s, new Date()] } },
+  { text: '半年内',    value: () => { const s = new Date(); s.setMonth(s.getMonth() - 6); return [s, new Date()] } },
+  { text: '三个月内',  value: () => { const s = new Date(); s.setMonth(s.getMonth() - 3); return [s, new Date()] } },
+  { text: '一个月内',  value: () => { const s = new Date(); s.setMonth(s.getMonth() - 1); return [s, new Date()] } },
+]
+
+// 子维度 Tab（不含产品，产品是默认视图）
+const DIMS = [
+  { key: 'reason',         label: '原因' },
+  { key: 'shipping_alias', label: '物料' },
+  { key: 'channel',        label: '渠道' },
+  { key: 'province',       label: '地域' },
+]
+
 // ── 响应式状态 ────────────────────────────────────
 
-// 筛选
-const dateRange    = ref([])
-const channels     = ref([])          // 渠道多选
-const provinces    = ref([])          // 省份多选
-const reasonCatId  = ref(null)        // 原因一级分类筛选（id）
+// 筛选面板折叠状态
+const sections = reactive({
+  time:     true,
+  product:  true,
+  reason:   true,
+  shipping: true,
+  channel:  true,
+  region:   true,
+})
 
-// 图表维度 tab
-const groupBy      = ref('reason')    // 'reason' | 'channel' | 'province' | 'month'
-const chartType    = ref('bar')       // 'bar' | 'pie'（月度维度用折线）
+// 筛选值
+const filters = ref({
+  dateRange:            (() => { const s = new Date(); s.setMonth(s.getMonth() - 1); return [s, new Date()] })(),
+  maxDaysSincePurchase: 15,   // 售后间隔上限（天），null = 不限
+  categoryIds:          [],
+  seriesIds:            [],
+  modelIds:             [],
+  reasonCategoryIds:    [],
+  reasonIds:            [],
+  shippingAliasIds:     [],
+  returnAliasIds:       [],
+  channelNames:         [],
+  provinces:            [],
+  cities:               [],
+})
 
-// 图表数据
+// 静态候选数据（初始加载一次）
+const categoryTree       = ref([])
+const allReasonGroups    = ref([])
+const allShippingAliases = ref([])
+const allReturnAliases   = ref([])
+
+// 联动筛选后可用 id 集合（null=未加载）
+const available = ref({
+  channels:           null,
+  provinces:          null,
+  cities:             null,
+  model_ids:          null,
+  reason_ids:         null,
+  shipping_alias_ids: null,
+  return_alias_ids:   null,
+})
+
+const loadingOpts      = ref(false)
+const filterCollapsed  = ref(false)
+let   _filterTimer = null
+let   _chartTimer  = null
+
+// 图表状态
+const groupBy      = ref(null)    // null=产品视图（默认），非null=子维度
 const chartData    = ref(null)
-const loading      = ref(false)
-
-// 筛选选项（来自后端）
-const optChannels  = ref([])
-const optProvinces = ref([])
-const optCats      = ref([])
-
-// 摘要统计
-const stats        = ref(null)
-
-// ECharts 实例
-let chartInst      = null
+const loadingChart = ref(false)
 const chartEl      = ref(null)
+let   chartInst    = null
 
-// 维度配置
-const GROUP_TABS = [
-  { key: 'reason',   label: '原因分布' },
-  { key: 'channel',  label: '渠道分布' },
-  { key: 'province', label: '地域分布' },
-  { key: 'month',    label: '时间趋势' },
-]
+// 产品维度下钻面包屑：[{ label, savedCategoryIds, savedSeriesIds, savedModelIds }]
+const drillStack = ref([])
+// 防止 drillDown/drillBack 修改 filters 时触发清栈
+let   _isDrilling = false
+
+// ── 计算属性 ──────────────────────────────────────
+
+/** 当前产品视图的聚合层级（基于左侧筛选选择） */
+const effectiveProductLevel = computed(() => {
+  if (filters.value.modelIds.length)   return 'model'
+  if (filters.value.seriesIds.length)  return 'model'   // 系列已定，显示型号
+  if (filters.value.categoryIds.length) return 'series'  // 品类已定，显示系列
+  return 'category'
+})
+
+/** 产品视图是否还能继续下钻 */
+const canDrillDown = computed(() => effectiveProductLevel.value !== 'model')
+
+/** 品类选项：联动过滤，只显示含有可用型号的品类 */
+const categoryOpts = computed(() => {
+  const avail = available.value.model_ids
+  return categoryTree.value
+    .filter(c => !avail || (c.series || []).some(s =>
+      (s.models || []).some(m => avail.includes(m.id))
+    ))
+    .map(c => ({ value: c.id, label: c.name }))
+})
+
+/** 已选品类对应的系列选项：联动过滤，只显示含有可用型号的系列 */
+const seriesOpts = computed(() => {
+  const cats = filters.value.categoryIds.length
+    ? categoryTree.value.filter(c => filters.value.categoryIds.includes(c.id))
+    : categoryTree.value
+  const avail = available.value.model_ids
+  return cats.flatMap(c =>
+    (c.series || [])
+      .filter(s => !avail || (s.models || []).some(m => avail.includes(m.id)))
+      .map(s => ({ value: s.id, label: s.code, sub: s.name }))
+  )
+})
+
+const seriesEnabled = computed(() => filters.value.categoryIds.length > 0)
+
+/** 型号选项：联动过滤 */
+const modelOpts = computed(() => {
+  const sers = filters.value.seriesIds.length
+    ? categoryTree.value.flatMap(c => (c.series || []).filter(s => filters.value.seriesIds.includes(s.id)))
+    : categoryTree.value.flatMap(c =>
+        (c.series || []).filter(() => !filters.value.categoryIds.length || filters.value.categoryIds.includes(c.id))
+      )
+  const avail = available.value.model_ids
+  return sers.flatMap(s =>
+    (s.models || [])
+      .filter(m => !avail || avail.includes(m.id))
+      .map(m => ({ value: m.id, label: m.model_code, sub: m.name }))
+  )
+})
+
+const modelEnabled = computed(() => filters.value.seriesIds.length > 0 || filters.value.categoryIds.length > 0)
+
+/** 一级分类选项：联动过滤 */
+const reasonCatOpts = computed(() => {
+  const avail = available.value.reason_ids
+  return allReasonGroups.value
+    .filter(g => !avail || (g.reasons || []).some(r => avail.includes(r.id)))
+    .map(g => ({ value: g.category_id, label: g.category_name }))
+})
+
+/** 二级原因选项：联动过滤 */
+const reasonOpts = computed(() => {
+  const groups = filters.value.reasonCategoryIds.length
+    ? allReasonGroups.value.filter(g => filters.value.reasonCategoryIds.includes(g.category_id))
+    : allReasonGroups.value
+  const avail = available.value.reason_ids
+  return groups.flatMap(g =>
+    (g.reasons || [])
+      .filter(r => !avail || avail.includes(r.id))
+      .map(r => ({ value: r.id, label: r.name, sub: g.category_name }))
+  )
+})
+
+const reasonEnabled = computed(() => filters.value.reasonCategoryIds.length > 0)
+
+/** 发货物料简称选项：联动过滤 */
+const shippingAliasOpts = computed(() => {
+  const avail = available.value.shipping_alias_ids
+  return allShippingAliases.value
+    .filter(a => !avail || avail.includes(a.id))
+    .map(a => ({ value: a.id, label: a.name }))
+})
+
+/** 售后物料简称选项：联动过滤 */
+const returnAliasOpts = computed(() => {
+  const avail = available.value.return_alias_ids
+  return allReturnAliases.value
+    .filter(a => !avail || avail.includes(a.id))
+    .map(a => ({ value: a.id, label: a.name }))
+})
+
+/** 渠道选项：联动过滤 */
+const channelOpts = computed(() =>
+  (available.value.channels ?? []).map(c => ({ value: c, label: c }))
+)
+
+/** 省份选项：联动过滤 */
+const provinceOpts = computed(() =>
+  (available.value.provinces ?? []).map(p => ({ value: p, label: p }))
+)
+
+/** 城市选项：联动过滤 */
+const cityOpts = computed(() =>
+  (available.value.cities ?? []).map(c => ({ value: c, label: c }))
+)
+
+const cityEnabled = computed(() => filters.value.provinces.length > 0)
 
 // ── 生命周期 ──────────────────────────────────────
 onMounted(async () => {
-  await loadOptions()
-  await loadStats()
-  await loadChart()
-  initChart()
+  initChart()  // 先挂载 ResizeObserver，等容器就绪后自动初始化
+  await Promise.all([loadStaticOptions(), loadCrossFilterOptions()])
+  await loadChartData()
 })
 
 onBeforeUnmount(() => {
   chartInst?.dispose()
+  chartInst = null
 })
 
 // ── Watch ─────────────────────────────────────────
-watch([dateRange, channels, provinces, reasonCatId, groupBy], async () => {
-  await loadChart()
-  renderChart()
-})
 
-watch(chartType, () => renderChart())
+// 任意筛选变化 → 防抖刷新联动候选选项（始终自动）
+watch(filters, () => {
+  clearTimeout(_filterTimer)
+  _filterTimer = setTimeout(() => loadCrossFilterOptions(), 300)
+}, { deep: true })
+
+// 非时间筛选变化 → 防抖自动刷新图表（时间/间隔需手动点查询）
+watch(
+  () => [
+    filters.value.categoryIds, filters.value.seriesIds, filters.value.modelIds,
+    filters.value.reasonCategoryIds, filters.value.reasonIds,
+    filters.value.shippingAliasIds, filters.value.returnAliasIds,
+    filters.value.channelNames, filters.value.provinces, filters.value.cities,
+  ],
+  () => {
+    clearTimeout(_chartTimer)
+    _chartTimer = setTimeout(() => loadChartData(), 300)
+  },
+  { deep: true }
+)
+
+// 产品筛选手动变化时清空下钻栈（drillDown/drillBack 期间用 _isDrilling 跳过）
+watch(
+  () => [filters.value.categoryIds, filters.value.seriesIds, filters.value.modelIds],
+  () => { if (!_isDrilling) drillStack.value = [] },
+  { deep: true }
+)
+
+// 维度 Tab 切换 → 刷新图表
+watch(groupBy, () => loadChartData())
 
 // ── 方法 ──────────────────────────────────────────
 
-async function loadOptions() {
-  const res = await http.get('/api/aftersale/chart-options')
-  if (res.success) {
-    optChannels.value  = res.data.channels
-    optProvinces.value = res.data.provinces
-    optCats.value      = res.data.categories
+async function loadStaticOptions() {
+  const [treeRes, reasonRes, shippingRes, returnRes] = await Promise.all([
+    http.get('/api/category/tree'),
+    http.get('/api/aftersale/reasons'),
+    http.get('/api/aftersale/shipping-aliases'),
+    http.get('/api/aftersale/return-aliases'),
+  ])
+  if (treeRes.success)     categoryTree.value       = treeRes.data
+  if (reasonRes.success)   allReasonGroups.value    = reasonRes.data
+  if (shippingRes.success) allShippingAliases.value = shippingRes.data
+  if (returnRes.success)   allReturnAliases.value   = returnRes.data
+}
+
+/** 构建通用筛选参数（category_ids/series_ids/model_ids 分开传） */
+function buildFilterBody() {
+  const [start, end] = filters.value.dateRange || []
+  return {
+    date_start:              start ? formatDate(start) : undefined,
+    date_end:                end   ? formatDate(end)   : undefined,
+    max_days_since_purchase: filters.value.maxDaysSincePurchase ?? undefined,
+    category_ids:            filters.value.categoryIds,
+    series_ids:              filters.value.seriesIds,
+    model_ids:               filters.value.modelIds,
+    reason_ids:              filters.value.reasonIds,
+    reason_category_ids:     filters.value.reasonCategoryIds,
+    shipping_alias_ids:      filters.value.shippingAliasIds,
+    return_alias_ids:        filters.value.returnAliasIds,
+    channel_names:           filters.value.channelNames,
+    provinces:               filters.value.provinces,
+    cities:                  filters.value.cities,
   }
 }
 
-async function loadStats() {
-  const res = await http.get('/api/aftersale/stats')
-  if (res.success) stats.value = res.data
-}
-
-async function loadChart() {
-  loading.value = true
+async function loadCrossFilterOptions() {
+  loadingOpts.value = true
   try {
-    const body = {
-      group_by:   groupBy.value,
-      date_start: dateRange.value?.[0] || undefined,
-      date_end:   dateRange.value?.[1] || undefined,
-      channel_names: channels.value.length ? channels.value : undefined,
-      provinces:    provinces.value.length ? provinces.value : undefined,
-      category_id:  reasonCatId.value || undefined,
-    }
-    const res = await http.post('/api/aftersale/chart-data', body)
-    if (res.success) chartData.value = res.data
+    const res = await http.post('/api/aftersale/chart-filter-options', buildFilterBody())
+    if (res.success) available.value = res.data
   } finally {
-    loading.value = false
+    loadingOpts.value = false
   }
 }
+
+async function loadChartData() {
+  loadingChart.value = true
+  try {
+    const body = { ...buildFilterBody(), group_by: groupBy.value ?? 'product' }
+    const res = await http.post('/api/aftersale/chart-data', body)
+    if (res.success) {
+      chartData.value = res.data
+      renderChart()
+    }
+  } finally {
+    loadingChart.value = false
+  }
+}
+
+function formatDate(d) {
+  if (!d) return undefined
+  if (typeof d === 'string') return d
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+}
+
+// ── 图表工具函数 ───────────────────────────────────
+
+/** 销售占比显示格式 */
+function fmtSaleRatio(v) {
+  if (v === null || v === undefined) return '无同期发货'
+  if (v < 0.01) return '< 0.01%'
+  return `${v.toFixed(2)}%`
+}
+
+/** 工具箱（保存图片 + 还原，withZoom 时加区域缩放） */
+function makeToolbox(withZoom = false) {
+  return {
+    right: 16, top: 12,
+    feature: {
+      ...(withZoom ? { dataZoom: { title: { zoom: '区域缩放', back: '缩放还原' }, yAxisIndex: 'none' } } : {}),
+      restore:     { title: '还原' },
+      saveAsImage: { title: '保存图片', pixelRatio: 2 },
+    },
+    iconStyle: { borderColor: '#8a7a6a' },
+    emphasis:  { iconStyle: { borderColor: '#c4883a', color: '#c4883a' } },
+  }
+}
+
+/** 图表标题：产品/原因/物料/渠道/地域 筛选状态描述 */
+function buildChartTitle() {
+  function prodDesc() {
+    if (filters.value.modelIds.length > 1)    return '部分型号'
+    if (filters.value.modelIds.length === 1) {
+      for (const c of categoryTree.value) for (const s of c.series || []) for (const m of s.models || []) if (m.id === filters.value.modelIds[0]) return m.model_code
+    }
+    if (filters.value.seriesIds.length > 1)   return '部分系列'
+    if (filters.value.seriesIds.length === 1) {
+      for (const c of categoryTree.value) for (const s of c.series || []) if (s.id === filters.value.seriesIds[0]) return s.code
+    }
+    if (filters.value.categoryIds.length > 1)  return '部分品类'
+    if (filters.value.categoryIds.length === 1) return categoryTree.value.find(c => c.id === filters.value.categoryIds[0])?.name ?? '品类'
+    return '全部品类'
+  }
+  function reasonDesc() {
+    if (filters.value.reasonIds.length > 1)  return '部分原因'
+    if (filters.value.reasonIds.length === 1) {
+      for (const g of allReasonGroups.value) { const r = (g.reasons||[]).find(r => r.id === filters.value.reasonIds[0]); if (r) return r.name }
+    }
+    if (filters.value.reasonCategoryIds.length === 1) return allReasonGroups.value.find(g => g.category_id === filters.value.reasonCategoryIds[0])?.category_name ?? '部分分类'
+    return '全部原因'
+  }
+  function channelDesc() {
+    if (filters.value.channelNames.length > 1)  return '部分渠道'
+    if (filters.value.channelNames.length === 1) return filters.value.channelNames[0]
+    return '全部渠道'
+  }
+  function regionDesc() {
+    const src = filters.value.cities.length ? filters.value.cities : filters.value.provinces
+    if (src.length > 1)  return '部分区域'
+    if (src.length === 1) return src[0]
+    return '全部区域'
+  }
+
+  const dimLabel = groupBy.value ? (DIMS.find(d => d.key === groupBy.value)?.label ?? '') + '分布' : '产品分布'
+  const gby = groupBy.value
+  let parts
+  if (gby === 'channel')        parts = [channelDesc(), prodDesc(), reasonDesc(), regionDesc()]
+  else if (gby === 'province')  parts = [regionDesc(), prodDesc(), reasonDesc(), channelDesc()]
+  else if (gby === 'reason')    parts = [reasonDesc(), prodDesc(), channelDesc(), regionDesc()]
+  else                          parts = [prodDesc(), reasonDesc(), channelDesc(), regionDesc()]
+
+  // 去掉"全部"的默认项，只保留有意义的描述
+  const defaults = new Set(['全部品类', '全部原因', '全部渠道', '全部区域'])
+  const filtered = parts.filter(p => !defaults.has(p))
+  const prefix = filtered.length ? filtered.join(' - ') : '全部'
+  return `${prefix}   ${dimLabel}`
+}
+
+function buildSubtitle() {
+  const [start, end] = filters.value.dateRange || []
+  if (start && end) return `${formatDate(start)}  ~  ${formatDate(end)}`
+  if (start) return `${formatDate(start)} 起`
+  return '全部时间'
+}
+
+// ── 图表 ──────────────────────────────────────────
 
 function initChart() {
   if (!chartEl.value) return
-  chartInst = echarts.init(chartEl.value, null, { renderer: 'canvas' })
-  renderChart()
 
-  const ro = new ResizeObserver(() => chartInst?.resize())
+  // 用 ResizeObserver 等容器有实际尺寸后再初始化，避免 ECharts "0 width/height" 警告
+  const ro = new ResizeObserver((entries) => {
+    const { width, height } = entries[0].contentRect
+    if (!chartInst && width > 0 && height > 0) {
+      chartInst = echarts.init(chartEl.value, null, { renderer: 'canvas' })
+
+      // 产品视图下：右击柱子下钻
+      chartInst.on('contextmenu', (params) => {
+        params.event?.event?.preventDefault?.()
+        if (groupBy.value === null &&
+            params.componentType === 'series' &&
+            params.seriesType === 'bar' &&
+            canDrillDown.value) {
+          drillDown(params.name)
+        }
+      })
+
+      renderChart()
+    } else if (chartInst) {
+      chartInst.resize()
+    }
+  })
   ro.observe(chartEl.value)
 }
 
 function renderChart() {
   if (!chartInst || !chartData.value) return
   const items = chartData.value.items || []
+  if (!items.length) { chartInst.clear(); return }
 
-  let option
-  if (groupBy.value === 'month') {
-    option = buildLineOption(items)
-  } else if (chartType.value === 'pie') {
-    option = buildPieOption(items)
+  if (groupBy.value === null) {
+    // 产品视图：柱状图 + 占比折线 + 累计占比（Pareto）
+    chartInst.setOption(buildProductOption(items), true)
   } else {
-    option = buildBarOption(items)
+    // 子维度视图：标准柱状图
+    chartInst.setOption(buildDimOption(items), true)
   }
-
-  chartInst.setOption(option, true)
 }
 
-function buildBarOption(items) {
+/** 产品视图图表配置：柱 + 占比折线 + 累计折线，右击可下钻 */
+function buildProductOption(items) {
   const names  = items.map(i => i.name)
   const values = items.map(i => i.value)
+  const total  = chartData.value.summary?.total || 1
+
+  const pctData      = values.map(v => total > 0 ? Math.round(v / total * 1000) / 10 : 0)
+  const rawSaleRatio  = items.map(i => i.sale_ratio ?? null)
+  const hasSaleRatio  = rawSaleRatio.some(v => v !== null)
+  // 超出100%时在图表上钳制为101%（Y轴 max=102），用特殊标记表示
+  const saleRatioData = rawSaleRatio.map(v => {
+    const overflow = v === null || v > 100
+    return {
+      value:     overflow ? 101 : v,
+      itemStyle: overflow ? { color: 'transparent', borderColor: '#7a5cbf', borderWidth: 2 } : undefined,
+      symbol:    overflow ? 'triangle' : undefined,
+    }
+  })
+  const cumulData = []
+  let running = 0
+  for (const v of values) {
+    running += v
+    cumulData.push(total > 0 ? Math.round(running / total * 1000) / 10 : 0)
+  }
+
+  const levelLabel = { category: '品类', series: '系列', model: '型号' }[effectiveProductLevel.value]
+  const rotate = names.length > 8 ? 30 : 0
+
   return {
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-    grid: { left: 60, right: 20, top: 20, bottom: 60 },
+    backgroundColor: 'transparent',
+    title: {
+      text: buildChartTitle(),
+      subtext: buildSubtitle(),
+      left: 10, top: 16,
+      textStyle: { color: '#3a3028', fontFamily: FONT, fontSize: 14, fontWeight: '600' },
+      subtextStyle: { color: '#8a7a6a', fontFamily: FONT, fontSize: 12 },
+    },
+    toolbox: makeToolbox(true),
+    legend: {
+      top: 16, left: 'center', type: 'scroll',
+      textStyle: { fontFamily: FONT, fontSize: 13, color: '#6b5e4e' },
+      itemWidth: 18, itemHeight: 12, itemGap: 16,
+    },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      textStyle: { fontFamily: FONT },
+      formatter(params) {
+        const bar   = params.find(p => p.seriesType === 'bar')
+        const pct   = params.find(p => p.seriesName === '占比')
+        const cumul = params.find(p => p.seriesName === '累计占比')
+        const ROW = (marker, name, val) =>
+          `<div style="display:flex;justify-content:space-between;align-items:center;gap:20px;line-height:1.8">`+
+          `<span>${marker}${name}</span><span style="font-weight:600">${val}</span></div>`
+        let s = `<div style="font-family:${FONT};font-size:13px;min-width:150px">`
+        s += `<div style="font-weight:600;margin-bottom:4px;color:#3a3028">${params[0]?.name}</div>`
+        const dataItem = (chartData.value?.items || []).find(i => i.name === params[0]?.name)
+        const saleRatio = dataItem?.sale_ratio ?? null
+        const shipped   = dataItem?.shipped   ?? 0
+        const srColor   = '#7a5cbf'
+        const srMarker  = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${srColor};margin-right:4px"></span>`
+        if (bar)   s += ROW(bar.marker,   '件数',    bar.value)
+        if (pct)   s += ROW(pct.marker,   '占比',    `${pct.value}%`)
+        if (cumul) s += ROW(cumul.marker, '累计占比', `${cumul.value}%`)
+        if (hasSaleRatio || shipped > 0 || saleRatio !== null) {
+          s += ROW(srMarker, '销售占比', fmtSaleRatio(saleRatio))
+        }
+        if (canDrillDown.value) {
+          s += `<div style="margin-top:6px;border-top:1px solid #e0d4c0;padding-top:4px;color:#8a7a6a;font-size:11px">右击查看详情</div>`
+        }
+        return s + '</div>'
+      },
+    },
+    grid: { top: 100, left: 56, right: 80, bottom: rotate ? 72 : 48 },
     xAxis: {
       type: 'category', data: names,
-      axisLabel: { interval: 0, rotate: names.length > 8 ? 30 : 0, fontSize: 11 },
+      axisLabel: { interval: 0, rotate, fontSize: 12, color: '#6b5e4e', fontFamily: FONT, overflow: 'truncate', width: 80 },
+      axisLine: { lineStyle: { color: '#e0d4c0' } },
+      axisTick: { lineStyle: { color: '#e0d4c0' } },
     },
-    yAxis: { type: 'value', name: '件数' },
-    series: [{
-      type: 'bar',
-      data: values,
-      itemStyle: { color: '#c4883a', borderRadius: [3, 3, 0, 0] },
-      emphasis: { itemStyle: { color: '#e09050' } },
-      label: { show: true, position: 'top', fontSize: 11, color: '#6b5e4e' },
-    }],
+    yAxis: [
+      {
+        type: 'value', name: `${levelLabel}件数`,
+        nameTextStyle: { color: '#8a7a6a', fontFamily: FONT, fontSize: 11 },
+        axisLabel: { color: '#8a7a6a', fontFamily: FONT, fontSize: 11 },
+        splitLine: { lineStyle: { color: '#f0e8d8' } },
+        axisLine: { show: true, lineStyle: { color: '#e0d4c0' } },
+      },
+      {
+        type: 'value', min: 0, max: 102, name: '占比%',
+        nameTextStyle: { color: '#8a7a6a', fontFamily: FONT, fontSize: 11 },
+        axisLabel: { color: '#8a7a6a', fontFamily: FONT, fontSize: 11, formatter: '{value}%' },
+        splitLine: { show: false },
+        axisLine: { show: true, lineStyle: { color: '#e0d4c0' } },
+      },
+    ],
+    series: [
+      {
+        name: levelLabel, type: 'bar', data: values, yAxisIndex: 0,
+        itemStyle: { color: '#c4883a', borderRadius: [3, 3, 0, 0] },
+        emphasis: { itemStyle: { color: '#e09050' } },
+        label: { show: names.length <= 16, position: 'top', fontSize: 12, color: '#3a3028', fontFamily: FONT, fontWeight: 'bold' },
+      },
+      {
+        name: '占比', type: 'line', data: pctData, yAxisIndex: 1,
+        smooth: true, symbol: 'circle', symbolSize: 4,
+        lineStyle: { color: '#4a8fc0', width: 1.5 },
+        itemStyle: { color: '#4a8fc0' },
+        label: { show: false },
+      },
+      {
+        name: '累计占比', type: 'line', data: cumulData, yAxisIndex: 1,
+        smooth: true, symbol: 'circle', symbolSize: 4,
+        lineStyle: { color: '#e05050', width: 1.5, type: 'dashed' },
+        itemStyle: { color: '#e05050' },
+        label: { show: false },
+      },
+      ...(hasSaleRatio ? [{
+        name: '销售占比', type: 'line', data: saleRatioData, yAxisIndex: 1,
+        smooth: true, symbol: 'circle', symbolSize: 6,
+        lineStyle: { color: '#7a5cbf', width: 1.5, type: 'dotted' },
+        itemStyle: { color: '#7a5cbf' },
+        label: { show: false },
+        markLine: (() => {
+          const overall = chartData.value.summary?.overall_ratio
+          if (overall == null) return undefined
+          return {
+            silent: true,
+            symbol: ['none', 'none'],
+            lineStyle: { color: '#7a5cbf', type: 'dashed', width: 1.5, opacity: 0.7 },
+            label: {
+              formatter: `整体 ${overall.toFixed(2)}%`,
+              fontFamily: FONT, fontSize: 11, color: '#7a5cbf',
+            },
+            data: [{ yAxis: overall > 100 ? 101 : overall }],
+          }
+        })(),
+      }] : []),
+    ],
   }
 }
 
-function buildPieOption(items) {
-  const COLORS = ['#c4883a', '#4a8fc0', '#6ab47a', '#9c6fba', '#e07070', '#70aacc', '#e0a040', '#7abcaa']
-  return {
-    tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
-    legend: { orient: 'vertical', right: 10, top: 'center', type: 'scroll', textStyle: { fontSize: 11 } },
-    series: [{
-      type: 'pie',
-      radius: ['35%', '65%'],
-      center: ['40%', '50%'],
-      data: items.map((i, idx) => ({
-        name: i.name,
-        value: i.value,
-        itemStyle: { color: COLORS[idx % COLORS.length] },
-      })),
-      label: { fontSize: 11 },
-      emphasis: { itemStyle: { shadowBlur: 10, shadowOffsetX: 0, shadowColor: 'rgba(0,0,0,0.2)' } },
-    }],
-  }
-}
+/** 子维度视图图表配置：标准柱状图 */
+function buildDimOption(items) {
+  const names         = items.map(i => i.name)
+  const values        = items.map(i => i.value)
+  const total         = chartData.value.summary?.total || 1
+  const rawSaleRatio  = items.map(i => i.sale_ratio ?? null)
+  const hasSaleRatio  = rawSaleRatio.some(v => v !== null)
+  const saleRatioData = rawSaleRatio.map(v => {
+    const overflow = v === null || v > 100
+    return {
+      value:     overflow ? 101 : v,
+      itemStyle: overflow ? { color: 'transparent', borderColor: '#7a5cbf', borderWidth: 2 } : undefined,
+      symbol:    overflow ? 'triangle' : undefined,
+    }
+  })
+  const rotate   = names.length > 8 ? 30 : 0
+  const dimLabel = DIMS.find(d => d.key === groupBy.value)?.label ?? ''
+  const ROW = (marker, name, val) =>
+    `<div style="display:flex;justify-content:space-between;align-items:center;gap:20px;line-height:1.8">` +
+    `<span>${marker}${name}</span><span style="font-weight:600">${val}</span></div>`
 
-function buildLineOption(items) {
-  // 月度趋势：X 轴为月份，折线图
-  const months = items.map(i => i.name).sort()
-  const valMap = Object.fromEntries(items.map(i => [i.name, i.value]))
-  const values = months.map(m => valMap[m] || 0)
   return {
-    tooltip: { trigger: 'axis' },
-    grid: { left: 50, right: 20, top: 20, bottom: 60 },
+    backgroundColor: 'transparent',
+    title: {
+      text: buildChartTitle(),
+      subtext: buildSubtitle(),
+      left: 10, top: 16,
+      textStyle: { color: '#3a3028', fontFamily: FONT, fontSize: 14, fontWeight: '600' },
+      subtextStyle: { color: '#8a7a6a', fontFamily: FONT, fontSize: 12 },
+    },
+    toolbox: makeToolbox(true),
+    legend: {
+      top: 16, left: 'center', type: 'scroll',
+      textStyle: { fontFamily: FONT, fontSize: 13, color: '#6b5e4e' },
+      itemWidth: 18, itemHeight: 12, itemGap: 16,
+    },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      textStyle: { fontFamily: FONT },
+      formatter(params) {
+        const bar = params.find(p => p.seriesType === 'bar')
+        const pct = bar ? Math.round(bar.value / total * 1000) / 10 : 0
+        const dataItem  = (chartData.value?.items || []).find(i => i.name === params[0]?.name)
+        const saleRatio = dataItem?.sale_ratio ?? null
+        const shipped   = dataItem?.shipped   ?? 0
+        const srColor   = '#7a5cbf'
+        const srMarker  = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${srColor};margin-right:4px"></span>`
+        let s = `<div style="font-family:${FONT};font-size:13px;min-width:140px">`
+        s += `<div style="font-weight:600;margin-bottom:4px;color:#3a3028">${params[0]?.name}</div>`
+        if (bar)  s += ROW(bar.marker, '件数', bar.value)
+        s += ROW('', '占比', `${pct}%`)
+        if (hasSaleRatio || shipped > 0 || saleRatio !== null) {
+          s += ROW(srMarker, '销售占比', fmtSaleRatio(saleRatio))
+        }
+        return s + '</div>'
+      },
+    },
+    grid: { top: 100, left: 56, right: 80, bottom: rotate ? 72 : 48 },
     xAxis: {
-      type: 'category', data: months,
-      axisLabel: { fontSize: 11 },
+      type: 'category', data: names,
+      axisLabel: { interval: 0, rotate, fontSize: 12, color: '#6b5e4e', fontFamily: FONT, overflow: 'truncate', width: 80 },
+      axisLine: { lineStyle: { color: '#e0d4c0' } },
+      axisTick: { lineStyle: { color: '#e0d4c0' } },
     },
-    yAxis: { type: 'value', name: '件数' },
-    series: [{
-      type: 'line',
-      data: values,
-      smooth: true,
-      symbol: 'circle', symbolSize: 6,
-      lineStyle: { color: '#c4883a', width: 2 },
-      itemStyle: { color: '#c4883a' },
-      areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
-        colorStops: [
-          { offset: 0, color: 'rgba(196,136,58,0.3)' },
-          { offset: 1, color: 'rgba(196,136,58,0.02)' },
-        ] } },
-      label: { show: values.length <= 18, position: 'top', fontSize: 11, color: '#6b5e4e' },
-    }],
+    yAxis: [
+      {
+        type: 'value', name: `${dimLabel}件数`,
+        nameTextStyle: { color: '#8a7a6a', fontFamily: FONT, fontSize: 11 },
+        axisLabel: { color: '#8a7a6a', fontFamily: FONT, fontSize: 11 },
+        splitLine: { lineStyle: { color: '#f0e8d8' } },
+        axisLine: { show: true, lineStyle: { color: '#e0d4c0' } },
+      },
+      {
+        type: 'value', min: 0, max: 102, name: '占比%',
+        nameTextStyle: { color: '#8a7a6a', fontFamily: FONT, fontSize: 11 },
+        axisLabel: { color: '#8a7a6a', fontFamily: FONT, fontSize: 11, formatter: '{value}%' },
+        splitLine: { show: false },
+        axisLine: { show: true, lineStyle: { color: '#e0d4c0' } },
+      },
+    ],
+    series: [
+      {
+        name: dimLabel, type: 'bar', data: values, yAxisIndex: 0,
+        itemStyle: { color: '#c4883a', borderRadius: [3, 3, 0, 0] },
+        emphasis: { itemStyle: { color: '#e09050' } },
+        label: { show: names.length <= 20, position: 'top', fontSize: 12, color: '#3a3028', fontFamily: FONT, fontWeight: 'bold' },
+      },
+      ...(hasSaleRatio ? [{
+        name: '销售占比', type: 'line', data: saleRatioData, yAxisIndex: 1,
+        smooth: true, symbol: 'circle', symbolSize: 6,
+        lineStyle: { color: '#7a5cbf', width: 1.5, type: 'dotted' },
+        itemStyle: { color: '#7a5cbf' },
+        label: { show: false },
+        markLine: (() => {
+          const overall = chartData.value.summary?.overall_ratio
+          if (overall == null) return undefined
+          return {
+            silent: true,
+            symbol: ['none', 'none'],
+            lineStyle: { color: '#7a5cbf', type: 'dashed', width: 1.5, opacity: 0.7 },
+            label: {
+              formatter: `整体 ${overall.toFixed(2)}%`,
+              fontFamily: FONT, fontSize: 11, color: '#7a5cbf',
+            },
+            data: [{ yAxis: overall > 100 ? 101 : overall }],
+          }
+        })(),
+      }] : []),
+    ],
   }
 }
+
+// ── 产品视图下钻 ───────────────────────────────────
+
+function drillDown(label) {
+  const level = effectiveProductLevel.value
+  if (level === 'model') return
+
+  // 保存当前 filter 快照
+  drillStack.value.push({
+    label,
+    savedCategoryIds: [...filters.value.categoryIds],
+    savedSeriesIds:   [...filters.value.seriesIds],
+    savedModelIds:    [...filters.value.modelIds],
+  })
+
+  _isDrilling = true
+  if (level === 'category') {
+    const cat = categoryTree.value.find(c => c.name === label)
+    if (!cat) { drillStack.value.pop(); _isDrilling = false; return }
+    filters.value.categoryIds = [cat.id]
+    filters.value.seriesIds   = []
+    filters.value.modelIds    = []
+  } else if (level === 'series') {
+    let seriesId = null
+    for (const c of categoryTree.value) {
+      const s = (c.series || []).find(s => s.code === label)
+      if (s) { seriesId = s.id; break }
+    }
+    if (!seriesId) { drillStack.value.pop(); _isDrilling = false; return }
+    filters.value.seriesIds = [seriesId]
+    filters.value.modelIds  = []
+  }
+  nextTick(() => { _isDrilling = false })
+}
+
+function drillBack(idx) {
+  const snap = drillStack.value[idx]
+  _isDrilling = true
+  filters.value.categoryIds = snap.savedCategoryIds
+  filters.value.seriesIds   = snap.savedSeriesIds
+  filters.value.modelIds    = snap.savedModelIds
+  drillStack.value = drillStack.value.slice(0, idx)
+  nextTick(() => { _isDrilling = false })
+}
+
+// ── 其他操作 ──────────────────────────────────────
+
+function toggleSection(key) { sections[key] = !sections[key] }
+
+// Tab 可取消（再次点击 = 回到产品视图）
+function selectDim(key) { groupBy.value = groupBy.value === key ? null : key }
+
+function onCategoryChange() { filters.value.seriesIds = []; filters.value.modelIds = [] }
+function onSeriesChange()   { filters.value.modelIds = [] }
+function onReasonCatChange() { filters.value.reasonIds = [] }
+function onProvinceChange()  { filters.value.cities = [] }
 
 function resetFilters() {
-  dateRange.value = []
-  channels.value  = []
-  provinces.value = []
-  reasonCatId.value = null
+  drillStack.value = []
+  groupBy.value    = null
+  Object.assign(filters.value, {
+    dateRange:            (() => { const s = new Date(); s.setMonth(s.getMonth() - 1); return [s, new Date()] })(),
+    maxDaysSincePurchase: 15,
+    categoryIds: [], seriesIds: [], modelIds: [],
+    reasonCategoryIds: [], reasonIds: [], shippingAliasIds: [],
+    returnAliasIds: [], channelNames: [], provinces: [], cities: [],
+  })
 }
 
-// 外部调用刷新（工单确认后同步数据）
+// 查询按钮：手动触发图表刷新（时间筛选变更后必须通过此按钮）
+async function handleQuery() {
+  clearTimeout(_chartTimer)
+  await loadChartData()
+}
+
 async function refresh() {
-  await loadStats()
-  await loadChart()
+  await Promise.all([loadCrossFilterOptions(), loadChartData()])
 }
 
 defineExpose({ refresh })
 </script>
 
 <template>
-  <div class="dashboard-wrap">
-    <!-- ── 左侧筛选面板 ────────────────────────── -->
-    <aside class="filter-panel">
-      <div class="filter-title">筛选</div>
+  <div class="dashboard-root">
 
-      <div class="filter-section">
-        <div class="filter-label">日期范围</div>
-        <el-date-picker
-          v-model="dateRange"
-          type="daterange"
-          size="small"
-          range-separator="~"
-          start-placeholder="开始"
-          end-placeholder="结束"
-          value-format="YYYY-MM-DD"
-          style="width:100%"
-        />
+    <!-- ── 左侧筛选面板 ──────────────────────────── -->
+    <aside class="filter-panel" :class="{ 'is-collapsed': filterCollapsed }">
+
+      <!-- 查询 + 设置 -->
+      <div class="panel-top-btns">
+        <button class="btn-query" :disabled="loadingChart" @click="handleQuery">
+          {{ loadingChart ? '查询中…' : '查询' }}
+        </button>
+        <button class="btn-settings" title="分组">
+          <el-icon><Setting /></el-icon>分组
+        </button>
       </div>
 
-      <div class="filter-section">
-        <div class="filter-label">渠道</div>
-        <el-select
-          v-model="channels"
-          multiple
-          filterable
-          clearable
-          size="small"
-          placeholder="全部渠道"
-          style="width:100%"
-        >
-          <el-option v-for="c in optChannels" :key="c" :value="c" :label="c" />
-        </el-select>
-      </div>
-
-      <div class="filter-section">
-        <div class="filter-label">省份</div>
-        <el-select
-          v-model="provinces"
-          multiple
-          filterable
-          clearable
-          size="small"
-          placeholder="全部省份"
-          style="width:100%"
-        >
-          <el-option v-for="p in optProvinces" :key="p" :value="p" :label="p" />
-        </el-select>
-      </div>
-
-      <div class="filter-section">
-        <div class="filter-label">原因分类</div>
-        <el-select
-          v-model="reasonCatId"
-          clearable
-          size="small"
-          placeholder="全部分类"
-          style="width:100%"
-        >
-          <el-option
-            v-for="c in optCats"
-            :key="c.id"
-            :value="c.id"
-            :label="c.name"
-          />
-        </el-select>
-      </div>
-
-      <el-button size="small" style="width:100%;margin-top:8px" @click="resetFilters">重置筛选</el-button>
-
-      <!-- 摘要统计 -->
-      <div v-if="stats" class="stats-card">
-        <div class="stat-item">
-          <span class="stat-val">{{ stats.pending }}</span>
-          <span class="stat-lbl">待处理</span>
+      <!-- ▌时间选择 -->
+      <div class="section-group">
+        <div class="section-hd" @click="toggleSection('time')">
+          <span class="section-title">时间选择</span>
+          <el-icon class="section-chevron" :class="{ 'is-closed': !sections.time }"><ArrowDown /></el-icon>
         </div>
-        <div class="stat-item">
-          <span class="stat-val accent">{{ stats.confirmed }}</span>
-          <span class="stat-lbl">已处理</span>
-        </div>
-        <div class="stat-item">
-          <span class="stat-val muted">{{ stats.ignored }}</span>
-          <span class="stat-lbl">已忽略</span>
+        <div class="section-bd" :class="{ 'is-closed': !sections.time }">
+          <div class="section-bd-inner">
+            <el-date-picker
+              v-model="filters.dateRange"
+              type="daterange" range-separator="~"
+              start-placeholder="开始日期" end-placeholder="结束日期"
+              size="default" style="width:100%"
+              :shortcuts="DATE_SHORTCUTS"
+            />
+            <div class="field-row">
+              <div class="field-label">售后间隔上限</div>
+              <div class="days-input-row">
+                <el-input-number
+                  v-model="filters.maxDaysSincePurchase"
+                  :min="1" :max="9999" :step="1"
+                  controls-position="right" placeholder="不限"
+                  size="default" style="flex:1"
+                />
+                <span class="days-unit">天</span>
+                <button
+                  class="btn-clear-days"
+                  :class="{ 'is-active': filters.maxDaysSincePurchase == null }"
+                  @click="filters.maxDaysSincePurchase = null"
+                >不限</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
-      <!-- Top 原因 -->
-      <div v-if="stats?.top_reasons?.length" class="top-reasons">
-        <div class="filter-label" style="margin-top:12px">常见原因 Top5</div>
-        <div
-          v-for="(r, i) in stats.top_reasons"
-          :key="r.name"
-          class="top-reason-item"
-        >
-          <span class="top-rank" :class="`rank-${i+1}`">{{ i + 1 }}</span>
-          <span class="top-name">{{ r.name }}</span>
-          <span class="top-count">{{ r.use_count }}</span>
+      <!-- ▌产品选择 -->
+      <div class="section-group">
+        <div class="section-hd" @click="toggleSection('product')">
+          <span class="section-title">产品选择</span>
+          <el-icon class="section-chevron" :class="{ 'is-closed': !sections.product }"><ArrowDown /></el-icon>
+        </div>
+        <div class="section-bd" :class="{ 'is-closed': !sections.product }">
+          <div class="section-bd-inner">
+            <div class="field-row">
+              <div class="field-label">产品品类</div>
+              <el-select v-model="filters.categoryIds" placeholder="全部品类"
+                multiple filterable collapse-tags collapse-tags-tooltip
+                clearable size="default" style="width:100%"
+                @change="onCategoryChange">
+                <el-option v-for="opt in categoryOpts" :key="opt.value" :label="opt.label" :value="opt.value" />
+              </el-select>
+            </div>
+            <div class="field-row">
+              <div class="field-label">产品系列</div>
+              <el-select v-model="filters.seriesIds" placeholder="全部系列"
+                multiple filterable collapse-tags collapse-tags-tooltip
+                clearable size="default" style="width:100%"
+                :disabled="!seriesEnabled" @change="onSeriesChange">
+                <el-option v-for="opt in seriesOpts" :key="opt.value" :label="opt.label" :value="opt.value">
+                  <span class="opt-main">{{ opt.label }}</span>
+                  <span v-if="opt.sub" class="opt-sub">{{ opt.sub }}</span>
+                </el-option>
+              </el-select>
+            </div>
+            <div class="field-row">
+              <div class="field-label">产品型号</div>
+              <el-select v-model="filters.modelIds" placeholder="全部型号"
+                multiple filterable collapse-tags collapse-tags-tooltip
+                clearable size="default" style="width:100%"
+                :disabled="!modelEnabled">
+                <el-option v-for="opt in modelOpts" :key="opt.value" :label="opt.label" :value="opt.value">
+                  <span class="opt-main">{{ opt.label }}</span>
+                  <span v-if="opt.sub" class="opt-sub">{{ opt.sub }}</span>
+                </el-option>
+              </el-select>
+            </div>
+          </div>
         </div>
       </div>
+
+      <!-- ▌售后原因选择 -->
+      <div class="section-group">
+        <div class="section-hd" @click="toggleSection('reason')">
+          <span class="section-title">售后原因选择</span>
+          <el-icon class="section-chevron" :class="{ 'is-closed': !sections.reason }"><ArrowDown /></el-icon>
+        </div>
+        <div class="section-bd" :class="{ 'is-closed': !sections.reason }">
+          <div class="section-bd-inner">
+            <div class="field-row">
+              <div class="field-label">原因分类</div>
+              <el-select v-model="filters.reasonCategoryIds" placeholder="全部分类"
+                multiple filterable collapse-tags collapse-tags-tooltip
+                clearable size="default" style="width:100%"
+                :loading="loadingOpts" @change="onReasonCatChange">
+                <el-option v-for="opt in reasonCatOpts" :key="opt.value" :label="opt.label" :value="opt.value" />
+              </el-select>
+            </div>
+            <div class="field-row">
+              <div class="field-label">具体原因</div>
+              <el-select v-model="filters.reasonIds" placeholder="全部原因"
+                multiple filterable collapse-tags collapse-tags-tooltip
+                clearable size="default" style="width:100%"
+                :disabled="!reasonEnabled" :loading="loadingOpts">
+                <el-option v-for="opt in reasonOpts" :key="opt.value" :label="opt.label" :value="opt.value">
+                  <span class="opt-main">{{ opt.label }}</span>
+                  <span v-if="opt.sub" class="opt-sub">{{ opt.sub }}</span>
+                </el-option>
+              </el-select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ▌发货物料选择 -->
+      <div class="section-group">
+        <div class="section-hd" @click="toggleSection('shipping')">
+          <span class="section-title">发货物料选择</span>
+          <el-icon class="section-chevron" :class="{ 'is-closed': !sections.shipping }"><ArrowDown /></el-icon>
+        </div>
+        <div class="section-bd" :class="{ 'is-closed': !sections.shipping }">
+          <div class="section-bd-inner">
+            <div class="field-row">
+              <div class="field-label">发货物料简称</div>
+              <el-select v-model="filters.shippingAliasIds" placeholder="全部发货物料"
+                multiple filterable collapse-tags collapse-tags-tooltip
+                clearable size="default" style="width:100%" :loading="loadingOpts">
+                <el-option v-for="opt in shippingAliasOpts" :key="opt.value" :label="opt.label" :value="opt.value" />
+              </el-select>
+            </div>
+            <div class="field-row">
+              <div class="field-label">售后物料简称</div>
+              <el-select v-model="filters.returnAliasIds" placeholder="全部售后物料"
+                multiple filterable collapse-tags collapse-tags-tooltip
+                clearable size="default" style="width:100%" :loading="loadingOpts">
+                <el-option v-for="opt in returnAliasOpts" :key="opt.value" :label="opt.label" :value="opt.value" />
+              </el-select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ▌渠道选择 -->
+      <div class="section-group">
+        <div class="section-hd" @click="toggleSection('channel')">
+          <span class="section-title">渠道选择</span>
+          <el-icon class="section-chevron" :class="{ 'is-closed': !sections.channel }"><ArrowDown /></el-icon>
+        </div>
+        <div class="section-bd" :class="{ 'is-closed': !sections.channel }">
+          <div class="section-bd-inner">
+            <div class="field-row">
+              <div class="field-label">渠道</div>
+              <el-select v-model="filters.channelNames" placeholder="全部渠道"
+                multiple filterable collapse-tags collapse-tags-tooltip
+                clearable size="default" style="width:100%" :loading="loadingOpts">
+                <el-option v-for="opt in channelOpts" :key="opt.value" :label="opt.label" :value="opt.value" />
+              </el-select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ▌地域选择 -->
+      <div class="section-group">
+        <div class="section-hd" @click="toggleSection('region')">
+          <span class="section-title">地域选择</span>
+          <el-icon class="section-chevron" :class="{ 'is-closed': !sections.region }"><ArrowDown /></el-icon>
+        </div>
+        <div class="section-bd" :class="{ 'is-closed': !sections.region }">
+          <div class="section-bd-inner">
+            <div class="field-row">
+              <div class="field-label">省份</div>
+              <el-select v-model="filters.provinces" placeholder="全部省份"
+                multiple filterable collapse-tags collapse-tags-tooltip
+                clearable size="default" style="width:100%"
+                :loading="loadingOpts" @change="onProvinceChange">
+                <el-option v-for="opt in provinceOpts" :key="opt.value" :label="opt.label" :value="opt.value" />
+              </el-select>
+            </div>
+            <div class="field-row">
+              <div class="field-label">城市</div>
+              <el-select v-model="filters.cities" placeholder="全部城市"
+                multiple filterable collapse-tags collapse-tags-tooltip
+                clearable size="default" style="width:100%"
+                :disabled="!cityEnabled" :loading="loadingOpts">
+                <el-option v-for="opt in cityOpts" :key="opt.value" :label="opt.label" :value="opt.value" />
+              </el-select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <button class="btn-reset" @click="resetFilters">重置筛选</button>
+
     </aside>
 
-    <!-- ── 右侧图表区 ──────────────────────────── -->
-    <div class="chart-area">
-      <!-- 维度 Tab + 图表类型 -->
+    <!-- ── 右侧内容区 ──────────────────────────────── -->
+    <div class="content-panel">
+
+      <!-- 顶部工具栏：左=面包屑 / 中=空 / 右=空 -->
       <div class="chart-toolbar">
-        <div class="group-tabs">
-          <button
-            v-for="tab in GROUP_TABS"
-            :key="tab.key"
-            class="group-tab"
-            :class="{ active: groupBy === tab.key }"
-            @click="groupBy = tab.key"
-          >{{ tab.label }}</button>
+        <div class="ct-left">
+          <button class="btn-collapse" :title="filterCollapsed ? '展开筛选' : '收起筛选'" @click="filterCollapsed = !filterCollapsed">
+            <el-icon><ArrowLeft v-if="!filterCollapsed" /><ArrowRight v-else /></el-icon>
+          </button>
+          <div class="drill-breadcrumb">
+            <span :class="drillStack.length ? 'bc-item bc-link' : 'bc-item bc-current'" @click="drillStack.length ? drillBack(0) : null">全部</span>
+            <template v-for="(entry, i) in drillStack" :key="i">
+              <span class="bc-sep">/</span>
+              <span v-if="i < drillStack.length - 1" class="bc-item bc-link" @click="drillBack(i + 1)">{{ entry.label }}</span>
+              <span v-else class="bc-item bc-current">{{ entry.label }}</span>
+            </template>
+          </div>
         </div>
-
-        <!-- 图表类型（月度时隐藏） -->
-        <div v-if="groupBy !== 'month'" class="chart-type-btns">
-          <button
-            class="type-btn"
-            :class="{ active: chartType === 'bar' }"
-            title="柱图"
-            @click="chartType = 'bar'"
-          >柱</button>
-          <button
-            class="type-btn"
-            :class="{ active: chartType === 'pie' }"
-            title="饼图"
-            @click="chartType = 'pie'"
-          >饼</button>
+        <div class="ct-center"></div>
+        <div class="ct-right">
+          <button class="btn-view-data">查看数据</button>
         </div>
       </div>
 
-      <!-- 图表容器 -->
-      <div v-loading="loading" class="chart-container">
-        <div v-if="chartData?.items?.length === 0 && !loading" class="chart-empty">
-          暂无数据
-        </div>
-        <div ref="chartEl" class="echart-el"></div>
+      <!-- 图表 -->
+      <div v-loading="loadingChart" class="chart-wrap">
+        <div v-if="!loadingChart && !chartData?.items?.length" class="chart-empty">暂无数据</div>
+        <div ref="chartEl" class="chart-canvas"></div>
       </div>
 
-      <!-- 数据明细（前10条） -->
-      <div v-if="chartData?.items?.length" class="data-table">
-        <div class="data-table-header">
-          <span class="col-name">{{ groupBy === 'reason' ? '原因' : groupBy === 'channel' ? '渠道' : groupBy === 'province' ? '省份' : '月份' }}</span>
-          <span class="col-val">件数</span>
-          <span class="col-pct">占比</span>
+      <!-- 底部：维度选择（可取消） -->
+      <div class="chart-footer">
+        <div class="footer-placeholder"></div>
+        <div class="footer-dims">
+          <button
+            v-for="dim in DIMS"
+            :key="dim.key"
+            class="gb-btn"
+            :class="{ active: groupBy === dim.key }"
+            @click="selectDim(dim.key)"
+          >
+            <span class="gb-label">{{ dim.label }}</span>
+          </button>
         </div>
-        <div
-          v-for="item in chartData.items.slice(0, 10)"
-          :key="item.name"
-          class="data-row"
-        >
-          <span class="col-name">{{ item.name }}</span>
-          <span class="col-val">{{ item.value }}</span>
-          <span class="col-pct">{{ chartData.summary.total ? Math.round(item.value / chartData.summary.total * 100) : 0 }}%</span>
-        </div>
+        <div class="footer-placeholder"></div>
       </div>
+
     </div>
+
   </div>
 </template>
 
 <style scoped>
-.dashboard-wrap {
-  flex: 1; display: flex; overflow: hidden;
+.dashboard-root {
+  flex: 1; min-height: 0;
+  display: flex; overflow: hidden;
+  font-family: var(--font-family);
+  padding: 5px; gap: 4px;
 }
 
-/* 左侧筛选 */
+/* ── 筛选面板顶部按钮 ──────────────────────────── */
+.panel-top-btns { display: flex; gap: 6px; flex-shrink: 0; }
+.btn-query {
+  flex: 1; height: 36px;
+  border: none; border-radius: 8px;
+  background: var(--accent); color: #fff;
+  font-size: 13px; font-family: var(--font-family);
+  cursor: pointer; transition: background 0.15s;
+}
+.btn-query:hover:not(:disabled) { background: var(--accent-hover); }
+.btn-query:disabled { opacity: 0.6; cursor: not-allowed; }
+.btn-settings {
+  height: 36px; padding: 0 10px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-card); color: var(--text-muted);
+  font-size: 12px; font-family: var(--font-family);
+  cursor: pointer; display: flex; align-items: center; gap: 4px;
+  transition: all 0.15s; white-space: nowrap;
+}
+.btn-settings:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ── 筛选面板 ─────────────────────────────────── */
 .filter-panel {
-  width: 210px; flex-shrink: 0;
-  border-right: 1px solid var(--border);
-  padding: 14px 12px;
-  overflow-y: auto;
-  background: var(--bg-card);
+  width: 270px; flex-shrink: 0;
+  background: transparent;
+  overflow-y: auto; overflow-x: hidden;
+  padding: 5px;
+  display: flex; flex-direction: column; gap: 5px;
+  transition: width 0.22s ease, opacity 0.22s ease, padding 0.22s ease;
+}
+.filter-panel.is-collapsed {
+  width: 0; padding: 0; opacity: 0; pointer-events: none;
 }
 .filter-panel::-webkit-scrollbar { width: 4px; }
 .filter-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
-.filter-title {
-  font-size: 12px; font-weight: 600; color: var(--text-secondary);
-  letter-spacing: 0.05em; margin-bottom: 12px;
+/* ── 区块卡片 ────────────────────────────────── */
+.section-group {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 9px; overflow: hidden; flex-shrink: 0;
 }
-.filter-section { margin-bottom: 12px; }
-.filter-label {
-  font-size: 11px; color: var(--text-muted); margin-bottom: 5px;
-}
-
-.stats-card {
-  margin-top: 16px;
-  background: #faf7f2; border: 1px solid var(--border);
-  border-radius: 8px; padding: 10px;
-  display: flex; justify-content: space-around;
-}
-.stat-item {
-  display: flex; flex-direction: column;
-  align-items: center; gap: 2px;
-}
-.stat-val {
-  font-size: 18px; font-weight: 700; color: var(--text-primary);
-}
-.stat-val.accent { color: var(--accent); }
-.stat-val.muted  { color: var(--text-muted); }
-.stat-lbl { font-size: 10px; color: var(--text-muted); }
-
-.top-reasons { margin-top: 4px; }
-.top-reason-item {
-  display: flex; align-items: center; gap: 6px;
-  padding: 5px 0; border-bottom: 1px solid #f0e8d8;
-}
-.top-rank {
-  width: 18px; height: 18px; border-radius: 50%;
-  background: var(--border); color: var(--text-muted);
-  font-size: 10px; font-weight: 700; text-align: center; line-height: 18px;
-  flex-shrink: 0;
-}
-.rank-1 { background: #c4883a; color: #fff; }
-.rank-2 { background: #aaa; color: #fff; }
-.rank-3 { background: #b87333; color: #fff; }
-.top-name { flex: 1; font-size: 12px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.top-count { font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
-
-/* 右侧图表区 */
-.chart-area {
-  flex: 1; display: flex; flex-direction: column; overflow: hidden;
-}
-
-.chart-toolbar {
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border);
+.section-hd {
   display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px; cursor: pointer; user-select: none; transition: background 0.15s;
+}
+.section-hd:hover { background: rgba(196,136,58,0.04); }
+.section-hd:hover .section-title { color: var(--accent); }
+.section-title { font-size: 12px; font-weight: 600; color: var(--text-primary); letter-spacing: 0.02em; transition: color 0.15s; }
+.section-chevron { font-size: 11px; color: var(--text-muted); transition: transform 0.22s ease; flex-shrink: 0; }
+.section-chevron.is-closed { transform: rotate(-90deg); }
+.section-bd { max-height: 600px; overflow: hidden; transition: max-height 0.22s ease; border-top: 1px solid var(--border); }
+.section-bd.is-closed { max-height: 0; border-top: none; }
+.section-bd-inner { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+
+.field-row { display: flex; flex-direction: column; gap: 6px; }
+.field-label { font-size: 11px; color: var(--text-muted); letter-spacing: 0.02em; }
+.opt-main  { font-size: 12px; color: var(--text-primary); }
+.opt-sub   { font-size: 11px; color: var(--text-muted); margin-left: 6px; }
+
+/* ── 间隔天数 ──────────────────────────────────── */
+.days-input-row { display: flex; align-items: center; gap: 6px; }
+.days-unit { font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
+.btn-clear-days {
+  padding: 0 10px; height: 32px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: transparent; color: var(--text-muted);
+  font-size: 12px; font-family: var(--font-family);
+  cursor: pointer; transition: all 0.15s; white-space: nowrap; flex-shrink: 0;
+}
+.btn-clear-days:hover { border-color: var(--accent); color: var(--accent); }
+.btn-clear-days.is-active { background: #fff7ed; border-color: var(--accent); color: var(--accent); font-weight: 600; }
+
+/* ── 重置按钮 ──────────────────────────────────── */
+.btn-reset {
+  width: 100%; padding: 9px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: transparent; color: var(--text-muted);
+  font-size: 12px; font-family: var(--font-family);
+  cursor: pointer; transition: all 0.15s; flex-shrink: 0;
+}
+.btn-reset:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ── 右侧内容区 ───────────────────────────────── */
+.content-panel { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 5px; overflow: hidden; padding-top: 5px; }
+
+/* 顶部工具栏 */
+.chart-toolbar {
+  height: 36px;
   flex-shrink: 0;
+  display: flex; align-items: center;
 }
-.group-tabs {
-  display: flex; gap: 4px;
+.ct-left   { flex: 1; display: flex; align-items: center; }
+.ct-center { display: flex; align-items: center; gap: 3px; }
+.ct-right  { flex: 1; display: flex; align-items: center; justify-content: flex-end; }
+.btn-view-data {
+  height: 30px; padding: 0 14px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-card); color: var(--text-muted);
+  font-size: 12px; font-family: var(--font-family);
+  cursor: pointer; transition: all 0.15s;
 }
-.group-tab {
-  padding: 5px 14px; border-radius: 7px;
-  border: 1px solid var(--border); background: transparent;
-  color: var(--text-muted); font-size: 12px; cursor: pointer;
-  transition: all 0.15s;
-}
-.group-tab:hover { background: var(--bg); color: var(--text-primary); }
-.group-tab.active {
-  background: #fff7ed; border-color: var(--accent);
-  color: var(--accent); font-weight: 600;
-}
+.btn-view-data:hover { border-color: var(--accent); color: var(--accent); }
 
-.chart-type-btns {
-  display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+/* 折叠按钮 */
+.btn-collapse {
+  flex-shrink: 0; width: 24px; height: 24px; margin-right: 6px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg-card); color: var(--text-muted);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; transition: all 0.15s;
 }
-.type-btn {
-  padding: 4px 12px; border: none; background: transparent;
-  color: var(--text-muted); font-size: 12px; cursor: pointer;
-  transition: all 0.15s;
-}
-.type-btn:not(:last-child) { border-right: 1px solid var(--border); }
-.type-btn.active { background: #fff7ed; color: var(--accent); font-weight: 600; }
-.type-btn:hover:not(.active) { background: var(--bg); }
+.btn-collapse:hover { border-color: var(--accent); color: var(--accent); }
 
-.chart-container {
-  flex: 1; position: relative; min-height: 0;
-}
-.echart-el {
-  width: 100%; height: 100%;
-}
+/* 面包屑 */
+.drill-breadcrumb { display: flex; align-items: center; gap: 4px; font-size: 14px; }
+.bc-sep  { color: #b0a090; }
+.bc-item { padding: 2px 4px; border-radius: 4px; white-space: nowrap; }
+.bc-link { color: #3a7bc8; cursor: pointer; }
+.bc-link:hover { text-decoration: underline; background: rgba(58,123,200,0.08); }
+.bc-current { color: #3a3028; font-weight: 600; }
+
+/* 图表区 */
+.chart-wrap { flex: 1; min-height: 0; background: var(--bg-card); border: 1px solid var(--border); border-radius: 9px; overflow: hidden; position: relative; }
+.chart-canvas { width: 100%; height: 100%; }
 .chart-empty {
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
   font-size: 13px; color: var(--text-muted);
 }
 
-/* 数据明细 */
-.data-table {
+/* 底部维度选择 */
+.chart-footer {
   flex-shrink: 0;
-  border-top: 1px solid var(--border);
-  max-height: 160px; overflow-y: auto;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 2px 0;
 }
-.data-table::-webkit-scrollbar { width: 4px; }
-.data-table::-webkit-scrollbar-thumb { background: var(--border); }
+.footer-placeholder { flex: 1; }
+.footer-dims { display: flex; gap: 4px; }
+.gb-btn {
+  display: flex; flex-direction: row; align-items: center; justify-content: center;
+  gap: 6px; padding: 6px 18px;
+  border: none; background: transparent; border-radius: 10px; cursor: pointer;
+  transition: background 0.15s;
+}
+.gb-btn:hover { background: var(--border); }
+.gb-btn.active { background: color-mix(in srgb, #c4883a 12%, transparent); }
+.gb-label { font-size: 15px; color: #2c2420; white-space: nowrap; transition: color 0.15s; }
+.gb-btn:hover .gb-label { color: #000; }
+.gb-btn.active .gb-label { color: #c4883a; font-weight: 500; }
 
-.data-table-header, .data-row {
-  display: grid;
-  grid-template-columns: 1fr 60px 50px;
-  padding: 5px 16px; font-size: 12px;
-}
-.data-table-header {
-  position: sticky; top: 0;
-  background: #f5f0e8; font-weight: 600;
-  color: var(--text-secondary); border-bottom: 1px solid var(--border);
-}
-.data-row { color: var(--text-primary); border-bottom: 1px solid #f5f0e8; }
-.data-row:hover { background: #faf7f2; }
-.col-val, .col-pct { text-align: right; }
 </style>

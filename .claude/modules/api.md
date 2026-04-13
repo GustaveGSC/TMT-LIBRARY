@@ -82,6 +82,12 @@ POST   /api/shipping/chart-data                       # 图表聚合数据，bod
 
 GET    /api/aftersale/pending                         # 待处理订单列表（动态查询，尚未建工单的售后操作人订单）
 GET    /api/aftersale/pending/count                   # 待处理订单数量
+POST   /api/aftersale/suggest-product                 # 型号/物料等推荐；body 含 product_codes、seller_remark 等
+                                                      #   返回 data 中可含 suggestions：
+                                                      #   suggested_shipping_alias_id, suggested_return_alias_id,
+                                                      #   suggested_return_alias_source('library'|'history'|null),
+                                                      #   suggested_return_alias_score（仅 library 匹配时有值）,
+                                                      #   suggested_reason_id, suggested_reason_category_id
 GET    /api/aftersale/cases                           # 工单列表（分页+服务端排序）
                                                       #   params: page/size/status/date_start/date_end/order_no/
                                                       #           channel_name/province/city/district/
@@ -100,18 +106,38 @@ GET    /api/aftersale/filter-options                  # 表格筛选选项（raw
                                                       #   返回：{channels, provinces, cities, districts,
                                                       #          reason_categories, reason_names,
                                                       #          shipping_aliases, return_aliases, model_codes}
-POST   /api/aftersale/auto-match                      # body: {text} → 两阶段匹配（关键词库+历史相似度），返回 Top5 建议
+POST   /api/aftersale/auto-match                      # body: {text}
+                                                      #   返回 Top5：reason_id, name, category_name, confidence,
+                                                      #   source('keyword'|'history'), matched_keywords[], keyword_score,
+                                                      #   history_score, total_score（历史阶段仅关键词候选不足时启用）
+GET    /api/aftersale/reason-keyword-rules            # 读取词典（仅 enabled 行；stopwords/fault_terms/component_terms/short_keep_terms 为 string[]）
+PUT    /api/aftersale/reason-keyword-rules            # 全量覆盖词典表（先 delete 再插入）；body 同 GET 的 data 形状：
+                                                      #   { stopwords[], fault_terms[], component_terms[], short_keep_terms[],
+                                                      #     synonyms: [{ pattern, replacement, is_regex? }] } （缺省 is_regex 时服务端按 true）
+                                                      #   未传 short_keep_terms 时保留库内原短词保留表（兼容旧客户端）
+                                                      #   成功后返回最新词典；服务端缓存约 60s，提交后失效
 GET    /api/aftersale/reasons                         # 原因库（按 category 聚合）
 POST   /api/aftersale/reasons                         # 创建原因
 PUT    /api/aftersale/reasons/:id                     # 更新原因
 DELETE /api/aftersale/reasons/:id                     # 删除原因
 GET    /api/aftersale/reasons/:id/usage               # 查询使用次数
 GET    /api/aftersale/reason-categories               # 所有一级分类
+GET    /api/aftersale/shipping-ignore-terms           # 发货物料匹配过滤词列表
+POST   /api/aftersale/shipping-ignore-terms           # 新增过滤词 {term}
+DELETE /api/aftersale/shipping-ignore-terms/:id       # 删除过滤词
 GET    /api/aftersale/shipping-aliases                # 发货物料简称列表
+POST   /api/aftersale/shipping-aliases                # 新增发货物料简称 {name}
+PUT    /api/aftersale/shipping-aliases/:id            # 更新发货物料简称
+DELETE /api/aftersale/shipping-aliases/:id            # 删除发货物料简称
 GET    /api/aftersale/return-aliases                  # 售后物料简称列表
+POST   /api/aftersale/return-aliases                  # 新增售后物料简称 {name}
+PUT    /api/aftersale/return-aliases/:id              # 更新售后物料简称
+DELETE /api/aftersale/return-aliases/:id              # 删除售后物料简称
 GET    /api/aftersale/stats                           # 统计摘要（pending/confirmed/ignored 数量 + Top5 原因）
 GET    /api/aftersale/chart-options                   # 图表筛选选项（channels/provinces/categories）
-POST   /api/aftersale/chart-data                      # 图表聚合数据，body: {group_by('reason'|'channel'|'province'|'month'), date_start?, ...}
+POST   /api/aftersale/chart-filter-options            # 联动筛选选项，body: {date_start?, date_end?, channel_names?, provinces?, cities?, model_ids?, reason_ids?, reason_category_ids?, shipping_alias_ids?, return_alias_ids?}
+                                                      #   返回：{channels, provinces, cities, model_ids, reason_ids, shipping_alias_ids, return_alias_ids}（跨维度联动过滤）
+POST   /api/aftersale/chart-data                      # 图表聚合数据，body: {group_by('product'|'reason'|'shipping_alias'|'channel'|'province'), date_start?, date_end?, max_days_since_purchase?, channel_names?, provinces?, cities?, model_ids?, category_ids?, series_ids?, reason_ids?, reason_category_ids?, shipping_alias_ids?, return_alias_ids?}
 ```
 
 ## /api/product/stats 返回结构
