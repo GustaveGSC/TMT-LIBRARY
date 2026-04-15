@@ -28,28 +28,6 @@ def delete_shipping_alias(alias_id):
     return _svc.delete_shipping_alias(alias_id).to_response()
 
 
-# ── 售后物料简称库 ─────────────────────────────────────────────────────────
-
-@aftersale_bp.get('/return-aliases')
-def get_return_aliases():
-    return _svc.get_return_aliases().to_response()
-
-
-@aftersale_bp.post('/return-aliases')
-def create_return_alias():
-    return _svc.create_return_alias(request.get_json() or {}).to_response()
-
-
-@aftersale_bp.put('/return-aliases/<int:alias_id>')
-def update_return_alias(alias_id):
-    return _svc.update_return_alias(alias_id, request.get_json() or {}).to_response()
-
-
-@aftersale_bp.delete('/return-aliases/<int:alias_id>')
-def delete_return_alias(alias_id):
-    return _svc.delete_return_alias(alias_id).to_response()
-
-
 # ── 一级分类 ───────────────────────────────────────────────────────────────
 
 @aftersale_bp.get('/reason-categories')
@@ -141,14 +119,13 @@ def get_cases():
     reason_category = request.args.get('reason_category')
     reason_name     = request.args.get('reason_name')
     shipping_alias  = request.args.get('shipping_alias')
-    return_alias    = request.args.get('return_alias')
     model_code      = request.args.get('model_code')
     sort_by         = request.args.get('sort_by')
     sort_order      = request.args.get('sort_order', 'desc')
     return _svc.get_cases(
         page, page_size, status, date_start, date_end,
         reason_id, channel, province, city, district,
-        reason_category, reason_name, shipping_alias, return_alias,
+        reason_category, reason_name, shipping_alias,
         model_code, search, sort_by=sort_by, sort_order=sort_order,
     ).to_response()
 
@@ -222,7 +199,7 @@ def update_reason_keyword_rules():
 @aftersale_bp.post('/auto-match')
 def auto_match():
     body = request.get_json() or {}
-    return _svc.auto_match(body.get('text', '')).to_response()
+    return _svc.auto_match(body.get('text', ''), body.get('buyer_remark', '')).to_response()
 
 
 # ── 统计 & 图表 ─────────────────────────────────────────────────────────────
@@ -245,3 +222,46 @@ def get_cross_filter_options():
 @aftersale_bp.post('/chart-data')
 def get_chart_data():
     return _svc.get_chart_data(request.get_json() or {}).to_response()
+
+
+# ── 词典自动建议 ──────────────────────────────────────────────────────────────
+
+@aftersale_bp.get('/dictionary-suggestions')
+def get_dict_suggestions():
+    type_filter = request.args.get('type')
+    status = request.args.get('status', 'pending')
+    return _svc.get_dict_suggestions(type_filter=type_filter, status=status).to_response()
+
+
+@aftersale_bp.post('/dictionary-suggestions/<int:sug_id>/accept')
+def accept_dict_suggestion(sug_id):
+    body = request.get_json() or {}
+    return _svc.accept_dict_suggestion(
+        sug_id,
+        target_type=body.get('target_type'),
+        canonical=body.get('canonical'),
+    ).to_response()
+
+
+@aftersale_bp.post('/dictionary-suggestions/<int:sug_id>/reject')
+def reject_dict_suggestion(sug_id):
+    return _svc.reject_dict_suggestion(sug_id).to_response()
+
+
+# ── 原因-简称亲和度 ───────────────────────────────────────────────────────────
+
+@aftersale_bp.post('/alias-affinity')
+def get_alias_affinity():
+    body      = request.get_json() or {}
+    reason_id = body.get('reason_id')
+    alias_ids = body.get('alias_ids', [])
+    if not reason_id or not alias_ids:
+        return _svc.get_alias_affinity(None, []).to_response()
+    return _svc.get_alias_affinity(int(reason_id), [int(i) for i in alias_ids]).to_response()
+
+
+# ── 管理工具 ─────────────────────────────────────────────────────────────────
+
+@aftersale_bp.post('/admin/migrate-alias-keywords')
+def migrate_alias_keywords():
+    return _svc.migrate_alias_keywords().to_response()

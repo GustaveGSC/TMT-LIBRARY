@@ -18,6 +18,14 @@ const submitting = ref(false)
 // 当前激活的 Tab
 const activeTab = ref('reasons')
 
+// ── 词典自动建议 ──────────────────────────────────
+const dictSuggestions       = ref([])
+const dictSuggestionsLoaded = ref(false)
+const dictSugExpanded       = ref(false)  // 建议区块是否展开
+const pendingSuggestionsCount = computed(
+  () => dictSuggestions.value.filter(s => s.status === 'pending').length
+)
+
 // ── 售后原因库状态 ─────────────────────────────────
 const categories  = ref([])
 const activeCatId = ref(null)
@@ -35,14 +43,6 @@ const shippingError   = ref('')
 const shipCodeInput   = ref('')   // 产品代码输入框
 const shippingSearch  = ref('')   // 发货简称搜索词
 
-// ── 售后物料简称库状态 ─────────────────────────────
-const returnAliases  = ref([])
-// editingReturn: { id, name, keywords: string[], sort_order }
-const editingReturn  = ref(null)
-const returnError    = ref('')
-const retKwInput     = ref('')    // 商家备注片段输入框
-const returnSearch   = ref('')    // 售后简称搜索词
-
 // ── 发货物料匹配过滤词状态 ─────────────────────────
 const ignoreTerms    = ref([])    // [{id, term}]
 const ignoreInput    = ref('')    // 输入框
@@ -58,11 +58,19 @@ const reasonRuleForm = ref({
   newFaultTerm: '',
   newComponentTerm: '',
   newShortKeepTerm: '',
-  newSynonymAlias: '',
-  newSynonymAliases: [],
+  newSynonymAliasText: '',  // 逗号分隔的别名词，如"粉色,粉红,浅粉"
   newReplacement: '',
   newIsRegex: true,
 })
+
+// 同义词候选建议：接受时需输入归一词
+const synCanonicalMap = ref({})   // sug.id → 用户输入的归一词
+
+// 同义词行内编辑状态
+const editingSynIdx         = ref(-1)
+const editingSynAliasText   = ref('')
+const editingSynReplacement = ref('')
+const editingSynIsRegex     = ref(true)
 
 // 是否显示弹窗
 const visible = computed({
@@ -86,16 +94,6 @@ const filteredShippingAliases = computed(() => {
   })
 })
 
-const filteredReturnAliases = computed(() => {
-  const q = (returnSearch.value || '').trim().toLowerCase()
-  if (!q) return returnAliases.value
-  return returnAliases.value.filter(item => {
-    const name = (item.name || '').toLowerCase()
-    const kws = (item.keywords || []).join(' ').toLowerCase()
-    return name.includes(q) || kws.includes(q)
-  })
-})
-
 // ── Watch ─────────────────────────────────────────
 watch(visible, (v) => {
   if (v) {
@@ -103,9 +101,7 @@ watch(visible, (v) => {
     editingCat.value          = null
     reasonForm.value          = null
     editingShipping.value     = null
-    editingReturn.value       = null
     shippingSearch.value      = ''
-    returnSearch.value        = ''
   }
 })
 
@@ -113,18 +109,16 @@ watch(visible, (v) => {
 async function loadAll() {
   loading.value = true
   try {
-    const [catRes, reasonRes, shipRes, retRes, ignoreRes, rulesRes] = await Promise.all([
+    const [catRes, reasonRes, shipRes, ignoreRes, rulesRes] = await Promise.all([
       http.get('/api/aftersale/reason-categories'),
       http.get('/api/aftersale/reasons'),
       http.get('/api/aftersale/shipping-aliases'),
-      http.get('/api/aftersale/return-aliases'),
       http.get('/api/aftersale/shipping-ignore-terms'),
       http.get('/api/aftersale/reason-keyword-rules'),
     ])
     if (catRes.success)     categories.value      = catRes.data
     if (reasonRes.success)  groups.value          = reasonRes.data
     if (shipRes.success)    shippingAliases.value  = shipRes.data
-    if (retRes.success)     returnAliases.value    = retRes.data
     if (ignoreRes.success)  ignoreTerms.value      = ignoreRes.data
     if (rulesRes.success)   setReasonRuleForm(rulesRes.data)
 
@@ -133,6 +127,49 @@ async function loadAll() {
     }
   } finally {
     loading.value = false
+  }
+}
+
+async function loadDictSuggestions(force = false) {
+  if (dictSuggestionsLoaded.value && !force) return
+  const res = await http.get('/api/aftersale/dictionary-suggestions')
+  if (res.success) {
+    dictSuggestions.value = res.data
+    dictSuggestionsLoaded.value = true
+    if (dictSuggestions.value.some(s => s.status === 'pending')) {
+      dictSugExpanded.value = true
+    }
+  }
+}
+
+async function acceptDictSuggestion(sug, targetType = null, canonical = null) {
+  // synonym_candidate 需要用户填入归一词
+  if (sug.type === 'synonym_candidate') {
+    canonical = (synCanonicalMap.value[sug.id] || '').trim()
+    if (!canonical) {
+      ElMessage.warning('请先填写归一词')
+      return
+    }
+  }
+  const body = {}
+  if (targetType)  body.target_type = targetType
+  if (canonical)   body.canonical   = canonical
+  const res = await http.post(`/api/aftersale/dictionary-suggestions/${sug.id}/accept`, body)
+  if (res.success) {
+    const idx = dictSuggestions.value.findIndex(s => s.id === sug.id)
+    if (idx >= 0) dictSuggestions.value[idx] = res.data
+    delete synCanonicalMap.value[sug.id]
+    ElMessage.success('已接受')
+    if (sug.type !== 'promoted_keyword') emit('updated')
+  }
+}
+
+async function rejectDictSuggestion(sug) {
+  const res = await http.post(`/api/aftersale/dictionary-suggestions/${sug.id}/reject`)
+  if (res.success) {
+    const idx = dictSuggestions.value.findIndex(s => s.id === sug.id)
+    if (idx >= 0) dictSuggestions.value[idx] = res.data
+    ElMessage.success('已忽略')
   }
 }
 
@@ -183,72 +220,46 @@ async function editRuleTerm(field, idx) {
 
 function addSynonymRule() {
   const aliases = [...new Set(
-    (reasonRuleForm.value.newSynonymAliases || [])
-      .map(s => (s || '').trim())
-      .filter(Boolean)
+    (reasonRuleForm.value.newSynonymAliasText || '')
+      .split(',').map(s => s.trim()).filter(Boolean)
   )]
-  const pattern = aliases.join('|')
   const replacement = (reasonRuleForm.value.newReplacement || '').trim()
-  if (!pattern || !replacement) return
+  if (!aliases.length || !replacement) return
   reasonRuleForm.value.synonyms.push({
-    pattern,
+    pattern: aliases.join('|'),
     replacement,
     is_regex: reasonRuleForm.value.newIsRegex,
   })
-  reasonRuleForm.value.newSynonymAlias = ''
-  reasonRuleForm.value.newSynonymAliases = []
+  reasonRuleForm.value.newSynonymAliasText = ''
   reasonRuleForm.value.newReplacement = ''
 }
 
 function removeSynonymRule(idx) {
+  if (editingSynIdx.value === idx) editingSynIdx.value = -1
   reasonRuleForm.value.synonyms.splice(idx, 1)
 }
 
-function addSynonymAlias() {
-  const alias = (reasonRuleForm.value.newSynonymAlias || '').trim()
-  if (!alias) return
-  if (!reasonRuleForm.value.newSynonymAliases.includes(alias)) {
-    reasonRuleForm.value.newSynonymAliases.push(alias)
-  }
-  reasonRuleForm.value.newSynonymAlias = ''
-}
-
-function removeSynonymAlias(idx) {
-  reasonRuleForm.value.newSynonymAliases.splice(idx, 1)
-}
-
-async function editSynonymRule(idx) {
+function startEditSynonym(idx) {
   const row = reasonRuleForm.value.synonyms[idx]
   if (!row) return
-  try {
-    const { value: aliasesVal } = await ElMessageBox.prompt('', '编辑同义词别名（逗号分隔）', {
-      inputValue: (row.pattern || '').split('|').join(','),
-      inputPlaceholder: '例如：红,粉色,浅粉',
-      confirmButtonText: '保存',
-      cancelButtonText: '取消',
-      inputPattern: /\S+/,
-      inputErrorMessage: '别名不能为空',
-    })
-    const aliases = [...new Set(
-      (aliasesVal || '')
-        .split(',')
-        .map(s => s.trim())
-        .filter(Boolean)
-    )]
-    if (!aliases.length) return
-    const { value: replacementVal } = await ElMessageBox.prompt('', '编辑归一词', {
-      inputValue: row.replacement || '',
-      inputPlaceholder: '例如：红色',
-      confirmButtonText: '保存',
-      cancelButtonText: '取消',
-      inputPattern: /\S+/,
-      inputErrorMessage: '归一词不能为空',
-    })
-    const pattern = aliases.join('|')
-    const replacement = (replacementVal || '').trim()
-    if (!pattern || !replacement) return
-    reasonRuleForm.value.synonyms.splice(idx, 1, { pattern, replacement, is_regex: row.is_regex !== false })
-  } catch {}
+  editingSynIdx.value = idx
+  editingSynAliasText.value   = (row.pattern || '').split('|').join(', ')
+  editingSynReplacement.value = row.replacement || ''
+  editingSynIsRegex.value     = row.is_regex !== false
+}
+
+function saveSynonymEdit(idx) {
+  const aliases = [...new Set(
+    editingSynAliasText.value.split(',').map(s => s.trim()).filter(Boolean)
+  )]
+  const replacement = editingSynReplacement.value.trim()
+  if (!aliases.length || !replacement) return
+  reasonRuleForm.value.synonyms.splice(idx, 1, {
+    pattern:    aliases.join('|'),
+    replacement,
+    is_regex:   editingSynIsRegex.value,
+  })
+  editingSynIdx.value = -1
 }
 
 async function saveReasonRules() {
@@ -538,93 +549,6 @@ async function deleteShipping(item) {
   }
 }
 
-// ── 售后物料简称操作 ───────────────────────────────
-
-function startNewReturn() {
-  editingReturn.value = { id: null, name: '', keywords: [], sort_order: 0 }
-  returnError.value   = ''
-  retKwInput.value    = ''
-}
-
-function startEditReturn(item) {
-  editingReturn.value = {
-    id:       item.id,
-    name:     item.name,
-    keywords: [...(item.keywords || [])],
-    sort_order: item.sort_order || 0,
-  }
-  returnError.value = ''
-  retKwInput.value  = ''
-}
-
-function cancelReturn() {
-  editingReturn.value = null
-}
-
-function addReturnKw() {
-  const kw = (retKwInput.value || '').trim()
-  if (!kw || !editingReturn.value) return
-  if (!editingReturn.value.keywords.includes(kw)) {
-    editingReturn.value.keywords = [...editingReturn.value.keywords, kw]
-  }
-  retKwInput.value = ''
-}
-
-function removeReturnKw(idx) {
-  if (!editingReturn.value) return
-  const list = [...editingReturn.value.keywords]
-  list.splice(idx, 1)
-  editingReturn.value.keywords = list
-}
-
-async function submitReturn() {
-  returnError.value = ''
-  const name = (editingReturn.value?.name || '').trim()
-  if (!name) { returnError.value = '简称不能为空'; return }
-
-  submitting.value = true
-  try {
-    const payload = {
-      name,
-      keywords:   editingReturn.value.keywords,
-      sort_order: Number(editingReturn.value.sort_order) || 0,
-    }
-    const isNew = editingReturn.value.id === null
-    const res = isNew
-      ? await http.post('/api/aftersale/return-aliases', payload)
-      : await http.put(`/api/aftersale/return-aliases/${editingReturn.value.id}`, payload)
-
-    if (res.success) {
-      ElMessage.success(isNew ? '简称已创建' : '简称已更新')
-      editingReturn.value = null
-      await loadAll()
-      emit('updated')
-    } else {
-      returnError.value = res.message || '操作失败'
-    }
-  } finally {
-    submitting.value = false
-  }
-}
-
-async function deleteReturn(item) {
-  try {
-    await ElMessageBox.confirm(`确认删除「${item.name}」？`, '删除简称', {
-      confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning',
-    })
-  } catch { return }
-
-  const res = await http.delete(`/api/aftersale/return-aliases/${item.id}`)
-  if (res.success) {
-    ElMessage.success('已删除')
-    if (editingReturn.value?.id === item.id) editingReturn.value = null
-    await loadAll()
-    emit('updated')
-  } else {
-    ElMessage.error(res.message || '删除失败')
-  }
-}
-
 // ── 过滤词操作 ────────────────────────────────────
 
 async function addIgnoreTerm() {
@@ -672,9 +596,11 @@ async function deleteIgnoreTerm(item) {
       <div class="lib-tabs">
         <button class="lib-tab" :class="{ active: activeTab === 'reasons' }"  @click="activeTab = 'reasons'">售后原因库</button>
         <button class="lib-tab" :class="{ active: activeTab === 'shipping' }" @click="activeTab = 'shipping'">发货物料简称</button>
-        <button class="lib-tab" :class="{ active: activeTab === 'return' }"   @click="activeTab = 'return'">售后物料简称</button>
-        <button class="lib-tab" :class="{ active: activeTab === 'ignore' }"   @click="activeTab = 'ignore'">过滤词</button>
-        <button class="lib-tab" :class="{ active: activeTab === 'reasonRules' }" @click="activeTab = 'reasonRules'">原因词典</button>
+
+        <button class="lib-tab" :class="{ active: activeTab === 'reasonRules' }" @click="activeTab = 'reasonRules'; loadDictSuggestions()">
+          词典
+          <span v-if="pendingSuggestionsCount > 0" class="sug-badge">{{ pendingSuggestionsCount }}</span>
+        </button>
       </div>
 
       <!-- ── 售后原因库 Tab ─────────────────────────── -->
@@ -742,16 +668,14 @@ async function deleteIgnoreTerm(item) {
           <div class="reason-list">
             <div v-for="r in currentReasons" :key="r.id" class="reason-item"
               :class="{ editing: reasonForm?.id === r.id }"
+              @click="startEditReason(r)"
             >
               <div class="reason-item-left">
                 <span class="reason-name">{{ r.name }}</span>
                 <span v-if="r.use_count > 0" class="use-count">已用 {{ r.use_count }} 次</span>
               </div>
               <div class="reason-item-actions">
-                <button class="btn-tiny" title="编辑" @click="startEditReason(r)">
-                  <el-icon><Edit /></el-icon>
-                </button>
-                <button class="btn-tiny btn-del" title="删除" @click="deleteReason(r)">
+                <button class="btn-tiny btn-del" title="删除" @click.stop="deleteReason(r)">
                   <el-icon><Delete /></el-icon>
                 </button>
               </div>
@@ -815,7 +739,7 @@ async function deleteIgnoreTerm(item) {
 
           <div v-else class="form-placeholder">
             <div class="placeholder-icon">📋</div>
-            <div>点击「＋」新建，或点击原因右侧编辑按钮</div>
+            <div>点击「＋」新建，或点击中间列的原因条目编辑</div>
           </div>
         </div>
       </div>
@@ -915,281 +839,343 @@ async function deleteIgnoreTerm(item) {
         </div>
       </div>
 
-      <!-- ── 售后物料简称库 Tab ───────────────────── -->
-      <div v-if="activeTab === 'return'" class="alias-lib">
-
-        <!-- 左列：简称列表 -->
-        <div class="alias-list-col">
-          <div class="col-header">
-            <span class="col-title">售后物料简称（{{ filteredReturnAliases.length }}/{{ returnAliases.length }}）</span>
-            <button class="btn-add" title="新建简称" @click="startNewReturn">＋</button>
-          </div>
-          <el-input
-            v-model="returnSearch"
-            size="small"
-            clearable
-            class="alias-search"
-            placeholder="搜索简称/关键词"
-          />
-
-          <div class="alias-list">
-            <div v-for="item in filteredReturnAliases" :key="item.id" class="alias-item"
-              :class="{ editing: editingReturn?.id === item.id }"
-              @click="startEditReturn(item)"
-            >
-              <div class="alias-item-main">
-                <span class="alias-name">{{ item.name }}</span>
-                <span class="alias-meta">
-                  {{ item.keywords?.length ? item.keywords.length + ' 条备注匹配' : '暂无关键词' }}
-                </span>
-              </div>
-              <div class="alias-actions">
-                <button class="btn-tiny btn-del" title="删除" @click.stop="deleteReturn(item)">
-                  <el-icon><Delete /></el-icon>
-                </button>
-              </div>
-            </div>
-            <div v-if="!returnAliases.length" class="col-empty">
-              暂无简称，点击右上角「＋」添加
-            </div>
-            <div v-else-if="!filteredReturnAliases.length" class="col-empty">
-              未找到匹配简称
-            </div>
-          </div>
-        </div>
-
-        <div class="col-divider"></div>
-
-        <!-- 右列：编辑表单 -->
-        <div class="alias-form-col">
-          <template v-if="editingReturn">
-            <div class="col-header">
-              <span class="col-title">{{ editingReturn.id ? '编辑简称' : '新建简称' }}</span>
-            </div>
-
-            <div class="form-row">
-              <label class="form-label">简称名称 <span class="required">*</span></label>
-              <el-input v-model="editingReturn.name" placeholder="如：拉链头" @keyup.enter="submitReturn" />
-            </div>
-
-            <div class="form-row">
-              <label class="form-label">备注关键词
-                <span class="form-label-hint">工单提交时从商家备注自动采集，也可手动维护</span>
-              </label>
-              <div class="tag-editor">
-                <div class="tag-list">
-                  <el-tag v-for="(kw, i) in editingReturn.keywords" :key="i"
-                    closable size="small" type="warning" @close="removeReturnKw(i)">{{ kw }}</el-tag>
-                  <span v-if="!editingReturn.keywords.length" class="tag-empty">暂无</span>
-                </div>
-                <el-input v-model="retKwInput" size="small" placeholder="输入备注片段，回车添加"
-                  style="margin-top:6px" @keyup.enter="addReturnKw" />
-              </div>
-            </div>
-
-            <div class="form-row">
-              <label class="form-label">排序</label>
-              <el-input-number v-model="editingReturn.sort_order" :min="0" :step="1"
-                controls-position="right" style="width:100px" />
-            </div>
-
-            <div v-if="returnError" class="form-error">{{ returnError }}</div>
-            <div class="form-actions">
-              <el-button size="small" @click="cancelReturn">取消</el-button>
-              <el-button size="small" type="primary" :loading="submitting" @click="submitReturn">
-                {{ editingReturn.id ? '保存' : '创建' }}
-              </el-button>
-            </div>
-          </template>
-
-          <div v-else class="form-placeholder">
-            <div class="placeholder-icon">🔧</div>
-            <div>点击「＋」新建，或点击左侧列表项编辑</div>
-            <div class="placeholder-hint">维护出现问题的物料规范简称；工单提交后商家备注<br>会自动采集为关键词，用于下次自动匹配</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- ── 过滤词 Tab ────────────────────────────── -->
-      <div v-if="activeTab === 'ignore'" class="ignore-lib">
-        <div class="col-header">
-          <span class="col-title">物料匹配过滤词（{{ ignoreTerms.length }}）</span>
-        </div>
-        <div class="ignore-desc">
-          发货物料名称包含以下词时，该物料跳过简称自动匹配与学习（如「半成品」「定制件」「其他」）
-        </div>
-
-        <!-- 输入新词 -->
-        <div class="ignore-input-row">
-          <el-input
-            v-model="ignoreInput"
-            placeholder="输入过滤词，回车添加"
-            size="small"
-            style="flex:1"
-            @keyup.enter="addIgnoreTerm"
-          />
-          <el-button size="small" type="primary" :loading="ignoreLoading" @click="addIgnoreTerm">添加</el-button>
-        </div>
-
-        <!-- 词列表 -->
-        <div class="ignore-tags">
-          <div v-for="item in ignoreTerms" :key="item.id" class="ignore-tag-item">
-            <span class="ignore-tag-text">{{ item.term }}</span>
-            <button class="btn-tiny btn-del" title="删除" @click="deleteIgnoreTerm(item)">
-              <el-icon><Delete /></el-icon>
-            </button>
-          </div>
-          <div v-if="ignoreTerms.length === 0" class="col-empty">暂无过滤词</div>
-        </div>
-      </div>
-
-      <!-- ── 原因词典 Tab ────────────────────────────── -->
+      <!-- ── 词典 Tab ──────────────────────────────── -->
       <div v-if="activeTab === 'reasonRules'" class="rule-lib">
-        <div class="col-header">
-          <span class="col-title">售后原因关键词词典</span>
-        </div>
-        <div class="ignore-desc">
-          规则实时加载于当前管理弹窗。词条支持直接新增/删除；同义词支持配置正则模式开关。
+
+        <!-- 可滚动内容区 -->
+        <div class="rule-lib-body">
+
+        <!-- 词典优化建议折叠区块 -->
+        <div v-if="dictSuggestionsLoaded && pendingSuggestionsCount > 0" class="dict-sug-panel">
+          <div class="dict-sug-header" @click="dictSugExpanded = !dictSugExpanded">
+            <span class="dict-sug-title">
+              待优化建议
+              <span class="sug-badge inline">{{ pendingSuggestionsCount }}</span>
+            </span>
+            <span class="dict-sug-toggle">{{ dictSugExpanded ? '▲ 收起' : '▼ 展开' }}</span>
+          </div>
+          <div v-if="dictSugExpanded" class="dict-sug-body">
+
+            <!-- 停用词建议 -->
+            <div v-if="dictSuggestions.filter(s => s.status === 'pending' && s.type === 'stopword').length" class="sug-group">
+              <div class="sug-group-label">停用词建议</div>
+              <div v-for="sug in dictSuggestions.filter(s => s.status === 'pending' && s.type === 'stopword')" :key="sug.id" class="sug-row">
+                <span class="sug-value">{{ sug.value }}</span>
+                <span class="sug-count">×{{ sug.count }}</span>
+                <span class="sug-reason">{{ sug.reason }}</span>
+                <div class="sug-actions">
+                  <el-button size="small" type="primary" @click="acceptDictSuggestion(sug)">加入停用词</el-button>
+                  <el-button size="small" @click="rejectDictSuggestion(sug)">忽略</el-button>
+                </div>
+              </div>
+            </div>
+
+            <!-- 过滤词建议 -->
+            <div v-if="dictSuggestions.filter(s => s.status === 'pending' && s.type === 'ignore_term').length" class="sug-group">
+              <div class="sug-group-label">发货过滤词建议</div>
+              <div v-for="sug in dictSuggestions.filter(s => s.status === 'pending' && s.type === 'ignore_term')" :key="sug.id" class="sug-row">
+                <span class="sug-value">{{ sug.value }}</span>
+                <span class="sug-count">×{{ sug.count }}</span>
+                <span class="sug-reason">{{ sug.reason }}</span>
+                <div class="sug-actions">
+                  <el-button size="small" type="primary" @click="acceptDictSuggestion(sug)">加入过滤词</el-button>
+                  <el-button size="small" @click="rejectDictSuggestion(sug)">忽略</el-button>
+                </div>
+              </div>
+            </div>
+
+            <!-- 晋升关键词建议 -->
+            <div v-if="dictSuggestions.filter(s => s.status === 'pending' && s.type === 'promoted_keyword').length" class="sug-group">
+              <div class="sug-group-label">晋升关键词（可归类）</div>
+              <div v-for="sug in dictSuggestions.filter(s => s.status === 'pending' && s.type === 'promoted_keyword')" :key="sug.id" class="sug-row">
+                <span class="sug-value">{{ sug.value }}</span>
+                <span class="sug-count">×{{ sug.count }}</span>
+                <span class="sug-reason">{{ sug.reason }}</span>
+                <div class="sug-actions">
+                  <el-button size="small" type="warning" @click="acceptDictSuggestion(sug, 'fault_term')">故障词</el-button>
+                  <el-button size="small" type="success" @click="acceptDictSuggestion(sug, 'component_term')">部件词</el-button>
+                  <el-button size="small" @click="acceptDictSuggestion(sug)">仅确认</el-button>
+                  <el-button size="small" @click="rejectDictSuggestion(sug)">忽略</el-button>
+                </div>
+              </div>
+            </div>
+
+            <!-- 同义词候选建议 -->
+            <div v-if="dictSuggestions.filter(s => s.status === 'pending' && s.type === 'synonym_candidate').length" class="sug-group">
+              <div class="sug-group-label">同义词候选</div>
+              <div v-for="sug in dictSuggestions.filter(s => s.status === 'pending' && s.type === 'synonym_candidate')" :key="sug.id" class="sug-row sug-row--syn">
+                <div class="sug-syn-main">
+                  <span class="sug-value">{{ sug.value }}</span>
+                  <span class="sug-count">×{{ sug.count }}</span>
+                  <span class="sug-reason">{{ sug.reason }}</span>
+                </div>
+                <div class="sug-syn-input">
+                  <el-input
+                    v-model="synCanonicalMap[sug.id]"
+                    size="small"
+                    placeholder="填写归一词（标准形式）"
+                    style="width:160px"
+                    @keyup.enter="acceptDictSuggestion(sug)"
+                  />
+                  <el-button size="small" type="primary"
+                    :disabled="!(synCanonicalMap[sug.id] || '').trim()"
+                    @click="acceptDictSuggestion(sug)">创建同义词规则</el-button>
+                  <el-button size="small" @click="rejectDictSuggestion(sug)">忽略</el-button>
+                </div>
+              </div>
+            </div>
+
+          </div>
         </div>
 
+        <!-- 4 个 tag 类词典：2×2 grid -->
         <div class="rule-grid">
-          <div class="rule-card">
-            <label class="form-label">停用词（stopwords）</label>
+
+          <!-- 停用词 -->
+          <div class="rule-card rule-card--neutral">
+            <div class="rule-card-header">
+              <span class="rule-card-title">停用词</span>
+              <span class="rule-card-count">{{ reasonRuleForm.stopwords.length }}</span>
+            </div>
+            <div class="rule-card-desc">匹配时过滤这些泛义词，降低误匹配</div>
             <div class="rule-input-row">
-              <el-input v-model="reasonRuleForm.newStopword" size="small" placeholder="如：补偿" @keyup.enter="addRuleTerm('stopwords', 'newStopword')" />
+              <el-input v-model="reasonRuleForm.newStopword" size="small" placeholder="如：补偿，回车添加" @keyup.enter="addRuleTerm('stopwords', 'newStopword')" />
               <el-button size="small" @click="addRuleTerm('stopwords', 'newStopword')">添加</el-button>
             </div>
             <div class="rule-tags">
-              <el-tag
-                v-for="(t, i) in reasonRuleForm.stopwords"
-                :key="`sw-${i}-${t}`"
-                closable
-                size="small"
-                title="点击编辑"
-                @click="editRuleTerm('stopwords', i)"
-                @close="removeRuleTerm('stopwords', i)"
+              <el-tag v-for="(t, i) in reasonRuleForm.stopwords" :key="`sw-${i}-${t}`"
+                closable size="small" title="点击编辑"
+                @click="editRuleTerm('stopwords', i)" @close="removeRuleTerm('stopwords', i)"
               >{{ t }}</el-tag>
               <span v-if="!reasonRuleForm.stopwords.length" class="tag-empty">暂无</span>
             </div>
           </div>
 
-          <div class="rule-card">
-            <label class="form-label">故障核心词（fault_terms）</label>
+          <!-- 故障核心词 -->
+          <div class="rule-card rule-card--danger">
+            <div class="rule-card-header">
+              <span class="rule-card-title">故障核心词</span>
+              <span class="rule-card-count">{{ reasonRuleForm.fault_terms.length }}</span>
+            </div>
+            <div class="rule-card-desc">描述损坏/缺陷的关键词，命中时提升匹配权重</div>
             <div class="rule-input-row">
-              <el-input v-model="reasonRuleForm.newFaultTerm" size="small" placeholder="如：开裂" @keyup.enter="addRuleTerm('fault_terms', 'newFaultTerm')" />
+              <el-input v-model="reasonRuleForm.newFaultTerm" size="small" placeholder="如：开裂，回车添加" @keyup.enter="addRuleTerm('fault_terms', 'newFaultTerm')" />
               <el-button size="small" @click="addRuleTerm('fault_terms', 'newFaultTerm')">添加</el-button>
             </div>
             <div class="rule-tags">
-              <el-tag
-                v-for="(t, i) in reasonRuleForm.fault_terms"
-                :key="`ft-${i}-${t}`"
-                closable
-                size="small"
-                type="danger"
-                title="点击编辑"
-                @click="editRuleTerm('fault_terms', i)"
-                @close="removeRuleTerm('fault_terms', i)"
+              <el-tag v-for="(t, i) in reasonRuleForm.fault_terms" :key="`ft-${i}-${t}`"
+                closable size="small" type="danger" title="点击编辑"
+                @click="editRuleTerm('fault_terms', i)" @close="removeRuleTerm('fault_terms', i)"
               >{{ t }}</el-tag>
               <span v-if="!reasonRuleForm.fault_terms.length" class="tag-empty">暂无</span>
             </div>
           </div>
-        </div>
 
-        <div class="rule-card">
-          <label class="form-label">部件词（component_terms）</label>
-          <div class="rule-input-row">
-            <el-input v-model="reasonRuleForm.newComponentTerm" size="small" placeholder="如：后固定板" @keyup.enter="addRuleTerm('component_terms', 'newComponentTerm')" />
-            <el-button size="small" @click="addRuleTerm('component_terms', 'newComponentTerm')">添加</el-button>
-          </div>
-          <div class="rule-tags">
-            <el-tag
-              v-for="(t, i) in reasonRuleForm.component_terms"
-              :key="`ct-${i}-${t}`"
-              closable
-              size="small"
-              type="warning"
-              title="点击编辑"
-              @click="editRuleTerm('component_terms', i)"
-              @close="removeRuleTerm('component_terms', i)"
-            >{{ t }}</el-tag>
-            <span v-if="!reasonRuleForm.component_terms.length" class="tag-empty">暂无</span>
-          </div>
-        </div>
-
-        <div class="rule-card">
-          <label class="form-label">短词保留（short_keep_terms）</label>
-          <div class="ignore-desc" style="margin-bottom:8px">
-            长度 ≤2 的词条默认当作泛词；在此维护的短词仍参与质量分与匹配（如：椅套、气杆）
-          </div>
-          <div class="rule-input-row">
-            <el-input v-model="reasonRuleForm.newShortKeepTerm" size="small" placeholder="如：气杆" @keyup.enter="addRuleTerm('short_keep_terms', 'newShortKeepTerm')" />
-            <el-button size="small" @click="addRuleTerm('short_keep_terms', 'newShortKeepTerm')">添加</el-button>
-          </div>
-          <div class="rule-tags">
-            <el-tag
-              v-for="(t, i) in reasonRuleForm.short_keep_terms"
-              :key="`sk-${i}-${t}`"
-              closable
-              size="small"
-              type="success"
-              title="点击编辑"
-              @click="editRuleTerm('short_keep_terms', i)"
-              @close="removeRuleTerm('short_keep_terms', i)"
-            >{{ t }}</el-tag>
-            <span v-if="!reasonRuleForm.short_keep_terms.length" class="tag-empty">暂无</span>
-          </div>
-        </div>
-
-        <div class="rule-card">
-          <label class="form-label">同义词规则（synonyms）</label>
-          <div class="synonym-input-grid">
-            <div class="synonym-alias-wrap">
-              <div class="rule-input-row">
-                <el-input
-                  v-model="reasonRuleForm.newSynonymAlias"
-                  size="small"
-                  placeholder="输入别名词（如：粉色）"
-                  @keyup.enter="addSynonymAlias"
-                />
-                <el-button size="small" @click="addSynonymAlias">加入别名</el-button>
-              </div>
-              <div class="rule-tags">
-                <el-tag
-                  v-for="(a, i) in reasonRuleForm.newSynonymAliases"
-                  :key="`new-alias-${i}-${a}`"
-                  closable
-                  size="small"
-                  @close="removeSynonymAlias(i)"
-                >{{ a }}</el-tag>
-                <span v-if="!reasonRuleForm.newSynonymAliases.length" class="tag-empty">先添加别名词条</span>
-              </div>
+          <!-- 部件词 -->
+          <div class="rule-card rule-card--warning">
+            <div class="rule-card-header">
+              <span class="rule-card-title">部件词</span>
+              <span class="rule-card-count">{{ reasonRuleForm.component_terms.length }}</span>
             </div>
-            <el-input v-model="reasonRuleForm.newReplacement" size="small" placeholder="归一结果（如：红色）" @keyup.enter="addSynonymRule" />
-            <el-select v-model="reasonRuleForm.newIsRegex" size="small" style="width:120px">
-              <el-option :value="true" label="正则" />
-              <el-option :value="false" label="文本" />
-            </el-select>
-            <el-button size="small" @click="addSynonymRule">添加规则</el-button>
+            <div class="rule-card-desc">产品零部件名称，命中时辅助提升匹配权重</div>
+            <div class="rule-input-row">
+              <el-input v-model="reasonRuleForm.newComponentTerm" size="small" placeholder="如：后固定板，回车添加" @keyup.enter="addRuleTerm('component_terms', 'newComponentTerm')" />
+              <el-button size="small" @click="addRuleTerm('component_terms', 'newComponentTerm')">添加</el-button>
+            </div>
+            <div class="rule-tags">
+              <el-tag v-for="(t, i) in reasonRuleForm.component_terms" :key="`ct-${i}-${t}`"
+                closable size="small" type="warning" title="点击编辑"
+                @click="editRuleTerm('component_terms', i)" @close="removeRuleTerm('component_terms', i)"
+              >{{ t }}</el-tag>
+              <span v-if="!reasonRuleForm.component_terms.length" class="tag-empty">暂无</span>
+            </div>
           </div>
+
+          <!-- 短词保留 -->
+          <div class="rule-card rule-card--success">
+            <div class="rule-card-header">
+              <span class="rule-card-title">短词保留</span>
+              <span class="rule-card-count">{{ reasonRuleForm.short_keep_terms.length }}</span>
+            </div>
+            <div class="rule-card-desc">≤2字默认视为泛词；列在此处的短词仍参与匹配</div>
+            <div class="rule-input-row">
+              <el-input v-model="reasonRuleForm.newShortKeepTerm" size="small" placeholder="如：气杆，回车添加" @keyup.enter="addRuleTerm('short_keep_terms', 'newShortKeepTerm')" />
+              <el-button size="small" @click="addRuleTerm('short_keep_terms', 'newShortKeepTerm')">添加</el-button>
+            </div>
+            <div class="rule-tags">
+              <el-tag v-for="(t, i) in reasonRuleForm.short_keep_terms" :key="`sk-${i}-${t}`"
+                closable size="small" type="success" title="点击编辑"
+                @click="editRuleTerm('short_keep_terms', i)" @close="removeRuleTerm('short_keep_terms', i)"
+              >{{ t }}</el-tag>
+              <span v-if="!reasonRuleForm.short_keep_terms.length" class="tag-empty">暂无</span>
+            </div>
+          </div>
+
+        </div><!-- /rule-grid -->
+
+        <!-- 同义词规则：全宽 -->
+        <div class="rule-card rule-card--synonym">
+          <div class="rule-card-header">
+            <span class="rule-card-title">同义词规则</span>
+            <span class="rule-card-count">{{ reasonRuleForm.synonyms.length }}</span>
+          </div>
+          <div class="rule-card-desc">将别名词归一为标准词再匹配，如「粉色,粉红 → 红色」</div>
+
+          <!-- 新增行 -->
+          <div class="synonym-add-form">
+            <div class="synonym-add-field">
+              <span class="syn-label">别名（逗号分隔）</span>
+              <el-input
+                v-model="reasonRuleForm.newSynonymAliasText"
+                size="small"
+                placeholder="如：粉色,粉红,浅粉"
+                @keyup.enter="addSynonymRule"
+              />
+            </div>
+            <span class="syn-arrow">→</span>
+            <div class="synonym-add-field">
+              <span class="syn-label">归一为</span>
+              <el-input
+                v-model="reasonRuleForm.newReplacement"
+                size="small"
+                placeholder="如：红色"
+                @keyup.enter="addSynonymRule"
+              />
+            </div>
+            <div class="synonym-add-field syn-type-field">
+              <span class="syn-label">
+                类型
+                <el-tooltip placement="right" :show-after="100" :hide-after="0" effect="light" popper-class="syn-type-tip">
+                  <template #content>
+                    <div class="syn-tip-body">
+                      <div class="syn-tip-title">选哪种类型？</div>
+
+                      <div class="syn-tip-mode">
+                        <span class="syn-tip-badge syn-tip-badge--text">文本</span>
+                        <span>只做精确匹配，「坏了」只替换「坏了」，写什么匹配什么</span>
+                      </div>
+                      <div class="syn-tip-mode">
+                        <span class="syn-tip-badge syn-tip-badge--regex">正则</span>
+                        <span>支持特殊语法，一条规则可以同时匹配多种写法</span>
+                      </div>
+
+                      <div class="syn-tip-section">常用正则写法举例</div>
+
+                      <div class="syn-tip-ex">
+                        <div class="syn-tip-ex-label">① 多个词同时匹配（用 | 分隔，长词写前面）</div>
+                        <div class="syn-tip-ex-row">
+                          <span class="syn-tip-ex-tag">别名</span>
+                          <code>损毁|损伤|坏了|坏</code>
+                        </div>
+                        <div class="syn-tip-ex-row">
+                          <span class="syn-tip-ex-tag">归一</span>
+                          <code>损坏</code>
+                        </div>
+                        <div class="syn-tip-ex-result">「扭扭坏了」「椅背损毁」→「扭扭损坏」「椅背损坏」</div>
+                      </div>
+
+                      <div class="syn-tip-ex">
+                        <div class="syn-tip-ex-label">② 去掉颜色前缀（用 [ ] 列出可能的字）</div>
+                        <div class="syn-tip-ex-row">
+                          <span class="syn-tip-ex-tag">别名</span>
+                          <code>[粉蓝绿白黑]椅背</code>
+                        </div>
+                        <div class="syn-tip-ex-row">
+                          <span class="syn-tip-ex-tag">归一</span>
+                          <code>椅背</code>
+                        </div>
+                        <div class="syn-tip-ex-result">「粉椅背」「蓝椅背」「白椅背」→「椅背」</div>
+                      </div>
+
+                      <div class="syn-tip-ex">
+                        <div class="syn-tip-ex-label">③ 匹配任意字符（. 代表任意一个字）</div>
+                        <div class="syn-tip-ex-row">
+                          <span class="syn-tip-ex-tag">别名</span>
+                          <code>.+椅背</code>
+                        </div>
+                        <div class="syn-tip-ex-row">
+                          <span class="syn-tip-ex-tag">归一</span>
+                          <code>椅背</code>
+                        </div>
+                        <div class="syn-tip-ex-result">「粉色椅背」「深蓝椅背」→「椅背」</div>
+                      </div>
+
+                      <div class="syn-tip-tip">不确定时选正则，多个写法用 | 隔开即可</div>
+                    </div>
+                  </template>
+                  <span class="syn-type-hint">?</span>
+                </el-tooltip>
+              </span>
+              <el-select v-model="reasonRuleForm.newIsRegex" size="small">
+                <el-option :value="false" label="文本" />
+                <el-option :value="true"  label="正则" />
+              </el-select>
+            </div>
+            <el-button size="small" type="primary" class="syn-add-btn" @click="addSynonymRule">添加</el-button>
+          </div>
+
+          <!-- 规则列表 -->
           <div class="synonym-list">
-            <div v-for="(s, i) in reasonRuleForm.synonyms" :key="`syn-${i}-${s.pattern}`" class="synonym-item">
-              <span class="synonym-pattern">{{ (s.pattern || '').split('|').join(' / ') }}</span>
-              <span class="path-sep">→</span>
-              <span class="synonym-replacement">{{ s.replacement }}</span>
-              <span class="source-badge" :class="s.is_regex ? 'src-api' : 'src-text'">{{ s.is_regex ? '正则' : '文本' }}</span>
-              <button class="btn-tiny" title="编辑" @click="editSynonymRule(i)">
-                <el-icon><Edit /></el-icon>
-              </button>
-              <button class="btn-tiny btn-del" @click="removeSynonymRule(i)">
-                <el-icon><Delete /></el-icon>
-              </button>
-            </div>
+            <template v-for="(s, i) in reasonRuleForm.synonyms" :key="`syn-${i}-${s.pattern}`">
+              <!-- 查看行 -->
+              <div v-if="editingSynIdx !== i" class="synonym-item">
+                <span class="synonym-pattern">{{ (s.pattern || '').split('|').join(' / ') }}</span>
+                <span class="path-sep">→</span>
+                <span class="synonym-replacement">{{ s.replacement }}</span>
+                <span class="source-badge" :class="s.is_regex ? 'src-api' : 'src-text'">{{ s.is_regex ? '正则' : '文本' }}</span>
+                <button class="btn-tiny" title="编辑" @click="startEditSynonym(i)">
+                  <el-icon><Edit /></el-icon>
+                </button>
+                <button class="btn-tiny btn-del" @click="removeSynonymRule(i)">
+                  <el-icon><Delete /></el-icon>
+                </button>
+              </div>
+              <!-- 行内编辑行 -->
+              <div v-else class="synonym-item synonym-item-editing">
+                <el-input v-model="editingSynAliasText"   size="small" placeholder="别名（逗号分隔）" style="flex:1;min-width:0" />
+                <span class="path-sep">→</span>
+                <el-input v-model="editingSynReplacement" size="small" placeholder="归一词" style="width:110px;flex-shrink:0" />
+                <el-select v-model="editingSynIsRegex" size="small" style="width:72px;flex-shrink:0">
+                  <el-option :value="false" label="文本" />
+                  <el-option :value="true"  label="正则" />
+                </el-select>
+                <button class="btn-tiny btn-ok" title="保存" @click="saveSynonymEdit(i)">
+                  <el-icon><Check /></el-icon>
+                </button>
+                <button class="btn-tiny" title="取消" @click="editingSynIdx = -1">
+                  <el-icon><Close /></el-icon>
+                </button>
+              </div>
+            </template>
             <div v-if="!reasonRuleForm.synonyms.length" class="col-empty">暂无同义词规则</div>
           </div>
         </div>
 
-        <div class="form-actions">
-          <el-button size="small" :loading="loading" @click="loadAll">刷新</el-button>
+        <!-- 物料匹配过滤词 -->
+        <div class="rule-card rule-card--ignore">
+          <div class="rule-card-header">
+            <span class="rule-card-title">物料过滤词</span>
+            <span class="rule-card-count">{{ ignoreTerms.length }}</span>
+          </div>
+          <div class="rule-card-desc">物料名称中与该词完全相同的分段，跳过简称匹配与学习</div>
+          <div class="rule-input-row">
+            <el-input v-model="ignoreInput" size="small" placeholder="输入过滤词，回车添加"
+              @keyup.enter="addIgnoreTerm" />
+            <el-button size="small" :loading="ignoreLoading" @click="addIgnoreTerm">添加</el-button>
+          </div>
+          <div class="rule-tags">
+            <el-tag v-for="item in ignoreTerms" :key="item.id"
+              closable size="small"
+              @close="deleteIgnoreTerm(item)">{{ item.term }}</el-tag>
+            <span v-if="!ignoreTerms.length" class="col-empty" style="font-size:12px">暂无过滤词</span>
+          </div>
+        </div>
+
+        </div><!-- /rule-lib-body -->
+
+        <!-- 固定底部操作栏 -->
+        <div class="rule-lib-footer">
+          <el-button size="small" :loading="loading" @click="loadAll(); loadDictSuggestions(true)">刷新</el-button>
           <el-button size="small" type="primary" :loading="ruleSaving" @click="saveReasonRules">保存词典</el-button>
         </div>
       </div>
@@ -1203,7 +1189,7 @@ async function deleteIgnoreTerm(item) {
 .lib-wrap {
   display: flex;
   flex-direction: column;
-  height: 500px;
+  height: 560px;
 }
 
 /* ── Tab 切换 ────────────────────────────────────── */
@@ -1432,7 +1418,7 @@ async function deleteIgnoreTerm(item) {
 .reason-item {
   display: flex; align-items: center; justify-content: space-between;
   padding: 7px 6px; border-radius: 6px;
-  transition: background 0.15s;
+  transition: background 0.15s; cursor: pointer;
 }
 .reason-item:hover { background: var(--bg); }
 .reason-item.editing { background: #fff7ed; }
@@ -1520,26 +1506,77 @@ async function deleteIgnoreTerm(item) {
 /* ── 原因词典 Tab ─────────────────────────────────── */
 .rule-lib {
   flex: 1;
-  overflow-y: auto;
-  padding: 6px 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
 }
-.rule-lib::-webkit-scrollbar { width: 4px; }
-.rule-lib::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.rule-lib-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0 4px;
+  min-height: 0;
+}
+.rule-lib-body::-webkit-scrollbar { width: 4px; }
+.rule-lib-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.rule-lib-footer {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 0 2px;
+  border-top: 1px solid var(--border);
+  background: #fff;
+}
 .rule-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  margin-bottom: 12px;
+  gap: 10px;
+  margin-bottom: 10px;
 }
 .rule-card {
   border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
   border-radius: 8px;
-  padding: 12px;
-  background: #faf7f2;
+  padding: 10px 12px;
+  background: #fff;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-bottom: 12px;
+  margin-bottom: 0;
+}
+/* 颜色变体 */
+.rule-card--neutral  { border-left-color: #8a7a6a; }
+.rule-card--danger   { border-left-color: #e04a4a; background: #fffafa; }
+.rule-card--warning  { border-left-color: #e09050; background: #fffaf5; }
+.rule-card--success  { border-left-color: #5cb87a; background: #f8fff9; }
+.rule-card--synonym  { border-left-color: #5b8dee; background: #f8faff; margin-bottom: 10px; }
+.rule-card--ignore   { border-left-color: #8a8a8a; background: #f9f9f7; margin-bottom: 0; }
+/* 卡片标题行 */
+.rule-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.rule-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.rule-card-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: #f0ebe4;
+  border-radius: 10px;
+  padding: 1px 7px;
+  line-height: 1.6;
+}
+.rule-card-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-top: -2px;
 }
 .rule-input-row {
   display: flex;
@@ -1549,9 +1586,9 @@ async function deleteIgnoreTerm(item) {
 .rule-tags {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  min-height: 30px;
-  max-height: 120px;
+  gap: 5px;
+  min-height: 28px;
+  max-height: 100px;
   overflow-y: auto;
   padding-right: 2px;
 }
@@ -1561,18 +1598,52 @@ async function deleteIgnoreTerm(item) {
 .rule-card .form-label {
   margin-bottom: 0;
 }
-.synonym-input-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr 120px auto;
+.synonym-add-form {
+  display: flex;
+  align-items: flex-end;
   gap: 8px;
-  margin-bottom: 0;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
 }
-.synonym-alias-wrap {
+.synonym-add-field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
+  flex: 1;
+  min-width: 110px;
 }
-.synonym-alias-wrap .rule-input-row { margin-bottom: 0; }
+.synonym-add-field.syn-type-field { flex: 0 0 80px; min-width: 80px; }
+.syn-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.syn-type-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: help;
+  user-select: none;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.syn-arrow {
+  font-size: 14px;
+  color: var(--text-secondary);
+  padding-bottom: 4px;
+  flex-shrink: 0;
+}
+.syn-add-btn { flex-shrink: 0; }
 .synonym-list {
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -1591,6 +1662,14 @@ async function deleteIgnoreTerm(item) {
   border-bottom: 1px dashed var(--border);
 }
 .synonym-item:last-child { border-bottom: none; }
+.synonym-item-editing {
+  background: #fffaf3;
+  gap: 6px;
+}
+.btn-ok {
+  color: #27ae60;
+}
+.btn-ok:hover { color: #1e8449; }
 .synonym-pattern {
   flex: 1;
   font-family: Consolas, monospace;
@@ -1601,5 +1680,201 @@ async function deleteIgnoreTerm(item) {
   min-width: 80px;
   color: var(--accent);
   font-size: 12px;
+}
+
+/* ── Tab 红点徽标 ────────────────────────────────── */
+.sug-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #e74c3c;
+  color: #fff;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+.sug-badge.inline { margin-left: 6px; }
+
+/* ── 词典优化建议区块 ─────────────────────────────── */
+.dict-sug-panel {
+  border: 1px solid #f0e0c8;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  background: #fffaf4;
+  overflow: hidden;
+}
+.dict-sug-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+  background: #fdf3e3;
+}
+.dict-sug-header:hover { background: #fae8cc; }
+.dict-sug-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+}
+.dict-sug-toggle {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.dict-sug-body {
+  padding: 8px 12px 12px;
+}
+.sug-group {
+  margin-top: 8px;
+}
+.sug-group:first-child { margin-top: 0; }
+.sug-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.sug-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid #f5ebe0;
+  flex-wrap: wrap;
+}
+.sug-row:last-child { border-bottom: none; }
+.sug-row--syn { flex-direction: column; align-items: flex-start; gap: 6px; }
+.sug-syn-main { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sug-syn-input { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.sug-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 48px;
+}
+.sug-count {
+  font-size: 11px;
+  color: var(--accent);
+  background: #fdf0e0;
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+.sug-reason {
+  font-size: 11px;
+  color: var(--text-secondary);
+  flex: 1;
+  min-width: 120px;
+}
+.sug-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+</style>
+
+<style>
+/* ── 同义词类型说明 tooltip（挂到 body，需全局样式）── */
+.syn-type-tip.el-popper {
+  max-width: 340px;
+  padding: 0 !important;
+}
+.syn-tip-body {
+  padding: 14px 16px;
+  font-size: 12px;
+  color: #3a3028;
+  line-height: 1.5;
+}
+.syn-tip-title {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 10px;
+  color: #2c2420;
+}
+.syn-tip-mode {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.syn-tip-badge {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.8;
+  white-space: nowrap;
+}
+.syn-tip-badge--text  { background: #e8e0d4; color: #6b5e4e; }
+.syn-tip-badge--regex { background: #fde8c8; color: #c4883a; }
+.syn-tip-section {
+  font-size: 11px;
+  font-weight: 600;
+  color: #8a7a6a;
+  margin: 12px 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.syn-tip-ex {
+  background: #faf7f2;
+  border-left: 3px solid #e0d4c0;
+  border-radius: 0 6px 6px 0;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.syn-tip-ex-label {
+  font-size: 11px;
+  color: #8a7a6a;
+  margin-bottom: 5px;
+}
+.syn-tip-ex-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+.syn-tip-ex-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: #8a7a6a;
+  background: #e8e0d4;
+  padding: 1px 5px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.syn-tip-ex code {
+  font-size: 12px;
+  background: #fff;
+  border: 1px solid #e0d4c0;
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: #c4883a;
+  font-family: 'Consolas', monospace;
+}
+.syn-tip-ex-result {
+  font-size: 11px;
+  color: #6b5e4e;
+  margin-top: 5px;
+  padding-left: 2px;
+}
+.syn-tip-tip {
+  margin-top: 10px;
+  padding: 6px 10px;
+  background: #fff8ee;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #c4883a;
+  font-weight: 500;
 }
 </style>

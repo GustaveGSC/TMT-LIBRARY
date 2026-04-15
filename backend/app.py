@@ -5,7 +5,7 @@ from flask import Flask
 from flask_cors import CORS
 from database.base import db
 from dotenv import load_dotenv
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import QueuePool
 
 # ── 环境变量加载（兼容打包后路径）────────────────────
 if getattr(sys, 'frozen', False):
@@ -25,14 +25,19 @@ def create_app() -> Flask:
         f"/{os.getenv('DB_NAME')}"
     )
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-    # 单用户桌面应用使用 NullPool：每次请求用完即释放连接，
-    # 彻底避免空闲连接被云端防火墙/NAT 静默关闭后复用失败的问题
+    # 单用户桌面应用：保持少量长连接，避免每次请求重建 TCP（NullPool 会带来 ~400ms 建连延迟）
+    # pool_pre_ping：使用前探活，连接被 NAT/防火墙静默关闭时自动重连
+    # pool_recycle：1800s 主动回收，早于云端 NAT 超时（通常 ~3600s）
     app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
-        "poolclass": NullPool,
+        "poolclass":     QueuePool,
+        "pool_size":     2,      # 常驻连接数
+        "max_overflow":  1,      # 峰值最多额外 1 条
+        "pool_pre_ping": True,   # 自动探活，死连接透明重连
+        "pool_recycle":  1800,   # 30 分钟回收一次，避免 NAT 静默断开
         "connect_args": {
-            "connect_timeout": 10,   # 建连超时
-            "read_timeout":    30,   # 读超时，防止查询挂起
-            "write_timeout":   30,   # 写超时
+            "connect_timeout": 10,
+            "read_timeout":    30,
+            "write_timeout":   30,
         },
     }
 

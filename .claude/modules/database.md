@@ -79,13 +79,33 @@ aftersale_shipping_alias
   id, name(UNIQUE VARCHAR 200), keywords(JSON 物料名/代码关键词列表), sort_order, created_at
   # 发货物料简称；匹配与学习逻辑见 frontend-aftersale.md
 
-aftersale_return_alias
-  id, name(UNIQUE VARCHAR 200), keywords(JSON 商家备注片段列表), sort_order, created_at
-  # 售后物料简称
+
+aftersale_reason_alias_affinity
+  id, reason_id(FK→aftersale_reason CASCADE), shipping_alias_id(FK→aftersale_shipping_alias CASCADE),
+  count(DEFAULT 1), updated_at
+  # UNIQUE(reason_id, shipping_alias_id)
+  # 工单确认时，对每条同时有 reason_id + shipping_alias_id 的 reason 行 count+1
+  # 用于在候选简称基础分相同时做二次排序（亲和度高的排前）
+  # 查询接口：POST /api/aftersale/alias-affinity {reason_id, alias_ids} → {alias_id: count}
 
 aftersale_shipping_ignore_term
   id, term(UNIQUE VARCHAR 100), created_at
   # 发货物料名包含该词时跳过简称匹配与学习
+
+aftersale_dict_suggestion
+  id, type(ENUM stopword|ignore_term|promoted_keyword|synonym_candidate),
+  value(VARCHAR 100), reason(VARCHAR 500), meta(JSON nullable),
+  count(DEFAULT 1), status(ENUM pending|accepted|rejected),
+  created_at, updated_at
+  # UNIQUE(type, value)
+  # 系统在工单确认时自动生成词典优化建议；已拒绝的建议不再重复触发
+  # stopword: 跨原因高频候选词建议加入停用词
+  # ignore_term: 物料名通用前缀词建议加入发货过滤词
+  # promoted_keyword: 自动晋升的关键词，建议用户归类为故障词或部件词
+  # synonym_candidate: 疑似同义词对，meta 含 reason_ids（路径一/二均用）
+  #   路径一（跨原因中频词）：meta.reason_ids=涉及原因列表，value=候选词本身
+  #   路径二（同原因子串重叠）：meta.longer/shorter，value="长词→短词"
+  #   接受时需前端传 canonical（归一词），后端写入 aftersale_reason_synonym_rule
 
 aftersale_reason_stopword
   id, term(UNIQUE VARCHAR 100), enabled, sort_order, created_at
@@ -123,10 +143,9 @@ aftersale_case_reason
   reason_category_id(FK→aftersale_reason_category SET NULL),
   model_id(FK→product_model SET NULL),
   shipping_alias_id(FK→aftersale_shipping_alias SET NULL),
-  return_alias_id(FK→aftersale_return_alias SET NULL),
   purchase_date(DATE), days_since_purchase(INT),
   created_at
-  # 一条工单多条原因行；发/售后简称为 ID 外键，非纯文本冗余列
+  # 一条工单多条原因行；发货简称为 ID 外键，非纯文本冗余列
 ```
 
 ## 产品库

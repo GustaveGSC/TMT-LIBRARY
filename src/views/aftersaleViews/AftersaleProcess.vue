@@ -42,8 +42,6 @@ const showReasonLib = ref(false)
 
 // 发货物料简称库（下拉候选）
 const shippingAliasOptions = ref([])   // [{id, name, keywords}]
-// 售后物料简称库（下拉候选）
-const returnAliasOptions   = ref([])   // [{id, name, keywords}]
 // 发货物料匹配过滤词（物料名称含这些词时跳过简称匹配）
 const shippingIgnoreTerms  = ref([])   // [{id, term}]
 
@@ -60,8 +58,7 @@ const reasonGroups = ref([])       // [{category_id, category_name, reasons:[{id
 
 // 售后内容列表
 // 每项：{ category_id, series_id, model_id,
-//         shipping_alias_id, return_alias_id,
-//         reason_category_id, reason_id }
+//         shipping_alias_id, reason_category_id, reason_id }
 const contentItems = ref([])
 
 // 产品匹配依据（选单后填充，用于底部说明面板）
@@ -91,7 +88,7 @@ const canConfirm = computed(() => {
     return !!(
       item.model_id &&
       item.shipping_alias_id &&
-      item.return_alias_id &&
+
       item.reason_category_id &&
       hasReason &&
       item.purchase_date &&
@@ -180,18 +177,15 @@ async function loadCategoryTree() {
     modelLifecycles.value = lcRes.value.data
 }
 
-// 加载物料简称（发货简称库 + 售后简称库 + 过滤词）
+// 加载物料简称（发货简称库 + 过滤词）
 // 使用 allSettled 确保任一请求失败不会阻断其他加载
 async function loadAliases() {
-  const [shipRes, retRes, ignoreRes] = await Promise.allSettled([
+  const [shipRes, ignoreRes] = await Promise.allSettled([
     http.get('/api/aftersale/shipping-aliases'),
-    http.get('/api/aftersale/return-aliases'),
     http.get('/api/aftersale/shipping-ignore-terms'),
   ])
   if (shipRes.status === 'fulfilled' && shipRes.value?.success)
     shippingAliasOptions.value = shipRes.value.data
-  if (retRes.status === 'fulfilled' && retRes.value?.success)
-    returnAliasOptions.value   = retRes.value.data
   if (ignoreRes.status === 'fulfilled' && ignoreRes.value?.success)
     shippingIgnoreTerms.value  = ignoreRes.value.data
 }
@@ -283,8 +277,10 @@ async function selectOrder(order) {
           }).then(r => { if (r.success && r.data) apiResult = r.data })
         : Promise.resolve(),
       debugText.trim()
-        ? http.post('/api/aftersale/auto-match', { text: debugText })
-            .then(r => { if (r.success) reasonCandidates = r.data || [] })
+        ? http.post('/api/aftersale/auto-match', {
+            text: debugText,
+            buyer_remark: order.buyer_remark || '',
+          }).then(r => { if (r.success) reasonCandidates = r.data || [] })
         : Promise.resolve(),
     ])
   } catch (e) {
@@ -299,7 +295,6 @@ async function selectOrder(order) {
 
   // ── 简称候选（前端实时计算）────────────────────────
   const shippingAliasCandidates = computeShippingAliasCandidates(order.products)
-  const returnAliasCandidates   = computeReturnAliasCandidates(order.seller_remark)
 
   // 防止切换工单太快导致覆盖
   if (currentOrder.value?.ecommerce_order_no !== orderNo) return
@@ -313,15 +308,6 @@ async function selectOrder(order) {
     : null
   const aliasSource = historyShippingId ? 'history' : null
   if (historyShippingId) item.shipping_alias_id = historyShippingId
-
-  // 售后物料简称：来自历史工单
-  const historyReturnId   = apiResult?.suggested_return_alias_id || null
-  const historyReturnName = historyReturnId
-    ? (returnAliasOptions.value.find(o => o.id === historyReturnId)?.name || null)
-    : null
-  const returnAliasSource = apiResult?.suggested_return_alias_source || (historyReturnId ? 'history' : null)
-  const returnAliasScore  = apiResult?.suggested_return_alias_score ?? null
-  if (historyReturnId) item.return_alias_id = historyReturnId
 
   // 售后原因：来自历史工单（最频繁的 reason_id + category_id）
   const suggestedReasonId  = apiResult?.suggested_reason_id          || null
@@ -377,13 +363,9 @@ async function selectOrder(order) {
       }),
       alias_source:           aliasSource,
       alias_value:            historyShippingName,
-      aftersale_alias_value:  historyReturnName,
-      aftersale_alias_source: returnAliasSource,
-      aftersale_alias_score:  returnAliasScore,
       suggested_reason_id:    suggestedReasonId,
       suggested_category_id:  suggestedCategoryId,
       shipping_alias_candidates: shippingAliasCandidates,
-      return_alias_candidates:   returnAliasCandidates,
       reason_candidates:         reasonCandidates,
     }
   } else if (textMatch) {
@@ -404,13 +386,9 @@ async function selectOrder(order) {
       candidates:             textMatch.candidates || [],
       alias_source:           aliasSource,
       alias_value:            historyShippingName,
-      aftersale_alias_value:  historyReturnName,
-      aftersale_alias_source: returnAliasSource,
-      aftersale_alias_score:  returnAliasScore,
       suggested_reason_id:    suggestedReasonId,
       suggested_category_id:  suggestedCategoryId,
       shipping_alias_candidates: shippingAliasCandidates,
-      return_alias_candidates:   returnAliasCandidates,
       reason_candidates:         reasonCandidates,
     }
   } else {
@@ -422,13 +400,9 @@ async function selectOrder(order) {
       candidates:             [],
       alias_source:           aliasSource,
       alias_value:            historyShippingName,
-      aftersale_alias_value:  historyReturnName,
-      aftersale_alias_source: returnAliasSource,
-      aftersale_alias_score:  returnAliasScore,
       suggested_reason_id:    suggestedReasonId,
       suggested_category_id:  suggestedCategoryId,
       shipping_alias_candidates: shippingAliasCandidates,
-      return_alias_candidates:   returnAliasCandidates,
       reason_candidates:         reasonCandidates,
     }
   }
@@ -471,7 +445,6 @@ function makeEmptyItem() {
     series_id:                null,
     model_id:                 null,
     shipping_alias_id:  null,
-    return_alias_id:    null,
     reason_category_id: null,
     reason_id:          null,
     custom_reason:      '',
@@ -479,9 +452,8 @@ function makeEmptyItem() {
     purchase_date:      null,   // 该条内容的购买日期（每条可不同）
     // 内部：reason select 当前输入文字（用于显示「新」选项）
     _reasonQuery:      '',
-    // 内部：发货/售后物料简称 select 当前输入文字（用于显示「新增」选项）
+    // 内部：发货物料简称 select 当前输入文字（用于显示「新增」选项）
     _shippingQuery:    '',
-    _returnQuery:      '',
     // 内部：多面板时该内容对应的发货物料 code 列表
     _selectedProducts: [],
   }
@@ -539,31 +511,9 @@ async function onShippingAliasChange(item, val) {
   item._shippingQuery = ''
 }
 
-// 售后物料简称 select 变更：若选中值为字符串（新增），调 API 创建后回填 id
-async function onReturnAliasChange(item, val) {
-  if (val === null || val === undefined || val === '') {
-    item.return_alias_id = null
-    return
-  }
-  if (typeof val === 'number') {
-    item.return_alias_id = val
-    return
-  }
-  const name = String(val).trim()
-  if (!name) return
-  const res = await http.post('/api/aftersale/return-aliases', { name })
-  if (res.success) {
-    returnAliasOptions.value.push(res.data)
-    item.return_alias_id = res.data.id
-  } else {
-    ElMessage.error(res.message || '新增售后物料简称失败')
-    item.return_alias_id = null
-  }
-  item._returnQuery = ''
-}
-
 // 具体原因 select 变更：值在原因库中 → 库原因；否则 → 自定义原因
-function onReasonChange(item, val) {
+// 选定原因后，用亲和度对发货简称候选列表做二次排序
+async function onReasonChange(item, val) {
   if (val === null || val === undefined || val === '') {
     item.reason_id     = null
     item.custom_reason = ''
@@ -576,10 +526,33 @@ function onReasonChange(item, val) {
   if (!isNaN(numVal) && knownIds.includes(numVal)) {
     item.reason_id     = numVal
     item.custom_reason = ''
+    // 有库原因 → 查亲和度，对候选简称重排
+    await applyAffinity(numVal)
   } else {
     item.reason_id     = null
     item.custom_reason = String(val)
   }
+}
+
+// 根据 reason_id 的历史亲和度对 matchDebug.shipping_alias_candidates 做二次排序
+// base_score 相同时，亲和度高的排前；有亲和度的候选加 affinity_count 字段供模板标注
+async function applyAffinity(reasonId) {
+  const candidates = matchDebug.value?.shipping_alias_candidates
+  if (!candidates?.length || !reasonId) return
+  const aliasIds = candidates.map(c => c.id)
+  const res = await http.post('/api/aftersale/alias-affinity', { reason_id: reasonId, alias_ids: aliasIds })
+  if (!res.success) return
+  const affinity = res.data   // { alias_id: count }
+  // 附加 affinity_count 字段，并按 matched_count desc → affinity_count desc → score desc 重排
+  const updated = candidates.map(c => ({
+    ...c,
+    affinity_count: affinity[c.id] || 0,
+  })).sort((a, b) =>
+    (b.matched_count - a.matched_count) ||
+    (b.affinity_count - a.affinity_count) ||
+    (b.score - a.score)
+  )
+  matchDebug.value = { ...matchDebug.value, shipping_alias_candidates: updated }
 }
 
 // ── 产品型号文本匹配 ────────────────────────────────
@@ -808,33 +781,6 @@ function computeShippingAliasCandidates(products) {
     .sort((a, b) => (b.matched_count - a.matched_count) || (b.score - a.score))
 }
 
-/**
- * 按关键词与商家备注的文本相似度给售后物料简称打分，返回所有匹配候选。
- * 取该简称所有关键词中最高的 calcMatchScore，阈值 0.3。
- */
-function computeReturnAliasCandidates(sellerRemark) {
-  if (!sellerRemark?.trim() || !returnAliasOptions.value.length) return []
-  const text = sellerRemark.toLowerCase()
-  return returnAliasOptions.value
-    .map(alias => {
-      const kws = alias.keywords || []
-      if (!kws.length) return null
-      let bestScore = 0
-      const matchedKws = []
-      for (const kw of kws) {
-        const s = calcMatchScore(text, kw.toLowerCase())
-        if (s >= 0.3) {
-          if (!matchedKws.includes(kw)) matchedKws.push(kw)
-          if (s > bestScore) bestScore = s
-        }
-      }
-      if (!matchedKws.length) return null
-      return { id: alias.id, name: alias.name, score: bestScore, matched_keywords: matchedKws }
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.score - a.score)
-}
-
 // ── 生命周期文字格式化 ───────────────────────────────
 // 将 modelLifecycles 里的 YYYY-MM 格式化为 YY.MM，返回 "上市~退市" 或 "上市~在售"
 function lifecycleText(modelId) {
@@ -851,10 +797,6 @@ function lifecycleText(modelId) {
 
 function applyShippingAlias(id) {
   if (contentItems.value[0]) contentItems.value[0].shipping_alias_id = id
-}
-
-function applyReturnAlias(id) {
-  if (contentItems.value[0]) contentItems.value[0].return_alias_id = id
 }
 
 function applyModelCandidate(c) {
@@ -1012,6 +954,18 @@ async function learnShippingAliasKeywords(products, items) {
   if (!aliasIds.length) return
 
   const ignoreTerms  = shippingIgnoreTerms.value.map(t => t.term.toLowerCase())
+
+  // 将物料名称清洗为有效 token（去掉 "_" 分隔的无用前缀和 ignore_term 子词）
+  // 取最末一段作为最具体词；如全部过滤则回退到原始 name
+  const cleanProductName = (name) => {
+    if (!name) return ''
+    const parts = name.split('_').filter(p => {
+      if (!p || p.length <= 1) return false
+      return !ignoreTerms.some(t => p.toLowerCase().includes(t))
+    })
+    return parts[parts.length - 1] || name
+  }
+
   const productEntries = products
     .map(p => ({
       code: (p.code || '').trim(),
@@ -1021,7 +975,8 @@ async function learnShippingAliasKeywords(products, items) {
       nameLower: (p.name || '').toLowerCase().trim(),
     }))
     .filter(p => p.code || p.name)
-  const bindKey = (p) => p.name || p.code || ''
+  // 学习关键词时优先使用清洗后的物料名，避免将"原材料_塑胶件_书包挂钩盖子"整体存入
+  const bindKey = (p) => cleanProductName(p.name) || p.name || p.code || ''
   const pickOneKey = (entries) => {
     if (!entries.length) return null
     const sorted = [...entries].sort((a, b) => b.quantity - a.quantity)
@@ -1134,7 +1089,6 @@ async function confirmCase() {
       reason_category_id:       item.reason_id ? null : (item.reason_category_id || null),
       model_id:          item.model_id         || null,
       shipping_alias_id: item.shipping_alias_id || null,
-      return_alias_id:   item.return_alias_id   || null,
       purchase_date:            item.purchase_date || null,
     }))
 
@@ -1429,37 +1383,6 @@ async function ignoreCase() {
                 </el-select>
               </div>
 
-              <!-- 售后物料简称 -->
-              <div class="item-row">
-                <span class="item-label">售后物料简称</span>
-                <el-select
-                  :model-value="item.return_alias_id"
-                  placeholder="选择或输入新简称"
-                  clearable
-                  filterable
-                  :filter-method="q => { item._returnQuery = q }"
-                  style="width:100%"
-                  @change="onReturnAliasChange(item, $event)"
-                  @visible-change="v => { if (!v) item._returnQuery = '' }"
-                >
-                  <el-option
-                    v-if="item._returnQuery && !returnAliasOptions.some(o => o.name === item._returnQuery)"
-                    :value="item._returnQuery"
-                    :label="item._returnQuery"
-                    class="new-create-option"
-                  >
-                    <span>{{ item._returnQuery }}</span>
-                    <el-tag size="small" type="warning" style="margin-left:6px">新</el-tag>
-                  </el-option>
-                  <el-option
-                    v-for="opt in returnAliasOptions.filter(o => !item._returnQuery || o.name.toLowerCase().includes(item._returnQuery.toLowerCase()))"
-                    :key="opt.id"
-                    :value="opt.id"
-                    :label="opt.name"
-                  />
-                </el-select>
-              </div>
-
               <!-- 售后原因：两级 -->
               <div class="item-row">
                 <span class="item-label">售后原因</span>
@@ -1669,7 +1592,7 @@ async function ignoreCase() {
                 <div class="candidates-list">
                   <!-- 已采纳的简称 -->
                   <div v-if="matchDebug.alias_value" class="debug-result" style="margin-bottom:4px">
-                    <span class="result-model">{{ matchDebug.alias_value }}</span>
+                    <span class="result-plain">{{ matchDebug.alias_value }}</span>
                     <span class="source-badge" :class="matchDebug.alias_source === 'library' ? 'src-api' : 'src-text'">
                       {{ matchDebug.alias_source === 'library' ? '简称库' : '历史工单' }}
                     </span>
@@ -1685,44 +1608,10 @@ async function ignoreCase() {
                   >
                     <span class="cand-rank">{{ i + 1 }}</span>
                     <span class="cand-path">{{ c.name }}</span>
+                    <span v-if="c.affinity_count" class="affinity-badge" :title="`与当前原因历史共现 ${c.affinity_count} 次`">
+                      历史匹配 ×{{ c.affinity_count }}
+                    </span>
                     <span class="cand-matched-hint">{{ (c.matched_codes || []).join('、') }}</span>
-                    <div class="cand-bar-wrap">
-                      <div class="cand-bar" :style="{ width: `${Math.round(c.score * 100)}%` }" />
-                    </div>
-                    <span class="cand-score">{{ Math.round(c.score * 100) }}</span>
-                  </div>
-                </div>
-              </div>
-
-              <!-- 售后物料简称匹配 -->
-              <div v-if="matchDebug.aftersale_alias_value || matchDebug.return_alias_candidates?.length" class="debug-row debug-row--top">
-                <span class="debug-key">售后简称</span>
-                <div class="candidates-list">
-                  <!-- 已采纳的简称 -->
-                  <div v-if="matchDebug.aftersale_alias_value" class="debug-result" style="margin-bottom:4px">
-                    <span class="result-model">{{ matchDebug.aftersale_alias_value }}</span>
-                    <span
-                      class="source-badge"
-                      :class="matchDebug.aftersale_alias_source === 'library' ? 'src-api' : 'src-text'"
-                    >
-                      {{ matchDebug.aftersale_alias_source === 'library' ? '简称库匹配' : '历史工单' }}
-                    </span>
-                    <span v-if="matchDebug.aftersale_alias_score !== null" class="cand-score">
-                      {{ Math.round(matchDebug.aftersale_alias_score * 100) }}
-                    </span>
-                  </div>
-                  <!-- 候选列表 -->
-                  <div
-                    v-for="(c, i) in matchDebug.return_alias_candidates"
-                    :key="c.id"
-                    class="candidate-item alias-candidate"
-                    :class="{ 'is-best': i === 0 && !matchDebug.aftersale_alias_value }"
-                    @click="applyReturnAlias(c.id)"
-                    title="点击应用"
-                  >
-                    <span class="cand-rank">{{ i + 1 }}</span>
-                    <span class="cand-path">{{ c.name }}</span>
-                    <span class="cand-matched-hint">{{ c.matched_keywords.join('、') }}</span>
                     <div class="cand-bar-wrap">
                       <div class="cand-bar" :style="{ width: `${Math.round(c.score * 100)}%` }" />
                     </div>
@@ -2135,6 +2024,7 @@ async function ignoreCase() {
 }
 .path-sep { color: var(--text-muted); font-size: 11px; }
 .result-model { font-weight: 600; color: var(--accent); }
+.result-plain { font-size: 12px; font-weight: 600; color: var(--accent); }
 
 /* 置信度徽章（依据面板内） */
 .conf-badge {
@@ -2251,6 +2141,15 @@ async function ignoreCase() {
 .alias-candidate:hover {
   background: #fff7ed;
   border-color: var(--accent);
+}
+.affinity-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #e8f4e8;
+  color: #3a7a3a;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .cand-matched-hint {
   font-size: 10px; color: var(--text-muted);

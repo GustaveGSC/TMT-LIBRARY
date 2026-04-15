@@ -2,15 +2,18 @@ import re
 import difflib
 from datetime import datetime, timezone, timedelta, date
 from collections import defaultdict
+from aftersale_logger import write_confirm_log
 from database.base import db
 from database.models.aftersale import (
     AftersaleReasonCategory, AftersaleReason, AftersaleKeywordCandidate,
     AftersaleCase, AftersaleCaseReason,
-    AftersaleShippingAlias, AftersaleReturnAlias,
+    AftersaleShippingAlias,
     AftersaleShippingIgnoreTerm,
     AftersaleReasonStopword, AftersaleReasonFaultTerm,
     AftersaleReasonComponentTerm, AftersaleReasonShortKeepTerm,
     AftersaleReasonSynonymRule,
+    AftersaleDictSuggestion,
+    AftersaleReasonAliasAffinity,
 )
 from database.models.shipping import ShippingRecord, ShippingOperatorType
 from database.models.product.category import ProductModel
@@ -255,7 +258,7 @@ class AftersaleRepository:
                   status=None, date_start=None, date_end=None,
                   reason_id=None, channel_name=None, province=None, city=None,
                   district=None, reason_category=None, reason_name=None,
-                  shipping_alias=None, return_alias=None, model_code=None, search=None,
+                  shipping_alias=None, model_code=None, search=None,
                   sort_by=None, sort_order='desc'):
         """分页查询工单，支持多维筛选和服务端排序"""
         from sqlalchemy import func as sqlfunc
@@ -298,11 +301,6 @@ class AftersaleRepository:
         if shipping_alias:
             sub = (db.session.query(AftersaleCaseReason.case_id)
                    .filter(AftersaleCaseReason.shipping_alias_id == shipping_alias)
-                   .subquery())
-            q = q.filter(AftersaleCase.id.in_(sub))
-        if return_alias:
-            sub = (db.session.query(AftersaleCaseReason.case_id)
-                   .filter(AftersaleCaseReason.return_alias_id == return_alias)
                    .subquery())
             q = q.filter(AftersaleCase.id.in_(sub))
         if model_code:
@@ -351,14 +349,10 @@ class AftersaleRepository:
         cities    = q("SELECT DISTINCT city        FROM aftersale_case WHERE city        IS NOT NULL AND city        != '' ORDER BY city")
         districts = q("SELECT DISTINCT district    FROM aftersale_case WHERE district    IS NOT NULL AND district    != '' ORDER BY district")
 
-        from database.models.aftersale import AftersaleShippingAlias, AftersaleReturnAlias
+        from database.models.aftersale import AftersaleShippingAlias
         ship_aliases = [
             {'id': r.id, 'name': r.name}
             for r in AftersaleShippingAlias.query.order_by(AftersaleShippingAlias.sort_order, AftersaleShippingAlias.name).all()
-        ]
-        return_aliases = [
-            {'id': r.id, 'name': r.name}
-            for r in AftersaleReturnAlias.query.order_by(AftersaleReturnAlias.sort_order, AftersaleReturnAlias.name).all()
         ]
 
         reason_cats = q("""
@@ -387,7 +381,6 @@ class AftersaleRepository:
             'reason_categories': reason_cats,
             'reason_names':      reason_names,
             'shipping_aliases':  ship_aliases,
-            'return_aliases':    return_aliases,
             'model_codes':       model_codes,
         }
 
@@ -398,7 +391,43 @@ class AftersaleRepository:
         创建或更新工单（status→confirmed），批量写入 reasons。
         reasons_data: [{reason_id?, custom_reason?, model_id?, shipping_material_alias?, aftersale_material_alias?}]
         """
+        # ── 初始化日志上下文 ──────────────────────────────
+        import time as _time
+        _t0 = _time.perf_counter()
+        def _lap(label):
+            print(f'[confirm_case] {label}: {(_time.perf_counter() - _t0)*1000:.1f}ms', flush=True)
+
+        self._active_log_ctx = None   # 先清空，confirm_case 执行完前通过 _upsert_dict_suggestion 填充
+        log_ctx = {
+            'timestamp':       now_cst().strftime('%Y-%m-%d %H:%M:%S'),
+            'order_no':        order_no,
+            'original': {
+                'seller_remark': seller_remark,
+                'buyer_remark':  buyer_remark,
+                'products':      products or [],
+                'reasons_data':  reasons_data,
+            },
+            'cleaned': {
+                'effective_remark':   None,   # 去除买家留言后的有效备注
+                'extracted_keywords': [],     # 提取的候选关键词
+                'product_tokens':     [],     # 物料名清洗后的 token
+            },
+            'saved': {
+                'case_id': None,
+                'is_new':  None,
+                'status':  'confirmed',
+                'reasons': [],
+            },
+            'alias_learning':   [],   # 每条简称学习详情
+            'keyword_learning': [],   # 每个原因的关键词晋升/抑制详情
+            'dict_suggestions': [],   # 本次触发的词典建议
+        }
+        self._active_log_ctx = log_ctx   # 供 _upsert_dict_suggestion 写入
+
         case = AftersaleCase.query.filter_by(ecommerce_order_no=order_no).first()
+        _lap('查询工单')
+        is_new = case is None
+        log_ctx['saved']['is_new'] = is_new
         if not case:
             case = AftersaleCase(
                 ecommerce_order_no=order_no,
@@ -426,6 +455,7 @@ class AftersaleRepository:
             case.district      = district
         case.status       = 'confirmed'
         case.processed_at = now_cst()
+        log_ctx['saved']['case_id'] = case.id
 
         # 清除旧 reasons，重新写入
         AftersaleCaseReason.query.filter_by(case_id=case.id).delete()
@@ -458,7 +488,6 @@ class AftersaleRepository:
                 reason_category_id  = reason_category_id,
                 model_id            = rd.get('model_id'),
                 shipping_alias_id   = rd.get('shipping_alias_id') or None,
-                return_alias_id     = rd.get('return_alias_id')   or None,
                 purchase_date       = item_purchase_date,
                 days_since_purchase = item_days,
             )
@@ -466,23 +495,70 @@ class AftersaleRepository:
             if rd.get('reason_id'):
                 reason_ids_used.add(rd['reason_id'])
 
+            # 记录保存的 reason 行
+            log_ctx['saved']['reasons'].append({
+                'reason_id':          reason_id,
+                'reason_name':        reason_obj.name if reason_id and reason_obj else rd.get('custom_reason'),
+                'reason_category_id': reason_category_id,
+                'model_id':           rd.get('model_id'),
+                'shipping_alias_id':  rd.get('shipping_alias_id') or None,
+                'purchase_date':      str(item_purchase_date) if item_purchase_date else None,
+                'days_since_purchase': item_days,
+            })
+
+        _lap('写入 case + reasons')
         # 递增 use_count + 自动合并关键词
         if reason_ids_used:
             AftersaleReason.query.filter(
                 AftersaleReason.id.in_(reason_ids_used)
             ).update({'use_count': AftersaleReason.use_count + 1},
                      synchronize_session='fetch')
-            self._auto_update_reason_keywords(seller_remark, reason_ids_used, buyer_remark)
+            self._auto_update_reason_keywords(seller_remark, reason_ids_used, buyer_remark,
+                                              log_ctx=log_ctx)
 
-        # 自动将简称关键词合并到简称库（通过 ID 查找对象）
-        product_names = [p.get('name') for p in (products or []) if p.get('name')]
+        _lap('关键词学习(_auto_update_reason_keywords)')
+        # 清洗物料名 → 有效 token（去掉代码段、数量、通用前缀、过滤词）
+        ignore_terms_list = [t.term for t in AftersaleShippingIgnoreTerm.query.all()]
+        cleaned_tokens = sorted(self._parse_product_tokens(products or [], ignore_terms_list))
+        log_ctx['cleaned']['product_tokens'] = cleaned_tokens
+
+        # 自动将简称关键词合并到简称库（使用清洗后的 token，而非原始名称）
+        alias_ids_used = list({rd['shipping_alias_id'] for rd in reasons_data if rd.get('shipping_alias_id')})
+        alias_obj_map = {
+            a.id: a
+            for a in AftersaleShippingAlias.query.filter(AftersaleShippingAlias.id.in_(alias_ids_used)).all()
+        } if alias_ids_used else {}
         for rd in reasons_data:
             if rd.get('shipping_alias_id'):
-                self.upsert_shipping_alias_by_id(rd['shipping_alias_id'], product_names)
-            if rd.get('return_alias_id'):
-                self.upsert_return_alias_by_id(rd['return_alias_id'], seller_remark, buyer_remark)
+                alias_id  = rd['shipping_alias_id']
+                alias_obj = alias_obj_map.get(alias_id)
+                kws_before = list(alias_obj.keywords or []) if alias_obj else []
+                self.upsert_shipping_alias_by_id(alias_id, cleaned_tokens)
+                kws_after  = list(alias_obj.keywords or []) if alias_obj else []
+                added = [k for k in kws_after if k not in kws_before]
+                log_ctx['alias_learning'].append({
+                    'alias_id':      alias_id,
+                    'alias_name':    alias_obj.name if alias_obj else None,
+                    'tokens_added':  added,
+                    'keywords_total': len(kws_after),
+                })
 
+        _lap('简称关键词学习(upsert_shipping_alias)')
+        # 词典自动建议：检测过滤词候选（_upsert_dict_suggestion 内自动追加到 log_ctx）
+        if products:
+            self._check_ignore_term_candidates(products)
+
+        _lap('过滤词候选检测(_check_ignore_term_candidates)')
+        # 原因-简称亲和度：累积 reason_id + shipping_alias_id 共现次数
+        self._upsert_reason_alias_affinity(reasons_data)
+
+        _lap('亲和度更新(_upsert_reason_alias_affinity)')
         db.session.commit()
+        _lap('db.commit')
+
+        self._active_log_ctx = None   # 清除，避免后续调用误用
+        write_confirm_log(log_ctx)
+        _lap('写日志文件(总耗时)')
         return case
 
     def update_case(self, case_id, reasons_data,
@@ -514,7 +590,6 @@ class AftersaleRepository:
                 reason_category_id = rd.get('reason_category_id') if not rd.get('reason_id') else None,
                 model_id           = rd.get('model_id'),
                 shipping_alias_id  = rd.get('shipping_alias_id') or None,
-                return_alias_id    = rd.get('return_alias_id')   or None,
             )
             db.session.add(cr)
             if rd.get('reason_id'):
@@ -760,9 +835,9 @@ class AftersaleRepository:
 
     @classmethod
     def _canonicalize_keyword(cls, kw):
-        """将关键词归一为可复用 token。"""
-        t = cls._normalize_reason_text(kw)
-        return t.replace(' ', '')
+        """将关键词归一为可复用 token。
+        仅做 lower + 去空格，不重复执行同义词替换（调用方已通过 _normalize_reason_text 处理过）。"""
+        return kw.lower().replace(' ', '')
 
     @classmethod
     def _extract_keywords_from_text(cls, text):
@@ -803,6 +878,18 @@ class AftersaleRepository:
         return result
 
     @staticmethod
+    def _strip_stopwords(text, stopwords):
+        """从文本中直接移除停用词子串，返回清洗后文本。
+        按停用词长度降序处理，避免短词提前截断长词。"""
+        if not stopwords or not text:
+            return text
+        result = text
+        for sw in sorted(stopwords, key=len, reverse=True):
+            if sw and sw in result:
+                result = result.replace(sw, '')
+        return result
+
+    @staticmethod
     def _subtract_buyer_remark(seller_remark, buyer_remark):
         """从商家备注中去掉买家留言里出现的内容，避免提取无关关键词。
         若买家留言是商家备注的子串，直接替换为空；否则按词（分隔符切段）逐段去除。"""
@@ -820,18 +907,28 @@ class AftersaleRepository:
                 result = result.replace(seg, ' ')
         return result
 
-    def _auto_update_reason_keywords(self, seller_remark, reason_ids, buyer_remark=None):
+    def _auto_update_reason_keywords(self, seller_remark, reason_ids, buyer_remark=None, log_ctx=None):
         """
         提交工单时更新候选词频池，达到阈值的候选词晋升到原因 keywords。
         流程：
           1. 从 seller_remark 中去除 buyer_remark 重复内容，再提取 n-gram 候选词
           2. 对每个 reason_id，upsert aftersale_keyword_candidate（count+1）
           3. count >= 阈值 且 尚未在 keywords 中 → 晋升，并从候选池删除
+        log_ctx: 若非 None，向其写入关键词学习详情供日志输出。
         """
         if not seller_remark or not reason_ids:
             return
         effective_remark = self._subtract_buyer_remark(seller_remark, buyer_remark)
-        new_kws = self._extract_keywords_from_text(effective_remark)
+        # 预处理：直接从文本中移除停用词，再提取候选词
+        rules    = self._get_reason_rules()
+        stopwords = rules.get('stopwords', set())
+        effective_remark = self._strip_stopwords(effective_remark, stopwords)
+        new_kws  = self._extract_keywords_from_text(effective_remark)
+
+        if log_ctx is not None:
+            log_ctx['cleaned']['effective_remark'] = effective_remark
+            log_ctx['cleaned']['extracted_keywords'] = sorted(new_kws)
+
         if not new_kws:
             return
 
@@ -888,28 +985,120 @@ class AftersaleRepository:
             if not reason:
                 continue
             kw_list = [k for k in (reason.keywords or '').split(',') if k.strip()]
+            # 日志：收集该原因的学习结果
+            if log_ctx is not None:
+                log_ctx['keyword_learning'].append({
+                    'reason_id':   rid,
+                    'reason_name': reason.name,
+                    'promoted':    [],
+                    'suppressed':  [],
+                })
+                _log_reason = log_ctx['keyword_learning'][-1]
+            else:
+                _log_reason = None
             for kw in kws:
-                if spread_map.get(kw, 0) >= self._KW_GLOBAL_HOT_THRESHOLD:
+                spread = spread_map.get(kw, 0)
+                if spread >= self._KW_GLOBAL_HOT_THRESHOLD:
+                    # 跨多个原因高频出现，疑似泛化词，建议加入停用词
+                    self._upsert_dict_suggestion(
+                        'stopword', kw,
+                        f'跨 {spread} 个原因候选池高频出现，疑似泛化词'
+                    )
+                    if _log_reason is not None:
+                        _log_reason['suppressed'].append({'keyword': kw, 'spread': spread})
                     continue
                 if kw not in kw_list and len(kw_list) < self._KW_MAX_TOTAL:
                     kw_list.append(kw)
+                    # 晋升成功：建议用户考虑是否归类为故障词或部件词
+                    self._upsert_dict_suggestion(
+                        'promoted_keyword', kw,
+                        f'已自动晋升至原因「{reason.name}」，可酌情归类为故障词或部件词'
+                    )
+                    if _log_reason is not None:
+                        _log_reason['promoted'].append(kw)
                 candidate = candidate_map.get((rid, kw))
                 if candidate:
                     db.session.delete(candidate)
             reason.keywords = ','.join(kw_list)
 
+        # ── 路径一：跨原因中频词 → 同义词候选建议 ────────────────────────────
+        # spread 在 [2, global_hot_threshold) 的候选词，疑似多原因共用的变体词
+        if to_check_spread and spread_map:
+            syn_threshold = self._KW_GLOBAL_HOT_THRESHOLD
+            mid_freq_kws = [kw for kw, spread in spread_map.items() if 2 <= spread < syn_threshold]
+            if mid_freq_kws:
+                # 批量查询所有中频词的候选行，避免逐词 N+1
+                all_involved_rows = (
+                    AftersaleKeywordCandidate.query
+                    .filter(AftersaleKeywordCandidate.keyword.in_(mid_freq_kws))
+                    .all()
+                )
+                # 收集涉及的 reason_id，批量加载名称
+                all_reason_ids = {row.reason_id for row in all_involved_rows}
+                reason_name_map = {
+                    r.id: r.name
+                    for r in AftersaleReason.query.filter(AftersaleReason.id.in_(all_reason_ids)).all()
+                }
+                # 按 keyword 分组
+                kw_to_rows = defaultdict(list)
+                for row in all_involved_rows:
+                    kw_to_rows[row.keyword].append(row)
+
+                for kw in mid_freq_kws:
+                    spread = spread_map[kw]
+                    rows = kw_to_rows.get(kw, [])
+                    involved_ids   = [r.reason_id for r in rows]
+                    involved_names = [reason_name_map[r.reason_id] for r in rows if r.reason_id in reason_name_map]
+                    reason_label   = '、'.join(involved_names[:3])
+                    self._upsert_dict_suggestion(
+                        'synonym_candidate', kw,
+                        f'在原因「{reason_label}」等 {spread} 个原因中均有候选，'
+                        f'可能是某关键词的同义变体',
+                        meta={'reason_ids': involved_ids},
+                    )
+
+        # ── 路径二：同原因内子串重叠 → 同义词候选建议 ────────────────────────
+        # 对本次确认工单涉及的原因，检查已晋升关键词中是否存在包含关系
+        for rid, reason in reasons.items():
+            all_kws = [k.strip() for k in (reason.keywords or '').split(',') if k.strip()]
+            if len(all_kws) < 2:
+                continue
+            checked = set()
+            for i, kw_a in enumerate(all_kws):
+                for kw_b in all_kws[i + 1:]:
+                    pair = tuple(sorted([kw_a, kw_b]))
+                    if pair in checked:
+                        continue
+                    checked.add(pair)
+                    # 一方是另一方的真子串（且至少 2 字）
+                    longer, shorter = (kw_a, kw_b) if len(kw_a) >= len(kw_b) else (kw_b, kw_a)
+                    if len(shorter) >= 2 and shorter in longer and shorter != longer:
+                        sug_value = f'{longer}→{shorter}'
+                        self._upsert_dict_suggestion(
+                            'synonym_candidate', sug_value,
+                            f'原因「{reason.name}」的关键词「{longer}」包含「{shorter}」，'
+                            f'可能互为同义，建议归一',
+                            meta={'reason_ids': [rid], 'longer': longer, 'shorter': shorter},
+                        )
+
     # ── 自动匹配 ────────────────────────────────────────────────────────────
 
-    def auto_match(self, text):
+    def auto_match(self, text, buyer_remark=None):
         """
         两阶段自动匹配，返回按置信度降序排列的 Top5 建议。
         阶段1：关键词库匹配
         阶段2：历史案例相似度（difflib）
+        buyer_remark 若非空，先从 text 中去除买家留言内容再匹配，减少噪声。
         """
         if not text or not text.strip():
             return []
 
-        text_lower = self._normalize_reason_text(text)
+        # 预处理：去除买家留言片段，再移除停用词
+        effective_text = self._subtract_buyer_remark(text, buyer_remark) if buyer_remark else text
+        rules = self._get_reason_rules()
+        stopwords = rules.get('stopwords', set())
+        effective_text = self._strip_stopwords(effective_text, stopwords)
+        text_lower = self._normalize_reason_text(effective_text)
         scores = {}   # reason_id -> score details
 
         def ensure_reason_score(reason_id, name, category_name):
@@ -1147,8 +1336,6 @@ class AftersaleRepository:
             q = q.filter(AftersaleCaseReason.reason_id.in_(sub))
         if filters.get('shipping_alias_ids'):
             q = q.filter(AftersaleCaseReason.shipping_alias_id.in_(filters['shipping_alias_ids']))
-        if filters.get('return_alias_ids'):
-            q = q.filter(AftersaleCaseReason.return_alias_id.in_(filters['return_alias_ids']))
 
         rows = q.all()
 
@@ -1375,7 +1562,6 @@ class AftersaleRepository:
           reason_ids,             # 二级原因 id 列表
           reason_category_ids,    # 一级分类 id 列表
           shipping_alias_ids,     # 发货物料简称 id 列表
-          return_alias_ids,       # 售后物料简称 id 列表
         }
         """
         from sqlalchemy import distinct, and_
@@ -1418,8 +1604,6 @@ class AftersaleRepository:
                 c.append(AftersaleCaseReason.reason_id.in_(sub))
             if exclude != 'shipping' and filters.get('shipping_alias_ids'):
                 c.append(AftersaleCaseReason.shipping_alias_id.in_(filters['shipping_alias_ids']))
-            if exclude != 'return' and filters.get('return_alias_ids'):
-                c.append(AftersaleCaseReason.return_alias_id.in_(filters['return_alias_ids']))
             if filters.get('max_days_since_purchase') is not None:
                 c.append(AftersaleCaseReason.days_since_purchase <= filters['max_days_since_purchase'])
             return c
@@ -1456,11 +1640,6 @@ class AftersaleRepository:
             r[0] for r in base('shipping').with_entities(AftersaleCaseReason.shipping_alias_id).all()
             if r[0] is not None
         ))
-        return_alias_ids = sorted(set(
-            r[0] for r in base('return').with_entities(AftersaleCaseReason.return_alias_id).all()
-            if r[0] is not None
-        ))
-
         return {
             'channels':           channels,
             'provinces':          provinces,
@@ -1468,7 +1647,6 @@ class AftersaleRepository:
             'model_ids':          model_ids,
             'reason_ids':         reason_ids,
             'shipping_alias_ids': shipping_alias_ids,
-            'return_alias_ids':   return_alias_ids,
         }
 
     def get_chart_options(self):
@@ -1702,13 +1880,6 @@ class AftersaleRepository:
         history_shipping_id     = _top_alias_id(AftersaleCaseReason.shipping_alias_id)
         suggested_shipping_alias_id = binding_shipping_id or history_shipping_id
 
-        # ── 售后物料简称：绑定库文本匹配优先，历史频次兜底 ──────────────────
-        binding_return_id, binding_return_score = self.match_return_alias(seller_remark)
-        history_return_id     = _top_alias_id(AftersaleCaseReason.return_alias_id)
-        suggested_return_alias_id = binding_return_id or history_return_id
-        suggested_return_alias_source = 'library' if binding_return_id else ('history' if history_return_id else None)
-        suggested_return_alias_score = binding_return_score if binding_return_id else None
-
         # 历史原因：取 reason_id 出现最多的一条，并附带其 category_id
         reason_cnt = {}
         reason_rows = (
@@ -1736,9 +1907,6 @@ class AftersaleRepository:
         # ── 组装返回 ─────────────────────────────────────────────────────
         suggestions = {
             'suggested_shipping_alias_id': suggested_shipping_alias_id,
-            'suggested_return_alias_id':   suggested_return_alias_id,
-            'suggested_return_alias_source': suggested_return_alias_source,
-            'suggested_return_alias_score': suggested_return_alias_score,
             'suggested_reason_id':          suggested_reason_id,
             'suggested_reason_category_id': suggested_reason_category_id,
         }
@@ -1846,66 +2014,32 @@ class AftersaleRepository:
         db.session.commit()
         return True
 
-    # ── 售后物料简称库 ─────────────────────────────────────────────────────────
-
-    def get_all_return_aliases(self):
-        return (
-            AftersaleReturnAlias.query
-            .order_by(AftersaleReturnAlias.sort_order.asc(),
-                      AftersaleReturnAlias.id.asc())
-            .all()
-        )
-
-    def create_return_alias(self, name, keywords=None, sort_order=0):
-        obj = AftersaleReturnAlias(name=name, keywords=keywords or [], sort_order=sort_order)
-        db.session.add(obj)
-        db.session.commit()
-        return obj
-
-    def update_return_alias(self, alias_id, name, keywords=None, sort_order=None):
-        obj = AftersaleReturnAlias.query.get(alias_id)
-        if not obj:
-            return None
-        obj.name = name
-        if keywords is not None:
-            obj.keywords = keywords
-        if sort_order is not None:
-            obj.sort_order = sort_order
-        db.session.commit()
-        return obj
-
-    def delete_return_alias(self, alias_id):
-        obj = AftersaleReturnAlias.query.get(alias_id)
-        if not obj:
-            return False
-        db.session.delete(obj)
-        db.session.commit()
-        return True
-
     # ── 简称库关键词自动合并（提交工单时调用，通过 ID 查找） ──────────────────
 
     def upsert_shipping_alias_by_id(self, alias_id, product_names):
-        """提交工单时：将当前物料名称合并到已有发货简称的关键词列表。"""
+        """提交工单时：将当前物料名称合并到已有发货简称的关键词列表。
+        只写入与简称名称有字符重叠的 token，避免同单其他无关产品污染关键词库。"""
         obj = AftersaleShippingAlias.query.get(alias_id)
         if not obj:
             return
-        new_kws = [n.strip() for n in (product_names or []) if n and n.strip()]
+        alias_name = (obj.name or '').lower()
+        # 过滤：token 必须是 alias_name 的子串，或 alias_name 是 token 的子串，
+        # 或双方共享长度 ≥ 2 的公共子串
+        def _relevant(token):
+            t = token.lower()
+            if t in alias_name or alias_name in t:
+                return True
+            for length in range(min(len(t), len(alias_name)), 1, -1):
+                for i in range(len(t) - length + 1):
+                    if t[i:i + length] in alias_name:
+                        return True
+            return False
+
+        new_kws = [n.strip() for n in (product_names or []) if n and n.strip() and _relevant(n.strip())]
         if new_kws:
             existing = set(obj.keywords or [])
             merged   = list(existing | set(new_kws))
             obj.keywords = merged[:50] if merged else obj.keywords
-
-    def upsert_return_alias_by_id(self, alias_id, seller_remark, buyer_remark=None):
-        """提交工单时：将商家备注片段合并到已有售后简称的关键词列表。"""
-        obj = AftersaleReturnAlias.query.get(alias_id)
-        if not obj:
-            return
-        remark = self._clean_remark_for_alias(seller_remark, buyer_remark)
-        if remark:
-            existing = list(obj.keywords or [])
-            if remark not in existing:
-                existing.append(remark)
-                obj.keywords = existing[-50:]
 
     # ── 简称库自动入库（简称管理页用） ───────────────────────────────────────
 
@@ -1947,31 +2081,6 @@ class AftersaleRepository:
         text = text.strip()
         return text
 
-    def upsert_return_alias(self, name, seller_remark, buyer_remark=None):
-        """
-        提交工单时：若售后物料简称不在库中则自动创建，
-        若已存在则将商家备注片段添加到关键词列表（去重，最多保留 50 条）。
-        自动去除买家留言中与商家备注重复的内容，以及日期类字符串。
-        不触发独立 commit（由 confirm_case 统一提交）。
-        """
-        if not name:
-            return
-        name = name.strip()
-        if not name:
-            return
-        remark = self._clean_remark_for_alias(seller_remark, buyer_remark)
-        obj = AftersaleReturnAlias.query.filter_by(name=name).first()
-        if obj is None:
-            obj = AftersaleReturnAlias(name=name, keywords=[remark] if remark else None)
-            db.session.add(obj)
-        else:
-            if remark:
-                existing = list(obj.keywords or [])
-                if remark not in existing:
-                    existing.append(remark)
-                    # 最多保留最新的 50 条备注片段
-                    obj.keywords = existing[-50:]
-
     # ── 简称库匹配（用于 suggest_product） ──────────────────────────────────────
 
     @staticmethod
@@ -2003,6 +2112,46 @@ class AftersaleRepository:
                 break
         return max_len / len(k) if max_len >= 2 else 0.0
 
+    @staticmethod
+    def _parse_product_tokens(products, ignore_terms):
+        """
+        从发货物料列表中提取有效词 token。
+
+        步骤：
+          1. 按空格分割物料名
+          2. 丢弃 code 段（含 "-" 且含数字的段，如 "14PL01197-A01"）
+          3. 丢弃数量段（匹配 ×N 或 NxN，如 "×3"）
+          4. 剩余段按 "_" 再分割
+          5. 丢弃含任意 ignore_term（大小写不敏感子串）的子词
+          6. 丢弃空串和单字符
+        返回去重后的 token set（小写）。
+        """
+        _CODE_RE = re.compile(r'^[A-Za-z0-9]+-[A-Za-z0-9\-]+$')
+        _QTY_RE  = re.compile(r'^[×xX×]\d+$|^\d+[×xX×]$|^\d+$')
+        ignore_lower = [t.lower() for t in ignore_terms if t]
+        tokens = set()
+        for p in products:
+            name = (p.get('name') or '').strip()
+            if not name:
+                continue
+            for seg in name.split(' '):
+                seg = seg.strip()
+                if not seg:
+                    continue
+                # 丢弃物料编号和数量标记
+                if _CODE_RE.match(seg) or _QTY_RE.match(seg):
+                    continue
+                # 按 "_" 再分割
+                for part in seg.split('_'):
+                    part = part.strip().lower()
+                    if not part or len(part) <= 1:
+                        continue
+                    # 丢弃与 ignore_term 完全相同的子词（精确匹配）
+                    if any(ig == part for ig in ignore_lower):
+                        continue
+                    tokens.add(part)
+        return tokens
+
     def match_shipping_alias(self, products):
         """
         根据发货物料列表（含 name 字段）匹配最佳发货物料简称。
@@ -2010,9 +2159,15 @@ class AftersaleRepository:
 
         评分策略：绝对命中数优先，覆盖率（matched/len(kws））仅作次级排序。
         避免仅绑定1个公共物料码的简称因100%覆盖率误胜。
+
+        匹配使用 _parse_product_tokens 提取的 token 集合；
+        旧格式 keyword（含 "_"）兼容回退到完整名称包含匹配。
         """
         if not products:
             return None, 0.0
+        ignore_terms = [t.term for t in AftersaleShippingIgnoreTerm.query.all()]
+        product_tokens = self._parse_product_tokens(products, ignore_terms)
+        # 旧格式 fallback：完整 combined_name 用于含 "_" 的 keyword
         product_names = [p.get('name', '') or '' for p in products]
         combined_name = ' '.join(product_names).lower()
         best_id, best_matched, best_ratio = None, 0, 0.0
@@ -2022,7 +2177,14 @@ class AftersaleRepository:
             kws = [k for k in (obj.keywords or []) if k]
             if not kws:
                 continue
-            matched = sum(1 for k in kws if k.lower() in combined_name)
+            matched = 0
+            for k in kws:
+                kl = k.lower()
+                if kl in product_tokens:
+                    matched += 1
+                elif '_' in kl and kl in combined_name:
+                    # 旧格式 keyword 兼容匹配
+                    matched += 1
             if matched == 0:
                 continue
             ratio = matched / len(kws)
@@ -2033,45 +2195,49 @@ class AftersaleRepository:
                 best_id      = obj.id
         return best_id, best_ratio
 
-    def match_return_alias(self, seller_remark):
+    def migrate_alias_keywords(self):
         """
-        根据商家备注文本匹配最佳售后物料简称。
-        返回 (alias_id, score) 或 (None, 0)。
-
-        评分策略（收敛误匹配）：
-        1) 简称名称在备注中直接命中时给高权重；
-        2) 仅累加“强命中关键词”（score >= _KW_STRONG_HIT）；
-        3) 没有简称直命中且没有强命中关键词时，视为不匹配。
-
-        这样可避免“补偿/更换”等弱相关片段造成误匹配。
+        将 aftersale_shipping_alias.keywords 中旧格式的完整物料名
+        （含"_"分隔的无效前缀，如"原材料_塑胶件_书包挂钩盖子"）
+        拆分为有效 token，就地更新。
+        返回 (总简称数, 变更数)。
         """
-        if not seller_remark:
-            return None, 0.0
-        text = seller_remark.lower()
-        _KW_STRONG_HIT = 0.5
-        _DIRECT_ALIAS_BONUS = 1.0
-        best_id, best_total = None, 0.0
-        for obj in AftersaleReturnAlias.query.filter(
-            AftersaleReturnAlias.keywords.isnot(None)
-        ).all():
-            kws = [kw for kw in (obj.keywords or []) if kw]
-            alias_name = (obj.name or '').strip()
-            alias_direct_hit = bool(alias_name and alias_name.lower() in text)
-            if not kws and not alias_direct_hit:
+        ignore_terms = [t.term for t in AftersaleShippingIgnoreTerm.query.all()]
+        aliases = AftersaleShippingAlias.query.all()
+        changed = 0
+        for alias in aliases:
+            if not alias.keywords:
                 continue
-            strong_scores = []
-            for kw in kws:
-                s = self._text_sim(seller_remark, kw)
-                if s >= _KW_STRONG_HIT:
-                    strong_scores.append(s)
-            if not strong_scores and not alias_direct_hit:
-                continue
-            total = sum(strong_scores) + (_DIRECT_ALIAS_BONUS if alias_direct_hit else 0.0)
-            if total > best_total:
-                best_total = total
-                best_id    = obj.id
-        return (best_id, best_total) if best_total >= _KW_STRONG_HIT else (None, 0.0)
-
+            new_kws = []
+            dirty = False
+            for kw in alias.keywords:
+                if not kw:
+                    continue
+                if '_' in kw:
+                    # 旧格式：拆分
+                    tokens = self._parse_product_tokens(
+                        [{'name': kw, 'code': ''}], ignore_terms
+                    )
+                    if tokens:
+                        new_kws.extend(sorted(tokens))
+                        dirty = True
+                    else:
+                        new_kws.append(kw)
+                else:
+                    new_kws.append(kw)
+            if dirty:
+                # 去重、保序
+                seen = set()
+                deduped = []
+                for k in new_kws:
+                    if k not in seen:
+                        seen.add(k)
+                        deduped.append(k)
+                alias.keywords = deduped
+                changed += 1
+        if changed:
+            db.session.commit()
+        return len(aliases), changed
 
     # ── 发货物料匹配过滤词 ────────────────────────────────────────────────────
 
@@ -2093,3 +2259,185 @@ class AftersaleRepository:
         db.session.delete(obj)
         db.session.commit()
         return True
+
+    # ── 词典自动建议 ──────────────────────────────────────────────────────────
+
+    # 已知通用物料名前缀词，首次出现即建议加入过滤词
+    _KNOWN_GENERIC_PREFIXES = {
+        '原材料', '塑胶件', '五金件', '配件', '辅料',
+        '半成品', '成品', '包材', '耗材', '工具',
+    }
+
+    def _upsert_dict_suggestion(self, sug_type, value, reason_text, meta=None):
+        """
+        插入或更新词典建议记录（count+1）。
+        已拒绝的建议不再重复触发；在调用方的 session 内执行，不独立 commit。
+        meta: 附加 JSON 数据（synonym_candidate 存涉及的 reason_ids 等）。
+        若当前处于 confirm_case 流程中（_active_log_ctx 非空），同步写入日志上下文。
+        """
+        existing = AftersaleDictSuggestion.query.filter_by(
+            type=sug_type, value=value
+        ).first()
+        if existing:
+            if existing.status == 'rejected':
+                return
+            existing.count += 1
+            # 合并 meta 中的 reason_ids（避免覆盖旧数据）
+            if meta and isinstance(meta.get('reason_ids'), list) and existing.meta:
+                old_ids = existing.meta.get('reason_ids') or []
+                merged = list(set(old_ids) | set(meta['reason_ids']))
+                existing.meta = {**existing.meta, 'reason_ids': merged}
+            elif meta:
+                existing.meta = meta
+            action = 'count+1'
+        else:
+            db.session.add(AftersaleDictSuggestion(
+                type=sug_type, value=value, reason=reason_text, meta=meta
+            ))
+            action = 'new'
+
+        # 写入日志上下文（如果在 confirm_case 流程中）
+        ctx = getattr(self, '_active_log_ctx', None)
+        if ctx is not None:
+            ctx['dict_suggestions'].append({
+                'type':   sug_type,
+                'value':  value,
+                'reason': reason_text,
+                'action': action,
+            })
+
+    def _check_ignore_term_candidates(self, products):
+        """
+        分析工单物料 token，对已知通用前缀词或极短词（≤2字）生成过滤词建议。
+        随着工单积累，count 升高的建议自然浮出水面供用户审核。
+        """
+        raw_tokens = self._parse_product_tokens(products, [])
+        if not raw_tokens:
+            return
+        existing_ignore = {t.term.lower() for t in AftersaleShippingIgnoreTerm.query.all()}
+        for token in raw_tokens:
+            if token in existing_ignore:
+                continue
+            if token in self._KNOWN_GENERIC_PREFIXES or len(token) <= 2:
+                self._upsert_dict_suggestion(
+                    'ignore_term', token,
+                    '物料名中的通用前缀词，建议加入过滤词以提升简称匹配精度'
+                )
+
+    def _upsert_reason_alias_affinity(self, reasons_data):
+        """
+        工单确认时，对每条同时有 reason_id 和 shipping_alias_id 的 reason 行，
+        将 (reason_id, shipping_alias_id) 共现次数 +1。
+        在调用方的 session 内执行，不独立 commit。
+        """
+        pairs = {
+            (int(rd['reason_id']), int(rd['shipping_alias_id']))
+            for rd in (reasons_data or [])
+            if rd.get('reason_id') and rd.get('shipping_alias_id')
+        }
+        if not pairs:
+            return
+
+        # 批量查询已有记录
+        existing = (
+            AftersaleReasonAliasAffinity.query
+            .filter(
+                db.tuple_(
+                    AftersaleReasonAliasAffinity.reason_id,
+                    AftersaleReasonAliasAffinity.shipping_alias_id,
+                ).in_(list(pairs))
+            )
+            .all()
+        )
+        existing_map = {(r.reason_id, r.shipping_alias_id): r for r in existing}
+
+        for pair in pairs:
+            rec = existing_map.get(pair)
+            if rec:
+                rec.count += 1
+            else:
+                db.session.add(AftersaleReasonAliasAffinity(
+                    reason_id=pair[0], shipping_alias_id=pair[1]
+                ))
+
+    def get_alias_affinity(self, reason_id, alias_ids):
+        """
+        查询指定 reason_id 对各 alias_id 的亲和度 count。
+        返回 {alias_id: count} 字典，无记录的 alias_id 不出现在结果中。
+        """
+        if not reason_id or not alias_ids:
+            return {}
+        rows = (
+            AftersaleReasonAliasAffinity.query
+            .filter_by(reason_id=reason_id)
+            .filter(AftersaleReasonAliasAffinity.shipping_alias_id.in_(alias_ids))
+            .all()
+        )
+        return {r.shipping_alias_id: r.count for r in rows}
+
+    def get_dict_suggestions(self, type_filter=None, status='pending'):
+        q = AftersaleDictSuggestion.query.filter_by(status=status)
+        if type_filter:
+            q = q.filter_by(type=type_filter)
+        return q.order_by(
+            AftersaleDictSuggestion.count.desc(),
+            AftersaleDictSuggestion.created_at.asc()
+        ).all()
+
+    def accept_dict_suggestion(self, sug_id, target_type=None, canonical=None):
+        """
+        接受建议：将词写入对应词典表，并标记 status=accepted。
+        target_type: promoted_keyword 用 ('fault_term' | 'component_term')
+        canonical:   synonym_candidate 用，指定归一词（接受方输入的标准形式）
+        """
+        from sqlalchemy.exc import IntegrityError
+        sug = AftersaleDictSuggestion.query.get(sug_id)
+        if not sug or sug.status != 'pending':
+            return None, '建议不存在或已处理'
+        sug.status = 'accepted'
+        try:
+            if sug.type == 'stopword':
+                db.session.add(AftersaleReasonStopword(term=sug.value))
+            elif sug.type == 'ignore_term':
+                db.session.add(AftersaleShippingIgnoreTerm(term=sug.value))
+            elif sug.type == 'promoted_keyword':
+                if target_type == 'fault_term':
+                    db.session.add(AftersaleReasonFaultTerm(term=sug.value))
+                elif target_type == 'component_term':
+                    db.session.add(AftersaleReasonComponentTerm(term=sug.value))
+            elif sug.type == 'synonym_candidate':
+                # canonical 是用户指定的标准词；aliases 是 value 中的变体词
+                # 路径一：value = 候选词本身（多原因共现）
+                # 路径二：value = "长词→短词"，meta 含 longer/shorter
+                if canonical:
+                    meta = sug.meta or {}
+                    longer  = meta.get('longer')
+                    shorter = meta.get('shorter')
+                    # 路径二：用 longer|shorter 作 pattern，canonical 作 replacement
+                    if longer and shorter:
+                        aliases = [longer, shorter]
+                    else:
+                        # 路径一：value 就是变体词，canonical 是标准词
+                        aliases = [sug.value]
+                    pattern = '|'.join(a for a in aliases if a != canonical)
+                    if pattern:
+                        db.session.add(AftersaleReasonSynonymRule(
+                            pattern=pattern,
+                            replacement=canonical,
+                            is_regex=False,
+                        ))
+            db.session.commit()
+            self._invalidate_reason_rule_cache()
+        except IntegrityError:
+            db.session.rollback()
+            sug.status = 'accepted'
+            db.session.commit()
+        return sug, None
+
+    def reject_dict_suggestion(self, sug_id):
+        sug = AftersaleDictSuggestion.query.get(sug_id)
+        if not sug or sug.status != 'pending':
+            return None
+        sug.status = 'rejected'
+        db.session.commit()
+        return sug

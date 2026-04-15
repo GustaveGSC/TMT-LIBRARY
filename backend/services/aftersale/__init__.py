@@ -3,7 +3,7 @@ from result import Result
 from database.repository.aftersale import AftersaleRepository
 from database.models.aftersale import (
     AftersaleReasonCategory, AftersaleReason,
-    AftersaleShippingAlias, AftersaleReturnAlias,
+    AftersaleShippingAlias,
     AftersaleCase, AftersaleCaseReason,
 )
 
@@ -166,42 +166,6 @@ class AftersaleService:
             return Result.fail('简称不存在')
         return Result.ok()
 
-    # ── 售后物料简称库 ─────────────────────────────────────────────────────────
-
-    def get_return_aliases(self):
-        return Result.ok(data=[a.to_dict() for a in _repo.get_all_return_aliases()])
-
-    def create_return_alias(self, data):
-        name = (data.get('name') or '').strip()
-        if not name:
-            return Result.fail('简称不能为空')
-        if AftersaleReturnAlias.query.filter_by(name=name).first():
-            return Result.fail('该简称已存在')
-        kws = [k.strip() for k in (data.get('keywords') or []) if str(k).strip()]
-        obj = _repo.create_return_alias(name=name, keywords=kws,
-                                        sort_order=data.get('sort_order', 0))
-        return Result.ok(data=obj.to_dict())
-
-    def update_return_alias(self, alias_id, data):
-        name = (data.get('name') or '').strip()
-        if not name:
-            return Result.fail('简称不能为空')
-        existing = AftersaleReturnAlias.query.filter_by(name=name).first()
-        if existing and existing.id != alias_id:
-            return Result.fail('该简称已存在')
-        kws = [k.strip() for k in (data.get('keywords') or []) if str(k).strip()]
-        obj = _repo.update_return_alias(alias_id, name=name, keywords=kws,
-                                        sort_order=data.get('sort_order'))
-        if not obj:
-            return Result.fail('简称不存在')
-        return Result.ok(data=obj.to_dict())
-
-    def delete_return_alias(self, alias_id):
-        ok = _repo.delete_return_alias(alias_id)
-        if not ok:
-            return Result.fail('简称不存在')
-        return Result.ok()
-
     # ── 待处理订单 ──────────────────────────────────────────────────────────
 
     def get_pending_orders(self, page, page_size, search, date_start, date_end):
@@ -219,7 +183,7 @@ class AftersaleService:
 
     def get_cases(self, page, page_size, status, date_start, date_end,
                   reason_id, channel_name, province, city, district,
-                  reason_category, reason_name, shipping_alias, return_alias,
+                  reason_category, reason_name, shipping_alias,
                   model_code=None, search=None, sort_by=None, sort_order='desc'):
         items, total = _repo.get_cases(
             page=page, page_size=page_size,
@@ -227,7 +191,7 @@ class AftersaleService:
             reason_id=reason_id, channel_name=channel_name,
             province=province, city=city, district=district,
             reason_category=reason_category, reason_name=reason_name,
-            shipping_alias=shipping_alias, return_alias=return_alias,
+            shipping_alias=shipping_alias,
             model_code=model_code, search=search,
             sort_by=sort_by, sort_order=sort_order,
         )
@@ -331,10 +295,10 @@ class AftersaleService:
 
     # ── 自动匹配 ────────────────────────────────────────────────────────────
 
-    def auto_match(self, text):
+    def auto_match(self, text, buyer_remark=None):
         if not text:
             return Result.ok(data=[])
-        results = _repo.auto_match(text)
+        results = _repo.auto_match(text, buyer_remark=buyer_remark)
         return Result.ok(data=results)
 
     # ── 统计 & 图表 ─────────────────────────────────────────────────────────
@@ -358,7 +322,6 @@ class AftersaleService:
             'reason_ids':               data.get('reason_ids') or [],
             'reason_category_ids':      data.get('reason_category_ids') or [],
             'shipping_alias_ids':       data.get('shipping_alias_ids') or [],
-            'return_alias_ids':         data.get('return_alias_ids') or [],
         }
         opts = _repo.get_cross_filter_options(filters)
         return Result.ok(data=opts)
@@ -386,7 +349,6 @@ class AftersaleService:
             'reason_ids':              data.get('reason_ids') or [],
             'reason_category_ids':     data.get('reason_category_ids') or [],
             'shipping_alias_ids':      data.get('shipping_alias_ids') or [],
-            'return_alias_ids':        data.get('return_alias_ids') or [],
         }
         result = _repo.get_chart_data(filters)
         return Result.ok(data=result)
@@ -411,6 +373,38 @@ class AftersaleService:
         if not ok:
             return Result.fail('过滤词不存在')
         return Result.ok()
+
+    # ── 词典自动建议 ────────────────────────────────────────────────────────────
+
+    def get_dict_suggestions(self, type_filter=None, status='pending'):
+        items = _repo.get_dict_suggestions(type_filter=type_filter, status=status)
+        return Result.ok(data=[s.to_dict() for s in items])
+
+    def accept_dict_suggestion(self, sug_id, target_type=None, canonical=None):
+        sug, err = _repo.accept_dict_suggestion(sug_id, target_type=target_type,
+                                                canonical=canonical)
+        if err:
+            return Result.fail(err)
+        return Result.ok(data=sug.to_dict())
+
+    def reject_dict_suggestion(self, sug_id):
+        sug = _repo.reject_dict_suggestion(sug_id)
+        if not sug:
+            return Result.fail('建议不存在或已处理')
+        return Result.ok(data=sug.to_dict())
+
+    # ── 原因-简称亲和度 ──────────────────────────────────────────────────────────
+
+    def get_alias_affinity(self, reason_id, alias_ids):
+        affinity = _repo.get_alias_affinity(reason_id, alias_ids)
+        return Result.ok(data=affinity)
+
+    # ── 管理工具 ────────────────────────────────────────────────────────────────
+
+    def migrate_alias_keywords(self):
+        total, changed = _repo.migrate_alias_keywords()
+        return Result.ok(data={'total': total, 'changed': changed},
+                         message=f'迁移完成：共 {total} 条简称，更新 {changed} 条')
 
     # ── 售后原因关键词词典（标准档）────────────────────────────────────────────
 
