@@ -14,7 +14,7 @@ const COL_DEFS = [
   { key: 'city',            header: '城市',          sortBtn: false, pad: 44, min: 72,  max: 120 },
   { key: 'district',        header: '县区',          sortBtn: false, pad: 44, min: 72,  max: 120 },
   { key: 'shipping_alias',  header: '发货物料简称',  sortBtn: false, pad: 44, min: 115, max: 180 },
-  { key: 'return_alias',    header: '售后物料简称',  sortBtn: false, pad: 44, min: 115, max: 180 },
+
 ]
 // 固定宽度列（不参与动态计算）
 const W_PURCHASE = 100
@@ -44,7 +44,7 @@ function cellValue(row, key) {
     case 'city':            return row.city || ''
     case 'district':        return row.district || ''
     case 'shipping_alias':  return r0?.shipping_alias_name || ''
-    case 'return_alias':    return r0?.return_alias_name   || ''
+
     default:                return ''
   }
 }
@@ -86,7 +86,7 @@ const filters = ref({
   reason_category: '',
   reason_name:     '',
   shipping_alias:  '',
-  return_alias:    '',
+
 })
 
 // 筛选下拉候选项（懒加载：第一次展开下拉时才请求）
@@ -99,7 +99,7 @@ const filterOptions = ref({
   reason_categories: [],
   reason_names:      [],
   shipping_aliases:  [],
-  return_aliases:    [],
+
 })
 
 // 排序
@@ -153,7 +153,7 @@ async function loadData() {
       reason_category:  f.reason_category || undefined,
       reason_name:      f.reason_name || undefined,
       shipping_alias:   f.shipping_alias || undefined,
-      return_alias:     f.return_alias || undefined,
+
       sort_by:          currentSortBy.value || undefined,
       sort_order:       currentSortOrder.value,
     }
@@ -499,27 +499,6 @@ defineExpose({ refresh: loadData })
           </template>
         </el-table-column>
 
-        <!-- 售后物料简称 -->
-        <el-table-column :width="colWidths.return_alias">
-          <template #header>
-            <div class="th-top"><span class="th-lbl">售后物料简称</span></div>
-            <div class="th-filter-wrap" @click.stop>
-              <el-select
-                v-model="filters.return_alias" filterable clearable size="small"
-                placeholder="筛选..." class="th-sel" :teleported="true"
-                @visible-change="onFilterDropdownOpen" @change="onColFilterChange" @clear="onColFilterChange"
-              >
-                <el-option v-for="v in filterOptions.return_aliases" :key="v.id" :value="v.id" :label="v.name" />
-              </el-select>
-            </div>
-          </template>
-          <template #default="{ row }">
-            <div class="cell-with-badge">
-              <span>{{ firstReason(row, 'return_alias') || '—' }}</span>
-              <span v-if="extraCount(row) > 0" class="multi-badge">+{{ extraCount(row) }}</span>
-            </div>
-          </template>
-        </el-table-column>
 
       </el-table>
     </div>

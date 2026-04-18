@@ -156,9 +156,10 @@ import_product_raw
   # name = 品名（去除「（已停用）」）+ 规格
 
 erp_code_rules
-  id, prefix, type(finished/packaged/semi/material), description, created_at
+  id, prefix, type(finished/packaged/semi/material), description, is_disabled(TINYINT 0/1 DEFAULT 0), created_at
   # UNIQUE(prefix, type)，同一前缀可对应多个类型，无优先级
   # type含义：finished=成品，packaged=产成品，semi=半成品，material=物料
+  # is_disabled=1 时，成品表/图片/图表视图过滤掉该前缀的成品（全局生效）
 
 product_category
   id, name(UNIQUE), sort_order, created_at

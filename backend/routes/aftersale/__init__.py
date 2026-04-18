@@ -265,3 +265,16 @@ def get_alias_affinity():
 @aftersale_bp.post('/admin/migrate-alias-keywords')
 def migrate_alias_keywords():
     return _svc.migrate_alias_keywords().to_response()
+
+
+@aftersale_bp.get('/admin/keyword-candidate-stats')
+def keyword_candidate_stats():
+    return _svc.get_keyword_candidate_stats().to_response()
+
+
+@aftersale_bp.post('/admin/cleanup-keyword-candidates')
+def cleanup_keyword_candidates():
+    body          = request.get_json() or {}
+    min_count     = int(body.get('min_count', 2))
+    top_per_reason = int(body.get('top_per_reason', 200))
+    return _svc.cleanup_keyword_candidates(min_count=min_count, top_per_reason=top_per_reason).to_response()

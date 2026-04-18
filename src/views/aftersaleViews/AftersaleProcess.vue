@@ -1,6 +1,6 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
-import { ref, computed, onMounted, onUnmounted, watchEffect } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Delete, Setting, ArrowDown } from '@element-plus/icons-vue'
 import http from '@/api/http.js'
@@ -18,14 +18,9 @@ const { canEditAftersale } = usePermission()
 const orders      = ref([])
 const totalOrders = ref(0)
 const page        = ref(1)
-const PAGE_SIZE   = 30
+const PAGE_SIZE   = 50
 const loadingList = ref(false)
-const loadingMore = ref(false)
-const hasMore     = computed(() => orders.value.length < totalOrders.value)
-
-// 懒加载哨兵元素
-const sentinel = ref(null)
-let   observer = null
+const totalPages  = computed(() => Math.ceil(totalOrders.value / PAGE_SIZE))
 
 // 当前工单
 const currentOrder  = ref(null)
@@ -65,7 +60,6 @@ const contentItems = ref([])
 const matchDebug          = ref(null)   // null | { source, text, category_name, ... }
 const showMatchDebug      = ref(true)   // 展开/折叠控制
 const expandedCandidates  = ref(new Set())   // 已展开系列的下标集合
-
 // ── 计算属性 ──────────────────────────────────────
 
 // 品类选项（产品库三级联动第一级）
@@ -99,41 +93,22 @@ const canConfirm = computed(() => {
 
 // ── 生命周期 ──────────────────────────────────────
 onMounted(async () => {
-  initObserver()
   // 先并发加载匹配所需的基础数据，再加载订单列表
   // 避免 selectOrder 运行时 categoryTree / productAliases / reasonGroups 尚未就绪
   await Promise.all([loadCategoryTree(), loadAliases(), loadReasonOptions()])
   loadOrders()
 })
 
-onUnmounted(() => {
-  observer?.disconnect()
-})
-
 // ── 方法 ──────────────────────────────────────────
 
-// 初始化 IntersectionObserver，监听哨兵进入视口时追加加载
-function initObserver() {
-  observer = new IntersectionObserver(
-    (entries) => {
-      if (entries[0].isIntersecting && hasMore.value && !loadingMore.value) {
-        loadMore()
-      }
-    },
-    { threshold: 0.1 }
-  )
-  watchEffect(() => {
-    if (sentinel.value) observer.observe(sentinel.value)
-  })
-}
-
-// 初次加载（重置列表）
-async function loadOrders() {
+// 加载指定页（p 省略时重置第1页）
+async function loadOrders(p) {
   loadingList.value = true
-  page.value = 1
+  if (p != null) page.value = p
+  else page.value = 1
   try {
     const res = await http.get('/api/aftersale/pending', {
-      params: { page: 1, page_size: PAGE_SIZE },
+      params: { page: page.value, page_size: PAGE_SIZE },
     })
     if (res.success) {
       orders.value      = res.data.items
@@ -147,23 +122,8 @@ async function loadOrders() {
   }
 }
 
-// 懒加载：追加下一页
-async function loadMore() {
-  if (!hasMore.value || loadingMore.value) return
-  loadingMore.value = true
-  page.value += 1
-  try {
-    const res = await http.get('/api/aftersale/pending', {
-      params: { page: page.value, page_size: PAGE_SIZE },
-    })
-    if (res.success) {
-      orders.value.push(...res.data.items)
-      totalOrders.value = res.data.total
-    }
-  } finally {
-    loadingMore.value = false
-  }
-}
+function goPrev() { if (page.value > 1) loadOrders(page.value - 1) }
+function goNext() { if (page.value < totalPages.value) loadOrders(page.value + 1) }
 
 // 加载品类树 + 型号生命周期（并发）
 async function loadCategoryTree() {
@@ -254,6 +214,10 @@ async function selectOrder(order) {
   // 从商家备注解析购买日期（仅用于初始推断，存入第一条内容项）
   const parsedPurchaseDate = parsePurchaseDateFromRemark(order.seller_remark)
 
+  // 检测买家/商家备注是否含 / 多产品段落
+  const slashSegments = detectSlashSegments(order.buyer_remark, order.seller_remark)
+  const isMultiProduct = slashSegments.length >= 2
+
   // 先放一条空内容占位，并预填购买日期
   const firstItem = makeEmptyItem()
   firstItem.purchase_date = parsedPurchaseDate
@@ -291,7 +255,7 @@ async function selectOrder(order) {
   const apiMatch = apiResult?.category_id ? apiResult : null
 
   // ── 来源2：买家留言 + 商家备注 文本匹配（前端） ──────
-  const textMatch = matchTextToModel(order.buyer_remark, order.seller_remark, parsedPurchaseDate)
+  const textMatch = matchTextToModel(order.buyer_remark, null, parsedPurchaseDate)
 
   // ── 简称候选（前端实时计算）────────────────────────
   const shippingAliasCandidates = computeShippingAliasCandidates(order.products)
@@ -333,34 +297,33 @@ async function selectOrder(order) {
         }
       }
     }
-    item.category_id = apiMatch.category_id
-    item.series_id   = apiMatch.series_id
-    item.model_id    = apiMatch.model_id
-    item.confidence  = dateOk ? 'high' : 'low'
+    item.category_id      = apiMatch.category_id
+    item.series_id        = apiMatch.series_id
+    item.model_id         = apiMatch.model_id
+    item.confidence       = apiMatch.series_confidence || (dateOk ? 'high' : 'low')
+    item.model_confidence = apiMatch.model_confidence || null
     const names = resolveModelNames(apiMatch.category_id, apiMatch.series_id, apiMatch.model_id)
     matchDebug.value = {
-      source:        'api',
-      text:          debugText,
-      date_ok:       dateOk,
-      date_reason:   dateReason,
-      category_name: names.category_name,
-      series_name:   names.series_name,
-      model_name:    names.model_name,
-      model_code:    names.model_code,
-      score:                  null,
-      confidence:             'high',
-      candidates:             (apiMatch.candidates || []).map(c => {
-        const seriesMax = c.models?.[0]?.score || 1
-        return {
-          ...c,
-          models: (c.models || []).map(m => ({
-            ...m,
-            score: m.score / seriesMax,
-            lifecycleOk:     m.date_ok !== false,
-            lifecycleStatus: m.date_ok === false ? 'too_early' : null,
-          })),
-        }
-      }),
+      source:             'api',
+      text:               debugText,
+      date_ok:            dateOk,
+      date_reason:        dateReason,
+      category_name:      names.category_name,
+      series_name:        names.series_name,
+      model_name:         names.model_name,
+      model_code:         names.model_code,
+      score:              null,
+      confidence:         apiMatch.series_confidence || 'high',
+      series_confidence:  apiMatch.series_confidence || null,
+      model_confidence:   apiMatch.model_confidence  || null,
+      candidates:             (apiMatch.candidates || []).map(c => ({
+        ...c,
+        models: (c.models || []).map(m => ({
+          ...m,
+          lifecycleOk:     m.date_ok !== false,
+          lifecycleStatus: m.date_ok === false ? 'too_early' : null,
+        })),
+      })),
       alias_source:           aliasSource,
       alias_value:            historyShippingName,
       suggested_reason_id:    suggestedReasonId,
@@ -370,19 +333,22 @@ async function selectOrder(order) {
     }
   } else if (textMatch) {
     // 仅文本匹配 → 根据分数设置置信度
-    item.category_id = textMatch.category_id
-    item.series_id   = textMatch.series_id
-    item.model_id    = textMatch.model_id
-    item.confidence  = scoreToConfidence(textMatch.score)
+    item.category_id      = textMatch.category_id
+    item.series_id        = textMatch.series_id
+    item.model_id         = textMatch.model_id
+    item.confidence       = textMatch.series_confidence
+    item.model_confidence = textMatch.model_confidence || null
     matchDebug.value = {
-      source:                 'text',
-      text:                   debugText,
-      category_name:          textMatch.category_name,
-      series_name:            textMatch.series_name,
-      model_name:             textMatch.model_name,
-      model_code:             textMatch.model_code,
-      score:                  textMatch.score,
-      confidence:             scoreToConfidence(textMatch.score),
+      source:             'text',
+      text:               debugText,
+      category_name:      textMatch.category_name,
+      series_name:        textMatch.series_name,
+      model_name:         textMatch.model_name,
+      model_code:         textMatch.model_code,
+      score:              textMatch.score,
+      confidence:         textMatch.series_confidence,
+      series_confidence:  textMatch.series_confidence,
+      model_confidence:   textMatch.model_confidence || null,
       candidates:             textMatch.candidates || [],
       alias_source:           aliasSource,
       alias_value:            historyShippingName,
@@ -405,6 +371,38 @@ async function selectOrder(order) {
       shipping_alias_candidates: shippingAliasCandidates,
       reason_candidates:         reasonCandidates,
     }
+  }
+
+  // ── 多产品模式：为每段额外建面板并独立匹配 ──────────────
+  if (isMultiProduct && currentOrder.value?.ecommerce_order_no === orderNo) {
+    // 为每个段落创建 item（第一个复用已有 firstItem）
+    while (contentItems.value.length < slashSegments.length) {
+      const ni = makeEmptyItem()
+      ni.purchase_date = parsedPurchaseDate
+      contentItems.value.push(ni)
+    }
+    // 每段独立产品匹配 + 原因候选
+    await Promise.all(slashSegments.map(async (seg, i) => {
+      if (currentOrder.value?.ecommerce_order_no !== orderNo) return
+      const item = contentItems.value[i]
+      if (!item) return
+      item._segmentText = seg
+      // 文本匹配产品
+      const tm = matchTextToModel(seg, null, parsedPurchaseDate)
+      if (tm) {
+        item.category_id = tm.category_id
+        item.series_id   = tm.series_id
+        item.model_id    = tm.model_id
+        item.confidence  = scoreToConfidence(tm.score)
+      }
+      // 原因候选（per-segment auto-match）
+      try {
+        const r = await http.post('/api/aftersale/auto-match', { text: seg, buyer_remark: '' })
+        if (r.success && currentOrder.value?.ecommerce_order_no === orderNo) {
+          item._reasonCandidates = r.data || []
+        }
+      } catch (_) { /* ignore */ }
+    }))
   }
 }
 
@@ -456,7 +454,20 @@ function makeEmptyItem() {
     _shippingQuery:    '',
     // 内部：多面板时该内容对应的发货物料 code 列表
     _selectedProducts: [],
+    // 多产品模式：该面板对应的文本段（来自 / 分割）
+    _segmentText:      null,
+    // 多产品模式：该面板的原因候选列表（per-item auto-match 结果）
+    _reasonCandidates: [],
   }
+}
+
+// 检测买家/商家备注是否包含 / 分隔的多产品段落
+// 返回有效段列表（≥2 段且每段至少 2 字才触发）
+function detectSlashSegments(buyerRemark, sellerRemark) {
+  const text = (buyerRemark || sellerRemark || '').trim()
+  if (!text.includes('/')) return []
+  const segs = text.split('/').map(s => s.trim()).filter(s => s.length >= 2)
+  return segs.length >= 2 ? segs : []
 }
 
 // 新增一条空白售后内容（手动添加，不带置信度标记）
@@ -614,133 +625,161 @@ function calcMatchScore(text, name) {
 }
 
 /**
+ * 型号置信度：独立于系列置信度，基于型号 model_code 是否存在。
+ * hasTokens = 型号有独立标识（model_code 非空），否则无法区分型号返回 null。
+ */
+function modelScoreToConfidence(score, hasTokens) {
+  if (!hasTokens) return null
+  if (score >= 0.5)  return 'high'
+  if (score >= 0.25) return 'medium'
+  return 'low'
+}
+
+/**
  * 对品类树中每个系列/型号与备注文本打分，返回最佳匹配。
- * 策略：
- *   1. 对每个系列，取系列名与文本的分值（seriesScore）
- *   2. 在该系列的型号中，取型号名/model_code 与文本的最高分值（modelScore）
- *   3. 取 max(seriesScore*0.8, modelScore) 作为该系列的最终分
- *   4. 若系列分最高但无具体型号匹配，默认选第一个型号，分值打 0.7 折
+ * 策略（两阶段，系列分与型号分独立）：
+ *   阶段一：对每个系列打 seriesScore，取分 > 0 的系列，按分降序取前5
+ *   阶段二：在每个入选系列内对型号打 modelScore（文本 + 变体字母 + 生命周期）
  *
- * 返回 { category_id, series_id, model_id, score } 或 null
+ * 返回 { category_id, series_id, model_id, series_confidence, model_confidence, ... } 或 null
  */
 function matchTextToModel(remark1, remark2, purchaseDateStr = null) {
   const text = [remark1, remark2].filter(Boolean).join(' ')
   if (!text.trim() || !categoryTree.value.length) return null
 
-  let bestScore  = 0
-  let bestResult = null
-  const allCandidates = []
+  const buyYm     = purchaseDateStr ? purchaseDateStr.slice(0, 7) : null
+  const currentYm = new Date().toISOString().slice(0, 7)
+
+  // ── 阶段一：系列评分 ──────────────────────────────────────────────────
+  const seriesCandidates = []   // { cat, series, seriesScore }
+
+  // 买家留言中的版本号（单位数字开头，如"2.1"、"3.1"，排除日期/尺寸）
+  const brVersions = [...text.matchAll(/(?<![0-9.])([1-9]\.\d+)(?![0-9.])/g)].map(m => m[1])
+  // 将文本中的版本号剥离，用于系列基础名匹配（避免"2.1"误命中"骑士(V2.1)"的model_code中的"2.1"）
+  const textStripped = text.replace(/(?<![0-9.])([1-9]\.\d+)(?![0-9.])/g, ' ')
 
   for (const cat of categoryTree.value) {
     for (const series of (cat.series || [])) {
       if (!series.models?.length) continue
 
-      // 系列分：系列名 + 系列代码
+      // 系列评分：用去掉版本括号的基础名 + 剥离版本号的文本
+      // 先判断名称是否匹配，匹配不上直接跳过（版本号相同不能作为匹配依据）
+      const seriesNameBase = series.name.replace(/\s*[（(][Vv][^）)]*[）)]/g, '').trim()
+      // 系列代码用严格包含匹配（避免"LH21"的"21"误命中"2021.6.1"）
+      const codeScore = (series.code && textStripped.toLowerCase().includes(series.code.toLowerCase())) ? 0.6 : 0
       const seriesScore = Math.max(
-        calcMatchScore(text, series.name),
-        calcMatchScore(text, series.code) * 0.6,
+        calcMatchScore(textStripped, seriesNameBase),
+        codeScore,
       )
+      if (seriesScore <= 0) continue
 
-      // 在系列内找最佳型号（考虑文本分 + 生命周期）
-      // 购买日期的年月（YYYY-MM），用于生命周期过滤
-      const buyYm = purchaseDateStr ? purchaseDateStr.slice(0, 7) : null
-
-      const currentYm = new Date().toISOString().slice(0, 7)
-      let bestModelScore = 0
-      let bestModel      = series.models[0]
-      const modelDetails = []   // 用于展开面板
-
-      for (const model of series.models) {
-        let s = Math.max(
-          calcMatchScore(text, model.name),
-          calcMatchScore(text, model.code)       * 0.5,
-          calcMatchScore(text, model.model_code) * 0.5,
-        )
-        // 变体字母加成：型号末尾为单字母（如 -GN-B），且该字母以词首形式出现在文本中（如"B新款"）
-        const variantM = model.model_code?.match(/-([A-Z])$/i)
-        if (variantM) {
-          const letter = variantM[1]
-          if (new RegExp(`(^|[\\s（(【])${letter}(?=[\\u4e00-\\u9fff0-9])`, 'i').test(text)) {
-            s += 0.1
-          }
-        }
-        // 生命周期调整：不论文本得分高低，只要有购买日期就参与计算
-        // 无法从文本区分型号时（各型号文本分相同），生命周期是唯一区分依据
-        let lifecycleOk = null      // null=无数据, true=在周期内, false=不符
-        let lifecycleStatus = null  // 'ok' | 'too_early' | 'too_late' | null
-        if (buyYm) {
-          const lc = modelLifecycles.value[model.id]
-          if (lc) {
-            const effectiveDelisted = lc.delisted_yymm || currentYm
-            const tooEarly = lc.listed_yymm && buyYm < lc.listed_yymm
-            const tooLate  = buyYm > effectiveDelisted
-            lifecycleOk = !tooEarly && !tooLate
-            lifecycleStatus = tooEarly ? 'too_early' : tooLate ? 'too_late' : 'ok'
-            s += lifecycleOk ? 0.15 : -0.15
-          }
-        }
-        modelDetails.push({
-          id:             model.id,
-          name:           model.name,
-          model_code:     model.model_code || '',
-          score:          s,
-          lifecycleOk,
-          lifecycleStatus,
-        })
-        if (s > bestModelScore) { bestModelScore = s; bestModel = model }
+      // 名称已匹配 → 版本号一致性校验（次级过滤）
+      // 例：留言"2.1进取" vs 系列"进取（V2.3）" → 名称匹配但版本不符 → 跳过
+      if (brVersions.length) {
+        const seriesVersions = [...(series.name || '').matchAll(/[vV](\d+\.\d+)/g)].map(m => m[1])
+        if (seriesVersions.length && !brVersions.some(v => seriesVersions.includes(v))) continue
       }
 
-      // 型号明细按得分降序
-      modelDetails.sort((a, b) => b.score - a.score)
-
-      // 本系列最终得分
-      let totalScore    = Math.max(seriesScore * 0.8, bestModelScore)
-      let selectedModel = bestModel
-
-      // 系列分更高但型号无明显文本匹配 → 用 bestModel（已含生命周期筛选），降分
-      // 阈值 0.5 = 纯文本 0.35 + 生命周期加成 0.15，避免已有生命周期优选的 model 被覆盖
-      if (seriesScore * 0.8 > bestModelScore && bestModelScore < 0.5) {
-        totalScore    = seriesScore * 0.7
-        selectedModel = bestModel   // 保留生命周期筛选结果，不强制回第一个
-      }
-
-      // 收集所有得分 > 0.05 的候选，供依据面板展示
-      if (totalScore > 0.05) {
-        allCandidates.push({
-          category_id:   cat.id,
-          category_name: cat.name,
-          series_id:     series.id,
-          series_name:   series.name,
-          model_id:      selectedModel.id,
-          model_name:    selectedModel.name,
-          model_code:    selectedModel.model_code || '',
-          score:         totalScore,
-          models:        modelDetails,   // 系列内所有型号得分
-        })
-      }
-
-      if (totalScore > bestScore) {
-        bestScore  = totalScore
-        bestResult = {
-          category_id:   cat.id,
-          category_name: cat.name,
-          series_id:     series.id,
-          series_name:   series.name,
-          model_id:      selectedModel.id,
-          model_name:    selectedModel.name,
-          model_code:    selectedModel.model_code || '',
-          score:         totalScore,
-        }
-      }
+      // 版本确认 → seriesScore 提升至满分
+      const seriesHasVersionInStage1 = /[vV]\d+\.\d+/.test(series.name || '')
+      const versionConfirmedInStage1 = seriesHasVersionInStage1 && brVersions.some(v =>
+        [...(series.name || '').matchAll(/[vV](\d+\.\d+)/g)].map(m => m[1]).includes(v)
+      )
+      const finalSeriesScore = versionConfirmedInStage1 ? 1.0 : seriesScore
+      seriesCandidates.push({ cat, series, seriesScore: finalSeriesScore })
     }
   }
 
-  if (bestScore <= 0.1) return null
+  if (!seriesCandidates.length) return null
 
-  // 候选按分数降序，最多保留 5 条
-  allCandidates.sort((a, b) => b.score - a.score)
-  bestResult.candidates = allCandidates.slice(0, 5)
-  return bestResult
+  // 按系列分降序，取前5
+  seriesCandidates.sort((a, b) => b.seriesScore - a.seriesScore)
+  const topSeries = seriesCandidates.slice(0, 5)
+
+  // ── 阶段二：在每个入选系列内评分型号 ─────────────────────────────────
+  const allCandidates = []
+
+  for (const { cat, series, seriesScore } of topSeries) {
+    // 系列名含版本号时，需买家留言也命中该版本才算 high；否则最多 medium
+    const seriesHasVersion = /[vV]\d+\.\d+/.test(series.name || '')
+    const versionConfirmed = seriesHasVersion && brVersions.some(v =>
+      [...(series.name || '').matchAll(/[vV](\d+\.\d+)/g)].map(m => m[1]).includes(v)
+    )
+    const seriesConf = seriesHasVersion && !versionConfirmed
+      ? (seriesScore >= 0.5 ? 'medium' : 'low')
+      : scoreToConfidence(seriesScore)
+    let bestModelScore = 0
+    let bestModel      = series.models[0]
+    const modelDetails = []
+
+    for (const model of series.models) {
+      let s = Math.max(
+        calcMatchScore(text, model.name),
+        calcMatchScore(text, model.code)       * 0.5,
+        calcMatchScore(text, model.model_code) * 0.5,
+      )
+      // 变体字母加成：型号末尾为单字母（如 -GN-B），且该字母以词首形式出现在文本中（如"B新款"）
+      const variantM = model.model_code?.match(/-([A-Z])$/i)
+      if (variantM) {
+        const letter = variantM[1]
+        if (new RegExp(`(^|[\\s（(【])${letter}(?=[\\u4e00-\\u9fff0-9])`, 'i').test(text)) {
+          s += 0.1
+        }
+      }
+      // 生命周期调整：无法从文本区分型号时，生命周期是唯一区分依据
+      let lifecycleOk     = null  // null=无数据, true=在周期内, false=不符
+      let lifecycleStatus = null  // 'ok' | 'too_early' | 'too_late' | null
+      if (buyYm) {
+        const lc = modelLifecycles.value[model.id]
+        if (lc) {
+          const effectiveDelisted = lc.delisted_yymm || currentYm
+          const tooEarly = lc.listed_yymm && buyYm < lc.listed_yymm
+          const tooLate  = buyYm > effectiveDelisted
+          lifecycleOk     = !tooEarly && !tooLate
+          lifecycleStatus = tooEarly ? 'too_early' : tooLate ? 'too_late' : 'ok'
+          s += lifecycleOk ? 0.15 : -0.15
+        }
+      }
+      modelDetails.push({
+        id:             model.id,
+        name:           model.name,
+        model_code:     model.model_code || '',
+        score:          s,
+        lifecycleOk,
+        lifecycleStatus,
+      })
+      if (s > bestModelScore) { bestModelScore = s; bestModel = model }
+    }
+
+    modelDetails.sort((a, b) => b.score - a.score)
+
+    const modelConf = modelScoreToConfidence(bestModelScore, !!bestModel.model_code)
+
+    // 系列名含版本但买家留言未确认版本 → 得分打折（最高 0.75）
+    const displayScore = seriesHasVersion && !versionConfirmed ? Math.min(seriesScore, 0.75) : seriesScore
+    allCandidates.push({
+      category_id:       cat.id,
+      category_name:     cat.name,
+      series_id:         series.id,
+      series_name:       series.name,
+      series_score:      displayScore,
+      series_confidence: seriesConf,
+      model_id:          bestModel.id,
+      model_name:        bestModel.name,
+      model_code:        bestModel.model_code || '',
+      model_confidence:  modelConf,
+      score:             displayScore,   // 向后兼容（供模板宽度条使用）
+      models:            modelDetails,
+    })
+  }
+
+  if (!allCandidates.length || allCandidates[0].seriesScore <= 0.1) return null
+
+  const best = allCandidates[0]
+  return {
+    ...best,
+    candidates: allCandidates,
+  }
 }
 
 /**
@@ -817,18 +856,18 @@ function applyModelDetail(c, m) {
   item.confidence  = scoreToConfidence(m.score)
 }
 
-function applyReasonCandidate(candidate) {
-  const item = contentItems.value[0]
-  if (!item) return
+function applyReasonCandidate(candidate, item) {
+  const target = item || contentItems.value[0]
+  if (!target) return
   // 在 reasonGroups 中查找 reason_id 对应的 category_id
   for (const group of reasonGroups.value) {
     if (group.reasons?.find(r => r.id === candidate.reason_id)) {
-      item.reason_category_id = group.category_id
-      item.reason_id          = candidate.reason_id
+      target.reason_category_id = group.category_id
+      target.reason_id          = candidate.reason_id
       return
     }
   }
-  item.reason_id = candidate.reason_id
+  target.reason_id = candidate.reason_id
 }
 
 // 根据 reason_id 从 reasonGroups 中查找原因名称及一级分类名
@@ -961,7 +1000,7 @@ async function learnShippingAliasKeywords(products, items) {
     if (!name) return ''
     const parts = name.split('_').filter(p => {
       if (!p || p.length <= 1) return false
-      return !ignoreTerms.some(t => p.toLowerCase().includes(t))
+      return !ignoreTerms.some(t => p.toLowerCase() === t)  // 精确匹配，与后端 _parse_product_tokens 保持一致
     })
     return parts[parts.length - 1] || name
   }
@@ -1020,7 +1059,7 @@ async function learnShippingAliasKeywords(products, items) {
       const rawPatterns = extractKeywordPatterns(existing)
       let patterns = rawPatterns
       if (ignoreTerms.length) {
-        patterns = rawPatterns.filter(p => !ignoreTerms.some(t => p.toLowerCase().includes(t)))
+        patterns = rawPatterns.filter(p => !ignoreTerms.some(t => p.toLowerCase() === t))  // 精确匹配
       }
       console.log(`[简称学习] alias="${aliasOpt.name}" 原始子串:`, rawPatterns, '过滤后:', patterns)
       if (patterns.length) {
@@ -1168,6 +1207,12 @@ async function ignoreCase() {
         </div>
       </div>
 
+      <!-- 批量操作按钮 -->
+      <div class="batch-bar">
+        <button class="btn-batch">批量处理</button>
+        <button class="btn-batch-submit">提交</button>
+      </div>
+
       <div v-loading="loadingList" class="order-list">
         <div
           v-for="order in orders"
@@ -1189,14 +1234,16 @@ async function ignoreCase() {
           </div>
         </div>
 
-        <div ref="sentinel" class="load-sentinel">
-          <span v-if="loadingMore" class="load-more-hint">加载中…</span>
-          <span v-else-if="!hasMore && orders.length > 0" class="load-more-hint">已全部加载</span>
-        </div>
-
         <div v-if="!loadingList && orders.length === 0" class="queue-empty">
           暂无待处理订单
         </div>
+      </div>
+
+      <!-- 分页 -->
+      <div v-if="totalPages > 1" class="queue-pagination">
+        <button class="pg-btn" :disabled="page <= 1" @click="goPrev">‹</button>
+        <span class="pg-info">{{ page }} / {{ totalPages }}</span>
+        <button class="pg-btn" :disabled="page >= totalPages" @click="goNext">›</button>
       </div>
     </aside>
 
@@ -1468,6 +1515,35 @@ async function ignoreCase() {
                   </el-checkbox>
                 </el-checkbox-group>
               </div>
+
+              <!-- 多产品模式：该段的原因候选 -->
+              <div v-if="item._segmentText && item._reasonCandidates?.length" class="item-reason-candidates">
+                <div class="irc-header">
+                  <span class="irc-segment">「{{ item._segmentText }}」</span>
+                  <span class="irc-hint">原因建议 · 点击应用</span>
+                </div>
+                <div
+                  v-for="(c, ci) in item._reasonCandidates"
+                  :key="c.reason_id"
+                  class="candidate-item alias-candidate"
+                  :class="{ 'is-best': ci === 0 }"
+                  @click="applyReasonCandidate(c, item)"
+                  title="点击应用"
+                >
+                  <span class="cand-rank">{{ ci + 1 }}</span>
+                  <span class="cand-path">
+                    <span v-if="c.category_name" class="cand-cat">{{ c.category_name }} › </span>{{ c.name }}
+                  </span>
+                  <span v-if="c.matched_keywords?.length" class="cand-matched-hint">{{ c.matched_keywords.join('、') }}</span>
+                  <span class="source-badge" :class="c.source === 'keyword' ? 'src-api' : 'src-text'" style="flex-shrink:0">
+                    {{ c.source === 'keyword' ? '关键词' : '历史' }}
+                  </span>
+                  <span class="cand-score">{{ Math.round((c.total_score ?? c.confidence ?? 0) * 100) }}</span>
+                  <div class="cand-bar-wrap">
+                    <div class="cand-bar" :style="{ width: `${Math.round((c.total_score ?? c.confidence ?? 0) * 100)}%` }" />
+                  </div>
+                </div>
+              </div>
             </div>
           </section>
 
@@ -1667,7 +1743,7 @@ async function ignoreCase() {
               </div>
 
               <!-- 无匹配提示 -->
-              <div v-if="!matchDebug.source && !matchDebug.alias_value" class="debug-no-match">
+              <div v-else-if="!matchDebug.source && !matchDebug.alias_value" class="debug-no-match">
                 买家留言和商家备注中未找到与产品库相似的内容，请手动选择型号
               </div>
               <div v-else-if="!matchDebug.source" class="debug-no-match">
@@ -1736,6 +1812,28 @@ async function ignoreCase() {
 }
 .btn-icon:hover { background: var(--bg); color: var(--text-primary); }
 
+.batch-bar {
+  flex-shrink: 0; display: flex; gap: 6px;
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid var(--border);
+}
+.btn-batch {
+  flex: 1; height: 28px;
+  border: 1px solid var(--border); border-radius: 7px;
+  background: transparent; color: var(--text-secondary);
+  font-size: 12px; font-family: var(--font-family);
+  cursor: pointer; transition: all 0.15s;
+}
+.btn-batch:hover { border-color: var(--accent); color: var(--accent); }
+.btn-batch-submit {
+  flex: 1; height: 28px;
+  border: none; border-radius: 7px;
+  background: var(--accent); color: #fff;
+  font-size: 12px; font-family: var(--font-family);
+  cursor: pointer; transition: background 0.15s;
+}
+.btn-batch-submit:hover { background: var(--accent-hover); }
+
 .order-list {
   flex: 1; overflow-y: auto;
   padding: 4px 6px 8px;
@@ -1771,11 +1869,21 @@ async function ignoreCase() {
   text-align: center; padding: 40px 0;
   font-size: 13px; color: var(--text-muted);
 }
-.load-sentinel {
-  height: 32px; display: flex;
-  align-items: center; justify-content: center;
+.queue-pagination {
+  flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+  gap: 6px; padding: 6px 0;
 }
-.load-more-hint { font-size: 11px; color: var(--text-muted); }
+.pg-btn {
+  width: 24px; height: 24px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg-card); color: var(--text-muted);
+  font-size: 14px; line-height: 1; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s;
+}
+.pg-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.pg-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.pg-info { font-size: 11px; color: var(--text-muted); }
 
 /* ── 右侧工作区 ────────────────────────────────── */
 .work-area {
@@ -1891,6 +1999,23 @@ async function ignoreCase() {
   border-radius: 10px; padding: 0 14px 12px;
   margin-bottom: 10px;
   box-shadow: 0 2px 8px rgba(80,60,40,0.12);
+}
+
+/* 多产品模式：per-item 原因候选区 */
+.item-reason-candidates {
+  margin-top: 10px;
+  border-top: 1px dashed var(--border);
+  padding-top: 8px;
+}
+.irc-header {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 6px;
+}
+.irc-segment {
+  font-size: 12px; font-weight: 600; color: var(--accent);
+}
+.irc-hint {
+  font-size: 11px; color: var(--text-muted);
 }
 
 /* 卡片头：序号 + 删除 */

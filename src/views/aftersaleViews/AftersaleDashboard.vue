@@ -4,6 +4,10 @@ import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } 
 import { ArrowDown, ArrowLeft, ArrowRight, Setting } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import http from '@/api/http.js'
+import iconReason   from '@/assets/icons/btn_reason.png'
+import iconMaterial from '@/assets/icons/btn_material.png'
+import iconShip     from '@/assets/icons/btn_ship.png'
+import iconRegion   from '@/assets/icons/btn_region.png'
 
 // ── 常量 ──────────────────────────────────────────
 const FONT = "'Microsoft YaHei UI','Microsoft YaHei','PingFang SC',sans-serif"
@@ -18,11 +22,12 @@ const DATE_SHORTCUTS = [
 
 // 子维度 Tab（不含产品，产品是默认视图）
 const DIMS = [
-  { key: 'reason',         label: '原因' },
-  { key: 'shipping_alias', label: '物料' },
-  { key: 'channel',        label: '渠道' },
-  { key: 'province',       label: '地域' },
+  { key: 'reason',         label: '原因', icon: iconReason   },
+  { key: 'shipping_alias', label: '物料', icon: iconMaterial },
+  { key: 'channel',        label: '渠道', icon: iconShip     },
+  { key: 'province',       label: '地域', icon: iconRegion   },
 ]
+
 
 // ── 响应式状态 ────────────────────────────────────
 
@@ -39,14 +44,14 @@ const sections = reactive({
 // 筛选值
 const filters = ref({
   dateRange:            (() => { const s = new Date(); s.setMonth(s.getMonth() - 1); return [s, new Date()] })(),
-  maxDaysSincePurchase: 15,   // 售后间隔上限（天），null = 不限
+  maxDaysSincePurchase: 1825, // 售后间隔上限（天），null = 不限
   categoryIds:          [],
   seriesIds:            [],
   modelIds:             [],
   reasonCategoryIds:    [],
   reasonIds:            [],
   shippingAliasIds:     [],
-  returnAliasIds:       [],
+
   channelNames:         [],
   provinces:            [],
   cities:               [],
@@ -56,7 +61,6 @@ const filters = ref({
 const categoryTree       = ref([])
 const allReasonGroups    = ref([])
 const allShippingAliases = ref([])
-const allReturnAliases   = ref([])
 
 // 联动筛选后可用 id 集合（null=未加载）
 const available = ref({
@@ -66,7 +70,6 @@ const available = ref({
   model_ids:          null,
   reason_ids:         null,
   shipping_alias_ids: null,
-  return_alias_ids:   null,
 })
 
 const loadingOpts      = ref(false)
@@ -172,14 +175,6 @@ const shippingAliasOpts = computed(() => {
     .map(a => ({ value: a.id, label: a.name }))
 })
 
-/** 售后物料简称选项：联动过滤 */
-const returnAliasOpts = computed(() => {
-  const avail = available.value.return_alias_ids
-  return allReturnAliases.value
-    .filter(a => !avail || avail.includes(a.id))
-    .map(a => ({ value: a.id, label: a.name }))
-})
-
 /** 渠道选项：联动过滤 */
 const channelOpts = computed(() =>
   (available.value.channels ?? []).map(c => ({ value: c, label: c }))
@@ -222,7 +217,7 @@ watch(
   () => [
     filters.value.categoryIds, filters.value.seriesIds, filters.value.modelIds,
     filters.value.reasonCategoryIds, filters.value.reasonIds,
-    filters.value.shippingAliasIds, filters.value.returnAliasIds,
+    filters.value.shippingAliasIds,
     filters.value.channelNames, filters.value.provinces, filters.value.cities,
   ],
   () => {
@@ -245,16 +240,14 @@ watch(groupBy, () => loadChartData())
 // ── 方法 ──────────────────────────────────────────
 
 async function loadStaticOptions() {
-  const [treeRes, reasonRes, shippingRes, returnRes] = await Promise.all([
+  const [treeRes, reasonRes, shippingRes] = await Promise.all([
     http.get('/api/category/tree'),
     http.get('/api/aftersale/reasons'),
     http.get('/api/aftersale/shipping-aliases'),
-    http.get('/api/aftersale/return-aliases'),
   ])
   if (treeRes.success)     categoryTree.value       = treeRes.data
   if (reasonRes.success)   allReasonGroups.value    = reasonRes.data
   if (shippingRes.success) allShippingAliases.value = shippingRes.data
-  if (returnRes.success)   allReturnAliases.value   = returnRes.data
 }
 
 /** 构建通用筛选参数（category_ids/series_ids/model_ids 分开传） */
@@ -270,7 +263,6 @@ function buildFilterBody() {
     reason_ids:              filters.value.reasonIds,
     reason_category_ids:     filters.value.reasonCategoryIds,
     shipping_alias_ids:      filters.value.shippingAliasIds,
-    return_alias_ids:        filters.value.returnAliasIds,
     channel_names:           filters.value.channelNames,
     provinces:               filters.value.provinces,
     cities:                  filters.value.cities,
@@ -398,14 +390,14 @@ function initChart() {
     if (!chartInst && width > 0 && height > 0) {
       chartInst = echarts.init(chartEl.value, null, { renderer: 'canvas' })
 
-      // 产品视图下：右击柱子下钻
+      // 右击柱子：产品视图下钻 / 维度视图切回产品
       chartInst.on('contextmenu', (params) => {
         params.event?.event?.preventDefault?.()
-        if (groupBy.value === null &&
-            params.componentType === 'series' &&
-            params.seriesType === 'bar' &&
-            canDrillDown.value) {
+        if (params.componentType !== 'series' || params.seriesType !== 'bar') return
+        if (groupBy.value === null && canDrillDown.value) {
           drillDown(params.name)
+        } else if (groupBy.value !== null) {
+          drillDim(params.name)
         }
       })
 
@@ -485,9 +477,24 @@ function buildProductOption(items) {
         const ROW = (marker, name, val) =>
           `<div style="display:flex;justify-content:space-between;align-items:center;gap:20px;line-height:1.8">`+
           `<span>${marker}${name}</span><span style="font-weight:600">${val}</span></div>`
+        // 系列/型号：查找全名
+        const xName = params[0]?.name ?? ''
+        let subName = ''
+        if (effectiveProductLevel.value === 'series') {
+          for (const c of categoryTree.value) {
+            const found = (c.series || []).find(s => s.code === xName)
+            if (found) { subName = found.name; break }
+          }
+        } else if (effectiveProductLevel.value === 'model') {
+          for (const c of categoryTree.value) for (const sr of c.series || []) {
+            const found = (sr.models || []).find(m => m.model_code === xName)
+            if (found) { subName = found.name; break }
+          }
+        }
         let s = `<div style="font-family:${FONT};font-size:13px;min-width:150px">`
-        s += `<div style="font-weight:600;margin-bottom:4px;color:#3a3028">${params[0]?.name}</div>`
-        const dataItem = (chartData.value?.items || []).find(i => i.name === params[0]?.name)
+        s += `<div style="font-weight:600;margin-bottom:${subName ? 1 : 4}px;color:#3a3028">${xName}</div>`
+        if (subName) s += `<div style="font-size:11px;color:#8a7a6a;margin-bottom:4px">${subName}</div>`
+        const dataItem = (chartData.value?.items || []).find(i => i.name === xName)
         const saleRatio = dataItem?.sale_ratio ?? null
         const shipped   = dataItem?.shipped   ?? 0
         const srColor   = '#7a5cbf'
@@ -504,7 +511,20 @@ function buildProductOption(items) {
         return s + '</div>'
       },
     },
-    grid: { top: 100, left: 56, right: 80, bottom: rotate ? 72 : 48 },
+    grid: { top: 100, left: 56, right: 80, bottom: rotate ? 110 : 86 },
+    dataZoom: [
+      {
+        type: 'slider', xAxisIndex: 0,
+        bottom: rotate ? 36 : 12, height: 20,
+        borderColor: '#e0d4c0', fillerColor: 'rgba(196,136,58,0.12)',
+        handleStyle: { color: '#c4883a' },
+        moveHandleStyle: { color: '#c4883a' },
+        selectedDataBackground: { lineStyle: { color: '#c4883a' }, areaStyle: { color: '#c4883a' } },
+        textStyle: { fontFamily: FONT, color: '#8a7a6a', fontSize: 11 },
+        brushSelect: false,
+      },
+      { type: 'inside', xAxisIndex: 0 },
+    ],
     xAxis: {
       type: 'category', data: names,
       axisLabel: { interval: 0, rotate, fontSize: 12, color: '#6b5e4e', fontFamily: FONT, overflow: 'truncate', width: 80 },
@@ -539,21 +559,24 @@ function buildProductOption(items) {
         smooth: true, symbol: 'circle', symbolSize: 4,
         lineStyle: { color: '#4a8fc0', width: 1.5 },
         itemStyle: { color: '#4a8fc0' },
-        label: { show: false },
+        label: { show: true, fontSize: 11, color: '#4a8fc0', fontFamily: FONT, formatter: p => `${p.value}%` },
       },
       {
         name: '累计占比', type: 'line', data: cumulData, yAxisIndex: 1,
         smooth: true, symbol: 'circle', symbolSize: 4,
         lineStyle: { color: '#e05050', width: 1.5, type: 'dashed' },
         itemStyle: { color: '#e05050' },
-        label: { show: false },
+        label: { show: true, fontSize: 11, color: '#e05050', fontFamily: FONT, formatter: p => `${p.value}%` },
       },
       ...(hasSaleRatio ? [{
         name: '销售占比', type: 'line', data: saleRatioData, yAxisIndex: 1,
         smooth: true, symbol: 'circle', symbolSize: 6,
         lineStyle: { color: '#7a5cbf', width: 1.5, type: 'dotted' },
         itemStyle: { color: '#7a5cbf' },
-        label: { show: false },
+        label: {
+          show: true, fontSize: 11, color: '#7a5cbf', fontFamily: FONT,
+          formatter: p => p.value === 101 ? '' : `${p.value}%`,
+        },
         markLine: (() => {
           const overall = chartData.value.summary?.overall_ratio
           if (overall == null) return undefined
@@ -573,7 +596,7 @@ function buildProductOption(items) {
   }
 }
 
-/** 子维度视图图表配置：标准柱状图 */
+/** 子维度视图图表配置：柱 + 占比折线 + 累计占比（Pareto） */
 function buildDimOption(items) {
   const names         = items.map(i => i.name)
   const values        = items.map(i => i.value)
@@ -588,6 +611,15 @@ function buildDimOption(items) {
       symbol:    overflow ? 'triangle' : undefined,
     }
   })
+
+  const pctData   = values.map(v => total > 0 ? Math.round(v / total * 1000) / 10 : 0)
+  const cumulData = []
+  let running = 0
+  for (const v of values) {
+    running += v
+    cumulData.push(total > 0 ? Math.round(running / total * 1000) / 10 : 0)
+  }
+
   const rotate   = names.length > 8 ? 30 : 0
   const dimLabel = DIMS.find(d => d.key === groupBy.value)?.label ?? ''
   const ROW = (marker, name, val) =>
@@ -614,24 +646,40 @@ function buildDimOption(items) {
       axisPointer: { type: 'shadow' },
       textStyle: { fontFamily: FONT },
       formatter(params) {
-        const bar = params.find(p => p.seriesType === 'bar')
-        const pct = bar ? Math.round(bar.value / total * 1000) / 10 : 0
+        const bar   = params.find(p => p.seriesType === 'bar')
+        const pct   = params.find(p => p.seriesName === '占比')
+        const cumul = params.find(p => p.seriesName === '累计占比')
         const dataItem  = (chartData.value?.items || []).find(i => i.name === params[0]?.name)
         const saleRatio = dataItem?.sale_ratio ?? null
         const shipped   = dataItem?.shipped   ?? 0
         const srColor   = '#7a5cbf'
         const srMarker  = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${srColor};margin-right:4px"></span>`
-        let s = `<div style="font-family:${FONT};font-size:13px;min-width:140px">`
+        let s = `<div style="font-family:${FONT};font-size:13px;min-width:150px">`
         s += `<div style="font-weight:600;margin-bottom:4px;color:#3a3028">${params[0]?.name}</div>`
-        if (bar)  s += ROW(bar.marker, '件数', bar.value)
-        s += ROW('', '占比', `${pct}%`)
+        if (bar)   s += ROW(bar.marker,   '件数',    bar.value)
+        if (pct)   s += ROW(pct.marker,   '占比',    `${pct.value}%`)
+        if (cumul) s += ROW(cumul.marker, '累计占比', `${cumul.value}%`)
         if (hasSaleRatio || shipped > 0 || saleRatio !== null) {
           s += ROW(srMarker, '销售占比', fmtSaleRatio(saleRatio))
         }
+        s += `<div style="margin-top:6px;border-top:1px solid #e0d4c0;padding-top:4px;color:#8a7a6a;font-size:11px">右击查看产品详情</div>`
         return s + '</div>'
       },
     },
-    grid: { top: 100, left: 56, right: 80, bottom: rotate ? 72 : 48 },
+    grid: { top: 100, left: 56, right: 80, bottom: rotate ? 110 : 86 },
+    dataZoom: [
+      {
+        type: 'slider', xAxisIndex: 0,
+        bottom: rotate ? 36 : 12, height: 20,
+        borderColor: '#e0d4c0', fillerColor: 'rgba(196,136,58,0.12)',
+        handleStyle: { color: '#c4883a' },
+        moveHandleStyle: { color: '#c4883a' },
+        selectedDataBackground: { lineStyle: { color: '#c4883a' }, areaStyle: { color: '#c4883a' } },
+        textStyle: { fontFamily: FONT, color: '#8a7a6a', fontSize: 11 },
+        brushSelect: false,
+      },
+      { type: 'inside', xAxisIndex: 0 },
+    ],
     xAxis: {
       type: 'category', data: names,
       axisLabel: { interval: 0, rotate, fontSize: 12, color: '#6b5e4e', fontFamily: FONT, overflow: 'truncate', width: 80 },
@@ -659,14 +707,31 @@ function buildDimOption(items) {
         name: dimLabel, type: 'bar', data: values, yAxisIndex: 0,
         itemStyle: { color: '#c4883a', borderRadius: [3, 3, 0, 0] },
         emphasis: { itemStyle: { color: '#e09050' } },
-        label: { show: names.length <= 20, position: 'top', fontSize: 12, color: '#3a3028', fontFamily: FONT, fontWeight: 'bold' },
+        label: { show: true, position: 'top', fontSize: 12, color: '#3a3028', fontFamily: FONT, fontWeight: 'bold' },
+      },
+      {
+        name: '占比', type: 'line', data: pctData, yAxisIndex: 1,
+        smooth: true, symbol: 'circle', symbolSize: 4,
+        lineStyle: { color: '#4a8fc0', width: 1.5 },
+        itemStyle: { color: '#4a8fc0' },
+        label: { show: true, fontSize: 11, color: '#4a8fc0', fontFamily: FONT, formatter: p => `${p.value}%` },
+      },
+      {
+        name: '累计占比', type: 'line', data: cumulData, yAxisIndex: 1,
+        smooth: true, symbol: 'circle', symbolSize: 4,
+        lineStyle: { color: '#e05050', width: 1.5, type: 'dashed' },
+        itemStyle: { color: '#e05050' },
+        label: { show: true, fontSize: 11, color: '#e05050', fontFamily: FONT, formatter: p => `${p.value}%` },
       },
       ...(hasSaleRatio ? [{
         name: '销售占比', type: 'line', data: saleRatioData, yAxisIndex: 1,
         smooth: true, symbol: 'circle', symbolSize: 6,
         lineStyle: { color: '#7a5cbf', width: 1.5, type: 'dotted' },
         itemStyle: { color: '#7a5cbf' },
-        label: { show: false },
+        label: {
+          show: true, fontSize: 11, color: '#7a5cbf', fontFamily: FONT,
+          formatter: p => p.value === 101 ? '' : `${p.value}%`,
+        },
         markLine: (() => {
           const overall = chartData.value.summary?.overall_ratio
           if (overall == null) return undefined
@@ -684,6 +749,44 @@ function buildDimOption(items) {
       }] : []),
     ],
   }
+}
+
+// ── 维度视图右击 → 切回产品视图 ──────────────────────
+
+function drillDim(dimName) {
+  const key = groupBy.value
+  drillStack.value.push({
+    label:                 dimName,
+    type:                  'dim',
+    savedGroupBy:          key,
+    savedCategoryIds:      [...filters.value.categoryIds],
+    savedSeriesIds:        [...filters.value.seriesIds],
+    savedModelIds:         [...filters.value.modelIds],
+    savedReasonCategoryIds:[...filters.value.reasonCategoryIds],
+    savedReasonIds:        [...filters.value.reasonIds],
+    savedShippingAliasIds: [...filters.value.shippingAliasIds],
+    savedChannelNames:     [...filters.value.channelNames],
+    savedProvinces:        [...filters.value.provinces],
+    savedCities:           [...filters.value.cities],
+  })
+  _isDrilling = true
+  if (key === 'reason') {
+    let id = null
+    for (const g of allReasonGroups.value) {
+      const r = (g.reasons || []).find(r => r.name === dimName)
+      if (r) { id = r.id; break }
+    }
+    if (id != null) filters.value.reasonIds = [id]
+  } else if (key === 'shipping_alias') {
+    const alias = allShippingAliases.value.find(a => a.name === dimName)
+    if (alias) filters.value.shippingAliasIds = [alias.id]
+  } else if (key === 'channel') {
+    filters.value.channelNames = [dimName]
+  } else if (key === 'province') {
+    filters.value.provinces = [dimName]
+  }
+  groupBy.value = null
+  nextTick(() => { _isDrilling = false })
 }
 
 // ── 产品视图下钻 ───────────────────────────────────
@@ -726,6 +829,15 @@ function drillBack(idx) {
   filters.value.categoryIds = snap.savedCategoryIds
   filters.value.seriesIds   = snap.savedSeriesIds
   filters.value.modelIds    = snap.savedModelIds
+  if (snap.type === 'dim') {
+    filters.value.reasonCategoryIds  = snap.savedReasonCategoryIds
+    filters.value.reasonIds          = snap.savedReasonIds
+    filters.value.shippingAliasIds   = snap.savedShippingAliasIds
+    filters.value.channelNames       = snap.savedChannelNames
+    filters.value.provinces          = snap.savedProvinces
+    filters.value.cities             = snap.savedCities
+    groupBy.value = snap.savedGroupBy
+  }
   drillStack.value = drillStack.value.slice(0, idx)
   nextTick(() => { _isDrilling = false })
 }
@@ -747,10 +859,10 @@ function resetFilters() {
   groupBy.value    = null
   Object.assign(filters.value, {
     dateRange:            (() => { const s = new Date(); s.setMonth(s.getMonth() - 1); return [s, new Date()] })(),
-    maxDaysSincePurchase: 15,
+    maxDaysSincePurchase: 1825,
     categoryIds: [], seriesIds: [], modelIds: [],
     reasonCategoryIds: [], reasonIds: [], shippingAliasIds: [],
-    returnAliasIds: [], channelNames: [], provinces: [], cities: [],
+    channelNames: [], provinces: [], cities: [],
   })
 }
 
@@ -913,14 +1025,6 @@ defineExpose({ refresh })
                 <el-option v-for="opt in shippingAliasOpts" :key="opt.value" :label="opt.label" :value="opt.value" />
               </el-select>
             </div>
-            <div class="field-row">
-              <div class="field-label">售后物料简称</div>
-              <el-select v-model="filters.returnAliasIds" placeholder="全部售后物料"
-                multiple filterable collapse-tags collapse-tags-tooltip
-                clearable size="default" style="width:100%" :loading="loadingOpts">
-                <el-option v-for="opt in returnAliasOpts" :key="opt.value" :label="opt.label" :value="opt.value" />
-              </el-select>
-            </div>
           </div>
         </div>
       </div>
@@ -997,7 +1101,20 @@ defineExpose({ refresh })
             </template>
           </div>
         </div>
-        <div class="ct-center"></div>
+        <div class="ct-center">
+          <div class="footer-dims">
+            <button
+              v-for="dim in DIMS"
+              :key="dim.key"
+              class="gb-btn"
+              :class="{ active: groupBy === dim.key }"
+              @click="selectDim(dim.key)"
+            >
+              <img :src="dim.icon" class="gb-icon" />
+              <span class="gb-label">{{ dim.label }}</span>
+            </button>
+          </div>
+        </div>
         <div class="ct-right">
           <button class="btn-view-data">查看数据</button>
         </div>
@@ -1009,22 +1126,6 @@ defineExpose({ refresh })
         <div ref="chartEl" class="chart-canvas"></div>
       </div>
 
-      <!-- 底部：维度选择（可取消） -->
-      <div class="chart-footer">
-        <div class="footer-placeholder"></div>
-        <div class="footer-dims">
-          <button
-            v-for="dim in DIMS"
-            :key="dim.key"
-            class="gb-btn"
-            :class="{ active: groupBy === dim.key }"
-            @click="selectDim(dim.key)"
-          >
-            <span class="gb-label">{{ dim.label }}</span>
-          </button>
-        </div>
-        <div class="footer-placeholder"></div>
-      </div>
 
     </div>
 
@@ -1186,6 +1287,9 @@ defineExpose({ refresh })
 }
 .gb-btn:hover { background: var(--border); }
 .gb-btn.active { background: color-mix(in srgb, #c4883a 12%, transparent); }
+.gb-icon  { width: 16px; height: 16px; object-fit: contain; flex-shrink: 0; opacity: 0.6; transition: opacity 0.15s; }
+.gb-btn:hover .gb-icon  { opacity: 1; }
+.gb-btn.active .gb-icon { opacity: 1; }
 .gb-label { font-size: 15px; color: #2c2420; white-space: nowrap; transition: color 0.15s; }
 .gb-btn:hover .gb-label { color: #000; }
 .gb-btn.active .gb-label { color: #c4883a; font-weight: 500; }

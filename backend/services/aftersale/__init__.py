@@ -434,3 +434,11 @@ class AftersaleService:
             short_keep_terms=short_keep_terms,
         )
         return Result.ok(data=_repo.get_reason_keyword_rules())
+
+    def cleanup_keyword_candidates(self, min_count=2, top_per_reason=200):
+        result = _repo.cleanup_keyword_candidates(min_count=min_count, top_per_reason=top_per_reason)
+        return Result.ok(data=result,
+                         message=f'清理完成：噪声 {result["deleted_noise"]} 条，溢出 {result["deleted_overflow"]} 条，剩余 {result["remaining"]} 条')
+
+    def get_keyword_candidate_stats(self):
+        return Result.ok(data=_repo.get_keyword_candidate_stats())

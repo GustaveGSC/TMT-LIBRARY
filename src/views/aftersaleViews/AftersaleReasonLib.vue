@@ -66,6 +66,9 @@ const reasonRuleForm = ref({
 // 同义词候选建议：接受时需输入归一词
 const synCanonicalMap = ref({})   // sug.id → 用户输入的归一词
 
+// 晋升关键词拆分模式：sug.id → { component: '', fault: '' }
+const splitMap = ref({})
+
 // 同义词行内编辑状态
 const editingSynIdx         = ref(-1)
 const editingSynAliasText   = ref('')
@@ -161,6 +164,33 @@ async function acceptDictSuggestion(sug, targetType = null, canonical = null) {
     delete synCanonicalMap.value[sug.id]
     ElMessage.success('已接受')
     if (sug.type !== 'promoted_keyword') emit('updated')
+  }
+}
+
+// 拆分晋升关键词：将 component + fault 两个词分别追加到词典表单，并标记建议为已接受
+async function confirmSplit(sug) {
+  const entry = splitMap.value[sug.id]
+  if (!entry) return
+  const component = (entry.component || '').trim()
+  const fault     = (entry.fault     || '').trim()
+  if (!component && !fault) {
+    ElMessage.warning('请至少填写一项')
+    return
+  }
+  // 追加到词典表单（保存时统一写库）
+  if (component && !reasonRuleForm.value.component_terms.includes(component)) {
+    reasonRuleForm.value.component_terms.push(component)
+  }
+  if (fault && !reasonRuleForm.value.fault_terms.includes(fault)) {
+    reasonRuleForm.value.fault_terms.push(fault)
+  }
+  // 标记建议为已接受（不指定 target_type，仅确认）
+  const res = await http.post(`/api/aftersale/dictionary-suggestions/${sug.id}/accept`, {})
+  if (res.success) {
+    const idx = dictSuggestions.value.findIndex(s => s.id === sug.id)
+    if (idx >= 0) dictSuggestions.value[idx] = res.data
+    delete splitMap.value[sug.id]
+    ElMessage.success('已拆分，请保存词典')
   }
 }
 
@@ -887,15 +917,34 @@ async function deleteIgnoreTerm(item) {
             <!-- 晋升关键词建议 -->
             <div v-if="dictSuggestions.filter(s => s.status === 'pending' && s.type === 'promoted_keyword').length" class="sug-group">
               <div class="sug-group-label">晋升关键词（可归类）</div>
-              <div v-for="sug in dictSuggestions.filter(s => s.status === 'pending' && s.type === 'promoted_keyword')" :key="sug.id" class="sug-row">
-                <span class="sug-value">{{ sug.value }}</span>
-                <span class="sug-count">×{{ sug.count }}</span>
-                <span class="sug-reason">{{ sug.reason }}</span>
-                <div class="sug-actions">
-                  <el-button size="small" type="warning" @click="acceptDictSuggestion(sug, 'fault_term')">故障词</el-button>
-                  <el-button size="small" type="success" @click="acceptDictSuggestion(sug, 'component_term')">部件词</el-button>
-                  <el-button size="small" @click="acceptDictSuggestion(sug)">仅确认</el-button>
-                  <el-button size="small" @click="rejectDictSuggestion(sug)">忽略</el-button>
+              <div v-for="sug in dictSuggestions.filter(s => s.status === 'pending' && s.type === 'promoted_keyword')" :key="sug.id" class="sug-row sug-row--block">
+                <!-- 主行 -->
+                <div class="sug-row-main">
+                  <span class="sug-value">{{ sug.value }}</span>
+                  <span class="sug-count">×{{ sug.count }}</span>
+                  <span class="sug-reason">{{ sug.reason }}</span>
+                  <div class="sug-actions">
+                    <el-button size="small" type="warning" @click="acceptDictSuggestion(sug, 'fault_term')">故障词</el-button>
+                    <el-button size="small" type="success" @click="acceptDictSuggestion(sug, 'component_term')">部件词</el-button>
+                    <el-button size="small" @click="splitMap[sug.id] = splitMap[sug.id] ? null : { component: sug.value, fault: '' }">
+                      拆分
+                    </el-button>
+                    <el-button size="small" @click="acceptDictSuggestion(sug)">仅确认</el-button>
+                    <el-button size="small" @click="rejectDictSuggestion(sug)">忽略</el-button>
+                  </div>
+                </div>
+                <!-- 拆分展开区 -->
+                <div v-if="splitMap[sug.id]" class="sug-split-row">
+                  <div class="sug-split-field">
+                    <span class="sug-split-label">部件词</span>
+                    <el-input v-model="splitMap[sug.id].component" size="small" placeholder="如：后固定桌面板" />
+                  </div>
+                  <div class="sug-split-field">
+                    <span class="sug-split-label">故障词</span>
+                    <el-input v-model="splitMap[sug.id].fault" size="small" placeholder="如：开裂" />
+                  </div>
+                  <el-button size="small" type="primary" @click="confirmSplit(sug)">确认拆分</el-button>
+                  <el-button size="small" @click="delete splitMap[sug.id]">取消</el-button>
                 </div>
               </div>
             </div>
@@ -1753,6 +1802,18 @@ async function deleteIgnoreTerm(item) {
   flex-wrap: wrap;
 }
 .sug-row:last-child { border-bottom: none; }
+.sug-row--block { flex-direction: column; align-items: stretch; gap: 0; }
+.sug-row-main { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 0; }
+.sug-split-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 10px;
+  margin-top: 4px;
+  background: #faf7f2;
+  border-radius: 6px;
+  border: 1px dashed #e0d4c0;
+}
+.sug-split-field { display: flex; align-items: center; gap: 6px; }
+.sug-split-label { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
 .sug-row--syn { flex-direction: column; align-items: flex-start; gap: 6px; }
 .sug-syn-main { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .sug-syn-input { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }

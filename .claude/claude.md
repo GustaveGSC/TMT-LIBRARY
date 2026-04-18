@@ -25,7 +25,7 @@ electron/main/python.ts  # Flask 子进程，退出用 spawnSync taskkill
 src/api/http.js          # axios baseURL:127.0.0.1:8765，拦截器已解一层 res.data
 src/routers/index.js     # Hash路由：/login /index /product /shipping /data-mgmt /aftersale /admin/*
 src/styles/themes.css    # 全局CSS变量（勿硬编码颜色）
-backend/app.py           # Flask 工厂；SQLAlchemy NullPool + connect/read/write 超时（见源码）
+backend/app.py           # Flask 工厂；SQLAlchemy QueuePool(size=2, pre_ping, recycle=1800) + connect/read/write 超时（见源码）
 backend/create_reason_keyword_rules.py  # 售后「原因词典」相关表初始化与种子数据（表结构见 database.md）
 backend/result.py        # Result.ok/fail → { success, message, data }
 ```

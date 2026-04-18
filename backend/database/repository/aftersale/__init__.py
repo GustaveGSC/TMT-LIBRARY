@@ -648,7 +648,7 @@ class AftersaleRepository:
     # ── 关键词自动提取 ───────────────────────────────────────────────────────
 
     # 关键词晋升阈值：候选词出现 N 次后才写入 keywords
-    _KW_PROMOTE_THRESHOLD = 3
+    _KW_PROMOTE_THRESHOLD = 2
     # 关键词晋升的最低质量分（0~1）
     _KW_MIN_QUALITY_SCORE = 0.45
     # 每个原因最多保留关键词数
@@ -1081,6 +1081,9 @@ class AftersaleRepository:
                             meta={'reason_ids': [rid], 'longer': longer, 'shorter': shorter},
                         )
 
+        # 候选池超限时自动清理（不独立 commit，由 confirm_case 统一提交）
+        self._auto_cleanup_candidates_if_needed()
+
     # ── 自动匹配 ────────────────────────────────────────────────────────────
 
     def auto_match(self, text, buyer_remark=None):
@@ -1093,12 +1096,13 @@ class AftersaleRepository:
         if not text or not text.strip():
             return []
 
-        # 预处理：去除买家留言片段，再移除停用词
+        # 预处理：去除买家留言片段，先做同义词归一，再移除停用词
+        # 顺序很关键：同义词必须先于停用词，否则"坏→破损"等规则会被停用词删除拦截
         effective_text = self._subtract_buyer_remark(text, buyer_remark) if buyer_remark else text
         rules = self._get_reason_rules()
         stopwords = rules.get('stopwords', set())
-        effective_text = self._strip_stopwords(effective_text, stopwords)
         text_lower = self._normalize_reason_text(effective_text)
+        text_lower = self._strip_stopwords(text_lower, stopwords)
         scores = {}   # reason_id -> score details
 
         def ensure_reason_score(reason_id, name, category_name):
@@ -1733,16 +1737,34 @@ class AftersaleRepository:
                     lc[r.model_id] = (r.listed_yymm, r.delisted_yymm)
             return lc
 
-        # 每个 model_id 的综合信息
-        # match_level: 2=系列+版本均命中，1=仅系列命中（无版本提示或版本未命中）
-        # 排序优先级：match_level > date_ok > score
-        model_score = defaultdict(lambda: {'score': 0.0, 'date_ok': True, 'meta': None, 'match_level': 1})
+        # ── 两阶段匹配数据结构 ──────────────────────────────────────────────────
+        # 阶段一：系列评分（仅系列名规则，不含型号属性加分）
+        # 阶段二：在前5系列内按型号属性 token 独立评分
+        # 两者分离，可分别输出 series_confidence / model_confidence
+        _SERIES_SCORE_CEILING = 20  # 精确匹配系列名的原始权重上限
 
-        # ── 来源 C：买家留言 → 产品名/系列名关键词匹配 ──────────────────────
+        def _series_confidence(raw_weight, version_confirmed=False):
+            s = min(raw_weight / _SERIES_SCORE_CEILING, 1.0)
+            if s >= 0.75:
+                # 系列名含版本但买家留言未提版本 → 最多 medium
+                return 'high' if version_confirmed else 'medium'
+            if s >= 0.50: return 'medium'
+            return 'low'
+
+        def _model_confidence(matched, total):
+            if total == 0: return None    # 型号名无可提取属性 token
+            r = matched / total
+            if r >= 0.5:  return 'high'
+            if r >= 0.25: return 'medium'
+            return 'low'
+
+        series_score_map = {}          # series_id → {'raw_weight': int, 'meta': row}
+        model_scores_by_series = defaultdict(dict)
+        # model_scores_by_series[series_id][model_id] = {
+        #     'matched_tokens': int, 'total_tokens': int, 'lifecycle_ok': bool, 'meta': row }
+
+        # ── 来源 C：买家留言 → 产品名/系列名关键词匹配（两阶段）────────────────
         # 买家留言通常直接写明产品名（如"梦境"），用于跨产品代码匹配正确的产品线。
-        # 优先级：系列名精确=买家留言 → +20；系列名/型号名包含买家留言 → +15；
-        #         买家留言包含系列名（≥2字） → +10
-        # 不依赖历史记录，只要产品库有对应数据即可命中
         if buyer_remark and buyer_remark.strip():
             br_lower = buyer_remark.strip().lower()
             if len(br_lower) >= 2:
@@ -1760,10 +1782,9 @@ class AftersaleRepository:
                     .join(ProductCategory, ProductCategory.id == ProductSeries.category_id)
                     .all()
                 )
-                # 尺寸归一化：将型号名中的 "x.x米" 转换为厘米数字字符串，方便与买家留言匹配
-                # 例如 "1.0米" → "100"，"0.8米" → "80"（080），"1.2米" → "120"
+
                 def _normalize_tokens(name):
-                    """提取型号名中的可匹配属性 token 列表（版本/尺寸/材料/颜色/手动/电动/型号版本等）"""
+                    """提取型号名中的可匹配属性 token 列表（版本/尺寸/材料/颜色/变体字母等）"""
                     tokens = []
                     # 系列版本号：V3.1 → "3.1"
                     for m in re.finditer(r'[Vv](\d+\.\d+)', name):
@@ -1771,9 +1792,9 @@ class AftersaleRepository:
                     # 尺寸：1.0米→"100"，0.8米→"080"，1.2米→"120"
                     for m in re.finditer(r'(\d+(?:\.\d+)?)米', name):
                         cm = round(float(m.group(1)) * 100)
-                        tokens.append(str(cm).zfill(3))   # 保留前导零如 "080"
-                        tokens.append(str(cm))             # 也匹配无前导零如 "80"
-                    # 型号版本字母：_A/_B/_C（出现在末尾），单独存放供外部比对
+                        tokens.append(str(cm).zfill(3))
+                        tokens.append(str(cm))
+                    # 型号版本字母：_A/_B/_C（出现在末尾）
                     m = re.search(r'[_\-]([A-Za-z])$', name.strip())
                     if m:
                         tokens.append('__variant__' + m.group(1).upper())
@@ -1791,70 +1812,86 @@ class AftersaleRepository:
                     l.upper() for l in re.findall(r'(?<![A-Za-z])([A-UW-Za-uw-z])(?![A-Za-z])', buyer_remark)
                 )
 
+                # 买家留言中的版本号（如"2.1"、"3.1"，单位数字开头，排除日期/尺寸）
+                br_versions = set(re.findall(r'(?<![0-9.])([1-9]\.\d+)(?![0-9.])', buyer_remark))
+
+                # ── 阶段一：系列评分（每 row 仅用系列名规则，取 series_id 最高权重）──
                 for row in model_rows:
                     sname      = (row.series_name or '').strip().lower()
                     sname_base = _base_name(row.series_name or '')
                     mname      = (row.model_name  or '').strip().lower()
-                    mid        = row.model_id
-                    if sname == br_lower:
-                        weight = 20
-                    elif sname_base and sname_base == br_lower:
-                        weight = 20
+                    sid        = row.series_id
+
+                    # 先判断名称是否匹配，匹配不上直接跳过（版本号相同不能作为匹配依据）
+                    if sname == br_lower or (sname_base and sname_base == br_lower):
+                        raw_weight = 20
                     elif sname and br_lower in sname:
-                        weight = 15
+                        raw_weight = 15
                     elif br_lower in mname:
-                        weight = 15
+                        raw_weight = 15
                     elif sname_base and len(sname_base) >= 2 and sname_base in br_lower:
-                        weight = 10
+                        raw_weight = 10
                     elif sname and len(sname) >= 2 and sname in br_lower:
-                        weight = 10
+                        raw_weight = 10
                     else:
                         continue
-                    # 属性匹配加分：逐一检查型号名的属性 token 是否出现在买家留言中
-                    version_hit = False
-                    for tok in _normalize_tokens(row.model_name or ''):
+
+                    # 名称已匹配 → 版本号一致性校验（次级过滤）
+                    # 例：留言"2.1进取" vs 系列"进取（V2.3）" → 名称匹配但版本不符 → 跳过
+                    # 例：留言"3.1进取" vs 系列"进取（V3.1）" → 版本确认 → raw_weight 提升至满分
+                    if br_versions:
+                        series_versions = set(re.findall(r'[Vv](\d+\.\d+)', row.series_name or ''))
+                        if series_versions:
+                            if br_versions & series_versions:
+                                raw_weight = _SERIES_SCORE_CEILING  # 版本确认 → 满分
+                            else:
+                                continue
+
+                    if sid not in series_score_map or raw_weight > series_score_map[sid]['raw_weight']:
+                        series_score_map[sid] = {'raw_weight': raw_weight, 'meta': row}
+
+                # ── 阶段二：在前5系列内按型号属性 token 独立评分 ────────────────
+                top_series_ids = sorted(
+                    series_score_map, key=lambda s: series_score_map[s]['raw_weight'], reverse=True
+                )[:5]
+
+                for row in model_rows:
+                    if row.series_id not in top_series_ids:
+                        continue
+                    tokens  = _normalize_tokens(row.model_name or '')
+                    matched = 0
+                    for tok in tokens:
                         if tok.startswith('__variant__'):
                             if tok[len('__variant__'):] in br_variant_letters:
-                                weight += 2
+                                matched += 1
                         elif tok in buyer_remark:
-                            weight += 2
-                            # 版本号 token（如 "3.1"）命中 → 升级 match_level
-                            if re.fullmatch(r'\d+\.\d+', tok):
-                                version_hit = True
-                    model_score[mid]['score'] += weight
-                    if version_hit:
-                        model_score[mid]['match_level'] = 2
-                    if not model_score[mid]['meta']:
-                        model_score[mid]['meta'] = row
+                            matched += 1
+                    model_scores_by_series[row.series_id][row.model_id] = {
+                        'matched_tokens': matched,
+                        'total_tokens':   len(tokens),
+                        'lifecycle_ok':   True,
+                        'meta':           row,
+                    }
 
-        # ── 生命周期惩罚 ──────────────────────────────────────────────────────────
+        # ── 生命周期校验（在阶段二之后，对 model_scores_by_series 每条型号设置 lifecycle_ok）──
         # 规则：
-        # 1. 购买日期 > 退市日期 → 直接归零（型号已停售）
-        # 2. 上市日期 > 2024-01，且购买日期 < 上市日期 → 直接归零（型号尚未发布）
-        # 3. 上市日期 <= 2024-01，且购买日期 < 上市日期 → 扣 3 分（上市日期可能是数据录入起点，非真实发布日）
-        # 说明：发货数据从 2024-01 起有记录，所有当时有数据的型号均被设为 2024-01 上市
-        _DATA_START = '2024-01'
-        if purchase_ym and model_score:
+        # 1. 购买日期 > 退市日期 → lifecycle_ok = False（型号已停售）
+        # 2. 上市日期 > 2024-01，且购买日期 < 上市日期 → lifecycle_ok = False（型号尚未发布）
+        # 3. 上市日期 <= 2024-01，且购买日期 < 上市日期 → lifecycle_ok = False（数据起点，保留但降优先级）
+        if purchase_ym and model_scores_by_series:
             lifecycle_map = _get_lifecycle_map()
             current_ym = now_cst().strftime('%Y-%m')
-            for mid, v in model_score.items():
-                lc = lifecycle_map.get(mid)
-                if not lc:
-                    continue
-                listed_ym, delisted_ym = lc
-                effective_delisted = delisted_ym or current_ym
-                if effective_delisted < purchase_ym:
-                    # 规则1：已退市
-                    v['date_ok'] = False
-                    v['score']   = 0
-                elif listed_ym and purchase_ym < listed_ym:
-                    v['date_ok'] = False
-                    if listed_ym > _DATA_START:
-                        # 规则2：明确在 2024-01 后上市，购买日期更早 → 不可能
-                        v['score'] = 0
-                    else:
-                        # 规则3：上市日期可能只是数据起点，扣分但保留
-                        v['score'] = max(0, v['score'] - 3)
+            for sid_models in model_scores_by_series.values():
+                for mid, entry in sid_models.items():
+                    lc = lifecycle_map.get(mid)
+                    if not lc:
+                        continue
+                    listed_ym, delisted_ym = lc
+                    effective_delisted = delisted_ym or current_ym
+                    if effective_delisted < purchase_ym:
+                        entry['lifecycle_ok'] = False
+                    elif listed_ym and purchase_ym < listed_ym:
+                        entry['lifecycle_ok'] = False
 
         # ── 历史简称 & 原因统计（共用 code_filters）────────────────────
         # 三个字段各自按频次取最高，来源均为相同产品代码的历史确认工单
@@ -1911,70 +1948,97 @@ class AftersaleRepository:
             'suggested_reason_category_id': suggested_reason_category_id,
         }
 
-        if not model_score:
-            # 没有找到型号匹配，但仍可返回辅助建议
+        if not series_score_map:
+            # 没有找到系列匹配，但仍可返回辅助建议
             has_any = any(v is not None for v in suggestions.values())
             return suggestions if has_any else None
 
-        # 排序：系列+版本匹配程度 > date_ok > 综合得分
-        ranked = sorted(
-            model_score.items(),
-            key=lambda x: (x[1]['match_level'], x[1]['date_ok'], x[1]['score']),
-            reverse=True,
-        )
-        size_hints_debug = set(re.findall(r'\b(0\d{2}|1[012]\d)\b', buyer_remark or ''))
-        print(f'[suggest_debug] buyer_remark={buyer_remark!r} size_hints={size_hints_debug}')
-        for mid, v in ranked[:8]:
-            print(f'  model_id={mid} name={v["meta"].model_name if v["meta"] else "?"} code={getattr(v["meta"], "model_code", "?")} score={v["score"]:.2f} date_ok={v["date_ok"]}')
-        best   = ranked[0][1]
-        meta   = best['meta']
+        # 每个系列选最佳型号：lifecycle_ok DESC → matched_tokens DESC → 顺序第一
+        def _best_model_in_series(models_dict):
+            if not models_dict:
+                return None, None
+            ranked_models = sorted(
+                models_dict.items(),
+                key=lambda x: (x[1]['lifecycle_ok'], x[1]['matched_tokens']),
+                reverse=True,
+            )
+            return ranked_models[0]
 
-        # Top 5 候选（按系列分组，每个系列取最高分型号为代表，附带系列内所有型号明细）
-        series_data = {}
-        for mid, v in ranked:
-            m = v['meta']
-            if not m:
-                continue
-            sid = m.series_id
-            if sid not in series_data:
-                series_data[sid] = {
-                    'mid': mid, 'score': v['score'], 'meta': m,
-                    'date_ok': v['date_ok'], 'match_level': v['match_level'], 'models': []
-                }
-            series_data[sid]['models'].append({
-                'id':         mid,
-                'model_code': getattr(m, 'model_code', None),
-                'name':       m.model_name,
-                'score':      v['score'],
-                'date_ok':    v['date_ok'],
+        # 按 series_score_map 中的 raw_weight 前5系列构建 candidates
+        top_series_ids = sorted(
+            series_score_map, key=lambda s: series_score_map[s]['raw_weight'], reverse=True
+        )[:5]
+
+        candidates = []
+        for sid in top_series_ids:
+            s_entry  = series_score_map[sid]
+            s_raw    = s_entry['raw_weight']
+            s_meta   = s_entry['meta']
+            # 系列名含版本号时，需买家留言也命中该版本才算 version_confirmed
+            _series_versions = set(re.findall(r'[Vv](\d+\.\d+)', s_meta.series_name or ''))
+            _version_confirmed = bool(_series_versions and br_versions & _series_versions)
+            s_conf   = _series_confidence(s_raw, version_confirmed=_version_confirmed)
+
+            models_dict          = model_scores_by_series.get(sid, {})
+            best_mid, best_entry = _best_model_in_series(models_dict)
+
+            if best_mid and best_entry:
+                m_conf = _model_confidence(best_entry['matched_tokens'], best_entry['total_tokens'])
+                m_meta = best_entry['meta']
+                date_ok = best_entry['lifecycle_ok']
+            else:
+                m_conf  = None
+                m_meta  = None
+                date_ok = True
+
+            model_list = sorted(
+                [
+                    {
+                        'id':               mid,
+                        'name':             e['meta'].model_name,
+                        'model_code':       getattr(e['meta'], 'model_code', None),
+                        'matched_tokens':   e['matched_tokens'],
+                        'total_tokens':     e['total_tokens'],
+                        'score':            round(e['matched_tokens'] / e['total_tokens'], 2) if e['total_tokens'] else 0,
+                        'model_confidence': _model_confidence(e['matched_tokens'], e['total_tokens']),
+                        'date_ok':          e['lifecycle_ok'],
+                    }
+                    for mid, e in models_dict.items()
+                ],
+                key=lambda x: (-x['matched_tokens'], not x['date_ok']),
+            )
+
+            _s_score_raw = round(min(s_raw / _SERIES_SCORE_CEILING, 1.0), 2)
+            # 系列名含版本但买家留言未确认版本 → 得分打折（最高 0.75）
+            _s_score = _s_score_raw if _version_confirmed or not _series_versions else min(_s_score_raw, 0.75)
+            candidates.append({
+                'category_id':       s_meta.category_id,
+                'category_name':     s_meta.category_name,
+                'series_id':         sid,
+                'series_name':       s_meta.series_name,
+                'series_score':      _s_score,
+                'score':             _s_score,   # 向后兼容（模板用 c.score 渲染进度条）
+                'series_confidence': s_conf,
+                'model_id':          best_mid,
+                'model_name':        m_meta.model_name if m_meta else None,
+                'model_code':        getattr(m_meta, 'model_code', None) if m_meta else None,
+                'model_confidence':  m_conf,
+                'date_ok':           date_ok,
+                'models':            model_list,
             })
-        top_series = sorted(series_data.values(), key=lambda x: (x['match_level'], x['date_ok'], x['score']), reverse=True)[:5]
-        max_score  = top_series[0]['score'] if top_series else 1
-        candidates = [
-            {
-                'category_id':   s['meta'].category_id,
-                'series_id':     s['meta'].series_id,
-                'model_id':      s['mid'],
-                'category_name': s['meta'].category_name,
-                'series_name':   s['meta'].series_name,
-                'model_name':    s['meta'].model_name,
-                'model_code':    getattr(s['meta'], 'model_code', None),
-                'score':         round(s['score'] / max_score, 2),
-                'date_ok':       s['date_ok'],
-                'models':        sorted(s['models'], key=lambda x: -x['score']),
-            }
-            for s in top_series
-        ]
 
+        best = candidates[0]
         return {
-            'category_id':   meta.category_id,
-            'series_id':     meta.series_id,
-            'model_id':      meta.model_id,
-            'category_name': meta.category_name,
-            'series_name':   meta.series_name,
-            'model_name':    meta.model_name,
-            'date_ok':       best['date_ok'],
-            'candidates':    candidates,
+            'category_id':       best['category_id'],
+            'category_name':     best['category_name'],
+            'series_id':         best['series_id'],
+            'series_name':       best['series_name'],
+            'series_confidence': best['series_confidence'],
+            'model_id':          best['model_id'],
+            'model_name':        best['model_name'],
+            'model_confidence':  best['model_confidence'],
+            'date_ok':           best['date_ok'],
+            'candidates':        candidates,
             **suggestions,
         }
 
@@ -2017,29 +2081,45 @@ class AftersaleRepository:
     # ── 简称库关键词自动合并（提交工单时调用，通过 ID 查找） ──────────────────
 
     def upsert_shipping_alias_by_id(self, alias_id, product_names):
-        """提交工单时：将当前物料名称合并到已有发货简称的关键词列表。
-        只写入与简称名称有字符重叠的 token，避免同单其他无关产品污染关键词库。"""
+        """提交工单时：从 product_tokens 中选出与简称名称重叠度最高的一个 token 写入关键词。
+        每次工单只写一个 key；若已存在则跳过，避免重复积累。"""
         obj = AftersaleShippingAlias.query.get(alias_id)
         if not obj:
             return
-        alias_name = (obj.name or '').lower()
-        # 过滤：token 必须是 alias_name 的子串，或 alias_name 是 token 的子串，
-        # 或双方共享长度 ≥ 2 的公共子串
-        def _relevant(token):
-            t = token.lower()
-            if t in alias_name or alias_name in t:
-                return True
+        # 对 alias_name 做同义词归一，使"椅垫"和"座垫"这类词能匹配
+        alias_name = self._normalize_reason_text(obj.name or '').replace(' ', '')
+
+        def _overlap_score(token):
+            """返回同义词归一后 token 与 alias_name 的最长公共子串长度（归一到 alias_name 长度）。"""
+            t = self._normalize_reason_text(token).replace(' ', '')
+            if not alias_name:
+                return 0
+            if t == alias_name:
+                return 1.0
+            best = 0
             for length in range(min(len(t), len(alias_name)), 1, -1):
                 for i in range(len(t) - length + 1):
                     if t[i:i + length] in alias_name:
-                        return True
-            return False
+                        best = length
+                        break
+                if best == length:
+                    break
+            return best / len(alias_name)
 
-        new_kws = [n.strip() for n in (product_names or []) if n and n.strip() and _relevant(n.strip())]
-        if new_kws:
-            existing = set(obj.keywords or [])
-            merged   = list(existing | set(new_kws))
-            obj.keywords = merged[:50] if merged else obj.keywords
+        # 过滤掉零重叠的 token，对剩余按重叠分降序，取最高分的一个
+        candidates = [
+            (n.strip(), _overlap_score(n.strip()))
+            for n in (product_names or [])
+            if n and n.strip() and _overlap_score(n.strip()) > 0
+        ]
+        if not candidates:
+            return
+        best_token = max(candidates, key=lambda x: x[1])[0]
+
+        existing = set(obj.keywords or [])
+        if best_token in existing:
+            return  # 已存在，跳过
+        obj.keywords = list(existing | {best_token})
 
     # ── 简称库自动入库（简称管理页用） ───────────────────────────────────────
 
@@ -2441,3 +2521,69 @@ class AftersaleRepository:
         sug.status = 'rejected'
         db.session.commit()
         return sug
+
+    # ── 候选池维护 ────────────────────────────────────────────────────────────
+
+    _CANDIDATE_MAX_ROWS = 1000  # 候选池上限，超出时自动清理 count=1 的噪声词
+
+    def cleanup_keyword_candidates(self, min_count=2, top_per_reason=200):
+        """手动清理接口：删除低频噪声词 + 每原因保留 top_per_reason 条。"""
+        noise = AftersaleKeywordCandidate.query.filter(
+            AftersaleKeywordCandidate.count < min_count
+        ).all()
+        noise_count = len(noise)
+        for row in noise:
+            db.session.delete(row)
+        db.session.flush()
+
+        overflow_count = 0
+        for (rid,) in db.session.query(AftersaleKeywordCandidate.reason_id).distinct().all():
+            rows = (
+                AftersaleKeywordCandidate.query
+                .filter_by(reason_id=rid)
+                .order_by(AftersaleKeywordCandidate.count.desc())
+                .all()
+            )
+            if len(rows) > top_per_reason:
+                for row in rows[top_per_reason:]:
+                    db.session.delete(row)
+                    overflow_count += 1
+
+        db.session.commit()
+        remaining = AftersaleKeywordCandidate.query.count()
+        return {
+            'deleted_noise':    noise_count,
+            'deleted_overflow': overflow_count,
+            'remaining':        remaining,
+        }
+
+    def _auto_cleanup_candidates_if_needed(self):
+        """超出上限时，按 id 升序删除 count=1 的噪声词，直到降回上限以内。
+        在 session 内执行，不独立 commit（由调用方统一提交）。"""
+        total = AftersaleKeywordCandidate.query.count()
+        if total <= self._CANDIDATE_MAX_ROWS:
+            return
+        excess = total - self._CANDIDATE_MAX_ROWS
+        # 取最旧的 count=1 行（id 升序），只取需要删除的数量
+        to_delete = (
+            AftersaleKeywordCandidate.query
+            .filter(AftersaleKeywordCandidate.count == 1)
+            .order_by(AftersaleKeywordCandidate.id.asc())
+            .limit(excess)
+            .all()
+        )
+        for row in to_delete:
+            db.session.delete(row)
+
+    def get_keyword_candidate_stats(self):
+        """返回候选池概况：总行数、原因数、各 count 分布。"""
+        total    = AftersaleKeywordCandidate.query.count()
+        reasons  = db.session.query(
+            db.func.count(db.func.distinct(AftersaleKeywordCandidate.reason_id))
+        ).scalar() or 0
+        dist_rows = db.session.query(
+            AftersaleKeywordCandidate.count,
+            db.func.count(AftersaleKeywordCandidate.id).label('n'),
+        ).group_by(AftersaleKeywordCandidate.count).order_by(AftersaleKeywordCandidate.count).all()
+        distribution = {int(r.count): int(r.n) for r in dist_rows}
+        return {'total': total, 'reasons': reasons, 'distribution': distribution}

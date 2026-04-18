@@ -51,7 +51,13 @@
       "Bash(ls e:/Project/tmt-library/backend/alter_tables*.py)",
       "Bash(curl -s \"https://geo.datav.aliyun.com/areas_v3/bound/100000_full.json\" -o \"e:/Project/tmt-library/src/assets/maps/china-city.json\")",
       "Bash(python3 -c ':*)",
-      "Bash(node -e ':*)"
+      "Bash(node -e ':*)",
+      "Bash(electron-builder --win)",
+      "Bash(xargs grep:*)",
+      "Bash(mysql -h 47.99.100.138 -u root -p tmt_db -e ':*)",
+      "Bash(curl -s -X POST http://127.0.0.1:8765/api/aftersale/admin/migrate-alias-keywords)",
+      "Bash(ls e:/Project/tmt-library/backend/create_*.py e:/Project/tmt-library/backend/migrate_*.py)",
+      "Bash(mysql -h 47.99.100.138 -P 3306 -u root -pTMT08011409gsc tmt_db -e \"ALTER TABLE erp_code_rules ADD COLUMN is_disabled TINYINT\\(1\\) NOT NULL DEFAULT 0;\")"
     ],
     "additionalDirectories": [
       "\\tmp",
