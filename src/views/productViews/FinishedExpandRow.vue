@@ -24,7 +24,7 @@ const props = defineProps({
 const emit = defineEmits(['saved'])
 
 // ── 权限 ──────────────────────────────────────────
-const { canEditProduct, canViewShipping } = usePermission()
+const { canEditProduct, canViewShipping, canViewAftersale } = usePermission()
 
 // ── 响应式状态 ────────────────────────────────────
 const editing      = ref(false)
@@ -130,9 +130,108 @@ function initShippingChart() {
   }, true)
 }
 
+// ── 售后数据图表 ──────────────────────────────────
+const aftersaleChartEl      = ref(null)
+const aftersaleChartLoading = ref(false)
+const aftersaleLoaded       = ref(false)
+const aftersaleMonthly      = ref([])   // [{ month, aftersale_count, shipping_actual }]
+let   aftersaleChartInst    = null
+
+async function loadAftersaleMonthly() {
+  if (!canViewAftersale || aftersaleLoaded.value) return
+  if (!props.row.model_id) return
+  aftersaleChartLoading.value = true
+  try {
+    const res = await http.get(`/api/aftersale/model/${props.row.model_id}/series-monthly`)
+    if (res.success) {
+      aftersaleMonthly.value      = res.data || []
+      aftersaleLoaded.value       = true
+      aftersaleChartLoading.value = false
+      await nextTick()
+      initAftersaleChart()
+    }
+  } finally {
+    aftersaleChartLoading.value = false
+  }
+}
+
+function initAftersaleChart() {
+  if (!aftersaleChartEl.value) return
+  if (!aftersaleChartInst) {
+    aftersaleChartInst = echarts.init(aftersaleChartEl.value, null, { renderer: 'canvas' })
+  }
+  const data    = aftersaleMonthly.value
+  const months  = data.map(d => d.month)
+  const counts  = data.map(d => d.aftersale_count)
+  // 占比 = 售后/发货 * 100%，发货为0时不显示
+  const ratios  = data.map(d =>
+    d.shipping_actual > 0 ? +(d.aftersale_count / d.shipping_actual * 100).toFixed(2) : null
+  )
+  const hasRatio = ratios.some(v => v !== null)
+
+  aftersaleChartInst.setOption({
+    grid: { top: 12, right: hasRatio ? 44 : 12, bottom: 40, left: 44, containLabel: false },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      formatter(params) {
+        let html = `<div style="font-size:12px;color:#3a3028">${params[0].axisValue}</div>`
+        params.forEach(p => {
+          if (p.seriesIndex === 0) {
+            html += `<div style="font-size:12px;margin-top:2px">售后量：<b>${p.value}</b></div>`
+          } else if (p.value !== null && p.value !== undefined) {
+            html += `<div style="font-size:12px;margin-top:2px">发货占比：<b>${p.value}%</b></div>`
+          }
+        })
+        return html
+      },
+    },
+    xAxis: {
+      type: 'category',
+      data: months,
+      axisLabel: { fontSize: 10, color: '#8a7a6a', rotate: months.length > 18 ? 45 : 0 },
+      axisLine:  { lineStyle: { color: '#e0d4c0' } },
+      axisTick:  { show: false },
+    },
+    yAxis: [
+      {
+        type: 'value', minInterval: 1,
+        axisLabel: { fontSize: 10, color: '#8a7a6a' },
+        splitLine: { lineStyle: { color: '#f0ebe0' } },
+      },
+      ...(hasRatio ? [{
+        type: 'value',
+        axisLabel: { fontSize: 10, color: '#8a7a6a', formatter: v => v + '%' },
+        splitLine: { show: false },
+      }] : []),
+    ],
+    series: [
+      {
+        type: 'bar',
+        data: counts,
+        barMaxWidth: 18,
+        itemStyle: { color: '#e07070', borderRadius: [3, 3, 0, 0] },
+        yAxisIndex: 0,
+      },
+      ...(hasRatio ? [{
+        type: 'line',
+        data: ratios,
+        smooth: true,
+        symbol: 'circle', symbolSize: 4,
+        lineStyle: { color: '#c4883a', width: 1.5 },
+        itemStyle: { color: '#c4883a' },
+        connectNulls: false,
+        yAxisIndex: 1,
+      }] : []),
+    ],
+  }, true)
+}
+
 onBeforeUnmount(() => {
   shippingChartInst?.dispose()
   shippingChartInst = null
+  aftersaleChartInst?.dispose()
+  aftersaleChartInst = null
 })
 
 // ── 生命周期 badge（始终显示）────────────────────
@@ -640,6 +739,7 @@ function toggleSec(key) {
   }
   if (key === 'data' && openSec[key]) {
     loadShippingMonthly()
+    loadAftersaleMonthly()
   }
 }
 </script>
@@ -1165,11 +1265,20 @@ function toggleSec(key) {
                 </div>
               </div>
             </div>
-            <!-- 售后数据（待开发） -->
-            <div class="data-placeholder-card">
-              <div class="data-ph-hd">售后数据</div>
-              <div class="data-ph-body">
-                <span class="eg-dim">待开发</span>
+            <!-- 售后数据图表 -->
+            <div class="data-shipping-card">
+              <div class="data-ph-hd">售后数据（系列）</div>
+              <div class="data-shipping-body">
+                <div v-if="aftersaleChartLoading" class="data-shipping-loading">
+                  <div class="data-shipping-spinner"></div>
+                </div>
+                <div v-else-if="!props.row.model_id" class="data-shipping-empty">未关联型号</div>
+                <div v-else-if="!aftersaleMonthly.length" class="data-shipping-empty">暂无售后记录</div>
+                <div v-else ref="aftersaleChartEl" class="data-shipping-chart"></div>
+                <!-- 无权限遮罩 -->
+                <div v-if="!canViewAftersale" class="data-shipping-mask">
+                  <span class="data-shipping-mask-text">无权限</span>
+                </div>
               </div>
             </div>
           </div>
@@ -1652,11 +1761,9 @@ function toggleSec(key) {
 /* ── 参数区 ───────────────────────────────────── */
 .eg-sec-bd-params { padding: 12px 14px; }
 .eg-sec-bd-data   { padding: 12px 14px; display: flex; gap: 12px; }
-.data-placeholder-card {
-  flex: 1; border: 1px solid #e8ddd0; border-radius: 10px; overflow: hidden;
-}
 .data-shipping-card {
-  flex: 2; border: 1px solid #e8ddd0; border-radius: 10px; overflow: hidden;
+  flex: 1; border: 1px solid #e8ddd0; border-radius: 10px; overflow: hidden;
+  min-width: 0;
 }
 .data-ph-hd {
   padding: 7px 12px; font-size: 12px; font-weight: 600;

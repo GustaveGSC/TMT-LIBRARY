@@ -4,6 +4,7 @@ from database.repository.aftersale import AftersaleRepository
 from database.models.aftersale import (
     AftersaleReasonCategory, AftersaleReason,
     AftersaleShippingAlias,
+    AftersaleShippingAmbiguousTerm,
     AftersaleCase, AftersaleCaseReason,
 )
 
@@ -297,9 +298,9 @@ class AftersaleService:
 
     def auto_match(self, text, buyer_remark=None):
         if not text:
-            return Result.ok(data=[])
-        results = _repo.auto_match(text, buyer_remark=buyer_remark)
-        return Result.ok(data=results)
+            return Result.ok(data={'items': [], 'cleaned_text': ''})
+        result = _repo.auto_match(text, buyer_remark=buyer_remark)
+        return Result.ok(data=result)
 
     # ── 统计 & 图表 ─────────────────────────────────────────────────────────
 
@@ -374,6 +375,26 @@ class AftersaleService:
             return Result.fail('过滤词不存在')
         return Result.ok()
 
+    # ── 发货物料歧义词 ─────────────────────────────────────────────────────────
+
+    def get_ambiguous_terms(self):
+        return Result.ok(data=[t.to_dict() for t in _repo.get_all_ambiguous_terms()])
+
+    def create_ambiguous_term(self, data):
+        term = (data.get('term') or '').strip()
+        if not term:
+            return Result.fail('词不能为空')
+        if AftersaleShippingAmbiguousTerm.query.filter_by(term=term).first():
+            return Result.fail('该词已存在')
+        obj = _repo.create_ambiguous_term(term=term)
+        return Result.ok(data=obj.to_dict())
+
+    def delete_ambiguous_term(self, term_id):
+        ok = _repo.delete_ambiguous_term(term_id)
+        if not ok:
+            return Result.fail('词不存在')
+        return Result.ok()
+
     # ── 词典自动建议 ────────────────────────────────────────────────────────────
 
     def get_dict_suggestions(self, type_filter=None, status='pending'):
@@ -435,6 +456,25 @@ class AftersaleService:
         )
         return Result.ok(data=_repo.get_reason_keyword_rules())
 
+    # ── 产品留言词典（材质/颜色/驱动/尺寸）────────────────────────────────────
+
+    def get_product_remark_dict(self):
+        return Result.ok(data=_repo.get_product_remark_dict())
+
+    def put_product_remark_dict(self, items):
+        if not isinstance(items, list):
+            return Result.fail('items 必须为数组')
+        valid_types = {'material', 'color', 'drive_type', 'size'}
+        for item in items:
+            if item.get('type') not in valid_types:
+                return Result.fail(f'无效的 type: {item.get("type")}')
+            if not (item.get('value') or '').strip():
+                return Result.fail('value 不能为空')
+            if item.get('type') == 'size' and not (item.get('display') or '').strip():
+                return Result.fail('size 类型必须填写 display（米制表达）')
+        _repo.replace_product_remark_dict(items)
+        return Result.ok(data=_repo.get_product_remark_dict())
+
     def cleanup_keyword_candidates(self, min_count=2, top_per_reason=200):
         result = _repo.cleanup_keyword_candidates(min_count=min_count, top_per_reason=top_per_reason)
         return Result.ok(data=result,
@@ -442,3 +482,7 @@ class AftersaleService:
 
     def get_keyword_candidate_stats(self):
         return Result.ok(data=_repo.get_keyword_candidate_stats())
+
+    def get_series_monthly_by_model_id(self, model_id: int):
+        data = _repo.get_series_monthly_by_model_id(model_id)
+        return Result.ok(data=data)

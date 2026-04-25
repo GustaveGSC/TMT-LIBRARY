@@ -57,7 +57,12 @@
       "Bash(mysql -h 47.99.100.138 -u root -p tmt_db -e ':*)",
       "Bash(curl -s -X POST http://127.0.0.1:8765/api/aftersale/admin/migrate-alias-keywords)",
       "Bash(ls e:/Project/tmt-library/backend/create_*.py e:/Project/tmt-library/backend/migrate_*.py)",
-      "Bash(mysql -h 47.99.100.138 -P 3306 -u root -pTMT08011409gsc tmt_db -e \"ALTER TABLE erp_code_rules ADD COLUMN is_disabled TINYINT\\(1\\) NOT NULL DEFAULT 0;\")"
+      "Bash(mysql -h 47.99.100.138 -P 3306 -u root -pTMT08011409gsc tmt_db -e \"ALTER TABLE erp_code_rules ADD COLUMN is_disabled TINYINT\\(1\\) NOT NULL DEFAULT 0;\")",
+      "Bash(python3 -c \"import sys; sys.path.insert\\(0, '.'\\); import app; print\\('Import successful'\\)\")",
+      "Bash(python3)",
+      "Bash(python3 -c \"print\\('Python works'\\)\")",
+      "Bash(powershell -Command ':*)",
+      "Bash(powershell -Command 'cd '\\\\''e:/Project/tmt-library/backend'\\\\''; $env:PYTHONIOENCODING='\\\\''utf-8'\\\\''; python inspect_candidates.py')"
     ],
     "additionalDirectories": [
       "\\tmp",

@@ -7,6 +7,14 @@ roles             id, name, description
 permissions       id, code, name, description
 user_roles        user_id, role_id
 role_permissions  role_id, permission_id
+
+user_login_log
+  id, user_id(FK→users SET NULL nullable), username(输入的用户名),
+  display_name(成功时记录), status(ENUM success/failed),
+  machine_name(VARCHAR 128，主机名，用于区分游客身份), login_at(CST DateTime)
+  # 每次登录尝试（包括密码错误/账号不存在/账号禁用）均写入；游客登录也写入
+  # verify_password + guest_login 均记录；user_id 找不到用户时为 NULL
+  # 游客以 machine_name 区分不同用户（socket.gethostname() 服务端获取）
 ```
 
 ## 版本
@@ -73,7 +81,9 @@ aftersale_reason
 aftersale_keyword_candidate
   id, reason_id(FK→aftersale_reason CASCADE), keyword(VARCHAR 20), count(DEFAULT 1)
   # UNIQUE(reason_id, keyword)
-  # 确认工单时从备注提取候选词累计 count；晋升需 count ≥ 阈值且质量分达标等（见仓库 _auto_update_reason_keywords），并受跨原因热点词抑制；晋升后写入 aftersale_reason.keywords 并删除候选行
+  # 确认工单时从备注提取候选词累计 count；晋升需 count ≥ 2（_KW_PROMOTE_THRESHOLD）且质量分 ≥ 0.45，并受跨原因热点词（spread ≥ 3）抑制；晋升后写入 aftersale_reason.keywords 并删除候选行
+  # 孤儿清理：手动编辑 reason.keywords 后候选行不自动消失；每次 confirm_case 时顺带清理该工单涉及原因的孤儿候选行
+  # 候选池上限 1000 行，超限时按 id 升序删除最旧的 count=1 行；手动清理接口：POST /api/aftersale/admin/cleanup-keyword-candidates
 
 aftersale_shipping_alias
   id, name(UNIQUE VARCHAR 200), keywords(JSON 物料名/代码关键词列表), sort_order, created_at
@@ -91,6 +101,14 @@ aftersale_reason_alias_affinity
 aftersale_shipping_ignore_term
   id, term(UNIQUE VARCHAR 100), created_at
   # 发货物料名包含该词时跳过简称匹配与学习
+
+aftersale_product_remark_dict
+  id, type(ENUM material/color/drive_type/size), value(VARCHAR 50), display(VARCHAR 50 nullable),
+  enabled(TINYINT DEFAULT 1), sort_order(INT DEFAULT 0), created_at
+  # UNIQUE(type, value)
+  # 供 suggest_product 结构化解析买家留言中的材质/颜色/驱动方式/尺寸关键词
+  # size 类型须填写 display（米制表达，如 '1.2米'），供型号名匹配用
+  # 初始化：运行 backend/create_product_remark_dict.py；管理入口：词典 Tab → 产品匹配词典
 
 aftersale_dict_suggestion
   id, type(ENUM stopword|ignore_term|promoted_keyword|synonym_candidate),

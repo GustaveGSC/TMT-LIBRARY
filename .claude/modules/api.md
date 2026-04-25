@@ -3,7 +3,10 @@
 ```
 GET    /health
 
-POST   /api/account/login
+POST   /api/account/login                             # 登录时自动写入 user_login_log（成功/失败均记录）
+GET    /api/account/login-logs                        # 登录记录原始列表（author 专用）?page&per_page&username
+GET    /api/account/login-stats/dau                   # 日活统计（author 专用）?days=30 → [{date,count}]
+GET    /api/account/login-stats/users                 # 账号登录统计（author 专用）→ [{username,display_name,total,success_count,failed_count,last_login_at,identity_type}]
 GET    /api/account/users
 POST   /api/account/users
 PUT    /api/account/users/:id
@@ -116,6 +119,9 @@ PUT    /api/aftersale/reason-keyword-rules            # 全量覆盖词典表（
                                                       #     synonyms: [{ pattern, replacement, is_regex? }] } （缺省 is_regex 时服务端按 true）
                                                       #   未传 short_keep_terms 时保留库内原短词保留表（兼容旧客户端）
                                                       #   成功后返回最新词典；服务端缓存约 60s，提交后失效
+GET    /api/aftersale/product-remark-dict             # 产品留言词典（全量，含 disabled）→ [{id,type,value,display,enabled,sort_order}]
+PUT    /api/aftersale/product-remark-dict             # 全量替换；body: { items:[{type,value,display?,enabled?,sort_order?}] }
+                                                      #   size 类型必须填 display；成功后返回最新全量列表；服务端缓存约 120s 后失效
 GET    /api/aftersale/reasons                         # 原因库（按 category 聚合）
 POST   /api/aftersale/reasons                         # 创建原因
 PUT    /api/aftersale/reasons/:id                     # 更新原因
@@ -133,6 +139,7 @@ GET    /api/aftersale/return-aliases                  # 售后物料简称列表
 POST   /api/aftersale/return-aliases                  # 新增售后物料简称 {name}
 PUT    /api/aftersale/return-aliases/:id              # 更新售后物料简称
 DELETE /api/aftersale/return-aliases/:id              # 删除售后物料简称
+GET    /api/aftersale/model/:model_id/series-monthly  # 按月聚合指定 model 所属系列的售后工单数+发货实际量（仅有售后数据的月份）
 GET    /api/aftersale/stats                           # 统计摘要（pending/confirmed/ignored 数量 + Top5 原因）
 GET    /api/aftersale/chart-options                   # 图表筛选选项（channels/provinces/categories）
 POST   /api/aftersale/chart-filter-options            # 联动筛选选项，body: {date_start?, date_end?, channel_names?, provinces?, cities?, model_ids?, reason_ids?, reason_category_ids?, shipping_alias_ids?, return_alias_ids?}

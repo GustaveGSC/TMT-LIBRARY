@@ -1,5 +1,5 @@
 import bcrypt
-from database.repository.account import UserRepository, RoleRepository, PermissionRepository
+from database.repository.account import UserRepository, RoleRepository, PermissionRepository, LoginLogRepository
 from result import Result
 
 
@@ -45,14 +45,21 @@ class AccountService:
         UserRepository.delete(user)
         return Result.ok(message="删除成功")
 
-    def verify_password(self, username: str, password: str) -> Result:
+    def verify_password(self, username: str, password: str, machine_name: str = None) -> Result:
         user = UserRepository.get_by_username(username)
         if not user:
+            LoginLogRepository.create(username=username, status='failed', machine_name=machine_name)
             return Result.fail("用户名或密码错误")
         if not bcrypt.checkpw(password.encode(), user.password.encode()):
+            LoginLogRepository.create(username=username, status='failed', user_id=user.id,
+                                      display_name=user.display_name, machine_name=machine_name)
             return Result.fail("用户名或密码错误")
         if not user.is_active:
+            LoginLogRepository.create(username=username, status='failed', user_id=user.id,
+                                      display_name=user.display_name, machine_name=machine_name)
             return Result.fail("账号已被禁用")
+        LoginLogRepository.create(username=username, status='success', user_id=user.id,
+                                  display_name=user.display_name, machine_name=machine_name)
         return Result.ok(user.to_dict())
 
     def change_password(self, user_id: int, old_password: str, new_password: str) -> Result:
@@ -132,10 +139,11 @@ class AccountService:
         if not perm: return Result.fail(f"权限 {perm_id} 不存在")
         return Result.ok(PermissionRepository.update(perm, **kwargs).to_dict(), message="更新成功")
 
-    def guest_login(self) -> Result:
-        """返回游客身份信息，权限取自 guest 角色"""
+    def guest_login(self, machine_name: str = None) -> Result:
+        """返回游客身份信息，权限取自 guest 角色；同时写入登录日志"""
         guest_role = RoleRepository.get_by_name("guest")
         perm_codes = [p.code for p in guest_role.permissions] if guest_role else []
+        LoginLogRepository.create(username='guest', status='success', machine_name=machine_name)
         return Result.ok({
             "id":           None,
             "username":     "guest",
@@ -145,6 +153,15 @@ class AccountService:
             "permissions":  perm_codes,
             "created_at":   None,
         })
+
+    def get_login_logs(self, page: int = 1, per_page: int = 50, username: str = None) -> Result:
+        return Result.ok(LoginLogRepository.get_all(page=page, per_page=per_page, username=username))
+
+    def get_login_dau(self, days: int = 30) -> Result:
+        return Result.ok(LoginLogRepository.get_dau(days=days))
+
+    def get_login_user_stats(self) -> Result:
+        return Result.ok(LoginLogRepository.get_user_stats())
 
     def assign_permission_to_role(self, role_id: int, permission_code: str) -> Result:
         role = RoleRepository.get_by_id(role_id)

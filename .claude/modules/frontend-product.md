@@ -92,7 +92,9 @@ src/stores/product/
   - **独立编辑模式**：不进入主行编辑也可单独编辑参数（参数区右上角 ✎ 按钮）
   - 添加参数通过 el-dialog（el-select filterable allow-create + el-input），键名可选库中已有或自由输入
   - 键名库通过「参数管理」弹窗维护（page-product.vue 概览页数据管理区）
-- **数据节**：占位，含两张卡片（发货数据 / 售后数据），待开发
+- **数据节**：两张等宽卡片并排
+  - **发货数据**：条形图，x 轴年月，y 轴净发货量（调 `GET /api/shipping/product/:code/monthly`）
+  - **售后数据（系列）**：条形图（售后量，红色）+ 折线图（发货占比%，橙色右轴），仅显示有售后数据的年月；需 `canViewAftersale` 权限，未关联型号时显示提示；调 `GET /api/aftersale/model/:model_id/series-monthly`
 
 ## ProductChart.vue 说明
 - 图表视图，从 `finishedStore.rawItems` 读取数据

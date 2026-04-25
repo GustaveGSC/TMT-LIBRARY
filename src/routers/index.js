@@ -23,9 +23,13 @@ const router = createRouter({
       path: '/admin/users',       
       component: () => import('@/views/adminViews/page-users.vue') 
     },
-    { 
-      path: '/admin/permissions', 
-      component: () => import('@/views/adminViews/page-permissions.vue') 
+    {
+      path: '/admin/permissions',
+      component: () => import('@/views/adminViews/page-permissions.vue')
+    },
+    {
+      path: '/admin/login-logs',
+      component: () => import('@/views/adminViews/page-login-logs.vue')
     },
     {
       path: '/product',

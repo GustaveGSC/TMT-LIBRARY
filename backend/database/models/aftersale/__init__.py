@@ -100,6 +100,18 @@ class AftersaleShippingIgnoreTerm(db.Model):
         return {'id': self.id, 'term': self.term}
 
 
+class AftersaleShippingAmbiguousTerm(db.Model):
+    """发货物料歧义词：该物料 token 被多个简称共用，匹配时需借助商家备注二次评分"""
+    __tablename__ = 'aftersale_shipping_ambiguous_term'
+
+    id         = db.Column(db.Integer,     primary_key=True, autoincrement=True)
+    term       = db.Column(db.String(200), nullable=False, unique=True)
+    created_at = db.Column(db.DateTime,    nullable=False, default=now_cst)
+
+    def to_dict(self):
+        return {'id': self.id, 'term': self.term}
+
+
 class AftersaleReasonStopword(db.Model):
     """售后原因词典：停用词（用于关键词学习/匹配降噪）"""
     __tablename__ = 'aftersale_reason_stopword'
@@ -325,6 +337,34 @@ class AftersaleCaseReason(db.Model):
             'purchase_date':         self.purchase_date.strftime('%Y-%m-%d') if self.purchase_date else None,
             'days_since_purchase':   self.days_since_purchase,
             'created_at':          self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
+        }
+
+
+class AftersaleProductRemarkDict(db.Model):
+    """产品匹配留言词典：材质/颜色/驱动方式/尺寸关键词，供 suggest_product 结构化解析买家留言"""
+    __tablename__ = 'aftersale_product_remark_dict'
+
+    id         = db.Column(db.Integer,  primary_key=True, autoincrement=True)
+    type       = db.Column(db.Enum('material', 'color', 'drive_type', 'size'),
+                           nullable=False, index=True)
+    value      = db.Column(db.String(50), nullable=False)   # 在留言中匹配的词，如 "橡胶木" / "120"
+    display    = db.Column(db.String(50), nullable=True)    # 型号中对应的表达，仅 size 类型使用，如 "1.2米"
+    enabled    = db.Column(db.Boolean,   nullable=False, default=True)
+    sort_order = db.Column(db.Integer,   nullable=False, default=0)
+    created_at = db.Column(db.DateTime,  nullable=False, default=now_cst)
+
+    __table_args__ = (
+        db.UniqueConstraint('type', 'value', name='uq_remark_dict_type_value'),
+    )
+
+    def to_dict(self):
+        return {
+            'id':         self.id,
+            'type':       self.type,
+            'value':      self.value,
+            'display':    self.display,
+            'enabled':    bool(self.enabled),
+            'sort_order': self.sort_order,
         }
 
 

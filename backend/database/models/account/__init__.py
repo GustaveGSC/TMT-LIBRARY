@@ -1,5 +1,8 @@
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from database.base import db
+
+_CST = timezone(timedelta(hours=8))
+def _now_cst(): return datetime.now(_CST).replace(tzinfo=None)
 
 
 # ── 用户-角色 关联表（多对多）────────────────────────
@@ -77,3 +80,26 @@ class Permission(db.Model):
 
     def to_dict(self) -> dict:
         return {"id": self.id, "code": self.code, "description": self.description}
+
+
+class UserLoginLog(db.Model):
+    __tablename__ = "user_login_log"
+
+    id           = db.Column(db.Integer,    primary_key=True, autoincrement=True)
+    user_id      = db.Column(db.Integer,    db.ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    username     = db.Column(db.String(64), nullable=False)              # 登录时输入的用户名（游客为 'guest'）
+    display_name = db.Column(db.String(64), nullable=True)              # 成功时记录显示名
+    status       = db.Column(db.Enum("success", "failed"), nullable=False, default="success")
+    machine_name = db.Column(db.String(128), nullable=True)             # 机器名/主机名，用于区分游客身份
+    login_at     = db.Column(db.DateTime,   nullable=False, default=_now_cst)
+
+    def to_dict(self) -> dict:
+        return {
+            "id":           self.id,
+            "user_id":      self.user_id,
+            "username":     self.username,
+            "display_name": self.display_name,
+            "status":       self.status,
+            "machine_name": self.machine_name,
+            "login_at":     self.login_at.isoformat() if self.login_at else None,
+        }

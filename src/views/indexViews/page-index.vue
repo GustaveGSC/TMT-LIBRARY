@@ -162,8 +162,8 @@ const modules = computed(() => [
     desc: '售后记录查询与分析',
     icon: '🔧',
     route: '/aftersale',
-    disabled: !isAuthor,
-    noPermission: false,
+    disabled: false,
+    noPermission: !canViewAftersale,
   },
 ])
 

@@ -19,6 +19,47 @@ const router = useRouter()
 const rolesLoading = ref(false)
 const roles        = ref([])
 
+// ── 角色拖拽排序 ──────────────────────────
+const ROLE_ORDER_KEY = 'role_sort_order'
+const dragSrcIndex   = ref(null)
+
+// 读取保存的排序顺序（role.id 数组），对 roles 重排
+function applySavedOrder(list) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(ROLE_ORDER_KEY) || 'null')
+    if (!Array.isArray(saved) || saved.length === 0) return list
+    const idxMap = new Map(saved.map((id, i) => [id, i]))
+    return [...list].sort((a, b) => {
+      const ia = idxMap.has(a.id) ? idxMap.get(a.id) : Infinity
+      const ib = idxMap.has(b.id) ? idxMap.get(b.id) : Infinity
+      return ia - ib
+    })
+  } catch { return list }
+}
+
+function saveOrder() {
+  localStorage.setItem(ROLE_ORDER_KEY, JSON.stringify(roles.value.map(r => r.id)))
+}
+
+function onDragStart(index) {
+  dragSrcIndex.value = index
+}
+
+function onDragOver(e, index) {
+  e.preventDefault()
+  if (dragSrcIndex.value === null || dragSrcIndex.value === index) return
+  const list = [...roles.value]
+  const [moved] = list.splice(dragSrcIndex.value, 1)
+  list.splice(index, 0, moved)
+  roles.value = list
+  dragSrcIndex.value = index
+}
+
+function onDragEnd() {
+  dragSrcIndex.value = null
+  saveOrder()
+}
+
 // ── 权限项列表 ────────────────────────────
 const permsLoading = ref(false)
 const permissions  = ref([])
@@ -48,7 +89,7 @@ async function loadRoles() {
   rolesLoading.value = true
   try {
     const res = await http.get('/api/account/roles')
-    if (res.success) roles.value = res.data || []
+    if (res.success) roles.value = applySavedOrder(res.data || [])
   } catch {
     ElMessage.error('加载角色列表失败')
   } finally {
@@ -229,7 +270,16 @@ onMounted(() => {
         <div v-loading="rolesLoading" class="card-body">
           <div v-if="roles.length === 0 && !rolesLoading" class="empty-tip">暂无角色</div>
 
-          <div v-for="role in roles" :key="role.id" class="role-item">
+          <div
+            v-for="(role, index) in roles"
+            :key="role.id"
+            class="role-item"
+            draggable="true"
+            @dragstart="onDragStart(index)"
+            @dragover="onDragOver($event, index)"
+            @dragend="onDragEnd"
+          >
+            <div class="drag-handle" title="拖拽排序">⠿</div>
             <div class="role-main">
               <!-- 角色名称和描述 -->
               <div class="role-name-row">
@@ -470,8 +520,23 @@ onMounted(() => {
   padding: 14px 20px;
   border-bottom: 1px solid var(--border);
   gap: 12px;
+  cursor: default;
 }
 .role-item:last-child { border-bottom: none; }
+.role-item[draggable="true"]:hover { background: var(--bg); }
+
+.drag-handle {
+  flex-shrink: 0;
+  font-size: 16px;
+  color: var(--text-muted);
+  opacity: 0.45;
+  cursor: grab;
+  user-select: none;
+  padding-top: 1px;
+  letter-spacing: -1px;
+}
+.drag-handle:hover { opacity: 0.9; }
+.drag-handle:active { cursor: grabbing; }
 
 .role-main { flex: 1; min-width: 0; }
 

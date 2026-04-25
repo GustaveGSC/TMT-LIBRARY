@@ -19,6 +19,7 @@ const userInfo    = ref(JSON.parse(localStorage.getItem('user') || '{}'))
 const username    = computed(() => userInfo.value.username || '')
 const displayName = computed(() => userInfo.value.display_name || '')
 const isAdmin     = computed(() => userInfo.value.roles?.includes('admin') ?? false)
+const isAuthor    = computed(() => userInfo.value.username === 'author')
 const isGuest     = computed(() => userInfo.value.username === '游客')
 const userInitial = computed(() => (displayName.value || username.value || '?')[0].toUpperCase())
 
@@ -227,6 +228,23 @@ defineExpose({ open })
             <div class="nav-icon-wrap">
               <span class="nav-icon">🚀</span>
               <span>版本发布</span>
+            </div>
+            <span class="section-arrow">›</span>
+          </div>
+        </div>
+
+        <div class="drawer-divider"></div>
+      </template>
+
+      <!-- author 专属 -->
+      <template v-if="isAuthor">
+        <div class="section-group-label">开发者</div>
+
+        <div class="section">
+          <div class="section-title nav" @click="handleNav('/admin/login-logs')">
+            <div class="nav-icon-wrap">
+              <span class="nav-icon">🔍</span>
+              <span>用户分析</span>
             </div>
             <span class="section-arrow">›</span>
           </div>

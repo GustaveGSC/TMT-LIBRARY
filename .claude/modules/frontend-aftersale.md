@@ -8,14 +8,17 @@
 ## AftersaleProcess.vue 说明
 - 布局：左侧队列（280px）+ 右侧处理工作区（flex:1）
 - 左侧：搜索 + 日期筛选 + 订单卡片列表（选中态主色左边框）
-- 右侧工作区：信息栏 / 物料列表（直接展示原始物料，无组别简称合并）/ 备注区（seller_remark + buyer_remark 只读）/ 自动匹配建议 / 原因分配区 / 底部确认/忽略操作
+- 右侧工作区：信息栏 / 物料列表（直接展示原始物料，无组别简称合并）/ 备注区（seller_remark + buyer_remark 只读）/ 售后日期 / 原因分配区（支持多条内容）/ 底部确认/忽略操作
 - **自动匹配**：进入工单时自动调用 `POST /api/aftersale/auto-match`，传入 seller_remark；结果显示候选原因（名称+来源+评分条+命中关键词），点击即填入原因行
 - **产品候选**：文本匹配的候选排名列表，每行有「应用」按钮；展开后型号明细可逐条点击应用
 - **原因分配行**：每行含原因下拉（从原因库选）/ 自定义原因输入 / 涉及产品多选 / 备注输入；支持添加多行（拆分多原因）
 - 待处理录入不再包含「售后物料简称」字段（已移除），`return_alias_id` 不随 `POST /api/aftersale/cases` 提交
+- 待处理列表按发货日期**降序**排列（最新在前）
 - 确认 → `POST /api/aftersale/cases`；忽略 → `POST /api/aftersale/cases/:order_no/ignore`
 - 需要 `aftersale:edit` 权限才显示确认/忽略/添加原因按钮
-- **关键词自动积累**：确认工单时，若原因行有 `reason_id`（原因库条目），在去除 seller 中与 buyer留言重复的长片段得到有效备注后提取候选词写入 `aftersale_keyword_candidate`；须通过质量门禁（词典停用词、长度、日期数字噪声、`_keyword_quality_score` 等），且 **count ≥ 3** 且质量分 ≥ 仓库阈值后才晋升到 `aftersale_reason.keywords`；自定义原因不参与
+- **多内容独立备注**：售后内容条数 ≥ 2 时，每条内容卡片显示独立「商家备注」textarea；提交时各条 reason 携带自己的 `seller_remark`，后端按备注文本分组调用关键词学习，避免不同原因互相污染候选词池；单条内容时不显示独立备注输入框，使用工单级备注
+- **关键词自动积累**：确认工单时，若原因行有 `reason_id`（原因库条目），在去除 seller 中与 buyer留言重复的长片段得到有效备注后提取候选词写入 `aftersale_keyword_candidate`；须通过质量门禁（词典停用词、长度、日期数字噪声、`_keyword_quality_score` 等），且 **count ≥ 2** 且质量分 ≥ 仓库阈值后才晋升到 `aftersale_reason.keywords`；自定义原因不参与
+- **孤儿候选词自动清理**：手动编辑 `reason.keywords` 后，候选表里已被收录的词不会自动删除；每次 `confirm_case` 时会顺带清理当前涉及原因中已存在于 keywords 的候选行，防止脏数据积累
 - **候选词晋升抑制**：同一候选词若在多个原因候选池中高频出现（跨原因热点词），不自动晋升，避免“补偿/更换/问题”等泛词污染原因关键词库
 - **原因匹配评分**：`auto-match` 使用加权评分（关键词命中分 + 条件触发的历史相似度分）。关键词阶段会结合词典中的故障核心词/部件词加权；仅当关键词命中候选过少时才拉取近期已确认工单做 `difflib` 比对（限量 + 文本截断 + `selectinload`，见仓库常量 `_AUTO_MATCH_*`）。返回字段含 `matched_keywords`、`keyword_score`、`history_score`、`total_score`、`confidence`、`source`
 - **原因词典（标准档）**：停用词 / 故障核心词 / 部件词 / 同义词规则**只来自数据库表**，无硬编码兜底；新环境需运行 `backend/create_reason_keyword_rules.py` 或在「原因词典」Tab 保存一次以写入数据。读写接口 `GET/PUT /api/aftersale/reason-keyword-rules`（PUT 为**全量覆盖**）；后端对词典有短时内存缓存（约 60s），保存后会失效

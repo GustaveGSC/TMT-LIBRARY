@@ -44,9 +44,12 @@ const shipCodeInput   = ref('')   // 产品代码输入框
 const shippingSearch  = ref('')   // 发货简称搜索词
 
 // ── 发货物料匹配过滤词状态 ─────────────────────────
-const ignoreTerms    = ref([])    // [{id, term}]
-const ignoreInput    = ref('')    // 输入框
-const ignoreLoading  = ref(false)
+const ignoreTerms      = ref([])    // [{id, term}]
+const ignoreInput      = ref('')
+const ignoreLoading    = ref(false)
+const ambiguousTerms   = ref([])    // [{id, term}]
+const ambiguousInput   = ref('')
+const ambiguousLoading = ref(false)
 const ruleSaving     = ref(false)
 const reasonRuleForm = ref({
   stopwords: [],
@@ -62,6 +65,12 @@ const reasonRuleForm = ref({
   newReplacement: '',
   newIsRegex: true,
 })
+
+// ── 产品留言词典状态（材质/颜色/驱动/尺寸）──────────────
+const remarkDictItems  = ref([])   // [{id, type, value, display, enabled, sort_order}]
+const remarkDictSaving = ref(false)
+// 新增输入框
+const newRemarkInputs = ref({ material: '', color: '', drive_type: '', sizeValue: '', sizeDisplay: '' })
 
 // 同义词候选建议：接受时需输入归一词
 const synCanonicalMap = ref({})   // sug.id → 用户输入的归一词
@@ -112,18 +121,22 @@ watch(visible, (v) => {
 async function loadAll() {
   loading.value = true
   try {
-    const [catRes, reasonRes, shipRes, ignoreRes, rulesRes] = await Promise.all([
+    const [catRes, reasonRes, shipRes, ignoreRes, rulesRes, remarkDictRes, ambiguousRes] = await Promise.all([
       http.get('/api/aftersale/reason-categories'),
       http.get('/api/aftersale/reasons'),
       http.get('/api/aftersale/shipping-aliases'),
       http.get('/api/aftersale/shipping-ignore-terms'),
       http.get('/api/aftersale/reason-keyword-rules'),
+      http.get('/api/aftersale/product-remark-dict'),
+      http.get('/api/aftersale/shipping-ambiguous-terms'),
     ])
-    if (catRes.success)     categories.value      = catRes.data
-    if (reasonRes.success)  groups.value          = reasonRes.data
-    if (shipRes.success)    shippingAliases.value  = shipRes.data
-    if (ignoreRes.success)  ignoreTerms.value      = ignoreRes.data
-    if (rulesRes.success)   setReasonRuleForm(rulesRes.data)
+    if (catRes.success)        categories.value      = catRes.data
+    if (reasonRes.success)     groups.value          = reasonRes.data
+    if (shipRes.success)       shippingAliases.value  = shipRes.data
+    if (ignoreRes.success)     ignoreTerms.value      = ignoreRes.data
+    if (rulesRes.success)      setReasonRuleForm(rulesRes.data)
+    if (remarkDictRes.success) remarkDictItems.value  = remarkDictRes.data
+    if (ambiguousRes.success)  ambiguousTerms.value   = ambiguousRes.data
 
     if (activeCatId.value === null && categories.value.length > 0) {
       activeCatId.value = categories.value[0].id
@@ -318,6 +331,51 @@ async function saveReasonRules() {
     }
   } finally {
     ruleSaving.value = false
+  }
+}
+
+// ── 产品留言词典操作 ───────────────────────────────
+
+function remarkDictByType(type) {
+  return remarkDictItems.value.filter(item => item.type === type)
+}
+
+function addRemarkDictItem(type) {
+  const value   = (newRemarkInputs.value[type === 'size' ? 'sizeValue' : type] || '').trim()
+  const display = type === 'size' ? (newRemarkInputs.value.sizeDisplay || '').trim() : null
+  if (!value) { ElMessage.warning('词条不能为空'); return }
+  if (type === 'size' && !display) { ElMessage.warning('尺寸需填写米制表达（如 1.2米）'); return }
+  if (remarkDictItems.value.some(i => i.type === type && i.value === value)) {
+    ElMessage.warning('已存在相同词条'); return
+  }
+  remarkDictItems.value.push({ id: null, type, value, display, enabled: true, sort_order: 0 })
+  if (type === 'size') { newRemarkInputs.value.sizeValue = ''; newRemarkInputs.value.sizeDisplay = '' }
+  else newRemarkInputs.value[type] = ''
+}
+
+function removeRemarkDictItem(item) {
+  remarkDictItems.value = remarkDictItems.value.filter(i => i !== item)
+}
+
+async function saveRemarkDict() {
+  remarkDictSaving.value = true
+  try {
+    const items = remarkDictItems.value.map((item, idx) => ({
+      type: item.type,
+      value: item.value,
+      display: item.display || null,
+      enabled: item.enabled !== false,
+      sort_order: idx,
+    }))
+    const res = await http.put('/api/aftersale/product-remark-dict', { items })
+    if (res.success) {
+      remarkDictItems.value = res.data
+      ElMessage.success('产品词典已保存')
+    } else {
+      ElMessage.error(res.message || '保存失败')
+    }
+  } finally {
+    remarkDictSaving.value = false
   }
 }
 
@@ -603,6 +661,36 @@ async function deleteIgnoreTerm(item) {
   const res = await http.delete(`/api/aftersale/shipping-ignore-terms/${item.id}`)
   if (res.success) {
     ignoreTerms.value = ignoreTerms.value.filter(t => t.id !== item.id)
+    emit('updated')
+  } else {
+    ElMessage.error(res.message || '删除失败')
+  }
+}
+
+// ── 歧义词操作 ────────────────────────────────────
+
+async function addAmbiguousTerm() {
+  const term = (ambiguousInput.value || '').trim()
+  if (!term) return
+  ambiguousLoading.value = true
+  try {
+    const res = await http.post('/api/aftersale/shipping-ambiguous-terms', { term })
+    if (res.success) {
+      ambiguousTerms.value.push(res.data)
+      ambiguousInput.value = ''
+      emit('updated')
+    } else {
+      ElMessage.error(res.message || '添加失败')
+    }
+  } finally {
+    ambiguousLoading.value = false
+  }
+}
+
+async function deleteAmbiguousTerm(item) {
+  const res = await http.delete(`/api/aftersale/shipping-ambiguous-terms/${item.id}`)
+  if (res.success) {
+    ambiguousTerms.value = ambiguousTerms.value.filter(t => t.id !== item.id)
     emit('updated')
   } else {
     ElMessage.error(res.message || '删除失败')
@@ -1149,6 +1237,19 @@ async function deleteIgnoreTerm(item) {
                         <div class="syn-tip-ex-result">「粉色椅背」「深蓝椅背」→「椅背」</div>
                       </div>
 
+                      <div class="syn-tip-ex">
+                        <div class="syn-tip-ex-label">④ 仅匹配单独出现的字，排除复合词（词边界）</div>
+                        <div class="syn-tip-ex-row">
+                          <span class="syn-tip-ex-tag">别名</span>
+                          <code>(?&lt;![^\s])断(?!裂)</code>
+                        </div>
+                        <div class="syn-tip-ex-row">
+                          <span class="syn-tip-ex-tag">归一</span>
+                          <code>破损</code>
+                        </div>
+                        <div class="syn-tip-ex-result">「螺丝断」→「螺丝破损」；「断裂」不受影响</div>
+                      </div>
+
                       <div class="syn-tip-tip">不确定时选正则，多个写法用 | 隔开即可</div>
                     </div>
                   </template>
@@ -1217,6 +1318,94 @@ async function deleteIgnoreTerm(item) {
               closable size="small"
               @close="deleteIgnoreTerm(item)">{{ item.term }}</el-tag>
             <span v-if="!ignoreTerms.length" class="col-empty" style="font-size:12px">暂无过滤词</span>
+          </div>
+        </div>
+
+        <!-- 物料歧义词 -->
+        <div class="rule-card rule-card--ambiguous">
+          <div class="rule-card-header">
+            <span class="rule-card-title">物料歧义词</span>
+            <span class="rule-card-count">{{ ambiguousTerms.length }}</span>
+          </div>
+          <div class="rule-card-desc">当发货物料中包含该词时，视为歧义词——该词被多个简称共用，系统将额外借助商家备注内容对候选简称进行二次评分排序</div>
+          <div class="rule-input-row">
+            <el-input v-model="ambiguousInput" size="small" placeholder="输入物料词，回车添加"
+              @keyup.enter="addAmbiguousTerm" />
+            <el-button size="small" :loading="ambiguousLoading" @click="addAmbiguousTerm">添加</el-button>
+          </div>
+          <div class="rule-tags">
+            <el-tag v-for="item in ambiguousTerms" :key="item.id"
+              closable size="small" type="warning"
+              @close="deleteAmbiguousTerm(item)">{{ item.term }}</el-tag>
+            <span v-if="!ambiguousTerms.length" class="col-empty" style="font-size:12px">暂无歧义词</span>
+          </div>
+        </div>
+
+        <!-- 产品留言词典（材质/颜色/驱动/尺寸）-->
+        <div class="rule-card rule-card--product-dict">
+          <div class="rule-card-header">
+            <span class="rule-card-title">产品匹配词典</span>
+            <span class="rule-card-count">{{ remarkDictItems.length }}</span>
+          </div>
+          <div class="rule-card-desc">供买家留言结构化解析使用；尺寸需同时填写数字和米制表达</div>
+
+          <!-- 材质 -->
+          <div class="rdict-group">
+            <div class="rdict-group-label">材质</div>
+            <div class="rule-tags">
+              <el-tag v-for="item in remarkDictByType('material')" :key="item.value"
+                closable size="small" @close="removeRemarkDictItem(item)">{{ item.value }}</el-tag>
+            </div>
+            <div class="rule-input-row">
+              <el-input v-model="newRemarkInputs.material" size="small" placeholder="如：橡胶木" @keyup.enter="addRemarkDictItem('material')" />
+              <el-button size="small" @click="addRemarkDictItem('material')">添加</el-button>
+            </div>
+          </div>
+
+          <!-- 颜色 -->
+          <div class="rdict-group">
+            <div class="rdict-group-label">颜色</div>
+            <div class="rule-tags">
+              <el-tag v-for="item in remarkDictByType('color')" :key="item.value"
+                closable size="small" @close="removeRemarkDictItem(item)">{{ item.value }}</el-tag>
+            </div>
+            <div class="rule-input-row">
+              <el-input v-model="newRemarkInputs.color" size="small" placeholder="如：红色" @keyup.enter="addRemarkDictItem('color')" />
+              <el-button size="small" @click="addRemarkDictItem('color')">添加</el-button>
+            </div>
+          </div>
+
+          <!-- 驱动方式 -->
+          <div class="rdict-group">
+            <div class="rdict-group-label">驱动方式</div>
+            <div class="rule-tags">
+              <el-tag v-for="item in remarkDictByType('drive_type')" :key="item.value"
+                closable size="small" @close="removeRemarkDictItem(item)">{{ item.value }}</el-tag>
+            </div>
+            <div class="rule-input-row">
+              <el-input v-model="newRemarkInputs.drive_type" size="small" placeholder="如：手摇式" @keyup.enter="addRemarkDictItem('drive_type')" />
+              <el-button size="small" @click="addRemarkDictItem('drive_type')">添加</el-button>
+            </div>
+          </div>
+
+          <!-- 尺寸 -->
+          <div class="rdict-group">
+            <div class="rdict-group-label">尺寸</div>
+            <div class="rule-tags">
+              <el-tag v-for="item in remarkDictByType('size')" :key="item.value"
+                closable size="small" @close="removeRemarkDictItem(item)">
+                {{ item.value }} → {{ item.display }}
+              </el-tag>
+            </div>
+            <div class="rule-input-row">
+              <el-input v-model="newRemarkInputs.sizeValue" size="small" placeholder="数字（如 120）" style="width:120px" @keyup.enter="addRemarkDictItem('size')" />
+              <el-input v-model="newRemarkInputs.sizeDisplay" size="small" placeholder="米制（如 1.2米）" style="width:130px" @keyup.enter="addRemarkDictItem('size')" />
+              <el-button size="small" @click="addRemarkDictItem('size')">添加</el-button>
+            </div>
+          </div>
+
+          <div class="rdict-footer">
+            <el-button size="small" type="primary" :loading="remarkDictSaving" @click="saveRemarkDict">保存产品词典</el-button>
           </div>
         </div>
 
@@ -1600,7 +1789,23 @@ async function deleteIgnoreTerm(item) {
 .rule-card--warning  { border-left-color: #e09050; background: #fffaf5; }
 .rule-card--success  { border-left-color: #5cb87a; background: #f8fff9; }
 .rule-card--synonym  { border-left-color: #5b8dee; background: #f8faff; margin-bottom: 10px; }
-.rule-card--ignore   { border-left-color: #8a8a8a; background: #f9f9f7; margin-bottom: 0; }
+.rule-card--ignore       { border-left-color: #8a8a8a; background: #f9f9f7; }
+.rule-card--ambiguous    { border-left-color: #e07a20; background: #fffaf5; margin-bottom: 0; }
+.rule-card--product-dict { border-left-color: #5b8dee; background: #f8faff; margin-top: 10px; }
+.rdict-group {
+  margin-top: 10px;
+}
+.rdict-group-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.rdict-footer {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
 /* 卡片标题行 */
 .rule-card-header {
   display: flex;

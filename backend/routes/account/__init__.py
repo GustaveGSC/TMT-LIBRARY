@@ -1,6 +1,14 @@
+import socket
 from flask import Blueprint, request
 from services.account import account_service
 from result import Result
+
+def _machine_name():
+    """返回当前机器主机名，作为游客/登录的身份标识"""
+    try:
+        return socket.gethostname()
+    except Exception:
+        return None
 
 account_bp = Blueprint('account', __name__)
 
@@ -13,7 +21,7 @@ def login():
     password = body.get("password", "")
     if not username or not password:
         return Result.fail("用户名和密码不能为空").to_response()
-    return account_service.verify_password(username, password).to_response()
+    return account_service.verify_password(username, password, machine_name=_machine_name()).to_response()
 
 
 # ── 用户 CRUD ──────────────────────────────────────
@@ -115,7 +123,25 @@ def assign_permission(role_id, code):
 # ── 游客登录 ──────────────────────────────────────
 @account_bp.get("/guest")
 def guest_login():
-    return account_service.guest_login().to_response()
+    return account_service.guest_login(machine_name=_machine_name()).to_response()
+
+
+# ── 登录记录与统计（author 专用）──────────────────
+@account_bp.get("/login-logs")
+def get_login_logs():
+    page     = request.args.get("page",     1,  type=int)
+    per_page = request.args.get("per_page", 50, type=int)
+    username = request.args.get("username", "").strip() or None
+    return account_service.get_login_logs(page=page, per_page=per_page, username=username).to_response()
+
+@account_bp.get("/login-stats/dau")
+def get_login_dau():
+    days = request.args.get("days", 30, type=int)
+    return account_service.get_login_dau(days=days).to_response()
+
+@account_bp.get("/login-stats/users")
+def get_login_user_stats():
+    return account_service.get_login_user_stats().to_response()
 
 
 # ── 权限管理 ──────────────────────────────────────

@@ -182,6 +182,23 @@ def delete_ignore_term(term_id):
     return _svc.delete_ignore_term(term_id).to_response()
 
 
+# ── 发货物料歧义词 ──────────────────────────────────────────────────────────
+
+@aftersale_bp.get('/shipping-ambiguous-terms')
+def get_ambiguous_terms():
+    return _svc.get_ambiguous_terms().to_response()
+
+
+@aftersale_bp.post('/shipping-ambiguous-terms')
+def create_ambiguous_term():
+    return _svc.create_ambiguous_term(request.get_json() or {}).to_response()
+
+
+@aftersale_bp.delete('/shipping-ambiguous-terms/<int:term_id>')
+def delete_ambiguous_term(term_id):
+    return _svc.delete_ambiguous_term(term_id).to_response()
+
+
 # ── 售后原因关键词词典（标准档）──────────────────────────────────────────────
 
 @aftersale_bp.get('/reason-keyword-rules')
@@ -192,6 +209,20 @@ def get_reason_keyword_rules():
 @aftersale_bp.put('/reason-keyword-rules')
 def update_reason_keyword_rules():
     return _svc.update_reason_keyword_rules(request.get_json() or {}).to_response()
+
+
+# ── 产品留言词典（材质/颜色/驱动/尺寸）──────────────────────────────────────
+
+@aftersale_bp.get('/product-remark-dict')
+def get_product_remark_dict():
+    return _svc.get_product_remark_dict().to_response()
+
+
+@aftersale_bp.put('/product-remark-dict')
+def put_product_remark_dict():
+    body = request.get_json() or {}
+    items = body.get('items', [])
+    return _svc.put_product_remark_dict(items).to_response()
 
 
 # ── 自动匹配 ────────────────────────────────────────────────────────────────
@@ -278,3 +309,11 @@ def cleanup_keyword_candidates():
     min_count     = int(body.get('min_count', 2))
     top_per_reason = int(body.get('top_per_reason', 200))
     return _svc.cleanup_keyword_candidates(min_count=min_count, top_per_reason=top_per_reason).to_response()
+
+
+# ── 产品库展开行：系列售后月度数据 ────────────────────────────────────────────
+
+@aftersale_bp.get('/model/<int:model_id>/series-monthly')
+def get_series_monthly(model_id):
+    """按月聚合指定 model 所属系列的售后工单数 + 发货实际量（仅有售后数据的月份）"""
+    return _svc.get_series_monthly_by_model_id(model_id).to_response()

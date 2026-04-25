@@ -8,12 +8,17 @@ import AftersaleProcess    from './AftersaleProcess.vue'
 import AftersaleDashboard  from './AftersaleDashboard.vue'
 import AftersaleTable      from './AftersaleTable.vue'
 import http                from '@/api/http.js'
+import { usePermission }   from '@/composables/usePermission'
 
 // ── 路由 ──────────────────────────────────────────
 const router = useRouter()
 
+// ── 权限 ──────────────────────────────────────────
+const { canEditAftersale } = usePermission()
+
 // ── 响应式状态 ────────────────────────────────────
-const activeTab    = ref('process')   // 'process' | 'chart' | 'data'
+// 无编辑权限时不显示待处理 tab，默认进图表
+const activeTab    = ref(canEditAftersale ? 'process' : 'chart')   // 'process' | 'chart' | 'data'
 const pendingCount = ref(0)
 
 // 子组件引用（用于外部触发刷新）
@@ -59,6 +64,7 @@ function onCaseConfirmed() {
         <div class="title-divider"></div>
         <nav class="top-nav">
           <button
+            v-if="canEditAftersale"
             class="nav-item"
             :class="{ active: activeTab === 'process' }"
             @click="activeTab = 'process'"
