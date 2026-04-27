@@ -364,13 +364,20 @@ defineExpose({ refresh: loadData })
         </el-table-column>
 
         <!-- 购买日期 -->
-        <el-table-column prop="purchase_date" :width="W_PURCHASE">
+        <el-table-column :width="W_PURCHASE">
           <template #header>
             <div class="th-top">
               <span class="th-lbl">购买日期</span>
               <button :class="['sort-btn', sortIcon('purchase_date') !== 'none' ? 'sort-' + sortIcon('purchase_date') : '']" @click.stop="sortBy('purchase_date')" />
             </div>
             <div class="th-fph" />
+          </template>
+          <template #default="{ row }">
+            <template v-if="row.reasons">
+              <span v-if="firstReason(row, 'purchase_date')">{{ firstReason(row, 'purchase_date') }}</span>
+              <span v-else class="empty-val">—</span>
+            </template>
+            <span v-else class="empty-val">—</span>
           </template>
         </el-table-column>
 
@@ -493,7 +500,7 @@ defineExpose({ refresh: loadData })
           </template>
           <template #default="{ row }">
             <div class="cell-with-badge">
-              <span>{{ firstReason(row, 'shipping_alias') || '—' }}</span>
+              <span>{{ firstReason(row, 'shipping_alias_name') || '—' }}</span>
               <span v-if="extraCount(row) > 0" class="multi-badge">+{{ extraCount(row) }}</span>
             </div>
           </template>

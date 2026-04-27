@@ -198,7 +198,10 @@ async function handleLogin() {
   }
   loading.value = true
   try {
-    const res = await http.post('/api/account/login', { username: loginForm.username, password: loginForm.password })
+    const res = await http.post('/api/account/login',
+      { username: loginForm.username, password: loginForm.password },
+      { timeout: 12000 },
+    )
     if (res.success) {
       if (rememberAccount.value) {
         localStorage.setItem('remembered_username', loginForm.username)
@@ -208,10 +211,12 @@ async function handleLogin() {
       localStorage.setItem('user', JSON.stringify(res.data))
       window.electronAPI ? window.electronAPI.loginSuccess() : router.push('/index')
     } else {
-      toast.value?.show(res.message || '登录失败', 'error')
+      toast.value?.show(res.message || '登录失败，请重试', 'error')
     }
-  } catch { toast.value?.show('网络错误，请重试', 'error') }
-  finally { loading.value = false }
+  } catch (err) {
+    const isTimeout = err.code === 'ECONNABORTED' || err.message?.includes('timeout')
+    toast.value?.show(isTimeout ? '服务器响应超时，请稍后重试' : '网络错误，请重试', 'error')
+  } finally { loading.value = false }
 }
 
 async function handleRegister() {

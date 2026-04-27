@@ -15,7 +15,7 @@
           @click="handleEnter(mod)"
         >
           <div class="module-icon">
-            <span class="module-emoji">{{ mod.icon }}</span>
+            <component :is="mod.iconComp" :size="40" weight="duotone" color="#c4883a" />
           </div>
           <div class="module-name">{{ mod.name }}</div>
           <div class="module-desc">{{ mod.desc }}</div>
@@ -84,6 +84,7 @@ import { usePermission } from '@/composables/usePermission'
 import UserSettingsDrawer from '@/components/user/UserSettingsDrawer.vue'
 import UpdateDialog from '@/components/update/UpdateDialog.vue'
 import WindowControls from '@/components/common/WindowControls.vue'
+import { PhCube, PhTruck, PhGear, PhWrench } from '@phosphor-icons/vue'
 
 const router         = useRouter()
 const version        = ref('1.0.0')
@@ -133,7 +134,7 @@ const modules = computed(() => [
     key: 'product',
     name: '产品库',
     desc: '产品信息管理与检索',
-    icon: '📦',
+    iconComp: PhCube,
     route: '/product',
     disabled: false,
     noPermission: !canViewProduct,
@@ -142,7 +143,7 @@ const modules = computed(() => [
     key: 'shipping',
     name: '发货数据',
     desc: '发货记录查询与统计',
-    icon: '🚚',
+    iconComp: PhTruck,
     route: '/shipping',
     disabled: false,
     noPermission: !canViewShipping,
@@ -151,7 +152,7 @@ const modules = computed(() => [
     key: 'data-mgmt',
     name: '数据管理',
     desc: '导入数据与操作人配置',
-    icon: '⚙️',
+    iconComp: PhGear,
     route: '/data-mgmt',
     disabled: false,
     noPermission: !canEditShipping,
@@ -160,7 +161,7 @@ const modules = computed(() => [
     key: 'aftersale',
     name: '售后数据',
     desc: '售后记录查询与分析',
-    icon: '🔧',
+    iconComp: PhWrench,
     route: '/aftersale',
     disabled: false,
     noPermission: !canViewAftersale,

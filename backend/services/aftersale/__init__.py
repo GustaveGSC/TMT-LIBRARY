@@ -217,6 +217,8 @@ class AftersaleService:
                 .selectinload(AftersaleReason.category_obj),
                 selectinload(AftersaleCase.case_reasons)
                 .selectinload(AftersaleCaseReason.product_model),
+                selectinload(AftersaleCase.case_reasons)
+                .selectinload(AftersaleCaseReason.shipping_alias),
             )
             .all()
         )
