@@ -47,7 +47,23 @@ const router = createRouter({
       path: '/aftersale',
       component: () => import('@/views/aftersaleViews/page-aftersale.vue')
     },
+    {
+      path: '/rd-tools',
+      component: () => import('@/views/rdToolsViews/page-rd-tools.vue'),
+      meta: { permission: 'rd:view' }
+    },
   ]
 })
 
-export default router  
+// 路由权限守卫
+router.beforeEach((to) => {
+  const required = to.meta?.permission
+  if (!required) return true
+  const user = JSON.parse(localStorage.getItem('user') || '{}')
+  const roles = user.roles || []
+  const perms = user.permissions || []
+  if (roles.includes('admin') || perms.includes(required)) return true
+  return '/index'
+})
+
+export default router

@@ -10,12 +10,11 @@ from database.models.aftersale import (
     AftersaleShippingAlias,
     AftersaleShippingIgnoreTerm,
     AftersaleShippingAmbiguousTerm,
-    AftersaleReasonStopword, AftersaleReasonFaultTerm,
-    AftersaleReasonComponentTerm, AftersaleReasonShortKeepTerm,
-    AftersaleReasonSynonymRule,
+    AftersaleReasonStopword, AftersaleReasonShortKeepTerm,
     AftersaleDictSuggestion,
     AftersaleReasonAliasAffinity,
     AftersaleProductRemarkDict,
+
 )
 from database.models.shipping import ShippingRecord, ShippingOperatorType
 from database.models.product.category import ProductModel
@@ -575,6 +574,7 @@ class AftersaleRepository:
         _lap('db.commit')
 
         self._active_log_ctx = None   # 清除，避免后续调用误用
+        self._invalidate_case_vec_cache()  # 新工单录入后使历史向量缓存失效，下次匹配重建
         write_confirm_log(log_ctx)
         _lap('写日志文件(总耗时)')
         return case
@@ -673,10 +673,67 @@ class AftersaleRepository:
     _KW_MAX_TOTAL = 30
     # 跨原因高频抑制：同一候选词在 >=N 个原因候选池出现时不晋升
     _KW_GLOBAL_HOT_THRESHOLD = 3
-    # auto_match 历史相似度阶段上限（CPU 防护）
+    # auto_match 历史相似度阶段上限（CPU 防护，difflib 兜底用）
     _AUTO_MATCH_HISTORY_LIMIT = 180
-    # auto_match 进入历史相似度阶段的最低关键词命中候选数
-    _AUTO_MATCH_MIN_KEYWORD_CANDIDATES = 2
+    # 已确认工单语义向量缓存（confirm_case 后失效；None = 未构建）
+    _CASE_VEC_CACHE = None
+    # 向量缓存最多纳入的已确认工单数
+    _CASE_VEC_CACHE_LIMIT = 400
+
+    @classmethod
+    def _invalidate_case_vec_cache(cls):
+        cls._CASE_VEC_CACHE = None
+
+    def _get_case_vec_cache(self):
+        """
+        构建/返回已确认工单文本的向量缓存，供 auto_match 历史语义检索使用。
+        - 首次调用时查库 + bge 编码，结果缓存在类变量中
+        - confirm_case 成功后调用 _invalidate_case_vec_cache 使缓存失效
+        - 返回 {'texts': [...], 'reason_ids': [[rid, ...], ...], 'vecs': ndarray|None}
+        """
+        if AftersaleRepository._CASE_VEC_CACHE is not None:
+            return AftersaleRepository._CASE_VEC_CACHE
+
+        from sqlalchemy.orm import selectinload
+        confirmed_cases = (
+            AftersaleCase.query
+            .filter_by(status='confirmed')
+            .filter(AftersaleCase.seller_remark.isnot(None))
+            .options(selectinload(AftersaleCase.case_reasons))
+            .order_by(AftersaleCase.processed_at.desc())
+            .limit(self._CASE_VEC_CACHE_LIMIT)
+            .all()
+        )
+
+        texts, reason_ids_per_case = [], []
+        for case in confirmed_cases:
+            if not case.seller_remark or not case.seller_remark.strip():
+                continue
+            rids = [cr.reason_id for cr in case.case_reasons if cr.reason_id]
+            if not rids:
+                continue
+            t = case.seller_remark.lower()
+            t = self._DATE_RE.sub(' ', t)
+            t = self._NUM_RE.sub(' ', t)
+            t = self._SPACES_RE.sub(' ', t).strip()[:100]
+            if not t:
+                continue
+            texts.append(t)
+            reason_ids_per_case.append(rids)
+
+        cache = {'texts': texts, 'reason_ids': reason_ids_per_case, 'vecs': None}
+
+        # 用 bge 对工单文本编码（模型不可用时 vecs 保持 None，退回 difflib）
+        try:
+            import model_manager
+            model = model_manager.get_model()
+            if model is not None and texts:
+                cache['vecs'] = model_manager.encode(texts)   # (N, dim)
+        except Exception:
+            pass
+
+        AftersaleRepository._CASE_VEC_CACHE = cache
+        return cache
     # 候选关键词长度边界
     _KW_MIN_LEN = 2
     _KW_MAX_LEN = 18
@@ -698,20 +755,6 @@ class AftersaleRepository:
             .all()
             if (r.term or '').strip()
         }
-        fault_terms = {
-            (r.term or '').strip().lower()
-            for r in AftersaleReasonFaultTerm.query
-            .filter(AftersaleReasonFaultTerm.enabled.is_(True))
-            .all()
-            if (r.term or '').strip()
-        }
-        component_terms = {
-            (r.term or '').strip().lower()
-            for r in AftersaleReasonComponentTerm.query
-            .filter(AftersaleReasonComponentTerm.enabled.is_(True))
-            .all()
-            if (r.term or '').strip()
-        }
         short_keep_terms = {
             (r.term or '').strip().lower()
             for r in AftersaleReasonShortKeepTerm.query
@@ -719,27 +762,9 @@ class AftersaleRepository:
             .all()
             if (r.term or '').strip()
         }
-        synonym_rows = (
-            AftersaleReasonSynonymRule.query
-            .filter(AftersaleReasonSynonymRule.enabled.is_(True))
-            .order_by(AftersaleReasonSynonymRule.sort_order.asc(), AftersaleReasonSynonymRule.id.asc())
-            .all()
-        )
-        # 构建缓存时一次性预编译正则，避免 _normalize_reason_text 热路径重复 compile
-        synonyms = []
-        for r in synonym_rows:
-            pat = (r.pattern or '').strip()
-            repl = (r.replacement or '').strip()
-            if not pat or not repl:
-                continue
-            is_re = bool(r.is_regex)
-            synonyms.append((re.compile(pat) if is_re else pat, repl, is_re))
         return {
             'stopwords': stopwords,
-            'fault_terms': fault_terms,
-            'component_terms': component_terms,
             'short_keep_terms': short_keep_terms,
-            'synonyms': synonyms,
         }
 
     @classmethod
@@ -756,49 +781,21 @@ class AftersaleRepository:
         rules = self._load_reason_rules_from_db()
         return {
             'stopwords': sorted(rules['stopwords']),
-            'fault_terms': sorted(rules['fault_terms']),
-            'component_terms': sorted(rules['component_terms']),
             'short_keep_terms': sorted(rules['short_keep_terms']),
-            'synonyms': [
-                {'pattern': p.pattern if is_regex else p, 'replacement': repl, 'is_regex': bool(is_regex)}
-                for p, repl, is_regex in rules['synonyms']
-            ],
         }
 
-    def replace_reason_keyword_rules(self, stopwords, fault_terms, component_terms, synonyms,
-                                     short_keep_terms=None):
+    def replace_reason_keyword_rules(self, stopwords, short_keep_terms=None):
         AftersaleReasonStopword.query.delete()
-        AftersaleReasonFaultTerm.query.delete()
-        AftersaleReasonComponentTerm.query.delete()
         AftersaleReasonShortKeepTerm.query.delete()
-        AftersaleReasonSynonymRule.query.delete()
 
         for i, term in enumerate(stopwords or []):
             t = (term or '').strip()
             if t:
                 db.session.add(AftersaleReasonStopword(term=t, sort_order=i))
-        for i, term in enumerate(fault_terms or []):
-            t = (term or '').strip()
-            if t:
-                db.session.add(AftersaleReasonFaultTerm(term=t, sort_order=i))
-        for i, term in enumerate(component_terms or []):
-            t = (term or '').strip()
-            if t:
-                db.session.add(AftersaleReasonComponentTerm(term=t, sort_order=i))
         for i, term in enumerate(short_keep_terms or []):
             t = (term or '').strip()
             if t:
                 db.session.add(AftersaleReasonShortKeepTerm(term=t, sort_order=i))
-        for i, row in enumerate(synonyms or []):
-            pattern = (row.get('pattern') or '').strip()
-            replacement = (row.get('replacement') or '').strip()
-            if pattern and replacement:
-                db.session.add(AftersaleReasonSynonymRule(
-                    pattern=pattern,
-                    replacement=replacement,
-                    is_regex=bool(row.get('is_regex', True)),
-                    sort_order=i,
-                ))
         db.session.commit()
         self._invalidate_reason_rule_cache()
 
@@ -824,7 +821,7 @@ class AftersaleRepository:
                       AftersaleProductRemarkDict.id.asc())
             .all()
         )
-        result = {'materials': [], 'colors': [], 'drive_types': [], 'sizes': {}}
+        result = {'materials': [], 'colors': [], 'drive_types': [], 'sizes': {}, 'series_aliases': {}}
         for r in rows:
             if r.type == 'material':
                 result['materials'].append(r.value)
@@ -834,6 +831,9 @@ class AftersaleRepository:
                 result['drive_types'].append(r.value)
             elif r.type == 'size' and r.display:
                 result['sizes'][r.value] = r.display
+            elif r.type == 'series_alias' and r.display:
+                # value=买家非正式名（小写存储），display=官方系列基础名
+                result['series_aliases'][r.value.lower().strip()] = r.display.strip()
         return result
 
     @classmethod
@@ -914,15 +914,12 @@ class AftersaleRepository:
 
     @classmethod
     def _normalize_reason_text(cls, text):
-        """原因学习/匹配用文本归一化：去日期数字噪声 + 同义词收敛。"""
+        """原因学习/匹配用文本归一化：去日期数字噪声。"""
         if not text:
             return ''
         t = text.lower()
-        # 日期与纯数字归一，降低型号/时间差异对学习的影响
         t = cls._DATE_RE.sub(' ', t)
         t = cls._NUM_RE.sub(' ', t)
-        for pattern, repl, is_regex in cls._get_reason_rules()['synonyms']:
-            t = pattern.sub(repl, t) if is_regex else t.replace(pattern, repl)
         t = cls._SPACES_RE.sub(' ', t).strip()
         return t
 
@@ -1130,66 +1127,6 @@ class AftersaleRepository:
                     db.session.delete(candidate)
             reason.keywords = ','.join(kw_list)
 
-        # ── 路径一：跨原因中频词 → 同义词候选建议 ────────────────────────────
-        # spread 在 [2, global_hot_threshold) 的候选词，疑似多原因共用的变体词
-        if to_check_spread and spread_map:
-            syn_threshold = self._KW_GLOBAL_HOT_THRESHOLD
-            mid_freq_kws = [kw for kw, spread in spread_map.items() if 2 <= spread < syn_threshold]
-            if mid_freq_kws:
-                # 批量查询所有中频词的候选行，避免逐词 N+1
-                all_involved_rows = (
-                    AftersaleKeywordCandidate.query
-                    .filter(AftersaleKeywordCandidate.keyword.in_(mid_freq_kws))
-                    .all()
-                )
-                # 收集涉及的 reason_id，批量加载名称
-                all_reason_ids = {row.reason_id for row in all_involved_rows}
-                reason_name_map = {
-                    r.id: r.name
-                    for r in AftersaleReason.query.filter(AftersaleReason.id.in_(all_reason_ids)).all()
-                }
-                # 按 keyword 分组
-                kw_to_rows = defaultdict(list)
-                for row in all_involved_rows:
-                    kw_to_rows[row.keyword].append(row)
-
-                for kw in mid_freq_kws:
-                    spread = spread_map[kw]
-                    rows = kw_to_rows.get(kw, [])
-                    involved_ids   = [r.reason_id for r in rows]
-                    involved_names = [reason_name_map[r.reason_id] for r in rows if r.reason_id in reason_name_map]
-                    reason_label   = '、'.join(involved_names[:3])
-                    self._upsert_dict_suggestion(
-                        'synonym_candidate', kw,
-                        f'在原因「{reason_label}」等 {spread} 个原因中均有候选，'
-                        f'可能是某关键词的同义变体',
-                        meta={'reason_ids': involved_ids},
-                    )
-
-        # ── 路径二：同原因内子串重叠 → 同义词候选建议 ────────────────────────
-        # 对本次确认工单涉及的原因，检查已晋升关键词中是否存在包含关系
-        for rid, reason in reasons.items():
-            all_kws = [k.strip() for k in (reason.keywords or '').split(',') if k.strip()]
-            if len(all_kws) < 2:
-                continue
-            checked = set()
-            for i, kw_a in enumerate(all_kws):
-                for kw_b in all_kws[i + 1:]:
-                    pair = tuple(sorted([kw_a, kw_b]))
-                    if pair in checked:
-                        continue
-                    checked.add(pair)
-                    # 一方是另一方的真子串（且至少 2 字）
-                    longer, shorter = (kw_a, kw_b) if len(kw_a) >= len(kw_b) else (kw_b, kw_a)
-                    if len(shorter) >= 2 and shorter in longer and shorter != longer:
-                        sug_value = f'{longer}→{shorter}'
-                        self._upsert_dict_suggestion(
-                            'synonym_candidate', sug_value,
-                            f'原因「{reason.name}」的关键词「{longer}」包含「{shorter}」，'
-                            f'可能互为同义，建议归一',
-                            meta={'reason_ids': [rid], 'longer': longer, 'shorter': shorter},
-                        )
-
         # 候选池超限时自动清理（不独立 commit，由 confirm_case 统一提交）
         self._auto_cleanup_candidates_if_needed()
 
@@ -1205,12 +1142,16 @@ class AftersaleRepository:
         if not text or not text.strip():
             return []
 
-        # 预处理：去除买家留言片段，先做同义词归一，再移除停用词
-        # 顺序很关键：同义词必须先于停用词，否则"坏→破损"等规则会被停用词删除拦截
+        # 预处理：去除买家留言片段，移除停用词（同义词归一已由语义向量承担，不再做文本替换）
         effective_text = self._subtract_buyer_remark(text, buyer_remark) if buyer_remark else text
         rules = self._get_reason_rules()
         stopwords = rules.get('stopwords', set())
-        text_lower = self._normalize_reason_text(effective_text)
+        # 仅做日期/数字归一化，不再做同义词替换
+        import re as _re
+        text_lower = effective_text.lower()
+        text_lower = self._DATE_RE.sub(' ', text_lower)
+        text_lower = self._NUM_RE.sub(' ', text_lower)
+        text_lower = self._SPACES_RE.sub(' ', text_lower).strip()
         text_lower = self._strip_stopwords(text_lower, stopwords)
         scores = {}   # reason_id -> score details
 
@@ -1222,8 +1163,9 @@ class AftersaleRepository:
                     'category_id': category_id,
                     'category_name': category_name,
                     'keyword_score': 0.0,
-                    'history_score': 0.0,
-                    'total_score': 0.0,
+                    'history_score': 0.0,  # difflib 兜底分
+                    'case_score':    0.0,  # 已确认工单语义相似度（主要历史信号）
+                    'total_score':   0.0,
                     'matched_keywords': [],
                 }
             return scores[reason_id]
@@ -1233,128 +1175,200 @@ class AftersaleRepository:
         reasons = AftersaleReason.query.options(
             joinedload(AftersaleReason.category_obj)
         ).all()
-        rules = self._get_reason_rules()
         for r in reasons:
             if not r.keywords:
                 continue
             kws = [k.strip() for k in r.keywords.split(',') if k.strip()]
             if not kws:
                 continue
-            strong_hits = []
+            hits = []
             for kw in kws:
                 kw_norm = self._canonicalize_keyword(kw)
                 if not kw_norm:
                     continue
-                sim = self._text_sim(text_lower, kw_norm)
                 direct_hit = kw_norm in text_lower
-                if sim < 0.45:
-                    if not direct_hit:
-                        continue
+                sim = self._text_sim(text_lower, kw_norm)
+                if not direct_hit and sim < 0.45:
+                    continue
                 quality = self._keyword_quality_score(kw_norm)
                 if quality <= 0:
                     continue
-                # 强语义关键词放大，泛化词显著降权
-                base = max(sim, 0.6 if direct_hit else sim)
+                base   = max(sim, 0.6 if direct_hit else sim)
                 weight = base * (0.55 + 0.45 * quality)
                 if self._is_generic_keyword(kw_norm):
                     weight *= 0.4
-                core_hit = any(t in kw_norm and t in text_lower for t in rules['fault_terms'])
-                comp_hit = any(t in kw_norm and t in text_lower for t in rules['component_terms'])
-                strong_hits.append({'kw': kw_norm, 'weight': weight, 'sim': sim, 'core_hit': core_hit, 'comp_hit': comp_hit, 'direct_hit': direct_hit})
+                hits.append({'kw': kw_norm, 'weight': weight, 'direct_hit': direct_hit})
 
-            if strong_hits:
-                item = ensure_reason_score(
-                    r.id,
-                    r.name,
-                    r.category_id,
-                    r.category_obj.name if r.category_obj else None
-                )
-                core_hits      = sum(1 for h in strong_hits if h['core_hit'])
-                comp_hits      = sum(1 for h in strong_hits if h['comp_hit'])
-                any_direct_hit = any(h['direct_hit'] for h in strong_hits)
-                # core_hits=0 时必须有关键词直接命中；
-                # 否则多个共享前缀词的 sim 滑动窗口命中会绕过此保护，造成误判。
-                if core_hits == 0 and not any_direct_hit:
-                    continue
-                keyword_score = sum(h['weight'] for h in strong_hits)
-                coverage = len(strong_hits) / len(kws)
-                # 覆盖率作为次级增益，避免单词命中直接冲顶
-                keyword_score *= (0.75 + 0.25 * coverage)
-                keyword_score *= (1.0 + min(core_hits, 2) * 0.15 + min(comp_hits, 2) * 0.08)
-                item['keyword_score'] = round(max(item['keyword_score'], keyword_score), 4)
-                item['matched_keywords'] = sorted(
-                    {h['kw'] for h in strong_hits},
-                    key=lambda k: -max(h['weight'] for h in strong_hits if h['kw'] == k)
-                )[:6]
+            if not hits:
+                continue
+            # 必须至少有一个关键词直接命中，防止纯 sim 滑动窗口误判
+            if not any(h['direct_hit'] for h in hits):
+                continue
 
-        # 阶段2：历史案例相似度（CPU 防护）
-        # 仅当关键词候选不足时再启动历史比对，避免每次都跑 difflib 全量扫描。
-        keyword_hits = sum(1 for v in scores.values() if v.get('keyword_score', 0) > 0)
-        if keyword_hits < self._AUTO_MATCH_MIN_KEYWORD_CANDIDATES:
-            from sqlalchemy.orm import selectinload
-            confirmed_cases = (
-                AftersaleCase.query
-                .filter_by(status='confirmed')
-                .filter(AftersaleCase.seller_remark.isnot(None))
-                .options(
-                    selectinload(AftersaleCase.case_reasons)
-                    .selectinload(AftersaleCaseReason.reason)
-                    .selectinload(AftersaleReason.category_obj)
-                )
-                .order_by(AftersaleCase.processed_at.desc())
-                .limit(self._AUTO_MATCH_HISTORY_LIMIT)
-                .all()
+            item = ensure_reason_score(
+                r.id, r.name, r.category_id,
+                r.category_obj.name if r.category_obj else None,
             )
+            keyword_score = sum(h['weight'] for h in hits)
+            coverage = len(hits) / len(kws)
+            keyword_score *= (0.75 + 0.25 * coverage)
+            item['keyword_score'] = round(max(item['keyword_score'], keyword_score), 4)
+            item['matched_keywords'] = sorted(
+                {h['kw'] for h in hits},
+                key=lambda k: -max(h['weight'] for h in hits if h['kw'] == k),
+            )[:6]
 
-            def _strip_num(t):
-                return re.sub(r'\d{4}[\.\-/]\d{1,2}[\.\-/]\d{1,2}', '', t).strip()  # 仅剥离日期
+        # ── 提前编码 query_vec（两个语义阶段复用，避免重复推理）────────────────
+        query_vec = None
+        try:
+            import model_manager
+            import numpy as np
+            _model = model_manager.get_model()
+            if _model is not None and text_lower.strip():
+                query_vec = model_manager.encode([text_lower])[0]   # (dim,)
+        except Exception:
+            pass
 
-            # 控制 difflib 输入长度，防止长文本高 CPU
-            left = _strip_num(text_lower)[:80]
-            if left:
-                for case in confirmed_cases:
-                    if not case.seller_remark:
+        # 阶段2：已确认工单历史匹配（始终运行，纠偏关键词排名）
+        # 优先使用 bge 语义相似度；模型不可用时退回 difflib。
+        # 工单向量缓存在进程生命周期内复用，confirm_case 后失效重建。
+        try:
+            case_cache = self._get_case_vec_cache()
+            if case_cache and case_cache['texts']:
+                if query_vec is not None and case_cache['vecs'] is not None:
+                    # ── 语义路径：bge 余弦相似度 ──────────────────────────────
+                    case_sims = np.dot(case_cache['vecs'], query_vec)   # (M,)
+                    for i, rids in enumerate(case_cache['reason_ids']):
+                        sim = float(case_sims[i])
+                        if sim < 0.50:
+                            continue
+                        for rid in rids:
+                            if rid not in scores:
+                                r_obj = next((r for r in reasons if r.id == rid), None)
+                                if r_obj is None:
+                                    continue
+                                item = ensure_reason_score(
+                                    rid, r_obj.name, r_obj.category_id,
+                                    r_obj.category_obj.name if r_obj.category_obj else None,
+                                )
+                            else:
+                                item = scores[rid]
+                            item['case_score'] = round(max(item['case_score'], sim), 4)
+                else:
+                    # ── 兜底路径：difflib（模型不可用时）───────────────────────
+                    def _strip_num(t):
+                        return re.sub(r'\d{4}[\.\-/]\d{1,2}[\.\-/]\d{1,2}', '', t).strip()
+                    left = _strip_num(text_lower)[:80]
+                    if left:
+                        for i, (t, rids) in enumerate(
+                            zip(case_cache['texts'], case_cache['reason_ids'])
+                        ):
+                            right = _strip_num(t)[:80]
+                            if not right:
+                                continue
+                            ratio = difflib.SequenceMatcher(None, left, right).ratio()
+                            if ratio < 0.30:
+                                continue
+                            for rid in rids:
+                                if rid not in scores:
+                                    r_obj = next((r for r in reasons if r.id == rid), None)
+                                    if r_obj is None:
+                                        continue
+                                    item = ensure_reason_score(
+                                        rid, r_obj.name, r_obj.category_id,
+                                        r_obj.category_obj.name if r_obj.category_obj else None,
+                                    )
+                                else:
+                                    item = scores[rid]
+                                item['history_score'] = round(max(item['history_score'], ratio), 4)
+        except Exception:
+            pass   # 历史阶段异常不影响主流程
+
+        # 阶段3：原因名语义匹配（bge 对原因名+关键词编码）
+        # 召回关键词尚未覆盖的原因，并对已有候选做语义校正。
+        try:
+            if query_vec is not None:
+                # 缓存原因向量：按原因列表 hash 决定是否重算
+                reason_ids_key = tuple(r.id for r in reasons)
+                if not hasattr(self, '_sem_cache') or self._sem_cache.get('key') != reason_ids_key:
+                    # 用"原因名 + 关键词"拼接作为语义文档，比单纯用名称效果更好
+                    reason_docs, reason_id_order = [], []
+                    for r in reasons:
+                        kws_part = '，'.join(k.strip() for k in (r.keywords or '').split(',') if k.strip())
+                        doc = r.name + ('，' + kws_part if kws_part else '')
+                        reason_docs.append(doc)
+                        reason_id_order.append(r.id)
+                    reason_vecs = model_manager.encode(reason_docs)   # (N, dim)
+                    self._sem_cache = {
+                        'key':  reason_ids_key,
+                        'vecs': reason_vecs,
+                        'ids':  reason_id_order,
+                    }
+
+                reason_vecs    = self._sem_cache['vecs']
+                reason_id_list = self._sem_cache['ids']
+
+                # 批量余弦相似度
+                sims = np.dot(reason_vecs, query_vec)                 # (N,)
+                for rid, sim in zip(reason_id_list, sims):
+                    sim = float(sim)
+                    if sim < 0.35:
                         continue
-                    right = _strip_num(case.seller_remark.lower())[:80]
-                    if not right:
-                        continue
-                    ratio = difflib.SequenceMatcher(None, left, right).ratio()
-                    if ratio < 0.3:
-                        continue
-                    for cr in case.case_reasons:
-                        if not cr.reason_id:
+                    if rid not in scores:
+                        r_obj = next((r for r in reasons if r.id == rid), None)
+                        if r_obj is None:
                             continue
                         item = ensure_reason_score(
-                            cr.reason_id,
-                            cr.reason.name if cr.reason else '',
-                            cr.reason.category_id if cr.reason else None,
-                            cr.reason.category_obj.name if cr.reason and cr.reason.category_obj else None
+                            rid, r_obj.name, r_obj.category_id,
+                            r_obj.category_obj.name if r_obj.category_obj else None,
                         )
-                        item['history_score'] = round(max(item['history_score'], ratio), 4)
+                    else:
+                        item = scores[rid]
+                    item['semantic_score'] = round(max(item.get('semantic_score', 0.0), sim), 4)
+        except Exception:
+            pass   # 语义模块异常不影响主流程
 
         # 统一融合与过滤
         results = []
         for item in scores.values():
-            kw_score = item['keyword_score']
-            hs_score = item['history_score']
-            if kw_score <= 0 and hs_score < 0.45:
+            kw_score   = item['keyword_score']
+            hs_score   = item['history_score']   # difflib 兜底分
+            case_score = item.get('case_score',  0.0)   # 历史工单语义分（主要历史信号）
+            sem_score  = item.get('semantic_score', 0.0)
+
+            # 过滤：至少有一个信号达到门槛（case_score 语义信号可独立触发）
+            if kw_score <= 0 and case_score < 0.50 and hs_score < 0.45 and sem_score < 0.55:
                 continue
-            total = kw_score + hs_score * 0.55
+
+            # 融合：关键词为主，历史工单语义为有力辅助，原因名语义次之，difflib 兜底
+            total = kw_score + case_score * 0.75 + sem_score * 0.45 + hs_score * 0.35
             if kw_score <= 0:
                 total *= 0.85
             confidence = min(0.99, total / 2.2)
-            source = 'keyword' if kw_score >= hs_score * 0.9 and kw_score > 0 else 'history'
+
+            # 来源：优先展示贡献最大的信号
+            if case_score > 0 and case_score >= kw_score and case_score >= sem_score:
+                source = 'case'
+            elif kw_score > 0 and kw_score >= case_score * 0.9:
+                source = 'keyword'
+            elif sem_score >= kw_score and sem_score >= case_score and sem_score >= hs_score:
+                source = 'semantic'
+            else:
+                source = 'history'
+
             results.append({
-                'reason_id': item['reason_id'],
-                'name': item['name'],
-                'category_id': item['category_id'],
-                'category_name': item['category_name'],
-                'confidence': round(confidence, 3),
-                'source': source,
+                'reason_id':       item['reason_id'],
+                'name':            item['name'],
+                'category_id':     item['category_id'],
+                'category_name':   item['category_name'],
+                'confidence':      round(confidence, 3),
+                'source':          source,
                 'matched_keywords': item['matched_keywords'],
-                'keyword_score': round(kw_score, 3),
-                'history_score': round(hs_score, 3),
-                'total_score': round(total, 3),
+                'keyword_score':   round(kw_score,   3),
+                'case_score':      round(case_score, 3),
+                'history_score':   round(hs_score,   3),
+                'semantic_score':  round(sem_score,  3),
+                'total_score':     round(total,       3),
             })
 
         results.sort(key=lambda x: x['total_score'], reverse=True)
@@ -1982,22 +1996,86 @@ class AftersaleRepository:
         parsed            = {}
         version_confirmed = False
 
+        # 非正式英文产品后缀正则（pro/plus/lite/max 等，不含 S/X 以免误剥官方后缀）
+        _INFORMAL_SUFFIX_RE = re.compile(
+            r'(?i)[\s\-_]*(pro\+?|plus|lite|max|mini|air|ultra|prime|go|elite|turbo)$'
+        )
+
+        def _run_tier_match(bt):
+            """对给定 base_text 跑 tier1-4 名称匹配，返回 candidate_sids 列表。"""
+            from difflib import SequenceMatcher as _SM
+            _exact, _sub, _pre, _fuzz_best_r, _fuzz_best = [], [], [], 0.0, []
+            for bn, sids in base_to_sids.items():
+                if not bn or len(bn) < 2:
+                    continue
+                bn_l = bn.lower()
+                if bn_l == bt:
+                    _exact.extend(sids)
+                elif bn_l in bt:
+                    _sub.extend(sids)
+                elif len(bt) >= 2 and bt in bn_l and len(bt) / len(bn_l) >= 0.5:
+                    _pre.extend(sids)
+                else:
+                    r = _SM(None, bt, bn_l).ratio()
+                    if r > _fuzz_best_r:
+                        _fuzz_best_r, _fuzz_best = r, list(sids)
+                    elif r == _fuzz_best_r and r > 0:
+                        _fuzz_best.extend(sids)
+            fuzz = _fuzz_best if (_fuzz_best_r >= 0.75 and not _exact and not _sub and not _pre) else []
+            return _exact or _sub or _pre or fuzz
+
         if buyer_remark and buyer_remark.strip() and len(buyer_remark.strip()) >= 2:
             parsed    = _parse_remark(buyer_remark)
             base_text = parsed['base_text'].lower()
 
-            # 1a. 名称匹配：精确 > 系列基础名包含于买家文本
-            #     精确优先：避免"领航员S"误匹配"领航员"系列
-            exact_sids, substring_sids = [], []
-            for bn, sids in base_to_sids.items():
-                if not bn or len(bn) < 2:
-                    continue
-                bn_lower = bn.lower()
-                if bn_lower == base_text:
-                    exact_sids.extend(sids)
-                elif bn_lower in base_text:
-                    substring_sids.extend(sids)
-            candidate_sids = exact_sids if exact_sids else substring_sids
+            # 0. 产品别名映射（用户在词典中配置的非正式名称 → 官方系列名）
+            #    优先级最高，命中后直接替换 base_text 再走正常 tier 匹配
+            _series_aliases = _remark_dict.get('series_aliases', {})
+            if base_text in _series_aliases:
+                base_text = _series_aliases[base_text].lower()
+                parsed['base_text'] = base_text
+
+            # 1a. 名称匹配：四级优先级（提取为 _run_tier_match 复用）
+            #   tier1 精确：bn == base_text
+            #   tier2 正向包含：系列名 in 买家文本（如"领航员"in"新款领航员S"）
+            #   tier3 反向包含：买家文本 in 系列名（如"领航" in "领航员"，缩写/简称）
+            #   tier4 模糊 difflib：处理"领航S"→"领航员S"之类省字缩写
+            candidate_sids = _run_tier_match(base_text)
+
+            # 1a-sfx. 非正式后缀兜底：去掉 pro/plus/lite 等后重试（如"领航pro"→"领航"→tier3 匹配"领航员"）
+            if not candidate_sids and base_text:
+                stripped = _INFORMAL_SUFFIX_RE.sub('', base_text).strip()
+                if stripped and stripped != base_text and len(stripped) >= 2:
+                    candidate_sids = _run_tier_match(stripped)
+                    if candidate_sids:
+                        # 后缀剥离后命中，置信度降为 medium
+                        series_confidence = 'medium'
+
+            # 1a-sem. 语义兜底：名称匹配均无结果时，用 bge 向量找最近系列
+            if not candidate_sids and base_text.strip():
+                try:
+                    import model_manager
+                    import numpy as np
+                    model = model_manager.get_model()
+                    if model is not None:
+                        all_sids = list(series_dict.keys())
+                        series_key = tuple(sorted(all_sids))
+                        if (not hasattr(self, '_series_sem_cache') or
+                                self._series_sem_cache.get('key') != series_key):
+                            docs = [series_dict[s]['base_name'] for s in all_sids]
+                            vecs = model_manager.encode(docs)
+                            self._series_sem_cache = {
+                                'key':  series_key,
+                                'vecs': vecs,
+                                'ids':  all_sids,
+                            }
+                        q_vec    = model_manager.encode([base_text])[0]
+                        sims     = np.dot(self._series_sem_cache['vecs'], q_vec)
+                        best_idx = int(np.argmax(sims))
+                        if float(sims[best_idx]) >= 0.72:
+                            candidate_sids = [self._series_sem_cache['ids'][best_idx]]
+                except Exception:
+                    pass   # 语义异常不影响主流程
 
             if candidate_sids:
                 # 1b. 版本号过滤（精确命中则锁定版本）
@@ -2030,8 +2108,16 @@ class AftersaleRepository:
                     if active:
                         candidate_sids = active
                     elif not parsed.get('version'):
-                        # 无版本 + 购买日期有效 + 生命周期全部过滤掉 → 无法确定版本，终止
-                        candidate_sids = []
+                        # 精确/包含匹配：生命周期全部不符
+                        # 模糊匹配：日期不符但名称有匹配 → 保留候选，降置信度（用户确认）
+                        if fuzzy_sids and not exact_sids and not substring_sids and not prefix_sids:
+                            series_confidence = 'low'   # 提前锁定低置信，不终止
+                        elif len(candidate_sids) == 1:
+                            # 单一候选：生命周期数据可能不准，保留并降低置信度
+                            series_confidence = 'low'
+                        else:
+                            # 多候选且全部不符 → 无法确定版本，终止
+                            candidate_sids = []
 
                 # 1d. 新款/老款：取版本最高/最低的系列
                 if parsed.get('recency') == 'new' and candidate_sids:
@@ -2134,22 +2220,32 @@ class AftersaleRepository:
         # ── 发货物料简称：绑定库匹配优先，历史频次二次验证兜底 ─────────────
         _ignore_terms_list = [t.term for t in AftersaleShippingIgnoreTerm.query.all()]
         product_tokens = sorted(self._parse_product_tokens(products or [], _ignore_terms_list))
-        binding_shipping_id, _ = self.match_shipping_alias(products or [])
+        binding_shipping_id, _ = self.match_shipping_alias(products or [], seller_remark=seller_remark, buyer_remark=buyer_remark)
         history_shipping_id     = _top_alias_id(AftersaleCaseReason.shipping_alias_id)
 
-        # 二次验证：library 命中的 alias 若在同款产品历史工单中出现频次为 0，
-        # 说明关键词误命中（泛化词覆盖），降级采用历史频次结果。
+        # 二次验证：只有当历史数据指向另一个简称时才降级（防止泛化词误命中）。
+        # 若该产品从未有过确认工单（any_hist == 0），无历史可参考，直接信任关键词匹配。
         if binding_shipping_id and code_filters:
-            binding_hist_count = (
+            any_hist = (
                 db.session.query(AftersaleCaseReason.shipping_alias_id)
                 .join(AftersaleCase, AftersaleCase.id == AftersaleCaseReason.case_id)
                 .filter(AftersaleCase.status == 'confirmed')
-                .filter(AftersaleCaseReason.shipping_alias_id == binding_shipping_id)
+                .filter(AftersaleCaseReason.shipping_alias_id.isnot(None))
                 .filter(or_(*code_filters))
                 .count()
             )
-            if binding_hist_count == 0:
-                binding_shipping_id = None   # 降级：绑定库结果不被历史支持
+            if any_hist > 0:
+                # 有历史数据：验证关键词命中的 alias 是否被历史支持
+                binding_hist_count = (
+                    db.session.query(AftersaleCaseReason.shipping_alias_id)
+                    .join(AftersaleCase, AftersaleCase.id == AftersaleCaseReason.case_id)
+                    .filter(AftersaleCase.status == 'confirmed')
+                    .filter(AftersaleCaseReason.shipping_alias_id == binding_shipping_id)
+                    .filter(or_(*code_filters))
+                    .count()
+                )
+                if binding_hist_count == 0:
+                    binding_shipping_id = None   # 历史指向其他简称，降级
 
         suggested_shipping_alias_id     = binding_shipping_id or history_shipping_id
         suggested_shipping_alias_source = (
@@ -2451,13 +2547,17 @@ class AftersaleRepository:
                     tokens.add(part)
         return tokens
 
-    def match_shipping_alias(self, products):
+    def match_shipping_alias(self, products, seller_remark=None, buyer_remark=None):
         """
         根据发货物料列表（含 name 字段）匹配最佳发货物料简称。
         返回 (alias_id, score) 或 (None, 0)。
 
-        评分策略：绝对命中数优先，覆盖率（matched/len(kws））仅作次级排序。
-        避免仅绑定1个公共物料码的简称因100%覆盖率误胜。
+        三阶段匹配：
+        1. 关键词匹配：绝对命中数优先，覆盖率次之（精准但依赖 keyword 配置）
+        2. 备注 × 简称名 tie-breaking：同分时用 seller/buyer 备注文本与简称名的
+           字符覆盖度区分歧义候选（如"气弹簧"vs"气弹簧手柄"）
+        3. 语义向量（bge）：模型就绪时对所有简称计算余弦相似度，作为无命中时的
+           兜底（sem >= 0.55）或命中数 <= 1 时的参与者（融合权重 kw*0.7 + sem*0.3）
 
         匹配使用 _parse_product_tokens 提取的 token 集合；
         旧格式 keyword（含 "_"）兼容回退到完整名称包含匹配。
@@ -2469,10 +2569,11 @@ class AftersaleRepository:
         # 旧格式 fallback：完整 combined_name 用于含 "_" 的 keyword
         product_names = [p.get('name', '') or '' for p in products]
         combined_name = ' '.join(product_names).lower()
-        best_id, best_matched, best_ratio = None, 0, 0.0
-        for obj in AftersaleShippingAlias.query.filter(
-            AftersaleShippingAlias.keywords.isnot(None)
-        ).all():
+
+        # 阶段1：关键词匹配，收集所有别名的 (matched, ratio)
+        aliases = AftersaleShippingAlias.query.all()
+        kw_scores = {}   # alias_id → (matched, ratio)
+        for obj in aliases:
             kws = [k for k in (obj.keywords or []) if k]
             if not kws:
                 continue
@@ -2482,17 +2583,99 @@ class AftersaleRepository:
                 if kl in product_tokens:
                     matched += 1
                 elif '_' in kl and kl in combined_name:
-                    # 旧格式 keyword 兼容匹配
                     matched += 1
             if matched == 0:
                 continue
             ratio = matched / len(kws)
-            # 主键：绝对命中数更多的优先；命中数相同时，覆盖率高的优先
-            if (matched, ratio) > (best_matched, best_ratio):
-                best_matched = matched
-                best_ratio   = ratio
-                best_id      = obj.id
-        return best_id, best_ratio
+            kw_scores[obj.id] = (matched, ratio)
+
+        best_kw_matched = max((v[0] for v in kw_scores.values()), default=0)
+
+        # 阶段2：语义向量评分（仅在模型就绪时）
+        sem_scores = {}  # alias_id → cosine_sim
+        try:
+            import model_manager
+            import numpy as np
+            model = model_manager.get_model()
+            if model is not None and combined_name.strip():
+                alias_ids_key = tuple(sorted(a.id for a in aliases))
+                if (not hasattr(self, '_alias_sem_cache') or
+                        self._alias_sem_cache.get('key') != alias_ids_key):
+                    alias_docs = [a.name for a in aliases]
+                    alias_vecs = model_manager.encode(alias_docs)
+                    self._alias_sem_cache = {
+                        'key':  alias_ids_key,
+                        'vecs': alias_vecs,
+                        'ids':  [a.id for a in aliases],
+                    }
+                query_vec  = model_manager.encode([combined_name])[0]
+                alias_vecs = self._alias_sem_cache['vecs']
+                alias_ids  = self._alias_sem_cache['ids']
+                sims = np.dot(alias_vecs, query_vec)
+                for aid, sim in zip(alias_ids, sims):
+                    sem_scores[aid] = float(sim)
+        except Exception:
+            pass   # 语义模块异常不影响主流程
+
+        # ── 备注 × 简称名 tie-breaking 工具 ──────────────────────────────────
+        # 当多个简称关键词分相同时（如"气弹簧"和"气弹簧手柄"关联同一物料清单），
+        # 用 seller/buyer 备注中出现的字符序列对简称名的覆盖量来区分。
+        # 覆盖量 = SequenceMatcher 匹配块的字符总数（绝对值，不归一）：
+        #   同分时覆盖量更高的候选获胜；仍相同时选名称更长者（更具体）。
+        remark_text = ' '.join(filter(None, [
+            (seller_remark or '').lower(),
+            (buyer_remark  or '').lower(),
+        ])).strip()
+        alias_names = {obj.id: obj.name.lower() for obj in aliases}
+
+        def _remark_name_coverage(aid):
+            """计算简称名称在备注中被覆盖的字符数（difflib 匹配块累计）。"""
+            if not remark_text:
+                return 0
+            name = alias_names.get(aid, '')
+            if not name:
+                return 0
+            import difflib as _dl
+            blocks = _dl.SequenceMatcher(None, name, remark_text, autojunk=False).get_matching_blocks()
+            return sum(size for _, _, size in blocks)
+
+        # 融合：
+        # - 关键词命中 >= 2 时直接用关键词结果（可信度高），同分时备注 tie-breaking
+        # - 关键词命中 <= 1 时引入语义分参与排序
+        # - 关键词无命中时语义兜底（阈值 0.55）
+        if best_kw_matched >= 2 or not sem_scores:
+            # 找出与最高命中数并列的全部候选
+            top_candidates = [(aid, m, r) for aid, (m, r) in kw_scores.items() if m == best_kw_matched]
+            if len(top_candidates) == 1:
+                aid, _, r = top_candidates[0]
+                return aid, r
+            # 同分 → 备注 tie-breaking：覆盖量大优先，相同则名称长优先，再看覆盖率
+            top_candidates.sort(key=lambda x: (
+                _remark_name_coverage(x[0]),   # 覆盖字符数（降序）
+                len(alias_names.get(x[0], '')),# 名称长度（降序，更具体）
+                x[2],                          # 关键词覆盖率（降序）
+            ), reverse=True)
+            best_id = top_candidates[0][0]
+            return best_id, top_candidates[0][2]
+
+        # 融合评分
+        all_ids = set(kw_scores) | (set(sem_scores) if best_kw_matched == 0 else set())
+        best_id, best_score = None, -1.0
+        for aid in all_ids:
+            m, r = kw_scores.get(aid, (0, 0.0))
+            sem  = sem_scores.get(aid, 0.0)
+            if best_kw_matched == 0:
+                # 无关键词命中：纯语义兜底，需超过阈值
+                if sem < 0.55:
+                    continue
+                score = sem
+            else:
+                # 命中数 == 1：关键词 + 语义融合
+                kw_norm = min(m / max(best_kw_matched, 1), 1.0) * r
+                score = kw_norm * 0.7 + sem * 0.3
+            if score > best_score:
+                best_score, best_id = score, aid
+        return best_id, best_score
 
     def migrate_alias_keywords(self):
         """
@@ -2704,12 +2887,8 @@ class AftersaleRepository:
             AftersaleDictSuggestion.created_at.asc()
         ).all()
 
-    def accept_dict_suggestion(self, sug_id, target_type=None, canonical=None):
-        """
-        接受建议：将词写入对应词典表，并标记 status=accepted。
-        target_type: promoted_keyword 用 ('fault_term' | 'component_term')
-        canonical:   synonym_candidate 用，指定归一词（接受方输入的标准形式）
-        """
+    def accept_dict_suggestion(self, sug_id):
+        """接受建议：将词写入对应词典表，并标记 status=accepted。"""
         from sqlalchemy.exc import IntegrityError
         sug = AftersaleDictSuggestion.query.get(sug_id)
         if not sug or sug.status != 'pending':
@@ -2720,32 +2899,7 @@ class AftersaleRepository:
                 db.session.add(AftersaleReasonStopword(term=sug.value))
             elif sug.type == 'ignore_term':
                 db.session.add(AftersaleShippingIgnoreTerm(term=sug.value))
-            elif sug.type == 'promoted_keyword':
-                if target_type == 'fault_term':
-                    db.session.add(AftersaleReasonFaultTerm(term=sug.value))
-                elif target_type == 'component_term':
-                    db.session.add(AftersaleReasonComponentTerm(term=sug.value))
-            elif sug.type == 'synonym_candidate':
-                # canonical 是用户指定的标准词；aliases 是 value 中的变体词
-                # 路径一：value = 候选词本身（多原因共现）
-                # 路径二：value = "长词→短词"，meta 含 longer/shorter
-                if canonical:
-                    meta = sug.meta or {}
-                    longer  = meta.get('longer')
-                    shorter = meta.get('shorter')
-                    # 路径二：用 longer|shorter 作 pattern，canonical 作 replacement
-                    if longer and shorter:
-                        aliases = [longer, shorter]
-                    else:
-                        # 路径一：value 就是变体词，canonical 是标准词
-                        aliases = [sug.value]
-                    pattern = '|'.join(a for a in aliases if a != canonical)
-                    if pattern:
-                        db.session.add(AftersaleReasonSynonymRule(
-                            pattern=pattern,
-                            replacement=canonical,
-                            is_regex=False,
-                        ))
+            # promoted_keyword：关键词已晋升到 reason.keywords，仅确认即可
             db.session.commit()
             self._invalidate_reason_rule_cache()
         except IntegrityError:
@@ -2914,3 +3068,42 @@ class AftersaleRepository:
                 'shipping_actual': shipping_by_month.get(month, 0.0),
             })
         return result
+
+    # ── 通用设置 ─────────────────────────────────────────────────────────────
+
+    _SETTINGS_DEFAULTS = {
+        'reason_auto_fill_threshold': {
+            'value': 0.35,
+            'label': '原因自动填写最低语义评分',
+        },
+    }
+
+    def get_settings(self):
+        """读取所有设置，缺失的键用默认值补全后返回 list[dict]"""
+        from database.models.aftersale import AftersaleSetting
+        AftersaleSetting.__table__.create(bind=db.engine, checkfirst=True)
+        rows = {r.key: r for r in AftersaleSetting.query.all()}
+        result = []
+        for key, meta in self._SETTINGS_DEFAULTS.items():
+            if key in rows:
+                result.append(rows[key].to_dict())
+            else:
+                result.append({'key': key, 'value': meta['value'], 'label': meta['label'], 'updated_at': None})
+        return result
+
+    def update_setting(self, key, value):
+        """更新单个设置，键不在白名单时拒绝"""
+        import json
+        from database.models.aftersale import AftersaleSetting
+        AftersaleSetting.__table__.create(bind=db.engine, checkfirst=True)
+        if key not in self._SETTINGS_DEFAULTS:
+            return False, f'未知设置项: {key}'
+        row = AftersaleSetting.query.filter_by(key=key).first()
+        encoded = json.dumps(value, ensure_ascii=False)
+        if row:
+            row.value = encoded
+        else:
+            label = self._SETTINGS_DEFAULTS[key]['label']
+            db.session.add(AftersaleSetting(key=key, value=encoded, label=label))
+        db.session.commit()
+        return True, None

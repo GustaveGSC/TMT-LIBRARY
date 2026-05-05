@@ -9,6 +9,7 @@
 - `frontend-data-mgmt.md` — 数据管理 & 发货图表
 - `frontend-aftersale.md` — 售后数据（前端面板、简称/原因词典配置入口、与后端的交互说明）
 - `frontend-admin.md` — 管理页注意事项
+- `frontend-rdtools.md` — 研发工具页（待补充）
 
 ## 技术栈
 - **桌面端**：Electron + Vue 3 + Vite（electron-vite）
@@ -23,10 +24,12 @@ electron/main/index.ts   # 主进程、IPC、updater 生命周期
 electron/main/window.ts  # 登录窗 420×640 / 主窗 800×600，frame:false，bg:#ede8dc
 electron/main/python.ts  # Flask 子进程，退出用 spawnSync taskkill
 src/api/http.js          # axios baseURL:127.0.0.1:8765，拦截器已解一层 res.data
-src/routers/index.js     # Hash路由：/login /index /product /shipping /data-mgmt /aftersale /admin/*
+src/routers/index.js     # Hash路由：/login /index /product /shipping /data-mgmt /aftersale /rd-tools /admin/*
 src/styles/themes.css    # 全局CSS变量（勿硬编码颜色）
 backend/app.py           # Flask 工厂；SQLAlchemy QueuePool(size=2, pre_ping, recycle=1800) + connect/read/write 超时（见源码）
 backend/create_reason_keyword_rules.py  # 售后「原因词典」相关表初始化与种子数据（表结构见 database.md）
+backend/create_ecr_reminders.py        # 研发工具「ECR提醒」相关表初始化与种子数据
+backend/model_manager.py               # 模型/系列管理工具（研发工具辅助脚本）
 backend/result.py        # Result.ok/fail → { success, message, data }
 ```
 
@@ -67,12 +70,15 @@ window.electronAPI = {
   getApiBase, getVersion, loginSuccess, logout, quitApp, openExternal, showOpenDialog,
   minimizeApp, maximizeApp, unmaximizeApp,
   onMaximize(cb), onUnmaximize(cb),   // 主进程转发窗口事件
+  showSaveDialog(options),             // 文件另存对话框 → { canceled, filePath }
+  saveFile(filePath, data),            // 将 ArrayBuffer 写入本地文件（ECR 导出使用）
   updater: { check, download, install, on, off }
 }
 ```
 
 ## 权限设计
 权限码：`product:view/edit/delete`、`shipping:view/edit/export`、`aftersale:view/edit/export`、`rd:view/edit`
+- rd 路由对应研发工具页（`/rd-tools`），权限码 `rd:view/edit`
 - admin 角色后端直接放行；isAdmin 判断：`userInfo.roles?.includes('admin')`
 - username==='admin' 或 'author'：不可删除/禁用，不显示分配角色按钮（后端拦截）
 - author 账号：开发者专用，admin 权限，用户列表仅 author 登录时可见
@@ -86,5 +92,5 @@ const { isAdmin, can, canEditProduct, canViewProduct, canDeleteProduct } = usePe
 ## 版本规则
 - `Beta x.x.x` 或主/次版本变更 → 强制更新
 - 仅修订版变更 → 可选更新（红点提示）
-- 当前版本：`1.0.3`（以 package.json 为准）
+- 当前版本：`1.1.0`（以 package.json 为准）
 - OSS上传 key 格式：`tmt-library/releases/{filename}`（含前缀）

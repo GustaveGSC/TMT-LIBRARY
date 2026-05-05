@@ -74,8 +74,10 @@ const available = ref({
 
 const loadingOpts      = ref(false)
 const filterCollapsed  = ref(false)
+const hideNoSales      = ref(false)  // 隐藏无同期发货的数据项
 let   _filterTimer = null
 let   _chartTimer  = null
+let   _chartCache  = new Map()       // key: groupBy值('product'/'reason'/...)，value: 接口返回 data
 
 // 图表状态
 const groupBy      = ref(null)    // null=产品视图（默认），非null=子维度
@@ -206,8 +208,9 @@ onBeforeUnmount(() => {
 
 // ── Watch ─────────────────────────────────────────
 
-// 任意筛选变化 → 防抖刷新联动候选选项（始终自动）
+// 任意筛选变化 → 清空图表缓存 + 防抖刷新联动候选选项（始终自动）
 watch(filters, () => {
+  _chartCache.clear()
   clearTimeout(_filterTimer)
   _filterTimer = setTimeout(() => loadCrossFilterOptions(), 300)
 }, { deep: true })
@@ -236,6 +239,9 @@ watch(
 
 // 维度 Tab 切换 → 刷新图表
 watch(groupBy, () => loadChartData())
+
+// 隐藏无同期发货 → 直接重渲染（不重新请求数据）
+watch(hideNoSales, () => renderChart())
 
 // ── 方法 ──────────────────────────────────────────
 
@@ -280,11 +286,21 @@ async function loadCrossFilterOptions() {
 }
 
 async function loadChartData() {
+  const cacheKey = groupBy.value ?? 'product'
+
+  // 命中缓存：直接渲染，无需等待
+  if (_chartCache.has(cacheKey)) {
+    chartData.value = _chartCache.get(cacheKey)
+    renderChart()
+    return
+  }
+
   loadingChart.value = true
   try {
-    const body = { ...buildFilterBody(), group_by: groupBy.value ?? 'product' }
+    const body = { ...buildFilterBody(), group_by: cacheKey }
     const res = await http.post('/api/aftersale/chart-data', body)
     if (res.success) {
+      _chartCache.set(cacheKey, res.data)
       chartData.value = res.data
       renderChart()
     }
@@ -411,7 +427,11 @@ function initChart() {
 
 function renderChart() {
   if (!chartInst || !chartData.value) return
-  const items = chartData.value.items || []
+  let items = chartData.value.items || []
+  // 仅产品视图下过滤"无同期发货"数据（维度视图 sale_ratio 本就全为 null，不适用此逻辑）
+  if (hideNoSales.value && groupBy.value === null) {
+    items = items.filter(i => i.sale_ratio !== null && i.sale_ratio !== undefined)
+  }
   if (!items.length) { chartInst.clear(); return }
 
   if (groupBy.value === null) {
@@ -427,7 +447,8 @@ function renderChart() {
 function buildProductOption(items) {
   const names  = items.map(i => i.name)
   const values = items.map(i => i.value)
-  const total  = chartData.value.summary?.total || 1
+  // 过滤后用实际 items 之和重新作分母，保证占比基于当前可见数据
+  const total  = values.reduce((s, v) => s + v, 0) || 1
 
   const pctData      = values.map(v => total > 0 ? Math.round(v / total * 1000) / 10 : 0)
   const rawSaleRatio  = items.map(i => i.sale_ratio ?? null)
@@ -600,7 +621,8 @@ function buildProductOption(items) {
 function buildDimOption(items) {
   const names         = items.map(i => i.name)
   const values        = items.map(i => i.value)
-  const total         = chartData.value.summary?.total || 1
+  // 过滤后用实际 items 之和重新作分母，保证占比基于当前可见数据
+  const total         = values.reduce((s, v) => s + v, 0) || 1
   const rawSaleRatio  = items.map(i => i.sale_ratio ?? null)
   const hasSaleRatio  = rawSaleRatio.some(v => v !== null)
   const saleRatioData = rawSaleRatio.map(v => {
@@ -869,10 +891,12 @@ function resetFilters() {
 // 查询按钮：手动触发图表刷新（时间筛选变更后必须通过此按钮）
 async function handleQuery() {
   clearTimeout(_chartTimer)
+  _chartCache.clear()
   await loadChartData()
 }
 
 async function refresh() {
+  _chartCache.clear()
   await Promise.all([loadCrossFilterOptions(), loadChartData()])
 }
 
@@ -1116,6 +1140,7 @@ defineExpose({ refresh })
           </div>
         </div>
         <div class="ct-right">
+          <el-checkbox v-model="hideNoSales" class="hide-no-sales-check">隐藏当前未销售产品数据</el-checkbox>
           <button class="btn-view-data">查看数据</button>
         </div>
       </div>
@@ -1243,6 +1268,19 @@ defineExpose({ refresh })
   cursor: pointer; transition: all 0.15s;
 }
 .btn-view-data:hover { border-color: var(--accent); color: var(--accent); }
+.hide-no-sales-check {
+  margin-right: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+:deep(.hide-no-sales-check .el-checkbox__label) {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--font-family);
+}
+:deep(.hide-no-sales-check .el-checkbox__inner) {
+  border-radius: 4px;
+}
 
 /* 折叠按钮 */
 .btn-collapse {

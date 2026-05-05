@@ -1190,7 +1190,6 @@ function buildBarOption(items) {
       })
     : []
 
-  const showDataLabel = labels.length <= 20  // 超过 20 项不在图表内显示数值
   const labelOpt = {
     interval: 0, hideOverlap: true,
     rotate: labels.length > 10 ? 30 : 0, color: '#7a5c3a', fontFamily: FONT, fontSize: 13,
@@ -1283,7 +1282,8 @@ function buildBarOption(items) {
       {
         name: label, type: 'bar', data: values, yAxisIndex: 0,
         itemStyle: { color: '#a8cce8', borderRadius: [2, 2, 0, 0] },
-        label: { show: showDataLabel, position: 'top', color: '#2c2420', fontFamily: FONT, fontSize: 14, fontWeight: 'bold', formatter: '{c}' },
+        label: { show: true, position: 'top', color: '#2c2420', fontFamily: FONT, fontSize: 14, fontWeight: 'bold', formatter: '{c}' },
+        labelLayout: { hideOverlap: true },
       },
       // 销退指标时额外显示「销退率」折线（销退量 / 发货量）
       ...(isReturn ? [{
@@ -1292,7 +1292,8 @@ function buildBarOption(items) {
         lineStyle: { color: '#9c6fba', width: 2 },
         itemStyle: { color: '#9c6fba' },
         symbol: 'circle', symbolSize: 4,
-        label: { show: showDataLabel, position: 'top', color: '#9c6fba', fontFamily: FONT, fontSize: 13, fontWeight: 'bold', formatter: p => `${p.value}%` },
+        label: { show: true, position: 'top', color: '#9c6fba', fontFamily: FONT, fontSize: 13, fontWeight: 'bold', formatter: p => `${p.value}%` },
+        labelLayout: { hideOverlap: true },
       }] : []),
       {
         name: '占比', type: 'line', data: pctData, yAxisIndex: 1,
@@ -1300,7 +1301,8 @@ function buildBarOption(items) {
         lineStyle: { color: '#e07c00', width: 2 },
         itemStyle: { color: '#e07c00' },
         symbol: 'circle', symbolSize: 4,
-        label: { show: showDataLabel, position: 'top', color: '#e07c00', fontFamily: FONT, fontSize: 13, fontWeight: 'bold', formatter: p => `${p.value}%` },
+        label: { show: true, position: 'top', color: '#e07c00', fontFamily: FONT, fontSize: 13, fontWeight: 'bold', formatter: p => `${p.value}%` },
+        labelLayout: { hideOverlap: true },
       },
       {
         name: '累计占比', type: 'line', data: cumulData, yAxisIndex: 1,
@@ -1308,7 +1310,8 @@ function buildBarOption(items) {
         lineStyle: { color: '#e05050', width: 1.5, type: 'dashed' },
         itemStyle: { color: '#e05050' },
         symbol: 'circle', symbolSize: 4,
-        label: { show: showDataLabel, position: 'top', color: '#c03030', fontFamily: FONT, fontSize: 13, fontWeight: 'bold', formatter: p => `${p.value}%` },
+        label: { show: true, position: 'top', color: '#c03030', fontFamily: FONT, fontSize: 13, fontWeight: 'bold', formatter: p => `${p.value}%` },
+        labelLayout: { hideOverlap: true },
       },
     ],
   }

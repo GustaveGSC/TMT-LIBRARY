@@ -46,6 +46,11 @@ export function usePermission() {
   const canEditAftersale   = can('aftersale:edit')
   const canExportAftersale = can('aftersale:export')
 
+  // ── 研发数据 ──────────────────────────────────────
+  const canViewRd  = can('rd:view')
+  const canEditRd  = can('rd:edit')
+  const canAdminRd = can('rd:admin')   // 研发部管理员：管理变更提醒
+
   return {
     userInfo,
     isAdmin,
@@ -59,5 +64,8 @@ export function usePermission() {
     canViewAftersale,
     canEditAftersale,
     canExportAftersale,
+    canViewRd,
+    canEditRd,
+    canAdminRd,
   }
 }

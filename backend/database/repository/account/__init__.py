@@ -219,7 +219,7 @@ class PermissionRepository:
 
     @staticmethod
     def create(code: str, name: str = None, description: str = None) -> Permission:
-        permission = Permission(code=code, name=name, description=description)
+        permission = Permission(code=code, description=description)
         db.session.add(permission)
         db.session.commit()
         return permission

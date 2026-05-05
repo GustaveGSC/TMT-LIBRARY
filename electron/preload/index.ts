@@ -26,6 +26,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   showOpenDialog: (options: Electron.OpenDialogOptions) =>
     ipcRenderer.invoke('show-open-dialog', options),
 
+  showSaveDialog: (options: Electron.SaveDialogOptions) =>
+    ipcRenderer.invoke('show-save-dialog', options),
+
+  saveFile: (filePath: string, data: ArrayBuffer) =>
+    ipcRenderer.invoke('save-file', filePath, data),
+
   // 读取本地文件为 base64 data URL（绕过 file:// 安全限制）
   readFileAsDataURL: (filePath: string) =>
     ipcRenderer.invoke('read-file-as-data-url', filePath),

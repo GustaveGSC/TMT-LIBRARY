@@ -57,6 +57,7 @@ def create_app() -> Flask:
     from routes.shipping import shipping_bp
     from routes.aftersale import aftersale_bp
     from routes.product.lifecycle import lifecycle_bp
+    from routes.rd import rd_bp
 
     app.register_blueprint(account_bp,        url_prefix="/api/account")
     app.register_blueprint(version_bp,        url_prefix="/api/version")
@@ -69,6 +70,11 @@ def create_app() -> Flask:
     app.register_blueprint(shipping_bp,       url_prefix="/api/shipping")
     app.register_blueprint(aftersale_bp,      url_prefix="/api/aftersale")
     app.register_blueprint(lifecycle_bp,      url_prefix="/api/product/lifecycle")
+    app.register_blueprint(rd_bp,             url_prefix="/api/rd")
+
+    # ── 数据库自动迁移（非破坏性，仅补充缺失变更）──────────
+    with app.app_context():
+        _run_migrations(db)
 
     # ── 健康检查 ──────────────────────────────────────
     @app.get("/health")
@@ -76,6 +82,34 @@ def create_app() -> Flask:
         return {"status": "ok"}
 
     return app
+
+
+def _run_migrations(db):
+    """轻量自动迁移：检测列定义，仅在需要时执行 ALTER TABLE；并确保新表存在。"""
+    # 确保 ecr_reminder 表存在
+    try:
+        from database.models.rd import EcrReminder
+        EcrReminder.__table__.create(bind=db.engine, checkfirst=True)
+    except Exception as e:
+        print(f'[migration] ecr_reminder 建表失败（可忽略）: {e}', flush=True)
+
+    try:
+        with db.engine.connect() as conn:
+            # aftersale_product_remark_dict.type Enum 中补充 series_alias
+            row = conn.execute(db.text(
+                "SELECT COLUMN_TYPE FROM information_schema.COLUMNS "
+                "WHERE TABLE_SCHEMA = DATABASE() "
+                "AND TABLE_NAME = 'aftersale_product_remark_dict' "
+                "AND COLUMN_NAME = 'type'"
+            )).fetchone()
+            if row and 'series_alias' not in (row[0] or ''):
+                conn.execute(db.text(
+                    "ALTER TABLE aftersale_product_remark_dict "
+                    "MODIFY COLUMN type ENUM('material','color','drive_type','size','series_alias') NOT NULL"
+                ))
+                conn.commit()
+    except Exception as e:
+        print(f'[migration] 自动迁移失败（可忽略）: {e}', flush=True)
 
 
 if __name__ == "__main__":

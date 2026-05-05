@@ -50,6 +50,19 @@ const aftersaleDate = ref(null)   // 售后日期（来自 shipped_date，可编
 // 弹窗
 const showReasonLib = ref(false)
 
+// 通用设置（从 DB 加载）
+const reasonAutoFillThreshold = ref(0.35)   // 默认值，加载后覆盖
+
+async function loadSettings() {
+  try {
+    const res = await http.get('/api/aftersale/settings')
+    if (res.success && Array.isArray(res.data)) {
+      const t = res.data.find(s => s.key === 'reason_auto_fill_threshold')
+      if (t != null) reasonAutoFillThreshold.value = Number(t.value) || 0.35
+    }
+  } catch (_) { /* 保持默认值 */ }
+}
+
 // 物料简称列表（用于发货物料别名合并显示）
 
 // 发货物料简称库（下拉候选）
@@ -149,7 +162,7 @@ const canConfirm = computed(() => {
 onMounted(async () => {
   // 先并发加载匹配所需的基础数据，再加载订单列表
   // 避免 selectOrder 运行时 categoryTree / productAliases / reasonGroups 尚未就绪
-  await Promise.all([loadCategoryTree(), loadAliases(), loadReasonOptions(), loadRemarkDict(), loadAmbiguousTerms()])
+  await Promise.all([loadCategoryTree(), loadAliases(), loadReasonOptions(), loadRemarkDict(), loadAmbiguousTerms(), loadSettings()])
   loadOrders()
 })
 
@@ -389,7 +402,8 @@ async function selectOrder(order) {
   const suggestedCategoryId  = apiResult?.suggested_reason_category_id  || null
   const suggestedReasonCount = apiResult?.suggested_reason_count        || null
   // 原因自动填写优先级：关键词候选 > 历史推荐（纯历史不自动填）
-  if (reasonCandidates.length > 0) {
+  // total_score 低于设置阈值时只展示候选供点选，不自动填入
+  if (reasonCandidates.length > 0 && (reasonCandidates[0].total_score ?? 0) >= reasonAutoFillThreshold.value) {
     const top = reasonCandidates[0]
     item.reason_id          = top.reason_id   || null
     item.reason_category_id = top.category_id || null
@@ -597,6 +611,7 @@ function removeCurrentFromList() {
 function onReasonLibUpdated() {
   loadReasonOptions()
   loadAliases()
+  loadSettings()
 }
 
 // 物料简称更新后刷新
@@ -918,8 +933,11 @@ function matchTextToModel(remark1, remark2, purchaseDateStr = null) {
     if (active.length) {
       candidates = active
     } else if (!parsed.version) {
-      // 无版本 + 购买日期有效 + 生命周期全部不符 → 无法确定版本，终止
-      return { noMatch: true, reason: '购买日期与所有匹配系列的生命周期不符，无法确定版本' }
+      if (candidates.length > 1) {
+        // 多候选且生命周期全部不符 → 无法确定是哪个版本，终止
+        return { noMatch: true, reason: '购买日期与所有匹配系列的生命周期不符，无法确定版本' }
+      }
+      // 单候选时：生命周期数据可能不准确，保留候选并降低置信度（等待用户确认）
     }
   }
 
@@ -1538,7 +1556,7 @@ async function computeOrderBatchResult(order) {
   // ── 确定原因（仅关键词候选存在时取历史原因）────────
   const suggestedReasonId   = apiResult?.suggested_reason_id          || null
   const suggestedCategoryId = apiResult?.suggested_reason_category_id || null
-  if (suggestedReasonId && reasonCandidates.length > 0) {
+  if (suggestedReasonId && reasonCandidates.length > 0 && (reasonCandidates[0].total_score ?? 0) >= reasonAutoFillThreshold.value) {
     content.reason_id          = suggestedReasonId
     content.reason_category_id = suggestedCategoryId
   }
@@ -1768,7 +1786,7 @@ async function ignoreCase() {
               <el-icon><Refresh /></el-icon>
             </button>
           </el-tooltip>
-          <el-tooltip content="原因库" placement="top">
+          <el-tooltip content="设置" placement="top">
             <button class="btn-icon" @click="showReasonLib = true">
               <el-icon><Setting /></el-icon>
             </button>
@@ -1798,7 +1816,7 @@ async function ignoreCase() {
           :key="order.ecommerce_order_no"
           class="order-card"
           :class="{ active: currentOrder?.ecommerce_order_no === order.ecommerce_order_no }"
-          @click="batchRunning ? undefined : selectOrder(order)"
+          @click="(batchRunning || selectingOrder) ? undefined : selectOrder(order)"
         >
           <div class="order-no-row">
             <span class="order-no">{{ order.ecommerce_order_no }}</span>
@@ -1843,6 +1861,12 @@ async function ignoreCase() {
 
     <!-- ── 右侧处理工作区 ──────────────────────── -->
     <div class="work-area">
+      <!-- 匹配中遮罩 -->
+      <div v-if="selectingOrder" class="matching-overlay">
+        <div class="matching-spinner"></div>
+        <div class="matching-text">匹配中…</div>
+      </div>
+
       <div v-if="!currentOrder" class="work-empty">
         <div class="work-empty-icon">✓</div>
         <div>当前无待处理售后订单</div>
@@ -2149,10 +2173,14 @@ async function ignoreCase() {
                     <span v-if="c.category_name" class="cand-cat">{{ c.category_name }} › </span>{{ c.name }}
                   </span>
                   <span v-if="c.matched_keywords?.length" class="cand-matched-hint">{{ c.matched_keywords.join('、') }}</span>
-                  <span class="source-badge" :class="c.source === 'keyword' ? 'src-api' : 'src-text'" style="flex-shrink:0">
-                    {{ c.source === 'keyword' ? '关键词' : '历史' }}
+                  <span
+                    class="source-badge"
+                    :class="c.source === 'keyword' ? 'src-kw' : c.source === 'semantic' ? 'src-sem' : 'src-hist'"
+                    style="flex-shrink:0"
+                  >{{ c.source === 'keyword' ? '关键词' : c.source === 'semantic' ? '语义' : '历史' }}</span>
+                  <span class="cand-score" :title="`关键词:${Math.round((c.keyword_score??0)*100)} 语义:${Math.round((c.semantic_score??0)*100)} 历史:${Math.round((c.history_score??0)*100)}`">
+                    {{ Math.round((c.total_score ?? c.confidence ?? 0) * 100) }}
                   </span>
-                  <span class="cand-score">{{ Math.round((c.total_score ?? c.confidence ?? 0) * 100) }}</span>
                   <div class="cand-bar-wrap">
                     <div class="cand-bar" :style="{ width: `${Math.round((c.total_score ?? c.confidence ?? 0) * 100)}%` }" />
                   </div>
@@ -2243,7 +2271,7 @@ async function ignoreCase() {
                       <span class="cand-path">
                         {{ c.category_name }} › {{ c.series_name }}
                         <span v-if="c.model_code || c.model_name" class="cand-model">
-                          › {{ c.model_code || c.model_name }}
+                          › {{ [c.model_code, c.model_name].filter(Boolean).join(' ') }}
                           <span v-if="lifecycleText(c.model_id)" class="cand-lc-text">{{ lifecycleText(c.model_id) }}</span>
                         </span>
                       </span>
@@ -2271,7 +2299,7 @@ async function ignoreCase() {
                         @click="applyModelDetail(c, m)"
                         title="点击应用此型号"
                       >
-                        <span class="model-detail-code">{{ m.model_code || m.name }}</span>
+                        <span class="model-detail-code">{{ [m.model_code, m.name].filter(Boolean).join(' ') }}</span>
                         <span v-if="lifecycleText(m.id)" class="cand-lc-text" :class="m.lifecycleOk === false ? 'lc-fail-text' : ''">{{ lifecycleText(m.id) }}</span>
                         <span
                           v-if="m.lifecycleOk !== null"
@@ -2376,8 +2404,8 @@ async function ignoreCase() {
                         <span v-if="matchDebug.reason_candidates[0].category_name">{{ matchDebug.reason_candidates[0].category_name }} <span class="path-sep">›</span> </span>
                         <span class="result-model">{{ matchDebug.reason_candidates[0].name }}</span>
                       </span>
-                      <span class="source-badge" :class="matchDebug.reason_candidates[0].source === 'keyword' ? 'src-api' : 'src-text'">
-                        {{ matchDebug.reason_candidates[0].source === 'keyword' ? '关键词' : '历史' }}
+                      <span class="source-badge" :class="matchDebug.reason_candidates[0].source === 'keyword' ? 'src-kw' : matchDebug.reason_candidates[0].source === 'semantic' ? 'src-sem' : 'src-hist'">
+                        {{ matchDebug.reason_candidates[0].source === 'keyword' ? '关键词' : matchDebug.reason_candidates[0].source === 'semantic' ? '语义' : '历史' }}
                       </span>
                       <span class="cand-score">{{ Math.round((matchDebug.reason_candidates[0].total_score ?? 0) * 100) }}</span>
                     </template>
@@ -2417,10 +2445,10 @@ async function ignoreCase() {
                       v-if="c.matched_keywords?.length"
                       class="cand-matched-hint"
                     >{{ c.matched_keywords.join('、') }}</span>
-                    <span class="source-badge" :class="c.source === 'keyword' ? 'src-api' : 'src-text'" style="flex-shrink:0">
-                      {{ c.source === 'keyword' ? '关键词' : '历史' }}
+                    <span class="source-badge" :class="c.source === 'keyword' ? 'src-kw' : c.source === 'semantic' ? 'src-sem' : 'src-hist'" style="flex-shrink:0">
+                      {{ c.source === 'keyword' ? '关键词' : c.source === 'semantic' ? '语义' : '历史' }}
                     </span>
-                    <span class="cand-score" :title="`关键词:${Math.round((c.keyword_score || 0) * 100)} 历史:${Math.round((c.history_score || 0) * 100)}`">
+                    <span class="cand-score" :title="`关键词:${Math.round((c.keyword_score||0)*100)} 语义:${Math.round((c.semantic_score||0)*100)} 历史:${Math.round((c.history_score||0)*100)}`">
                       {{ Math.round((c.total_score ?? c.confidence ?? 0) * 100) }}
                     </span>
                     <div class="cand-bar-wrap">
@@ -2588,6 +2616,25 @@ async function ignoreCase() {
 /* ── 右侧工作区 ────────────────────────────────── */
 .work-area {
   flex: 1; display: flex; flex-direction: column; overflow: hidden;
+  position: relative;
+}
+.matching-overlay {
+  position: absolute; inset: 0; z-index: 10;
+  background: rgba(237, 232, 220, 0.72);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 12px; pointer-events: all;
+}
+.matching-spinner {
+  width: 28px; height: 28px;
+  border: 3px solid #e0d4c0;
+  border-top-color: #c4883a;
+  border-radius: 50%;
+  animation: ms-spin 0.7s linear infinite;
+}
+@keyframes ms-spin { to { transform: rotate(360deg); } }
+.matching-text {
+  font-size: 13px; color: #6b5e4e;
 }
 .work-empty {
   flex: 1; display: flex; flex-direction: column;
@@ -2929,6 +2976,9 @@ async function ignoreCase() {
 .src-api  { background: #e8f5e9; color: #2e7d32; }
 .src-text { background: #e3f2fd; color: #1565c0; }
 .src-none { background: #f3e5f5; color: #6a1b9a; }
+.src-kw   { background: #e8f5e9; color: #2e7d32; }
+.src-sem  { background: #fff3e0; color: #e65100; }
+.src-hist { background: #e3f2fd; color: #1565c0; }
 
 /* 匹配文本 */
 .debug-text-val {

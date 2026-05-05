@@ -32,6 +32,14 @@ ipcMain.handle('show-open-dialog', (_event, options) =>
   dialog.showOpenDialog(options)
 )
 
+ipcMain.handle('show-save-dialog', (_event, options) =>
+  dialog.showSaveDialog(options)
+)
+
+ipcMain.handle('save-file', (_event, filePath: string, data: ArrayBuffer) => {
+  fs.writeFileSync(filePath, Buffer.from(data))
+})
+
 ipcMain.handle('read-file-as-data-url', (_event, filePath: string) => {
   const data = fs.readFileSync(filePath)
   const ext  = path.extname(filePath).slice(1).toLowerCase()

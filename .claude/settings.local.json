@@ -62,7 +62,17 @@
       "Bash(python3)",
       "Bash(python3 -c \"print\\('Python works'\\)\")",
       "Bash(powershell -Command ':*)",
-      "Bash(powershell -Command 'cd '\\\\''e:/Project/tmt-library/backend'\\\\''; $env:PYTHONIOENCODING='\\\\''utf-8'\\\\''; python inspect_candidates.py')"
+      "Bash(powershell -Command 'cd '\\\\''e:/Project/tmt-library/backend'\\\\''; $env:PYTHONIOENCODING='\\\\''utf-8'\\\\''; python inspect_candidates.py')",
+      "Skill(update-config)",
+      "Skill(update-config:*)",
+      "Bash(npm i:*)",
+      "Bash(pip show:*)",
+      "Bash(pip install:*)",
+      "Read(//c/Users/gusta/Desktop/bge-small-zh-v1.5/**)",
+      "Bash(du -b ~/Desktop/bge-small-zh-v1.5/**/* ~/Desktop/bge-small-zh-v1.5/*)",
+      "Bash(sort -k2)",
+      "Bash(xargs wc:*)",
+      "Bash(find \"e:\\\\Project\\\\tmt-library\" -type f \\\\\\( -name \"*.py\" -o -name \"*.js\" \\\\\\) -exec grep -l \"product:view\\\\|shipping:view\\\\|aftersale:view\" {} \\\\;)"
     ],
     "additionalDirectories": [
       "\\tmp",

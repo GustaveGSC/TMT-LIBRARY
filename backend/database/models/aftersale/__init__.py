@@ -131,44 +131,6 @@ class AftersaleReasonStopword(db.Model):
         }
 
 
-class AftersaleReasonFaultTerm(db.Model):
-    """售后原因词典：故障核心词（命中后提升原因区分度）"""
-    __tablename__ = 'aftersale_reason_fault_term'
-
-    id         = db.Column(db.Integer,     primary_key=True, autoincrement=True)
-    term       = db.Column(db.String(100), nullable=False, unique=True)
-    enabled    = db.Column(db.Boolean,     nullable=False, default=True)
-    sort_order = db.Column(db.Integer,     nullable=False, default=0)
-    created_at = db.Column(db.DateTime,    nullable=False, default=now_cst)
-
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'term': self.term,
-            'enabled': bool(self.enabled),
-            'sort_order': self.sort_order,
-        }
-
-
-class AftersaleReasonComponentTerm(db.Model):
-    """售后原因词典：部件词（与核心词组合提升召回）"""
-    __tablename__ = 'aftersale_reason_component_term'
-
-    id         = db.Column(db.Integer,     primary_key=True, autoincrement=True)
-    term       = db.Column(db.String(100), nullable=False, unique=True)
-    enabled    = db.Column(db.Boolean,     nullable=False, default=True)
-    sort_order = db.Column(db.Integer,     nullable=False, default=0)
-    created_at = db.Column(db.DateTime,    nullable=False, default=now_cst)
-
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'term': self.term,
-            'enabled': bool(self.enabled),
-            'sort_order': self.sort_order,
-        }
-
-
 class AftersaleReasonShortKeepTerm(db.Model):
     """售后原因词典：短词保留（≤2 字时默认视为泛词，在此表中的词除外）"""
     __tablename__ = 'aftersale_reason_short_keep_term'
@@ -183,29 +145,6 @@ class AftersaleReasonShortKeepTerm(db.Model):
         return {
             'id': self.id,
             'term': self.term,
-            'enabled': bool(self.enabled),
-            'sort_order': self.sort_order,
-        }
-
-
-class AftersaleReasonSynonymRule(db.Model):
-    """售后原因词典：同义词归一规则（pattern -> replacement）"""
-    __tablename__ = 'aftersale_reason_synonym_rule'
-
-    id          = db.Column(db.Integer,     primary_key=True, autoincrement=True)
-    pattern     = db.Column(db.String(200), nullable=False, unique=True)
-    replacement = db.Column(db.String(100), nullable=False)
-    is_regex    = db.Column(db.Boolean,     nullable=False, default=True)
-    enabled     = db.Column(db.Boolean,     nullable=False, default=True)
-    sort_order  = db.Column(db.Integer,     nullable=False, default=0)
-    created_at  = db.Column(db.DateTime,    nullable=False, default=now_cst)
-
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'pattern': self.pattern,
-            'replacement': self.replacement,
-            'is_regex': bool(self.is_regex),
             'enabled': bool(self.enabled),
             'sort_order': self.sort_order,
         }
@@ -341,14 +280,14 @@ class AftersaleCaseReason(db.Model):
 
 
 class AftersaleProductRemarkDict(db.Model):
-    """产品匹配留言词典：材质/颜色/驱动方式/尺寸关键词，供 suggest_product 结构化解析买家留言"""
+    """产品匹配留言词典：材质/颜色/驱动方式/尺寸/产品别名，供 suggest_product 结构化解析买家留言"""
     __tablename__ = 'aftersale_product_remark_dict'
 
     id         = db.Column(db.Integer,  primary_key=True, autoincrement=True)
-    type       = db.Column(db.Enum('material', 'color', 'drive_type', 'size'),
+    type       = db.Column(db.Enum('material', 'color', 'drive_type', 'size', 'series_alias'),
                            nullable=False, index=True)
-    value      = db.Column(db.String(50), nullable=False)   # 在留言中匹配的词，如 "橡胶木" / "120"
-    display    = db.Column(db.String(50), nullable=True)    # 型号中对应的表达，仅 size 类型使用，如 "1.2米"
+    value      = db.Column(db.String(100), nullable=False)  # 在留言中匹配的词；series_alias 时为买家非正式名称
+    display    = db.Column(db.String(100), nullable=True)   # 对应表达；series_alias 时为官方系列基础名
     enabled    = db.Column(db.Boolean,   nullable=False, default=True)
     sort_order = db.Column(db.Integer,   nullable=False, default=0)
     created_at = db.Column(db.DateTime,  nullable=False, default=now_cst)
@@ -365,6 +304,30 @@ class AftersaleProductRemarkDict(db.Model):
             'display':    self.display,
             'enabled':    bool(self.enabled),
             'sort_order': self.sort_order,
+        }
+
+
+class AftersaleSetting(db.Model):
+    """系统设置键值表：通用配置项（键唯一，值 JSON 字符串）"""
+    __tablename__ = 'aftersale_setting'
+
+    id         = db.Column(db.Integer,      primary_key=True, autoincrement=True)
+    key        = db.Column(db.String(100),  nullable=False, unique=True)
+    value      = db.Column(db.Text,         nullable=False)         # JSON-encoded
+    label      = db.Column(db.String(200),  nullable=True)          # 前端显示名
+    updated_at = db.Column(db.DateTime,     nullable=False, default=now_cst, onupdate=now_cst)
+
+    def to_dict(self):
+        import json
+        try:
+            val = json.loads(self.value)
+        except Exception:
+            val = self.value
+        return {
+            'key':        self.key,
+            'value':      val,
+            'label':      self.label,
+            'updated_at': self.updated_at.strftime('%Y-%m-%d %H:%M:%S') if self.updated_at else None,
         }
 
 

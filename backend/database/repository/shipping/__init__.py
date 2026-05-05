@@ -730,7 +730,7 @@ class ShippingRepository:
             order_expr = func.sum(sof.actual_quantity).desc()
         elif group_by == 'channel_code':
             label_expr = func.coalesce(sof.channel_code, '未知')
-            name_expr  = None
+            name_expr  = func.max(sof.channel_org_name)
             order_expr = func.sum(sof.actual_quantity).desc()
         elif group_by == 'province':
             label_expr = func.coalesce(sof.province, '未知')

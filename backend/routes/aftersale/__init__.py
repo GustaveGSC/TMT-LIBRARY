@@ -266,12 +266,7 @@ def get_dict_suggestions():
 
 @aftersale_bp.post('/dictionary-suggestions/<int:sug_id>/accept')
 def accept_dict_suggestion(sug_id):
-    body = request.get_json() or {}
-    return _svc.accept_dict_suggestion(
-        sug_id,
-        target_type=body.get('target_type'),
-        canonical=body.get('canonical'),
-    ).to_response()
+    return _svc.accept_dict_suggestion(sug_id).to_response()
 
 
 @aftersale_bp.post('/dictionary-suggestions/<int:sug_id>/reject')
@@ -317,3 +312,46 @@ def cleanup_keyword_candidates():
 def get_series_monthly(model_id):
     """按月聚合指定 model 所属系列的售后工单数 + 发货实际量（仅有售后数据的月份）"""
     return _svc.get_series_monthly_by_model_id(model_id).to_response()
+
+
+# ── 通用设置 ─────────────────────────────────────────────────────────────────
+
+@aftersale_bp.get('/settings')
+def get_settings():
+    return _svc.get_settings().to_response()
+
+
+@aftersale_bp.put('/settings')
+def update_setting():
+    return _svc.update_setting(request.get_json() or {}).to_response()
+
+
+# ── 语义向量模型管理 ──────────────────────────────────────────────────────────
+
+@aftersale_bp.get('/model/status')
+def model_status():
+    import model_manager
+    from result import Result
+    installed = model_manager.is_model_installed()
+    ready     = model_manager.get_model() is not None
+    return Result.ok(data={
+        'installed': installed,
+        'ready':     ready,
+    }).to_response()
+
+
+@aftersale_bp.post('/model/download')
+def model_download():
+    import model_manager
+    from result import Result
+    if model_manager.is_model_installed():
+        return Result.ok(message='模型已安装').to_response()
+    started = model_manager.start_download()
+    return Result.ok(data={'started': started}).to_response()
+
+
+@aftersale_bp.get('/model/progress')
+def model_progress():
+    import model_manager
+    from result import Result
+    return Result.ok(data=model_manager.get_download_state()).to_response()

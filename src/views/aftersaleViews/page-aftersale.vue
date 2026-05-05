@@ -3,12 +3,13 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
-import WindowControls      from '@/components/common/WindowControls.vue'
-import AftersaleProcess    from './AftersaleProcess.vue'
-import AftersaleDashboard  from './AftersaleDashboard.vue'
-import AftersaleTable      from './AftersaleTable.vue'
-import http                from '@/api/http.js'
-import { usePermission }   from '@/composables/usePermission'
+import WindowControls        from '@/components/common/WindowControls.vue'
+import AftersaleProcess      from './AftersaleProcess.vue'
+import AftersaleDashboard    from './AftersaleDashboard.vue'
+import AftersaleTable        from './AftersaleTable.vue'
+import ModelDownloadDialog   from '@/components/aftersale/ModelDownloadDialog.vue'
+import http                  from '@/api/http.js'
+import { usePermission }     from '@/composables/usePermission'
 
 // ── 路由 ──────────────────────────────────────────
 const router = useRouter()
@@ -22,13 +23,21 @@ const activeTab    = ref(canEditAftersale ? 'process' : 'chart')   // 'process' 
 const pendingCount = ref(0)
 
 // 子组件引用（用于外部触发刷新）
-const dashboardRef = ref(null)
-const tableRef     = ref(null)
+const dashboardRef        = ref(null)
+const tableRef            = ref(null)
+const modelDownloadDialog = ref(null)
 
 // ── 生命周期 ──────────────────────────────────────
 onMounted(async () => {
   window.electronAPI?.maximizeApp?.()
   await loadPendingCount()
+  // 检测语义模型是否已安装，未安装则提示下载
+  try {
+    const res = await http.get('/api/aftersale/model/status')
+    if (res.success && !res.data.installed) {
+      modelDownloadDialog.value?.open()
+    }
+  } catch { /* 模型检测失败不影响主流程 */ }
 })
 
 // ── 方法 ──────────────────────────────────────────
@@ -89,6 +98,8 @@ function onCaseConfirmed() {
     </main>
 
   </div>
+
+  <ModelDownloadDialog ref="modelDownloadDialog" />
 </template>
 
 <style scoped>

@@ -403,9 +403,8 @@ class AftersaleService:
         items = _repo.get_dict_suggestions(type_filter=type_filter, status=status)
         return Result.ok(data=[s.to_dict() for s in items])
 
-    def accept_dict_suggestion(self, sug_id, target_type=None, canonical=None):
-        sug, err = _repo.accept_dict_suggestion(sug_id, target_type=target_type,
-                                                canonical=canonical)
+    def accept_dict_suggestion(self, sug_id):
+        sug, err = _repo.accept_dict_suggestion(sug_id)
         if err:
             return Result.fail(err)
         return Result.ok(data=sug.to_dict())
@@ -436,24 +435,16 @@ class AftersaleService:
 
     def update_reason_keyword_rules(self, data):
         stopwords = data.get('stopwords') or []
-        fault_terms = data.get('fault_terms') or []
-        component_terms = data.get('component_terms') or []
         if 'short_keep_terms' not in data:
             short_keep_terms = _repo.get_reason_keyword_rules().get('short_keep_terms', [])
         else:
             short_keep_terms = data.get('short_keep_terms')
             if not isinstance(short_keep_terms, list):
                 return Result.fail('short_keep_terms 必须为数组')
-        synonyms = data.get('synonyms') or []
-        if not isinstance(stopwords, list) or not isinstance(fault_terms, list) or not isinstance(component_terms, list):
+        if not isinstance(stopwords, list):
             return Result.fail('词典字段必须为数组')
-        if not isinstance(synonyms, list):
-            return Result.fail('synonyms 必须为数组')
         _repo.replace_reason_keyword_rules(
             stopwords=stopwords,
-            fault_terms=fault_terms,
-            component_terms=component_terms,
-            synonyms=synonyms,
             short_keep_terms=short_keep_terms,
         )
         return Result.ok(data=_repo.get_reason_keyword_rules())
@@ -466,7 +457,7 @@ class AftersaleService:
     def put_product_remark_dict(self, items):
         if not isinstance(items, list):
             return Result.fail('items 必须为数组')
-        valid_types = {'material', 'color', 'drive_type', 'size'}
+        valid_types = {'material', 'color', 'drive_type', 'size', 'series_alias'}
         for item in items:
             if item.get('type') not in valid_types:
                 return Result.fail(f'无效的 type: {item.get("type")}')
@@ -474,6 +465,8 @@ class AftersaleService:
                 return Result.fail('value 不能为空')
             if item.get('type') == 'size' and not (item.get('display') or '').strip():
                 return Result.fail('size 类型必须填写 display（米制表达）')
+            if item.get('type') == 'series_alias' and not (item.get('display') or '').strip():
+                return Result.fail('series_alias 类型必须填写 display（官方系列名）')
         _repo.replace_product_remark_dict(items)
         return Result.ok(data=_repo.get_product_remark_dict())
 
@@ -488,3 +481,20 @@ class AftersaleService:
     def get_series_monthly_by_model_id(self, model_id: int):
         data = _repo.get_series_monthly_by_model_id(model_id)
         return Result.ok(data=data)
+
+    # ── 通用设置 ────────────────────────────────────────────────────────────
+
+    def get_settings(self):
+        return Result.ok(data=_repo.get_settings())
+
+    def update_setting(self, data):
+        key   = (data.get('key') or '').strip()
+        value = data.get('value')
+        if not key:
+            return Result.fail('key 不能为空')
+        if value is None:
+            return Result.fail('value 不能为空')
+        ok, err = _repo.update_setting(key, value)
+        if not ok:
+            return Result.fail(err)
+        return Result.ok(message='保存成功')

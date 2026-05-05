@@ -6,21 +6,27 @@
     <WindowControls :confirm-close="true" confirm-text="确认退出两平米软件库？" />
 
     <main class="main-area">
-      <div class="modules">
-        <div
-          v-for="mod in modules"
-          :key="mod.key"
-          class="module-card"
-          :class="{ disabled: mod.disabled || mod.noPermission }"
-          @click="handleEnter(mod)"
-        >
-          <div class="module-icon">
-            <component :is="mod.iconComp" :size="40" weight="duotone" color="#c4883a" />
+      <div class="module-groups">
+        <div v-for="group in moduleGroups" :key="group.label" class="module-group">
+          <div class="group-label">{{ group.label }}</div>
+          <div class="modules">
+            <div
+              v-for="(mod, i) in group.items"
+              :key="mod.key"
+              class="module-card"
+              :class="{ disabled: mod.disabled || mod.noPermission }"
+              :style="{ animationDelay: `${0.05 + i * 0.07}s` }"
+              @click="handleEnter(mod)"
+            >
+              <div class="module-icon">
+                <component :is="mod.iconComp" :size="40" weight="duotone" color="#c4883a" />
+              </div>
+              <div class="module-name">{{ mod.name }}</div>
+              <div class="module-desc">{{ mod.desc }}</div>
+              <div v-if="mod.disabled" class="module-badge">即将上线</div>
+              <div v-else-if="mod.noPermission" class="module-badge module-badge--noperm">无权限</div>
+            </div>
           </div>
-          <div class="module-name">{{ mod.name }}</div>
-          <div class="module-desc">{{ mod.desc }}</div>
-          <div v-if="mod.disabled" class="module-badge">即将上线</div>
-          <div v-else-if="mod.noPermission" class="module-badge module-badge--noperm">无权限</div>
         </div>
       </div>
     </main>
@@ -84,7 +90,7 @@ import { usePermission } from '@/composables/usePermission'
 import UserSettingsDrawer from '@/components/user/UserSettingsDrawer.vue'
 import UpdateDialog from '@/components/update/UpdateDialog.vue'
 import WindowControls from '@/components/common/WindowControls.vue'
-import { PhCube, PhTruck, PhGear, PhWrench } from '@phosphor-icons/vue'
+import { PhCube, PhTruck, PhDatabase, PhWrench, PhCode } from '@phosphor-icons/vue'
 
 const router         = useRouter()
 const version        = ref('1.0.0')
@@ -120,51 +126,72 @@ onMounted(async () => {
   } catch { }
 })
 
-const { isAdmin, canViewProduct, canViewShipping, canEditShipping, canViewAftersale } = usePermission()
+const { isAdmin, canViewProduct, canViewShipping, canEditShipping, canViewAftersale, canViewRd } = usePermission()
 
 const userInfo    = JSON.parse(localStorage.getItem('user') || '{}')
 const userName    = computed(() => userInfo.display_name || userInfo.username || '游客')
 const userInitial = computed(() => (userName.value?.[0] ?? '?').toUpperCase())
 const isAuthor    = userInfo.username === 'author'
 
+// 模块分组，各组独立渲染
 // noPermission=true：无权限时禁用并显示"无权限"标签
-// author 用户可以看到所有模块（包括开发中）
-const modules = computed(() => [
+// hidden=true：对当前用户不可见
+const moduleGroups = computed(() => [
   {
-    key: 'product',
-    name: '产品库',
-    desc: '产品信息管理与检索',
-    iconComp: PhCube,
-    route: '/product',
-    disabled: false,
-    noPermission: !canViewProduct,
+    label: '业务数据',
+    items: [
+      {
+        key: 'product',
+        name: '产品库',
+        desc: '产品信息管理与检索',
+        iconComp: PhCube,
+        route: '/product',
+        disabled: false,
+        noPermission: !canViewProduct,
+      },
+      {
+        key: 'shipping',
+        name: '发货数据',
+        desc: '发货记录查询与统计',
+        iconComp: PhTruck,
+        route: '/shipping',
+        disabled: false,
+        noPermission: !canViewShipping,
+      },
+      {
+        key: 'aftersale',
+        name: '售后数据',
+        desc: '售后记录查询与分析',
+        iconComp: PhWrench,
+        route: '/aftersale',
+        disabled: false,
+        noPermission: !canViewAftersale,
+      },
+    ],
   },
   {
-    key: 'shipping',
-    name: '发货数据',
-    desc: '发货记录查询与统计',
-    iconComp: PhTruck,
-    route: '/shipping',
-    disabled: false,
-    noPermission: !canViewShipping,
-  },
-  {
-    key: 'data-mgmt',
-    name: '数据管理',
-    desc: '导入数据与操作人配置',
-    iconComp: PhGear,
-    route: '/data-mgmt',
-    disabled: false,
-    noPermission: !canEditShipping,
-  },
-  {
-    key: 'aftersale',
-    name: '售后数据',
-    desc: '售后记录查询与分析',
-    iconComp: PhWrench,
-    route: '/aftersale',
-    disabled: false,
-    noPermission: !canViewAftersale,
+    label: '工具',
+    items: [
+      {
+        key: 'data-mgmt',
+        name: '数据管理',
+        desc: '导入数据与操作人配置',
+        iconComp: PhDatabase,
+        route: '/data-mgmt',
+        disabled: false,
+        noPermission: !canEditShipping,
+      },
+      // 研发部工具：有 rd:view 权限的用户可见
+      {
+        key: 'rd-tools',
+        name: '研发部工具',
+        desc: 'PDM转BOM · 变更单填写',
+        iconComp: PhCode,
+        route: '/rd-tools',
+        disabled: false,
+        noPermission: !canViewRd,
+      },
+    ],
   },
 ])
 
@@ -219,21 +246,57 @@ function handleUserSetting() { settingsDrawer.value?.open() }
 
 .main-area {
   flex: 1; display: flex;
-  align-items: center; justify-content: center;
+  align-items: center; justify-content: flex-start;
   position: relative; z-index: 1;
 }
-.modules { display: flex; gap: 28px; flex-wrap: wrap; justify-content: center; padding: 24px; }
+
+.module-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 16px 48px;
+}
+
+.module-group {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px 20px 18px;
+  backdrop-filter: blur(8px);
+}
+
+.group-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.group-label::before {
+  content: '';
+  display: inline-block;
+  width: 3px;
+  height: 12px;
+  background: var(--accent);
+  border-radius: 2px;
+  opacity: 0.7;
+}
+
+.modules { display: flex; gap: 24px; flex-wrap: wrap; justify-content: flex-start; }
 
 .module-card {
-  position: relative; width: 140px;
+  position: relative; width: 130px;
   display: flex; flex-direction: column;
   align-items: center; gap: 10px;
   cursor: pointer;
   animation: card-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
-.module-card:nth-child(1) { animation-delay: 0.05s; }
-.module-card:nth-child(2) { animation-delay: 0.10s; }
-.module-card:nth-child(3) { animation-delay: 0.15s; }
 
 @keyframes card-in {
   from { opacity: 0; transform: translateY(20px) scale(0.95); }

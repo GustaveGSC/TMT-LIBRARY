@@ -26,9 +26,10 @@ PERMISSIONS = [
     ("aftersale:view",   "查看售后记录与统计"),
     ("aftersale:edit",   "录入/编辑售后记录"),
     ("aftersale:export", "导出售后统计报表"),
-    # 研发数据（预留）
-    ("rd:view", "查看研发相关数据"),
-    ("rd:edit", "编辑研发相关数据"),
+    # 研发数据
+    ("rd:view",  "查看研发相关数据"),
+    ("rd:edit",  "编辑研发相关数据"),
+    ("rd:admin", "研发部管理员：管理变更提醒条目（发布/下架）"),
 ]
 
 app = create_app()
