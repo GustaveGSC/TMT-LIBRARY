@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, shell } from 'electron'
 
 // 只暴露白名单方法给渲染进程，不暴露任何 Node.js 原生模块
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -57,6 +57,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 退出应用
   quitApp: () => ipcRenderer.send('quit-app'),
+
+  // 用系统默认浏览器打开外部链接
+  openExternal: (url: string) => shell.openExternal(url),
 })
 
 // 类型声明（在 src/env.d.ts 中引用）

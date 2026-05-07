@@ -88,6 +88,7 @@ app.whenReady().then(async () => {
   cleanUpdaterCache()
   if (app.isPackaged) await startPython()
   loginWin = createLoginWindow()
+  initUpdater(loginWin)   // 登录页也需要 updater（强制更新遮罩使用同一套逻辑）
 })
 
 app.on('window-all-closed', () => {

@@ -6,6 +6,8 @@ import { ArrowLeft } from '@element-plus/icons-vue'
 import WindowControls from '@/components/common/WindowControls.vue'
 import { PhHouseLine, PhArrowsLeftRight, PhClipboardText, PhBell } from '@phosphor-icons/vue'
 import EcrForm from '@/components/rdTools/EcrForm.vue'
+import EcnForm from '@/components/rdTools/EcnForm.vue'
+import PdmToBomForm from '@/components/rdTools/PdmToBomForm.vue'
 
 // ── 路由 ──────────────────────────────────────────
 const router = useRouter()
@@ -16,9 +18,9 @@ const activeTab = ref('home')
 // ── Tab 定义 ──────────────────────────────────────
 const tabs = [
   { key: 'home',     label: '主页',          icon: PhHouseLine },
-  { key: 'pdm2bom', label: 'PDM转BOM',      icon: PhArrowsLeftRight, coming: true },
+  { key: 'pdm2bom', label: 'PDM转BOM',      icon: PhArrowsLeftRight },
   { key: 'ecr',     label: '变更申请单填写', icon: PhClipboardText },
-  { key: 'ecn',     label: '变更通知单填写', icon: PhBell,            coming: true },
+  { key: 'ecn',     label: '变更通知单填写', icon: PhBell },
 ]
 
 // ── 生命周期 ──────────────────────────────────────
@@ -80,10 +82,8 @@ function handleBack() {
       </div>
 
       <!-- PDM转BOM -->
-      <div v-show="activeTab === 'pdm2bom'" class="tab-panel coming-panel">
-        <component :is="PhArrowsLeftRight" :size="48" weight="duotone" color="#c4883a" style="opacity:0.4" />
-        <div class="coming-title">PDM 转 BOM</div>
-        <div class="coming-desc">从 PDM 导出文件自动转换为标准 BOM 格式，功能开发中</div>
+      <div v-show="activeTab === 'pdm2bom'" class="tab-panel pdm2bom-panel">
+        <PdmToBomForm />
       </div>
 
       <!-- 变更申请单填写 -->
@@ -92,10 +92,8 @@ function handleBack() {
       </div>
 
       <!-- 变更通知单填写 -->
-      <div v-show="activeTab === 'ecn'" class="tab-panel coming-panel">
-        <component :is="PhBell" :size="48" weight="duotone" color="#c4883a" style="opacity:0.4" />
-        <div class="coming-title">变更通知单填写</div>
-        <div class="coming-desc">ECN 变更通知单填写与导出，功能开发中</div>
+      <div v-show="activeTab === 'ecn'" class="tab-panel ecn-panel">
+        <EcnForm />
       </div>
 
     </main>
@@ -212,9 +210,11 @@ function handleBack() {
 }
 .coming-desc { font-size: 13px; color: var(--text-muted); text-align: center; max-width: 280px; line-height: 1.6; }
 
-.ecr-panel {
+.ecr-panel,
+.ecn-panel,
+.pdm2bom-panel {
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
+  overflow: hidden;
 }
 </style>

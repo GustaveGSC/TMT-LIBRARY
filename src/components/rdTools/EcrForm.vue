@@ -29,6 +29,7 @@ const CHANGE_TYPE_OPTS  = ['设计变更', '制程变更', '其他']
 const DISTRIBUTION_OPTS = ['研发', '业务', '采购', '生产', '生管', '品牌', '服务', '品管']
 const REASON_OPTS       = ['品质不良', '价格变动', '设计优化', '结构优化', '成本优化', '工艺优化', '其他']
 
+
 // ── 响应式状态 ────────────────────────────────────
 const form = reactive({
   issuing_unit:         '研发部',
@@ -38,7 +39,7 @@ const form = reactive({
   change_type:          '设计变更',
   change_type_custom:   '',
   distribution:         ['采购', '生产', '生管', '品管'],
-  change_reason:        '',
+  change_reason:        '结构优化',
   change_reason_custom: '',
   change_subject:       '',
   change_desc:          '',
@@ -46,6 +47,7 @@ const form = reactive({
 
 const exportLoading = ref(false)
 const showPreview   = ref(false)
+
 
 // 变更提醒（从后端加载，在架条目）
 const reminders        = ref([])         // 当前在架提醒列表（db 数据）
@@ -73,6 +75,39 @@ const mgmtReminders    = ref([])         // 全部提醒（含下架历史）
 const mgmtLoading      = ref(false)
 const newReminder      = reactive({ content: '', notes: '' })
 const createLoading    = ref(false)
+const editingId        = ref(null)       // 当前正在编辑的提醒 id
+const editForm         = reactive({ content: '', notes: '' })
+const editLoading      = ref(false)
+
+function startEdit(item) {
+  editingId.value    = item.id
+  editForm.content   = item.content
+  editForm.notes     = item.notes || ''
+}
+function cancelEdit() {
+  editingId.value = null
+}
+async function handleUpdateReminder(id) {
+  if (!editForm.content.trim()) { ElMessage.warning('提醒内容不能为空'); return }
+  editLoading.value = true
+  try {
+    const res = await http.put(`/api/rd/reminders/${id}`, {
+      content: editForm.content.trim(),
+      notes:   editForm.notes.trim(),
+    }, { headers: _authHeaders() })
+    if (res.success) {
+      const item = mgmtReminders.value.find(r => r.id === id)
+      if (item) { item.content = res.data.content; item.notes = res.data.notes }
+      editingId.value = null
+      await fetchReminders()
+      ElMessage.success('已更新')
+    } else {
+      ElMessage.error(res.message || '更新失败')
+    }
+  } finally {
+    editLoading.value = false
+  }
+}
 
 async function openMgmtDialog() {
   showMgmtDialog.value = true
@@ -150,6 +185,25 @@ const allChanges = computed(() => {
   return list
 })
 
+// 预览用：处理 cancel+add 对的研发列合并显示
+const previewRows = computed(() => {
+  const rows = allChanges.value
+  const result = []
+  let i = 0
+  while (i < rows.length) {
+    const ch = rows[i]
+    if (ch.row_type === 'cancel' && i + 1 < rows.length && rows[i + 1].row_type === 'add') {
+      result.push({ ...ch,          rdText: ch.change_kind || '', rdRowspan: 2, rdSkip: false })
+      result.push({ ...rows[i + 1], rdText: '',                   rdRowspan: 1, rdSkip: true  })
+      i += 2
+    } else {
+      result.push({ ...ch, rdText: ch.qty_desc || ch.change_kind || '', rdRowspan: 1, rdSkip: false })
+      i++
+    }
+  }
+  return result
+})
+
 // ── 生命周期 ──────────────────────────────────────
 onMounted(() => {
   form.ecr_code = generateEcrCode(false)
@@ -209,7 +263,7 @@ function diffRowsFor(group) {
         drawing_after:  ch.row_type === 'added'   ? ch.drawing : '',
         spec_before:    ch.row_type === 'deleted' ? ch.spec : '',
         spec_after:     ch.row_type === 'added'   ? ch.spec : '',
-        change_content: kind,
+        change_content: ch.qty_desc ? `数量变更 ${ch.qty_desc}` : kind,
         row_type:       ch.row_type,
       })
       i++
@@ -331,7 +385,7 @@ function resetForm() {
   form.change_type          = '设计变更'
   form.change_type_custom   = ''
   form.distribution         = ['采购', '生产', '生管', '品管']
-  form.change_reason        = ''
+  form.change_reason        = '结构优化'
   form.change_reason_custom = ''
   form.change_subject       = ''
   form.change_desc          = ''
@@ -629,25 +683,43 @@ function resetForm() {
         class="mgmt-item"
         :class="{ 'mgmt-item--inactive': !item.is_active }"
       >
-        <div class="mgmt-item-main">
-          <div class="mgmt-item-content">{{ item.content }}</div>
-          <div v-if="item.notes" class="mgmt-item-notes">{{ item.notes }}</div>
-          <div class="mgmt-item-meta">
-            {{ item.created_at }}
-            <template v-if="item.created_by"> · {{ item.created_by }}</template>
-            <el-tag v-if="!item.is_active" size="small" type="info" style="margin-left:8px">已下架</el-tag>
+        <!-- 编辑模式 -->
+        <template v-if="editingId === item.id">
+          <div class="mgmt-item-main">
+            <el-input v-model="editForm.content" placeholder="提醒内容" maxlength="200" show-word-limit />
+            <el-input v-model="editForm.notes" type="textarea" :rows="2" placeholder="备注说明（选填）" style="margin-top:6px" />
           </div>
-        </div>
-        <div class="mgmt-item-actions">
-          <el-button v-if="item.is_active" size="small" type="danger" plain @click="handleDeactivate(item.id)">下架</el-button>
-          <el-button v-else size="small" @click="handleActivate(item.id)">重新上架</el-button>
-        </div>
+          <div class="mgmt-item-actions">
+            <el-button size="small" type="primary" :loading="editLoading" @click="handleUpdateReminder(item.id)">保存</el-button>
+            <el-button size="small" @click="cancelEdit">取消</el-button>
+          </div>
+        </template>
+        <!-- 展示模式 -->
+        <template v-else>
+          <div class="mgmt-item-main">
+            <div class="mgmt-item-content">{{ item.content }}</div>
+            <div v-if="item.notes" class="mgmt-item-notes">{{ item.notes }}</div>
+            <div class="mgmt-item-meta">
+              {{ item.created_at }}
+              <template v-if="item.created_by"> · {{ item.created_by }}</template>
+              <el-tag v-if="!item.is_active" size="small" type="info" style="margin-left:8px">已下架</el-tag>
+            </div>
+          </div>
+          <div class="mgmt-item-actions">
+            <el-button size="small" @click="startEdit(item)">编辑</el-button>
+            <el-button v-if="item.is_active" size="small" type="danger" plain @click="handleDeactivate(item.id)">下架</el-button>
+            <el-button v-else size="small" @click="handleActivate(item.id)">重新上架</el-button>
+          </div>
+        </template>
       </div>
     </div>
   </el-dialog>
 
   <!-- ── 预览弹窗 ──────────────────────────────── -->
-  <el-dialog v-model="showPreview" title="变更申请单预览" width="min(1200px, 96vw)" :close-on-click-modal="true" draggable style="--el-dialog-margin-top:3vh">
+  <el-dialog v-model="showPreview" title="变更申请单预览" width="min(1200px, 96vw)" :close-on-click-modal="true" draggable
+    style="--el-dialog-margin-top:3vh"
+    class="preview-dialog"
+  >
     <div class="preview-sheet">
 
       <div class="preview-top">
@@ -693,6 +765,7 @@ function resetForm() {
           <col class="c-seq" />
           <col class="c-main" />
           <col class="c-draw" />
+          <col class="c-level" />
           <col class="c-name" span="2" />
           <col class="c-spec" span="2" />
           <col class="c-meth" />
@@ -706,6 +779,7 @@ function resetForm() {
             <th rowspan="2">序号</th>
             <th rowspan="2">主件图号</th>
             <th rowspan="2">图号</th>
+            <th rowspan="2">层次</th>
             <th rowspan="2" colspan="2">品名</th>
             <th rowspan="2" colspan="2">规格</th>
             <th rowspan="2">变更方式</th>
@@ -719,21 +793,24 @@ function resetForm() {
           </tr>
         </thead>
         <tbody>
-          <template v-if="allChanges.length">
-            <tr v-for="ch in allChanges" :key="ch.seq" :class="`detail-row--${ch.row_type}`">
+          <template v-if="previewRows.length">
+            <tr v-for="ch in previewRows" :key="ch.seq + ch.row_type" :class="`detail-row--${ch.row_type}`">
               <td class="tc">{{ ch.seq }}</td>
               <td>{{ ch.main_drawing || '' }}</td>
               <td>{{ ch.drawing      || '' }}</td>
+              <td class="tc">{{ ch.level || '' }}</td>
               <td colspan="2" class="tl">{{ ch.name }}</td>
               <td colspan="2" class="tl">{{ ch.spec }}</td>
               <td class="tl">{{ ch.change_method }}</td>
-              <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+              <!-- 研发列：cancel+add 对合并，填入变更类型 -->
+              <td v-if="!ch.rdSkip" :rowspan="ch.rdRowspan" class="tc rd-cell">{{ ch.rdText }}</td>
+              <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
             </tr>
           </template>
           <template v-else>
             <tr v-for="n in 6" :key="n">
               <td class="tc">{{ n }}</td>
-              <td></td><td></td><td colspan="2"></td><td colspan="2"></td>
+              <td></td><td></td><td></td><td colspan="2"></td><td colspan="2"></td>
               <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
             </tr>
           </template>
@@ -1027,6 +1104,7 @@ function resetForm() {
 .diff-row--added   { background: rgba(50,160,80,0.05);  }
 .diff-row--deleted { background: rgba(192,64,42,0.05);  }
 
+
 /* ── 预览样式 ── */
 .preview-sheet {
   font-family: '宋体', 'SimSun', serif;
@@ -1058,19 +1136,22 @@ function resetForm() {
 .preview-detail th      { background: #f0ede6; font-weight: 600; text-align: center; font-size: 10px; padding: 3px 3px; }
 .preview-detail td      { text-align: center; height: 20px; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 列宽：合计约 960px，可在 1200px 弹窗内完整显示 */
-.preview-detail col.c-seq   { width: 30px; }
-.preview-detail col.c-main  { width: 100px; }
-.preview-detail col.c-draw  { width: 100px; }
-.preview-detail col.c-name  { width: 65px; }   /* ×2 = 130px */
-.preview-detail col.c-spec  { width: 85px; }   /* ×2 = 170px */
-.preview-detail col.c-meth  { width: 55px; }
-.preview-detail col.c-rep   { width: 70px; }
-.preview-detail col.c-dept  { width: 34px; }   /* ×6 = 204px */
-.preview-detail col.c-disp  { width: 60px; }
-.preview-detail col.c-resp  { width: 50px; }
+.preview-detail col.c-seq   { width: 28px; }
+.preview-detail col.c-main  { width: 95px; }
+.preview-detail col.c-draw  { width: 95px; }
+.preview-detail col.c-level { width: 36px; }
+.preview-detail col.c-name  { width: 60px; }   /* ×2 = 120px */
+.preview-detail col.c-spec  { width: 80px; }   /* ×2 = 160px */
+.preview-detail col.c-meth  { width: 50px; }
+.preview-detail col.c-rep   { width: 68px; }
+.preview-detail col.c-dept  { width: 32px; }   /* ×6 = 192px */
+.preview-detail col.c-disp  { width: 55px; }
+.preview-detail col.c-resp  { width: 48px; }
 .preview-detail td.tl   { text-align: left; }
 .preview-detail td.tc   { text-align: center; color: #666; }
-.detail-row--cancel     { background: rgba(192,64,42,0.07); }
+.preview-detail td.rd-cell { font-size: 10px; color: #555; vertical-align: middle; }
+.detail-row--cancel,
+.detail-row--deleted    { background: rgba(192,64,42,0.07); }
 .detail-row--add        { background: rgba(50,160,80,0.07); }
 .detail-row--added      { background: rgba(50,160,80,0.07); }
 .detail-row--deleted    { background: rgba(192,64,42,0.07); }
@@ -1221,5 +1302,17 @@ function resetForm() {
 .mgmt-item-content { font-size: 13px; font-weight: 600; color: var(--text-primary); word-break: break-word; }
 .mgmt-item-notes   { font-size: 12px; color: var(--text-muted); word-break: break-word; white-space: pre-wrap; }
 .mgmt-item-meta    { font-size: 11px; color: #a09080; margin-top: 2px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
-.mgmt-item-actions { flex-shrink: 0; }
+.mgmt-item-actions { flex-shrink: 0; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+
+</style>
+
+<!-- 非 scoped：el-dialog 通过 teleport 渲染到 body，scoped 样式无法穿透 -->
+<style>
+.preview-dialog .el-dialog__body {
+  max-height: calc(80vh - 120px);
+  overflow-y: auto;
+}
+.preview-dialog .el-dialog__body::-webkit-scrollbar       { width: 4px; }
+.preview-dialog .el-dialog__body::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.18); border-radius: 2px; }
+.preview-dialog .el-dialog__body::-webkit-scrollbar-track { background: transparent; }
 </style>

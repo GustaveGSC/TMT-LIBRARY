@@ -97,14 +97,8 @@
     </div>
   </div>
 
-  <!-- 强制更新遮罩 -->
-  <div v-if="showForceUpdate" class="force-overlay">
-    <div class="force-box">
-      <div class="force-title">发现新版本 {{ latestVersion }}</div>
-      <div class="force-desc">{{ updateDesc || '当前版本需要更新才能继续使用，请下载最新版本。' }}</div>
-      <button class="force-btn" @click="handleForceDownload">立即下载更新</button>
-    </div>
-  </div>
+  <!-- 强制更新弹窗（与主页同一套 electron-updater 逻辑） -->
+  <UpdateDialog ref="updateDialog" />
 </template>
 
 <script setup>
@@ -115,18 +109,15 @@ import { checkUpdateType } from '@/utils/version'
 import http from '@/api/http'
 import GToast from '@/components/common/GToast.vue'
 import WindowControls from '@/components/common/WindowControls.vue'
+import UpdateDialog from '@/components/update/UpdateDialog.vue'
 
 const router = useRouter()
 const toast  = ref(null)
+const updateDialog = ref(null)
 const mode       = ref('login')
 const loading    = ref(false)
 const isFlipping = ref(false)
 const version    = ref('1.0.0')
-const updateType      = ref('none')
-const showForceUpdate = ref(false)
-const latestVersion   = ref('')
-const latestDownload  = ref('')
-const updateDesc      = ref('')
 
 window.electronAPI?.getVersion().then(v => { version.value = v })
 
@@ -154,27 +145,23 @@ onMounted(async () => {
   if (window.electronAPI) {
     version.value = await window.electronAPI.getVersion()
   }
-  console.log('本地版本:', version.value)
 
   try {
     const res = await http.get('/api/version/latest')
-    console.log('接口返回:', res)
     if (res.success && res.data) {
       const type = checkUpdateType(version.value, res.data.version)
-      console.log('updateType:', type)
-      console.log('latest version:', res.data.version)
-      
-      updateType.value     = type
-      latestVersion.value  = res.data.version
-      latestDownload.value = res.data.download_url
-      updateDesc.value     = res.data.description
-
-      if (type === 'force') showForceUpdate.value = true
-
+      if (type === 'force') {
+        await window.electronAPI?.updater.check()
+        updateDialog.value?.open({
+          latestVersion:  res.data.version,
+          currentVersion: version.value,
+          releaseDate:    res.data.releaseDate,
+          description:    res.data.description,
+          isForce:        true,
+        })
+      }
     }
-  } catch (e) {
-    console.error('版本检测失败:', e)
-  }
+  } catch { }
 })
 
 function switchMode(target) {
@@ -260,12 +247,6 @@ async function handleGuest() {
   }
 }
 
-function handleForceDownload() {
-  window.electronAPI?.openExternal(latestDownload.value)
-  window.electronAPI?.quitApp()
-}
-
-function handleClose() { window.electronAPI?.quitApp() }
 </script>
 
 <style scoped>
@@ -457,53 +438,4 @@ function handleClose() { window.electronAPI?.quitApp() }
 .fade-slide-enter-from { opacity: 0; transform: translateY(8px); }
 .fade-slide-leave-to   { opacity: 0; transform: translateY(-8px); }
 
-/* ── 强制更新遮罩 ──────────────────────────────── */
-.force-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  background: rgba(237, 232, 220, 0.88);
-  backdrop-filter: blur(8px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.force-box {
-  width: 300px;
-  background: var(--bg-card);
-  border: 1.5px solid var(--border);
-  border-radius: 18px;
-  padding: 36px 28px 28px;
-  text-align: center;
-  box-shadow: 0 8px 40px rgba(150,100,50,0.15);
-}
-.force-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 10px;
-}
-.force-desc {
-  font-size: 13px;
-  color: var(--text-muted);
-  line-height: 1.7;
-  margin-bottom: 24px;
-  white-space: pre-line;
-}
-.force-btn {
-  width: 100%;
-  padding: 12px;
-  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
-  border: none;
-  border-radius: 10px;
-  color: #fff;
-  font-size: 13px;
-  font-family: inherit;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  cursor: pointer;
-  box-shadow: 0 4px 14px rgba(196,136,58,0.3);
-  transition: all 0.2s;
-}
-.force-btn:hover { opacity: 0.92; transform: translateY(-1px); }
 </style>

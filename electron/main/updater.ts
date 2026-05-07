@@ -73,10 +73,9 @@ export function initUpdater(win: BrowserWindow) {
     }
   })
 
-  // 开始下载
+  // 开始下载（更新 manifest 已在 updater:check 时缓存，直接下载即可）
   ipcMain.handle('updater:download', async () => {
     try {
-      await autoUpdater.checkForUpdates()
       await autoUpdater.downloadUpdate()
     } catch (e: any) {
       sendToRenderer('updater:error', e.message)

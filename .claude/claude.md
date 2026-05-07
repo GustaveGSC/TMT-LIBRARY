@@ -9,7 +9,7 @@
 - `frontend-data-mgmt.md` — 数据管理 & 发货图表
 - `frontend-aftersale.md` — 售后数据（前端面板、简称/原因词典配置入口、与后端的交互说明）
 - `frontend-admin.md` — 管理页注意事项
-- `frontend-rdtools.md` — 研发工具页（待补充）
+- `frontend-rdtools.md` — 研发工具页（ECR变更申请单、ECN变更通知单、变更提醒）
 
 ## 技术栈
 - **桌面端**：Electron + Vue 3 + Vite（electron-vite）
@@ -92,5 +92,5 @@ const { isAdmin, can, canEditProduct, canViewProduct, canDeleteProduct } = usePe
 ## 版本规则
 - `Beta x.x.x` 或主/次版本变更 → 强制更新
 - 仅修订版变更 → 可选更新（红点提示）
-- 当前版本：`1.1.0`（以 package.json 为准）
+- 当前版本：`1.1.1`（以 package.json 为准）
 - OSS上传 key 格式：`tmt-library/releases/{filename}`（含前缀）
