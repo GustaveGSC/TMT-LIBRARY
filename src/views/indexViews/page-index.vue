@@ -202,12 +202,16 @@ function handleEnter(mod) {
 
 async function handleUpdate() {
   if (updateType.value === 'none') {
-    // 已在 onMounted 完成检查，直接提示，无需再触发 Electron updater
     ElMessageBox.alert('当前已是最新版本', '检查更新', {
       confirmButtonText: '确定',
       type: 'success',
     })
     return
+  }
+  // optional 更新未在 onMounted 触发 electron-updater，此处确保 updateInfo 已加载
+  // force 更新重复调用无害
+  if (updateType.value === 'optional') {
+    await window.electronAPI?.updater.check()
   }
   updateDialog.value?.open({
     latestVersion:  latestInfo.value?.version    || '',
