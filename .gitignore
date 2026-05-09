@@ -9,16 +9,20 @@ out/
 dist/
 dist-electron/
 release/
+release*/
 backend/build/
 backend/dist/
 *.spec
+
+# Logs
+backend/logs/
 
 # Environment & secrets
 backend/.env
 .env
 .env.*
 
-# Logs
+# Logs (npm)
 *.log
 npm-debug.log*
 
@@ -36,6 +40,9 @@ backend/.venv/
 
 # Electron build cache
 .electron-builder-cache/
+
+# Python backend binary（体积过大，不纳入版本控制）
+electron/resources/python-backend/backend.exe
 
 # Temp
 *.tmp

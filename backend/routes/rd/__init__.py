@@ -2,7 +2,7 @@ from flask import Blueprint, request, Response
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
-import io, urllib.parse, os, re
+import io, urllib.parse, os, re, sys
 
 rd_bp = Blueprint('rd', __name__)
 
@@ -1297,10 +1297,87 @@ def activate_reminder(rid):
 
 
 # ─────────────────────────────────────────────────────────────
+# 个人笔记（按用户隔离）
+# ─────────────────────────────────────────────────────────────
+
+@rd_bp.get('/notes')
+def list_notes():
+    """返回当前用户的笔记列表（按创建时间倒序）"""
+    from result import Result
+    from database.models.rd import EcrNote
+    from database.base import db
+    username = request.headers.get('X-Username', '').strip()
+    if not username:
+        return Result.fail('未识别用户').to_response()
+    items = EcrNote.query.filter_by(username=username).order_by(EcrNote.created_at.desc()).all()
+    return Result.ok([i.to_dict() for i in items]).to_response()
+
+
+@rd_bp.post('/notes')
+def create_note():
+    """新建一条笔记"""
+    from result import Result
+    from database.models.rd import EcrNote
+    from database.base import db
+    username = request.headers.get('X-Username', '').strip()
+    if not username:
+        return Result.fail('未识别用户').to_response()
+    data = request.get_json(silent=True) or {}
+    content = (data.get('content') or '').strip()
+    if not content:
+        return Result.fail('笔记内容不能为空').to_response()
+    note = EcrNote(username=username, content=content)
+    db.session.add(note)
+    db.session.commit()
+    return Result.ok(note.to_dict()).to_response()
+
+
+@rd_bp.put('/notes/<int:nid>')
+def update_note(nid):
+    """编辑笔记内容（只能改自己的）"""
+    from result import Result
+    from database.models.rd import EcrNote
+    from database.base import db
+    username = request.headers.get('X-Username', '').strip()
+    note = EcrNote.query.get(nid)
+    if not note or note.username != username:
+        return Result.fail('笔记不存在或无权限').to_response()
+    data = request.get_json(silent=True) or {}
+    content = (data.get('content') or '').strip()
+    if not content:
+        return Result.fail('笔记内容不能为空').to_response()
+    note.content = content
+    db.session.commit()
+    return Result.ok(note.to_dict()).to_response()
+
+
+@rd_bp.delete('/notes/<int:nid>')
+def delete_note(nid):
+    """删除一条笔记（只能删自己的）"""
+    from result import Result
+    from database.models.rd import EcrNote
+    from database.base import db
+    username = request.headers.get('X-Username', '').strip()
+    note = EcrNote.query.get(nid)
+    if not note or note.username != username:
+        return Result.fail('笔记不存在或无权限').to_response()
+    db.session.delete(note)
+    db.session.commit()
+    return Result.ok(None).to_response()
+
+
+# ─────────────────────────────────────────────────────────────
 # PDM 转 BOM
 # ─────────────────────────────────────────────────────────────
 
-_PTB_RESOURCES_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'resources')
+def _get_resources_dir():
+    # PyInstaller onefile 解压到 sys._MEIPASS，resources 打包进去后在 _MEIPASS/resources/
+    # 开发时用 __file__ 相对路径
+    if getattr(sys, 'frozen', False):
+        return os.path.join(sys._MEIPASS, 'resources')
+    return os.path.join(os.path.dirname(__file__), '..', '..', 'resources')
+
+_PTB_RESOURCES_DIR = _get_resources_dir()
 
 # PDM 文件中需要校验非空的列名（来自 page_PTB.py list_checked_column）
 _PTB_CHECKED_COLUMNS = [
@@ -1445,7 +1522,7 @@ def pdm2bom_process():
         if not any(v for v in raw_row if v is not None):
             continue
         code = str(raw_row[code_idx]) if raw_row[code_idx] is not None else ''
-        if '.' in code or code[:6] == '14ST10':
+        if '.' in code or code[:6] == '14ST10' or code == '-':
             continue
         level_val = str(raw_row[level_idx]) if raw_row[level_idx] is not None else ''
         depth = len(level_val.split('.'))

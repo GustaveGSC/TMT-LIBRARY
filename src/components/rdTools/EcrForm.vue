@@ -1,8 +1,8 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
 import { ref, reactive, computed, onMounted, nextTick } from 'vue'
-import { ElMessage } from 'element-plus'
-import { Close, Plus, Setting } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Close, Plus, Setting, EditPen } from '@element-plus/icons-vue'
 import http from '@/api/http.js'
 import logoUrl from '@/assets/logo-banner.png'
 import { usePermission } from '@/composables/usePermission'
@@ -29,6 +29,31 @@ const CHANGE_TYPE_OPTS  = ['设计变更', '制程变更', '其他']
 const DISTRIBUTION_OPTS = ['研发', '业务', '采购', '生产', '生管', '品牌', '服务', '品管']
 const REASON_OPTS       = ['品质不良', '价格变动', '设计优化', '结构优化', '成本优化', '工艺优化', '其他']
 
+
+// ── 变更提醒区高度拖拽 ────────────────────────────
+const reminderHeight    = ref(200)          // px，默认高度
+const reminderCollapsed = ref(false)        // 是否合拢
+const REMINDER_MIN      = 80               // 展开时最小高度
+const REMINDER_MAX      = 520              // 最大高度
+
+function startReminderResize(e) {
+  if (reminderCollapsed.value) return
+  e.preventDefault()
+  const startY = e.clientY
+  const startH = reminderHeight.value
+
+  function onMove(ev) {
+    // 向上拖 → 增大高度；向下拖 → 减小高度
+    const delta = startY - ev.clientY
+    reminderHeight.value = Math.min(REMINDER_MAX, Math.max(REMINDER_MIN, startH + delta))
+  }
+  function onUp() {
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup',   onUp)
+  }
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup',   onUp)
+}
 
 // ── 响应式状态 ────────────────────────────────────
 const form = reactive({
@@ -208,6 +233,7 @@ const previewRows = computed(() => {
 onMounted(() => {
   form.ecr_code = generateEcrCode(false)
   fetchReminders()
+  fetchNotes()
 })
 
 // ── 工具函数 ──────────────────────────────────────
@@ -377,6 +403,114 @@ async function handleExport() {
   }
 }
 
+// ── 笔记面板 ──────────────────────────────────────
+const notesOpen    = ref(false)
+const notesWidth   = ref(272)               // px，可拖拽调整
+const NOTES_W_MIN  = 200
+const NOTES_W_MAX  = 520
+const notesList    = ref([])
+const noteInput    = ref('')
+const notesLoading = ref(false)
+const noteAdding   = ref(false)
+const editingNoteId   = ref(null)   // 当前正在编辑的笔记 id
+const editingNoteText = ref('')
+
+// 请求头携带用户名，后端按此隔离数据
+function _noteHeaders() {
+  return { 'X-Username': _user.username || '' }
+}
+
+async function fetchNotes() {
+  notesLoading.value = true
+  try {
+    const res = await http.get('/api/rd/notes', { headers: _noteHeaders() })
+    if (res.success) notesList.value = res.data
+  } finally {
+    notesLoading.value = false
+  }
+}
+
+function startNotesResize(e) {
+  e.preventDefault()
+  const startX = e.clientX
+  const startW = notesWidth.value
+  function onMove(ev) {
+    // 向左拖 → 增大宽度；向右拖 → 减小宽度
+    const delta = startX - ev.clientX
+    notesWidth.value = Math.min(NOTES_W_MAX, Math.max(NOTES_W_MIN, startW + delta))
+  }
+  function onUp() {
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup',   onUp)
+  }
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup',   onUp)
+}
+
+async function addNote() {
+  const text = noteInput.value.trim()
+  if (!text) return
+  noteAdding.value = true
+  try {
+    const res = await http.post('/api/rd/notes', { content: text }, { headers: _noteHeaders() })
+    if (res.success) {
+      notesList.value.unshift(res.data)
+      noteInput.value = ''
+    } else {
+      ElMessage.error(res.message || '添加失败')
+    }
+  } finally {
+    noteAdding.value = false
+  }
+}
+
+function startEditNote(note) {
+  editingNoteId.value   = note.id
+  editingNoteText.value = note.content || note.text || ''
+}
+
+function cancelEditNote() {
+  editingNoteId.value   = null
+  editingNoteText.value = ''
+}
+
+async function saveEditNote(id) {
+  const text = editingNoteText.value.trim()
+  if (!text) return
+  const res = await http.put(`/api/rd/notes/${id}`, { content: text }, { headers: _noteHeaders() })
+  if (res.success) {
+    const item = notesList.value.find(n => n.id === id)
+    if (item) { item.content = res.data.content; item.text = res.data.content }
+    cancelEditNote()
+  } else {
+    ElMessage.error(res.message || '保存失败')
+  }
+}
+
+async function deleteNote(id) {
+  try {
+    await ElMessageBox.confirm('确认删除这条笔记？', '删除确认', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+      confirmButtonClass: 'el-button--danger',
+    })
+  } catch {
+    return  // 用户点取消
+  }
+  const res = await http.delete(`/api/rd/notes/${id}`, { headers: _noteHeaders() })
+  if (res.success) {
+    notesList.value = notesList.value.filter(n => n.id !== id)
+  } else {
+    ElMessage.error(res.message || '删除失败')
+  }
+}
+
+function handleNoteKeydown(e) {
+  // Ctrl/Cmd + Enter 提交
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') addNote()
+}
+
 // ── 重置 ──────────────────────────────────────────
 function resetForm() {
   form.issuing_unit         = '研发部'
@@ -402,6 +536,10 @@ function resetForm() {
 
 <template>
   <div class="ecr-form-wrap">
+
+    <!-- ── 中部主体：表单区 + 笔记面板 + 功能侧栏 ── -->
+    <div class="ecr-body">
+
     <div class="ecr-scroll-area">
     <div class="ecr-form">
 
@@ -486,9 +624,20 @@ function resetForm() {
         </div>
 
         <div class="form-actions">
-          <el-button @click="resetForm">重置</el-button>
-          <el-button @click="handlePreview">预览</el-button>
-          <el-button type="primary" :loading="exportLoading" @click="handleExport">导出 XLSX</el-button>
+          <!-- 笔记按钮：跑道圆形，靠左 -->
+          <button
+            class="notes-pill-btn"
+            :class="{ 'notes-pill-btn--active': notesOpen }"
+            @click="notesOpen = !notesOpen"
+          >
+            <el-icon><EditPen /></el-icon>
+            <span>笔记</span>
+          </button>
+          <div class="form-actions-right">
+            <el-button @click="resetForm">重置</el-button>
+            <el-button @click="handlePreview">预览</el-button>
+            <el-button type="primary" :loading="exportLoading" @click="handleExport">导出 XLSX</el-button>
+          </div>
         </div>
 
       </div>
@@ -608,40 +757,126 @@ function resetForm() {
     </div>
     </div><!-- /ecr-scroll-area -->
 
+    <!-- ── 笔记悬浮入口（右上角） ──────────────── -->
+    <!-- ── 笔记抽屉（覆盖，从右滑入） ──────────── -->
+    <Transition name="notes-drawer">
+      <div v-if="notesOpen" class="notes-drawer" :style="{ width: notesWidth + 'px' }">
+        <!-- 左侧拖拽手柄 -->
+        <div class="notes-resize-handle" @mousedown="startNotesResize" />
+        <div class="notes-drawer-header">
+          <span class="notes-drawer-title">笔记</span>
+          <div class="notes-drawer-actions">
+            <!-- 最小化（收起）按钮 -->
+            <button class="notes-action-btn notes-action-btn--minimize" title="收起" @click="notesOpen = false">
+              <span class="minimize-bar" />
+            </button>
+          </div>
+        </div>
+
+        <!-- 输入区 -->
+        <div class="notes-input-area">
+          <textarea
+            v-model="noteInput"
+            class="notes-input"
+            placeholder="记录一条笔记…"
+            rows="3"
+            @keydown="handleNoteKeydown"
+          />
+          <div class="notes-input-footer">
+            <span class="notes-input-hint">Ctrl+Enter 提交</span>
+            <button class="notes-add-btn" :disabled="noteAdding" @click="addNote">{{ noteAdding ? '…' : '添加' }}</button>
+          </div>
+        </div>
+
+        <!-- 笔记列表 -->
+        <div class="notes-list">
+          <div v-if="notesLoading" class="notes-empty">加载中…</div>
+          <div v-else-if="!notesList.length" class="notes-empty">暂无笔记</div>
+          <TransitionGroup name="note-item" tag="div" class="notes-list-inner">
+            <div v-for="note in notesList" :key="note.id" class="note-item">
+              <!-- 编辑模式 -->
+              <template v-if="editingNoteId === note.id">
+                <textarea
+                  v-model="editingNoteText"
+                  class="note-edit-input"
+                  @keydown.ctrl.enter="saveEditNote(note.id)"
+                  @keydown.esc="cancelEditNote"
+                />
+                <div class="note-edit-actions">
+                  <button class="note-save-btn" @click="saveEditNote(note.id)">保存</button>
+                  <button class="note-cancel-btn" @click="cancelEditNote">取消</button>
+                </div>
+              </template>
+              <!-- 展示模式 -->
+              <template v-else>
+                <div class="note-item-text">{{ note.content || note.text }}</div>
+                <div class="note-item-footer">
+                  <span class="note-item-time">{{ note.time }}</span>
+                  <div class="note-item-btns">
+                    <button class="note-edit-btn" title="编辑" @click="startEditNote(note)">编辑</button>
+                    <button class="note-delete-btn" title="删除" @click="deleteNote(note.id)">
+                      <el-icon><Close /></el-icon>
+                    </button>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </TransitionGroup>
+        </div>
+      </div>
+    </Transition>
+
+    </div><!-- /ecr-body -->
+
     <!-- ── 底部：变更提醒项 ────────────────────── -->
-    <div class="ecr-reminder">
+    <div
+      class="ecr-reminder"
+      :class="{ 'ecr-reminder--collapsed': reminderCollapsed }"
+      :style="reminderCollapsed ? {} : { flex: `0 0 ${reminderHeight}px` }"
+    >
+      <!-- 拖拽手柄 -->
+      <div
+        class="reminder-resize-handle"
+        :class="{ 'reminder-resize-handle--disabled': reminderCollapsed }"
+        @mousedown="startReminderResize"
+      />
+
       <div class="section-label">
+        <!-- 合拢/展开箭头（最左） -->
+        <span class="reminder-collapse-icon" :class="{ 'reminder-collapse-icon--up': reminderCollapsed }" @click="reminderCollapsed = !reminderCollapsed">▾</span>
         变更提醒
-        <span class="section-tip">在架提醒需全部勾选确认后方可导出</span>
-        <button v-if="canAdminRd" class="btn-mgmt-reminder" @click="openMgmtDialog">
+        <span v-if="!reminderCollapsed" class="section-tip">在架提醒需全部勾选确认后方可导出</span>
+        <button v-if="canAdminRd && !reminderCollapsed" class="btn-mgmt-reminder" @click="openMgmtDialog">
           <el-icon><Setting /></el-icon> 管理变更提醒
         </button>
       </div>
 
-      <div v-if="remindersLoading" class="reminder-empty">加载中…</div>
+      <template v-if="!reminderCollapsed">
+        <div v-if="remindersLoading" class="reminder-empty">加载中…</div>
 
-      <div v-else-if="!reminders.length" class="reminder-empty">
-        当前暂无在架变更提醒
-      </div>
+        <div v-else-if="!reminders.length" class="reminder-empty">
+          当前暂无在架变更提醒
+        </div>
 
-      <div v-else class="reminder-list">
-        <div
-          v-for="item in reminders"
-          :key="item.id"
-          class="reminder-card"
-          :class="{ 'reminder-card--checked': reminderChecked[item.id] }"
-        >
-          <el-checkbox
-            v-model="reminderChecked[item.id]"
-            class="reminder-check"
-          />
-          <div class="reminder-body">
-            <div class="reminder-content">{{ item.content }}</div>
-            <div v-if="item.notes" class="reminder-notes">{{ item.notes }}</div>
-            <div class="reminder-meta">发布于 {{ item.created_at }}{{ item.created_by ? '  ·  ' + item.created_by : '' }}</div>
+        <div v-else class="reminder-list">
+          <div
+            v-for="item in reminders"
+            :key="item.id"
+            class="reminder-card"
+            :class="{ 'reminder-card--checked': reminderChecked[item.id] }"
+          >
+            <el-checkbox
+              v-model="reminderChecked[item.id]"
+              class="reminder-check"
+            />
+            <div class="reminder-body">
+              <div class="reminder-content">{{ item.content }}</div>
+              <div v-if="item.notes" class="reminder-notes">{{ item.notes }}</div>
+              <div class="reminder-meta">发布于 {{ item.created_at }}{{ item.created_by ? '  ·  ' + item.created_by : '' }}</div>
+            </div>
           </div>
         </div>
-      </div>
+      </template>
     </div>
 
   </div>
@@ -835,15 +1070,295 @@ function resetForm() {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  padding: 24px 32px 0;
+  padding: 24px 32px 0 32px;
   box-sizing: border-box;
+}
+
+/* ── 中部主体（抽屉定位锚点） ── */
+.ecr-body {
+  flex: 1 1 0;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
 }
 
 /* ── 上方可滚动区域（表单 + 材料明细） ── */
 .ecr-scroll-area {
   flex: 1 1 0;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;   /* 自身不滚动，由左右列各自滚动 */
+}
+
+
+/* ── 笔记抽屉 ── */
+.notes-drawer {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  bottom: 16px;
+  /* width 由内联 style 动态控制 */
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: -4px 0 20px rgba(0,0,0,0.10), 0 4px 16px rgba(0,0,0,0.07);
+  overflow: hidden;
+}
+
+/* 左侧拖拽手柄 */
+.notes-resize-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+  z-index: 1;
+  border-radius: 12px 0 0 12px;
+  transition: background 0.15s;
+}
+.notes-resize-handle:hover,
+.notes-resize-handle:active {
+  background: rgba(196,136,58,0.15);
+}
+.notes-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 14px 11px 16px;
+  border-bottom: 1px solid var(--border);
+  background: #faf7f2;
+  flex-shrink: 0;
+}
+.notes-drawer-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.06em;
+}
+.notes-drawer-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.notes-action-btn {
+  background: transparent;
+  border: none;
+  font-size: 11px;
+  font-family: var(--font-family);
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.notes-action-btn:hover                { color: var(--text-primary); background: rgba(0,0,0,0.05); }
+.notes-action-btn--minimize            { width: 22px; height: 22px; }
+.notes-action-btn--minimize:hover      { background: rgba(0,0,0,0.07); }
+.minimize-bar {
+  display: block;
+  width: 12px;
+  height: 2px;
+  background: currentColor;
+  border-radius: 1px;
+}
+
+/* 输入区 */
+.notes-input-area {
+  flex-shrink: 0;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--border);
+  background: #fdfbf8;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.notes-input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: none;
+  resize: none;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  font-family: var(--font-family);
+  color: var(--text-primary);
+  background: #fff;
+  line-height: 1.6;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+.notes-input:focus { border-color: var(--accent); }
+.notes-input::placeholder { color: #c0b0a0; }
+.notes-input-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.notes-input-hint {
+  font-size: 10px;
+  color: #b0a090;
+}
+.notes-add-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 3px 12px;
+  font-size: 12px;
+  font-family: var(--font-family);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.notes-add-btn:hover { background: #e09050; }
+
+/* 笔记列表 */
+.notes-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px 12px;
+}
+.notes-list::-webkit-scrollbar       { width: 4px; }
+.notes-list::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15); border-radius: 2px; }
+.notes-list::-webkit-scrollbar-track { background: transparent; }
+.notes-list-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.notes-empty {
+  text-align: center;
+  font-size: 12px;
+  color: #c0b0a0;
+  padding: 20px 0;
+}
+.note-item {
+  background: #faf7f2;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.note-item-text {
+  font-size: 12.5px;
+  color: var(--text-primary);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.note-item-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.note-item-time {
+  font-size: 10px;
+  color: #b0a090;
+}
+.note-item-btns {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.note-item:hover .note-item-btns { opacity: 1; }
+.note-edit-btn {
+  background: transparent;
+  border: none;
+  font-size: 11px;
+  font-family: var(--font-family);
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  transition: color 0.15s;
+}
+.note-edit-btn:hover { color: var(--accent); }
+.note-delete-btn {
+  background: transparent;
+  border: none;
+  color: #c8b8a8;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  transition: color 0.15s;
+}
+.note-delete-btn:hover { color: #c0402a; }
+
+/* 编辑模式 */
+.note-edit-input {
+  width: 100%;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  outline: none;
+  resize: none;
+  padding: 6px 8px;
+  font-size: 12.5px;
+  font-family: var(--font-family);
+  color: var(--text-primary);
+  background: #fff;
+  line-height: 1.6;
+  box-sizing: border-box;
+  min-height: 60px;
+}
+.note-edit-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+.note-save-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-family: var(--font-family);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.note-save-btn:hover { background: #e09050; }
+.note-cancel-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: var(--font-family);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.note-cancel-btn:hover { border-color: var(--text-muted); color: var(--text-primary); }
+
+/* 列表条目动画 */
+.note-item-enter-active { transition: opacity 0.18s, transform 0.18s; }
+.note-item-leave-active { transition: opacity 0.15s, transform 0.15s; }
+.note-item-enter-from   { opacity: 0; transform: translateY(-6px); }
+.note-item-leave-to     { opacity: 0; transform: translateX(10px); }
+
+/* 抽屉滑入滑出动画 */
+.notes-drawer-enter-active,
+.notes-drawer-leave-active {
+  transition: transform 0.24s cubic-bezier(0.4, 0, 0.2, 1),
+              opacity   0.24s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.notes-drawer-enter-from,
+.notes-drawer-leave-to {
+  transform: translateX(100%);
+  opacity: 0;
 }
 
 /* ── 双列布局：左侧固定宽度，右侧占满剩余 ── */
@@ -945,12 +1460,46 @@ function resetForm() {
 /* ── 操作栏 ── */
 .form-actions {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
   padding-top: 8px;
   margin-top: 4px;
   border-top: 1px solid var(--border);
 }
+.form-actions-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ── 笔记跑道按钮 ── */
+.notes-pill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 14px 5px 10px;
+  border-radius: 999px;
+  border: 1.5px solid var(--accent);
+  background: rgba(196,136,58,0.08);
+  color: var(--accent);
+  font-family: var(--font-family);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+  box-shadow: 0 1px 4px rgba(196,136,58,0.15);
+}
+.notes-pill-btn:hover {
+  background: rgba(196,136,58,0.15);
+  box-shadow: 0 2px 8px rgba(196,136,58,0.25);
+}
+.notes-pill-btn--active {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 2px 10px rgba(196,136,58,0.35);
+}
+.notes-pill-btn .el-icon { font-size: 15px; }
 
 /* ── 添加变更按钮 ── */
 .btn-add-group {
@@ -1157,20 +1706,71 @@ function resetForm() {
 .detail-row--deleted    { background: rgba(192,64,42,0.07); }
 .preview-submitter      { margin-top: 6px; font-size: 11px; text-align: right; color: #555; }
 
-/* ── 变更提醒区：固定在底部，内容多时内部滚动 ── */
+/* ── 变更提醒区：底部，高度可拖拽调整 ── */
 .ecr-reminder {
-  flex: 0 0 25%;
+  /* flex: 由内联 style 动态控制 */
   width: 100%;
+  min-height: 0;
   overflow-y: auto;
   border-top: 2px solid var(--border);
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 14px 0 20px;
+  padding: 0 0 20px;
+  position: relative;
+}
+.ecr-reminder--collapsed {
+  flex: 0 0 auto !important;
+  overflow: hidden;
 }
 .ecr-reminder::-webkit-scrollbar       { width: 4px; }
 .ecr-reminder::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.18); border-radius: 2px; }
 .ecr-reminder::-webkit-scrollbar-track { background: transparent; }
+
+/* ── 拖拽手柄 ── */
+.reminder-resize-handle {
+  width: 100%;
+  height: 6px;
+  flex-shrink: 0;
+  cursor: ns-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+  margin-bottom: 8px;
+}
+.reminder-resize-handle::after {
+  content: '';
+  display: block;
+  width: 40px;
+  height: 3px;
+  background: var(--border);
+  border-radius: 2px;
+  transition: background 0.15s, width 0.15s;
+}
+.reminder-resize-handle:hover::after {
+  background: var(--accent);
+  width: 60px;
+}
+.reminder-resize-handle--disabled {
+  cursor: default;
+  pointer-events: none;
+}
+
+/* ── 合拢/展开箭头 ── */
+.reminder-collapse-icon {
+  font-size: 16px;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  display: inline-block;
+  transition: transform 0.2s, color 0.15s;
+  transform: rotate(0deg);
+  line-height: 1;
+  flex-shrink: 0;
+}
+.reminder-collapse-icon:hover { color: var(--accent); }
+.reminder-collapse-icon--up   { transform: rotate(-90deg); }
 
 /* 管理按钮 */
 .btn-mgmt-reminder {

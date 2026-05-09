@@ -72,7 +72,13 @@
       "Bash(du -b ~/Desktop/bge-small-zh-v1.5/**/* ~/Desktop/bge-small-zh-v1.5/*)",
       "Bash(sort -k2)",
       "Bash(xargs wc:*)",
-      "Bash(find \"e:\\\\Project\\\\tmt-library\" -type f \\\\\\( -name \"*.py\" -o -name \"*.js\" \\\\\\) -exec grep -l \"product:view\\\\|shipping:view\\\\|aftersale:view\" {} \\\\;)"
+      "Bash(find \"e:\\\\Project\\\\tmt-library\" -type f \\\\\\( -name \"*.py\" -o -name \"*.js\" \\\\\\) -exec grep -l \"product:view\\\\|shipping:view\\\\|aftersale:view\" {} \\\\;)",
+      "Bash(wc -l /e/Project/tmt-library/src/components/rdTools/*.vue /e/Project/tmt-library/backend/routes/rd/__init__.py)",
+      "Bash(taskkill /F /IM backend.exe)",
+      "Bash(taskkill //F //IM backend.exe)",
+      "Bash(cmd //c \"taskkill /F /IM backend.exe\")",
+      "Bash(cmd //c \"handle.exe \\\\\"e:\\\\\\\\Project\\\\\\\\tmt-library\\\\\\\\electron\\\\\\\\resources\\\\\\\\python-backend\\\\\\\\backend.exe\\\\\" 2>&1 | head -10\")",
+      "Bash(powershell -Command 'Get-Process | Where-Object { $_.Path -like '\\\\''*backend*'\\\\'' } | Select-Object Id, Name, Path')"
     ],
     "additionalDirectories": [
       "\\tmp",

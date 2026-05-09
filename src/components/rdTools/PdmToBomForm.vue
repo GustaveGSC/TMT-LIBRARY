@@ -1,8 +1,8 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
 import { ref, computed } from 'vue'
-import { ElMessage } from 'element-plus'
-import { UploadFilled, RefreshRight, Download } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
+import { UploadFilled, RefreshRight, Download, ArrowDown } from '@element-plus/icons-vue'
 import { PhArrowsLeftRight } from '@phosphor-icons/vue'
 import http from '@/api/http'
 
@@ -18,6 +18,40 @@ const tableData = ref([])             // 2D 字符串数组，可编辑
 const errorMap = ref({})              // { "rowIndex": [colIndex, ...] }
 const requiredColIndices = ref([])    // 必填列索引
 const totalLevel = ref(0)             // 最大层级深度
+
+// 列宽（拖拽调整）
+const colWidths = ref([])   // 每列宽度（px），与 columns 同步初始化
+
+function initColWidths() {
+  colWidths.value = columns.value.map(() => 110)
+}
+
+// 拖拽状态（非响应式，不需要追踪）
+let _resize = null
+
+function onResizeStart(e, ci) {
+  e.preventDefault()
+  _resize = { ci, startX: e.clientX, startW: colWidths.value[ci] }
+  window.addEventListener('mousemove', onResizeMove)
+  window.addEventListener('mouseup', onResizeEnd)
+}
+
+function onResizeMove(e) {
+  if (!_resize) return
+  const w = Math.max(50, _resize.startW + (e.clientX - _resize.startX))
+  colWidths.value[_resize.ci] = w
+}
+
+function onResizeEnd() {
+  _resize = null
+  window.removeEventListener('mousemove', onResizeMove)
+  window.removeEventListener('mouseup', onResizeEnd)
+}
+
+// 表格最小宽度（防止拖窄后出现空白）
+const tableMinWidth = computed(() =>
+  colWidths.value.reduce((s, w) => s + w, 36) + 'px'
+)
 
 // ── 计算属性 ──────────────────────────────────────
 // 第一行的品号，用于生成默认文件名
@@ -64,6 +98,7 @@ async function processFile() {
     }
     const data = res.data
     columns.value = data.columns
+    initColWidths()
     // 深拷贝，使 tableData 可在前端独立编辑
     tableData.value = data.table_data.map(row => [...row])
     errorMap.value = data.error_map
@@ -96,6 +131,7 @@ function revalidate() {
     }, 0)
   }
   errorMap.value = newErrorMap
+  errorCursor.value = { ri: -1, ci: -1 }  // 校验后 cursor 归位
   const errCount = Object.keys(newErrorMap).length
   if (errCount > 0) {
     state.value = 'error'
@@ -106,44 +142,110 @@ function revalidate() {
   }
 }
 
-// 导出 ERP 物料 xlsx
-async function exportErp() {
+// 判断 ArrayBuffer 是否为合法 xlsx（ZIP magic bytes: 50 4B 03 04）
+function isValidXlsx(buf) {
+  const b = new Uint8Array(buf)
+  return b[0] === 0x50 && b[1] === 0x4B && b[2] === 0x03 && b[3] === 0x04
+}
+
+// 从 arraybuffer 中尝试解码后端返回的 JSON 错误信息
+function decodeErrorMsg(buf, fallback = '导出失败') {
   try {
-    const res = await http.post('/api/rd/pdm2bom/export-erp', {
-      columns: columns.value,
-      table_data: tableData.value,
-    }, { responseType: 'arraybuffer' })
-    const saveResult = await window.electronAPI?.showSaveDialog({
-      defaultPath: `ERP-${firstCode.value}.xlsx`,
-      filters: [{ name: 'Excel', extensions: ['xlsx'] }],
-    })
-    if (!saveResult?.canceled && saveResult?.filePath) {
-      await window.electronAPI.saveFile(saveResult.filePath, res)
-      ElMessage.success(`ERP 物料文件已导出`)
-    }
+    const text = new TextDecoder().decode(buf)
+    const json = JSON.parse(text)
+    return json.message || fallback
   } catch {
-    ElMessage.error('ERP 物料导出失败')
+    return fallback
   }
 }
 
-// 导出 BOM xlsx
-async function exportBom() {
-  try {
-    const res = await http.post('/api/rd/pdm2bom/export-bom', {
-      columns: columns.value,
-      table_data: tableData.value,
-      total_level: totalLevel.value,
-    }, { responseType: 'arraybuffer' })
-    const saveResult = await window.electronAPI?.showSaveDialog({
-      defaultPath: `BOM-${firstCode.value}.xlsx`,
-      filters: [{ name: 'Excel', extensions: ['xlsx'] }],
-    })
-    if (!saveResult?.canceled && saveResult?.filePath) {
-      await window.electronAPI.saveFile(saveResult.filePath, res)
-      ElMessage.success(`BOM 文件已导出`)
+// 导出 ERP 物料 + BOM（选一次文件夹，自动生成文件名）
+async function exportAll() {
+  // 先选目标文件夹
+  const dirResult = await window.electronAPI?.showOpenDialog({
+    title: '选择导出文件夹',
+    properties: ['openDirectory'],
+  })
+  if (!dirResult?.filePaths?.[0]) return
+  const dir = dirResult.filePaths[0]
+  const sep = dir.includes('/') ? '/' : '\\'
+  const erpPath = `${dir}${sep}ERP-${firstCode.value}.xlsx`
+  const bomPath = `${dir}${sep}BOM-${firstCode.value}.xlsx`
+
+  // 检查同名文件是否已存在
+  const existing = await window.electronAPI?.checkFilesExist([erpPath, bomPath]) ?? []
+  if (existing.length > 0) {
+    const names = existing.map(p => p.split(/[\\/]/).pop()).join('、')
+    try {
+      await ElMessageBox.confirm(
+        `以下文件已存在，是否覆盖？\n${names}`,
+        '文件已存在',
+        { confirmButtonText: '覆盖', cancelButtonText: '取消', type: 'warning' }
+      )
+    } catch {
+      return  // 用户取消
     }
+  }
+
+  try {
+    const [resErp, resBom] = await Promise.all([
+      http.post('/api/rd/pdm2bom/export-erp', {
+        columns: columns.value,
+        table_data: tableData.value,
+      }, { responseType: 'arraybuffer' }),
+      http.post('/api/rd/pdm2bom/export-bom', {
+        columns: columns.value,
+        table_data: tableData.value,
+        total_level: totalLevel.value,
+      }, { responseType: 'arraybuffer' }),
+    ])
+    if (!isValidXlsx(resErp)) { ElMessage.error('ERP 导出失败：' + decodeErrorMsg(resErp)); return }
+    if (!isValidXlsx(resBom)) { ElMessage.error('BOM 导出失败：' + decodeErrorMsg(resBom)); return }
+    await window.electronAPI.saveFile(erpPath, resErp)
+    await window.electronAPI.saveFile(bomPath, resBom)
+    ElNotification({
+      title: '导出成功',
+      message: `ERP-${firstCode.value}.xlsx\nBOM-${firstCode.value}.xlsx\n\n已保存至：${dir}`,
+      type: 'success',
+      duration: 6000,
+    })
   } catch {
-    ElMessage.error('BOM 导出失败')
+    ElMessage.error('导出失败')
+  }
+}
+
+
+// 定位到下一个错误单元格（按行→列顺序，循环）
+// cursor: { ri, ci }，初始为 { ri: -1, ci: -1 } 确保第一次从头开始
+const errorCursor = ref({ ri: -1, ci: -1 })
+
+// 所有错误单元格按 [ri, ci] 排序的平铺列表
+const errorCells = computed(() => {
+  const cells = []
+  for (const [riStr, cols] of Object.entries(errorMap.value)) {
+    const ri = Number(riStr)
+    for (const ci of [...cols].sort((a, b) => a - b)) {
+      cells.push({ ri, ci })
+    }
+  }
+  return cells.sort((a, b) => a.ri - b.ri || a.ci - b.ci)
+})
+
+function goNextError() {
+  const cells = errorCells.value
+  if (!cells.length) return
+  const { ri, ci } = errorCursor.value
+  // 找第一个在当前 cursor 之后的错误格，越界时回到第一个
+  let next = cells.find(c => c.ri > ri || (c.ri === ri && c.ci > ci))
+  if (!next) next = cells[0]
+  errorCursor.value = next
+  // 找到对应 input 并滚动 + 聚焦
+  const input = document.querySelector(
+    `.ptb-table tbody tr:nth-child(${next.ri + 1}) td:nth-child(${next.ci + 2}) input`
+  )
+  if (input) {
+    input.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' })
+    input.focus()
   }
 }
 
@@ -204,17 +306,31 @@ function isErrorRow(ri) {
             <span class="leg-red">■ 缺失格</span>
             <span class="leg-yellow">■ 有问题行其他格</span>
           </span>
-          <button class="btn-revalidate" @click="revalidate">
-            <el-icon><RefreshRight /></el-icon>
-            重新校验
-          </button>
+          <div class="error-bar-actions">
+            <button class="btn-next-error" @click="goNextError">
+              <el-icon><ArrowDown /></el-icon>
+              下一个错误
+            </button>
+            <button class="btn-revalidate" @click="revalidate">
+              <el-icon><RefreshRight /></el-icon>
+              重新校验
+            </button>
+          </div>
         </div>
         <div class="table-scroll">
-          <table class="ptb-table">
+          <table class="ptb-table" :style="{ minWidth: tableMinWidth }">
             <thead>
               <tr>
                 <th class="col-seq">#</th>
-                <th v-for="(col, ci) in columns" :key="ci">{{ col }}</th>
+                <th
+                  v-for="(col, ci) in columns"
+                  :key="ci"
+                  :style="{ width: colWidths[ci] + 'px', minWidth: colWidths[ci] + 'px' }"
+                  class="th-resizable"
+                >
+                  <span class="th-text">{{ col }}</span>
+                  <span class="th-resize-handle" @mousedown="e => onResizeStart(e, ci)"></span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -233,6 +349,7 @@ function isErrorRow(ri) {
                     v-if="isErrorRow(ri)"
                     v-model="tableData[ri][ci]"
                     class="cell-input"
+                    :class="{ 'cell-input--error': cellClass(ri, ci) === 'cell-error' }"
                   />
                   <span v-else>{{ cell }}</span>
                 </td>
@@ -252,13 +369,9 @@ function isErrorRow(ri) {
           共 {{ tableData.length }} 行数据，品号：{{ firstCode }}
         </div>
         <div class="export-buttons">
-          <button class="btn-export erp" @click="exportErp">
+          <button class="btn-export" @click="exportAll">
             <el-icon><Download /></el-icon>
-            导出 ERP 物料 xlsx
-          </button>
-          <button class="btn-export bom" @click="exportBom">
-            <el-icon><Download /></el-icon>
-            导出 BOM xlsx
+            导出（ERP 物料 + BOM）
           </button>
         </div>
       </div>
@@ -388,6 +501,30 @@ function isErrorRow(ri) {
 .leg-red    { color: #c62828; font-size: 12px; margin-left: 10px; }
 .leg-yellow { color: #e65100; font-size: 12px; margin-left: 6px; }
 
+.error-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.btn-next-error {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 12px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-family: var(--font-family);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-next-error:hover { border-color: #e53935; color: #e53935; }
+
 .btn-revalidate {
   display: flex;
   align-items: center;
@@ -402,7 +539,6 @@ function isErrorRow(ri) {
   font-family: var(--font-family);
   cursor: pointer;
   transition: all 0.15s;
-  flex-shrink: 0;
 }
 .btn-revalidate:hover { background: var(--accent); color: #fff; }
 
@@ -417,11 +553,15 @@ function isErrorRow(ri) {
 
 .ptb-table {
   border-collapse: collapse;
+  table-layout: fixed;
   white-space: nowrap;
   font-size: 12px;
   font-family: var(--font-family);
 }
-.ptb-table th {
+
+/* 可拖拽列头 */
+.th-resizable {
+  position: relative;
   background: #f5f0e8;
   color: var(--text-primary);
   font-weight: 600;
@@ -430,11 +570,28 @@ function isErrorRow(ri) {
   position: sticky;
   top: 0;
   z-index: 1;
+  overflow: hidden;
+  user-select: none;
 }
+.th-text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.th-resize-handle {
+  position: absolute;
+  top: 0; right: 0;
+  width: 5px;
+  height: 100%;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.1s;
+}
+.th-resize-handle:hover { background: rgba(196, 136, 58, 0.4); }
+
 .ptb-table td {
   padding: 2px 6px;
   border: 1px solid #e8e0d0;
-  max-width: 160px;
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--text-primary);
@@ -442,22 +599,26 @@ function isErrorRow(ri) {
 }
 .col-seq {
   width: 36px;
+  min-width: 36px;
   text-align: center;
   color: var(--text-muted);
   font-size: 11px;
 }
 
-/* 高亮 */
+/* 行 / 单元格高亮 */
 .row-has-error td { background: #fff8e1; }
-.cell-warn        { background: #fff8e1 !important; }
-.cell-error       { background: #ffebee !important; }
+.cell-warn        { background: #fff3cd !important; }
+.cell-error       {
+  background: #fde8e8 !important;
+  outline: 2px solid #e53935;
+  outline-offset: -2px;
+}
 
 /* 可编辑输入框 */
 .cell-input {
   width: 100%;
-  min-width: 60px;
-  max-width: 150px;
-  border: 1px solid #bbb;
+  box-sizing: border-box;
+  border: 1px solid #ccc;
   border-radius: 3px;
   padding: 1px 4px;
   font-size: 12px;
@@ -467,6 +628,11 @@ function isErrorRow(ri) {
   outline: none;
 }
 .cell-input:focus { border-color: var(--accent); }
+.cell-input--error {
+  border-color: #e53935;
+  background: #fff0f0;
+}
+.cell-input--error:focus { border-color: #c62828; box-shadow: 0 0 0 2px rgba(229,57,53,0.15); }
 
 /* ── 就绪 ── */
 .ptb-ready {
@@ -509,16 +675,10 @@ function isErrorRow(ri) {
   cursor: pointer;
   transition: all 0.15s;
 }
-.btn-export.erp {
+.btn-export {
   border: none;
   background: var(--accent);
   color: #fff;
 }
-.btn-export.erp:hover { background: #e09050; }
-.btn-export.bom {
-  border: 1.5px solid var(--accent);
-  background: var(--bg-card);
-  color: var(--accent);
-}
-.btn-export.bom:hover { background: var(--accent); color: #fff; }
+.btn-export:hover { background: #e09050; }
 </style>

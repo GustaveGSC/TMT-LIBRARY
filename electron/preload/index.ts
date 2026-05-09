@@ -32,6 +32,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveFile: (filePath: string, data: ArrayBuffer) =>
     ipcRenderer.invoke('save-file', filePath, data),
 
+  checkFilesExist: (filePaths: string[]) =>
+    ipcRenderer.invoke('check-files-exist', filePaths),
+
   // 读取本地文件为 base64 data URL（绕过 file:// 安全限制）
   readFileAsDataURL: (filePath: string) =>
     ipcRenderer.invoke('read-file-as-data-url', filePath),

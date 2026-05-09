@@ -40,6 +40,10 @@ ipcMain.handle('save-file', (_event, filePath: string, data: ArrayBuffer) => {
   fs.writeFileSync(filePath, Buffer.from(data))
 })
 
+ipcMain.handle('check-files-exist', (_event, filePaths: string[]) => {
+  return filePaths.filter(p => fs.existsSync(p))
+})
+
 ipcMain.handle('read-file-as-data-url', (_event, filePath: string) => {
   const data = fs.readFileSync(filePath)
   const ext  = path.extname(filePath).slice(1).toLowerCase()

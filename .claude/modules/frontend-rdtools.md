@@ -71,7 +71,7 @@
 
 ## ECR 变更申请单（EcrForm.vue）
 
-`src/components/rdTools/EcrForm.vue`，整体布局为左右双列 + 底部固定提醒区。
+`src/components/rdTools/EcrForm.vue`，整体布局：`ecr-form-wrap`（flex 列）→ `ecr-body`（flex 行，含表单区 + 笔记抽屉）→ 底部变更提醒区。
 
 ### 表单字段
 
@@ -114,11 +114,22 @@
 - 取替代关系（col 10）：cancel+add 对合并两行，填 `change_kind`；单行填 `qty_desc` 或 `change_kind`
 - 填写人员行：右对齐
 
-### 变更提醒区（底部固定）
+### 变更提醒区（底部）
 
-- 从 `GET /api/rd/reminders` 加载在架提醒
+- 从 `GET /api/rd/reminders` 加载在架提醒，挂载时调用
 - 所有在架提醒必须**全部勾选**才能通过导出校验
-- `canAdminRd` 用户可打开「管理变更提醒」弹窗（新建 / 下架 / 重新上架）
+- `canAdminRd` 用户可打开「管理变更提醒」弹窗（新建 / 编辑 / 下架 / 重新上架）
+- 顶部拖拽手柄可调整区域高度（80px ~ 520px，`reminderHeight` ref）
+- section-label 最左侧箭头图标（`▾`）可折叠/展开，折叠时隐藏内容和管理按钮
+
+### 个人笔记
+
+- 操作栏（form-actions）左侧有跑道圆形「笔记」按钮（橙色边框 + `EditPen` 图标），激活时变实心橙
+- 点击后从右侧滑入笔记抽屉（覆盖，不挤压内容），左边缘可拖拽调整宽度（200px ~ 520px）
+- 抽屉左边缘 6px 拖拽手柄（`startNotesResize`）；标题栏「—」最小化按钮收起
+- **笔记按用户隔离**：请求头 `X-Username` 传当前登录用户名，后端按此筛选，数据存 `ecr_note` 表
+- 每条笔记独立卡片；悬浮显示「编辑」和删除按钮；删除有 `ElMessageBox.confirm` 二次确认
+- 编辑时卡片内显示 textarea（橙色边框），`Ctrl+Enter` 保存，`Esc` 取消
 
 ### 预览 & 导出
 
@@ -226,11 +237,17 @@
 | PUT | `/reminders/<id>` | `rd:admin` | 编辑提醒内容/备注 |
 | PUT | `/reminders/<id>/deactivate` | `rd:admin` | 下架提醒（软删除） |
 | PUT | `/reminders/<id>/activate` | `rd:admin` | 重新上架提醒 |
+| GET | `/notes` | `rd:view` | 返回当前用户笔记（按 `X-Username` 隔离，倒序） |
+| POST | `/notes` | `rd:view` | 新建笔记 |
+| PUT | `/notes/<id>` | `rd:view` | 编辑笔记内容（只能改自己的） |
+| DELETE | `/notes/<id>` | `rd:view` | 删除笔记（只能删自己的） |
 
 `rd:admin` 权限通过请求头 `X-User-Roles` / `X-User-Permissions` 透传，前端在每次需要鉴权的调用中手动注入：
 ```js
 headers: { 'X-User-Roles': roles.join(','), 'X-User-Permissions': permissions.join(',') }
 ```
+
+笔记接口通过 `X-Username` 请求头识别用户，前端从 `localStorage.user.username` 取值注入。
 
 ---
 
@@ -239,8 +256,11 @@ headers: { 'X-User-Roles': roles.join(','), 'X-User-Permissions': permissions.jo
 | 表 | 模型 | 文件 |
 |---|---|---|
 | `ecr_reminder` | `EcrReminder` | `backend/database/models/rd/__init__.py` |
+| `ecr_note` | `EcrNote` | `backend/database/models/rd/__init__.py` |
 
-字段：`id / content / notes / is_active / created_by / created_at / updated_at`
+`ecr_reminder` 字段：`id / content / notes / is_active / created_by / created_at / updated_at`
+
+`ecr_note` 字段：`id / username / content / created_at`（建表脚本：`backend/create_ecr_notes.py`）
 
 建表脚本：`backend/create_ecr_reminders.py`
 

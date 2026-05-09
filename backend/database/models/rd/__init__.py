@@ -27,3 +27,21 @@ class EcrReminder(db.Model):
             'created_at': self.created_at.strftime('%Y-%m-%d') if self.created_at else '',
             'updated_at': self.updated_at.strftime('%Y-%m-%d %H:%M') if self.updated_at else '',
         }
+
+
+class EcrNote(db.Model):
+    """用户在变更申请单页面记录的个人笔记（按用户名隔离）"""
+    __tablename__ = 'ecr_note'
+
+    id         = db.Column(db.Integer,      primary_key=True, autoincrement=True)
+    username   = db.Column(db.String(64),   nullable=False, index=True)   # 所属用户
+    content    = db.Column(db.Text,         nullable=False)                # 笔记内容
+    created_at = db.Column(db.DateTime,     nullable=False, default=now_cst)
+
+    def to_dict(self):
+        return {
+            'id':         self.id,
+            'content':    self.content,
+            'time':       self.created_at.strftime('%m-%d %H:%M') if self.created_at else '',
+            'created_at': self.created_at.isoformat() if self.created_at else '',
+        }

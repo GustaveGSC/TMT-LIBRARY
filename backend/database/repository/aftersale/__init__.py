@@ -1328,6 +1328,19 @@ class AftersaleRepository:
         except Exception:
             pass   # 语义模块异常不影响主流程
 
+        # 历史匹配语义验证加成
+        # case_score 较高（≥0.65）且 query 与该原因语义对齐（sem≥0.35）时，
+        # 说明历史相似度可信（而非文本凑巧相近），给予提权，最多 +25%。
+        if query_vec is not None:
+            for item in scores.values():
+                cs = item.get('case_score', 0.0)
+                if cs < 0.65:
+                    continue
+                sem = item.get('semantic_score', 0.0)
+                if sem >= 0.35:
+                    bonus = 0.15 + 0.10 * min(1.0, (sem - 0.35) / 0.30)  # 0.15~0.25
+                    item['case_score'] = round(min(cs * (1 + bonus), 0.99), 4)
+
         # 统一融合与过滤
         results = []
         for item in scores.values():
