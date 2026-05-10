@@ -7,6 +7,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessageBox } from 'element-plus'
+import { isElectron } from '@/utils/platform'
 
 // ── Props ──────────────────────────────────
 const props = defineProps({
@@ -75,7 +76,7 @@ async function handleClose() {
 </script>
 
 <template>
-  <div class="window-controls">
+  <div v-if="isElectron" class="window-controls">
     <!-- 最小化 -->
     <button class="ctrl-btn minimize" title="最小化" @click="handleMinimize">
       <span class="ctrl-icon">─</span>
@@ -101,6 +102,7 @@ async function handleClose() {
   display: flex;
   align-items: center;
   gap: 6px;
+  -webkit-app-region: no-drag;  /* 确保按钮区域不触发拖拽 */
 }
 
 .ctrl-btn {
@@ -119,6 +121,7 @@ async function handleClose() {
   box-shadow: 0 1px 4px var(--shadow);
   padding: 0;
   line-height: 1;
+  -webkit-app-region: no-drag;
 }
 
 /* 最小化 hover */

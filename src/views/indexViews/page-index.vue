@@ -60,7 +60,7 @@
       <div class="bar-right">
 
         <!-- 版本徽章：点击检查/查看更新 -->
-        <button class="version-badge" :class="{ 'has-update': updateType !== 'none' }" @click="handleUpdate">
+        <button v-if="isElectron" class="version-badge" :class="{ 'has-update': updateType !== 'none' }" @click="handleUpdate">
           <span class="version-text">v{{ version }}</span>
           <span v-if="updateType !== 'none'" class="version-dot"></span>
         </button>
@@ -87,6 +87,7 @@ import { ElMessageBox } from 'element-plus'
 import http from '@/api/http'
 import { checkUpdateType } from '@/utils/version'
 import { usePermission } from '@/composables/usePermission'
+import { isElectron } from '@/utils/platform'
 import UserSettingsDrawer from '@/components/user/UserSettingsDrawer.vue'
 import UpdateDialog from '@/components/update/UpdateDialog.vue'
 import WindowControls from '@/components/common/WindowControls.vue'
@@ -112,8 +113,8 @@ onMounted(async () => {
       const type = checkUpdateType(version.value, res.data.version)
       updateType.value = type
 
-      if (type === 'force') {
-        await window.electronAPI?.updater.check()
+      if (type === 'force' && window.electronAPI) {
+        await window.electronAPI.updater.check()
         updateDialog.value?.open({
           latestVersion:  res.data.version,
           currentVersion: version.value,
@@ -250,7 +251,7 @@ function handleUserSetting() { settingsDrawer.value?.open() }
 
 .main-area {
   flex: 1; display: flex;
-  align-items: center; justify-content: flex-start;
+  align-items: center; justify-content: center;
   position: relative; z-index: 1;
 }
 

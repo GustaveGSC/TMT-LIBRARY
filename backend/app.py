@@ -25,15 +25,15 @@ def create_app() -> Flask:
         f"/{os.getenv('DB_NAME')}"
     )
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-    # 单用户桌面应用：保持少量长连接，避免每次请求重建 TCP（NullPool 会带来 ~400ms 建连延迟）
     # pool_pre_ping：使用前探活，连接被 NAT/防火墙静默关闭时自动重连
     # pool_recycle：1800s 主动回收，早于云端 NAT 超时（通常 ~3600s）
+    # POOL_SIZE / MAX_OVERFLOW 可通过环境变量调整（网页端多用户场景需调大）
     app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
         "poolclass":     QueuePool,
-        "pool_size":     2,      # 常驻连接数
-        "max_overflow":  1,      # 峰值最多额外 1 条
-        "pool_pre_ping": True,   # 自动探活，死连接透明重连
-        "pool_recycle":  1800,   # 30 分钟回收一次，避免 NAT 静默断开
+        "pool_size":     int(os.getenv("POOL_SIZE",    2)),
+        "max_overflow":  int(os.getenv("MAX_OVERFLOW", 1)),
+        "pool_pre_ping": True,
+        "pool_recycle":  1800,
         "connect_args": {
             "connect_timeout": 10,
             "read_timeout":    30,
@@ -43,7 +43,11 @@ def create_app() -> Flask:
 
     # ── 初始化扩展 ────────────────────────────────────
     db.init_app(app)
-    CORS(app, origins=["http://localhost:5173", "file://"])
+    # CORS_ORIGINS 可通过环境变量覆盖（逗号分隔），生产环境配置实际域名
+    _cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
+    if not _cors_origins:
+        _cors_origins = ["http://localhost:5173", "file://"]
+    CORS(app, origins=_cors_origins)
 
     # ── 注册蓝图 ──────────────────────────────────────
     from routes.account import account_bp
@@ -86,12 +90,15 @@ def create_app() -> Flask:
 
 def _run_migrations(db):
     """轻量自动迁移：检测列定义，仅在需要时执行 ALTER TABLE；并确保新表存在。"""
-    # 确保 ecr_reminder 表存在
+    # 确保新增表存在（checkfirst=True 保证幂等）
     try:
-        from database.models.rd import EcrReminder
+        from database.models.rd import EcrReminder, EcrNote
+        from database.models.aftersale import AftersaleSetting
         EcrReminder.__table__.create(bind=db.engine, checkfirst=True)
+        EcrNote.__table__.create(bind=db.engine, checkfirst=True)
+        AftersaleSetting.__table__.create(bind=db.engine, checkfirst=True)
     except Exception as e:
-        print(f'[migration] ecr_reminder 建表失败（可忽略）: {e}', flush=True)
+        print(f'[migration] 建表失败（可忽略）: {e}', flush=True)
 
     try:
         with db.engine.connect() as conn:
@@ -118,4 +125,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     application = create_app()
-    application.run(host="127.0.0.1", port=args.port, debug=False)
+    application.run(host=os.getenv("FLASK_HOST", "127.0.0.1"), port=args.port, debug=False)

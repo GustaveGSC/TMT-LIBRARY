@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import { Close } from '@element-plus/icons-vue'
 import http from '@/api/http.js'
 import logoUrl from '@/assets/logo-banner.png'
+import { downloadBlob, pickFile } from '@/utils/download.js'
 
 // ── 当前用户 ──────────────────────────────────────
 const _user     = JSON.parse(localStorage.getItem('user') || '{}')
@@ -45,6 +46,7 @@ const form = reactive({
 const changes      = ref([])
 const ecrFilePath  = ref('')
 const ecrFileName  = ref('')
+const ecrFileObj   = ref(null)   // 网页端存储 File 对象
 const parseLoading = ref(false)
 const exportLoading = ref(false)
 const showPreview   = ref(false)
@@ -73,21 +75,38 @@ function markText(opts, selected, custom = '') {
 
 // ── 上传 ECR 文件并解析 ───────────────────────────
 async function selectEcrFile() {
-  const result = await window.electronAPI?.showOpenDialog({
-    filters: [{ name: 'Excel 文件', extensions: ['xlsx', 'xls'] }],
-    properties: ['openFile'],
-  })
-  if (result?.canceled || !result?.filePaths?.length) return
-  const filePath = result.filePaths[0]
-  ecrFilePath.value = filePath
-  ecrFileName.value = filePath.replace(/.*[/\\]/, '')
-  await parseEcr(filePath)
+  if (window.electronAPI) {
+    const result = await window.electronAPI.showOpenDialog({
+      filters: [{ name: 'Excel 文件', extensions: ['xlsx', 'xls'] }],
+      properties: ['openFile'],
+    })
+    if (result?.canceled || !result?.filePaths?.length) return
+    const filePath = result.filePaths[0]
+    ecrFilePath.value = filePath
+    ecrFileName.value = filePath.replace(/.*[/\\]/, '')
+    ecrFileObj.value = null
+    await parseEcr()
+  } else {
+    const file = await pickFile('.xlsx,.xls')
+    if (!file) return
+    ecrFilePath.value = ''
+    ecrFileName.value = file.name
+    ecrFileObj.value = file
+    await parseEcr()
+  }
 }
 
-async function parseEcr(path) {
+async function parseEcr() {
   parseLoading.value = true
   try {
-    const res = await http.post('/api/rd/ecr/parse-ecr', { ecr_path: path })
+    let res
+    if (window.electronAPI) {
+      res = await http.post('/api/rd/ecr/parse-ecr', { ecr_path: ecrFilePath.value })
+    } else {
+      const fd = new FormData()
+      fd.append('ecr_file', ecrFileObj.value)
+      res = await http.post('/api/rd/ecr/parse-ecr', fd)
+    }
     if (!res.success) { ElMessage.error(res.message || '解析失败'); return }
     const d = res.data
     ecr.issuing_unit         = d.issuing_unit  || ecr.issuing_unit
@@ -171,13 +190,16 @@ async function handleExport() {
       changes: changes.value.length ? changes.value : null,
     }, { responseType: 'arraybuffer' })
 
-    const saveResult = await window.electronAPI?.showSaveDialog({
-      defaultPath: `${form.ecn_code} ${form.product} 变更通知单.xlsx`,
-      filters: [{ name: 'Excel', extensions: ['xlsx'] }],
-    })
-    if (saveResult?.canceled || !saveResult?.filePath) return
-
-    await window.electronAPI.saveFile(saveResult.filePath, res)
+    if (window.electronAPI) {
+      const saveResult = await window.electronAPI.showSaveDialog({
+        defaultPath: `${form.ecn_code} ${form.product} 变更通知单.xlsx`,
+        filters: [{ name: 'Excel', extensions: ['xlsx'] }],
+      })
+      if (saveResult?.canceled || !saveResult?.filePath) return
+      await window.electronAPI.saveFile(saveResult.filePath, res)
+    } else {
+      downloadBlob(res, `${form.ecn_code} ${form.product} 变更通知单.xlsx`)
+    }
     ElMessage.success('导出成功')
   } catch {
     ElMessage.error('导出失败，请重试')

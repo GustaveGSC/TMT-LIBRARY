@@ -5,12 +5,14 @@ import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import { UploadFilled, RefreshRight, Download, ArrowDown } from '@element-plus/icons-vue'
 import { PhArrowsLeftRight } from '@phosphor-icons/vue'
 import http from '@/api/http'
+import { downloadBlob, pickFile } from '@/utils/download.js'
 
 // ── 响应式状态 ────────────────────────────────────
 // 'idle' | 'processing' | 'error' | 'ready'
 const state = ref('idle')
 const selectedFilePath = ref('')
 const selectedFileName = ref('')
+const selectedFileObj  = ref(null)   // 网页端存储 File 对象
 
 // 来自后端 process 响应
 const columns = ref([])               // PDM 文件所有列名
@@ -62,17 +64,26 @@ const firstCode = computed(() => {
 
 // ── 方法 ──────────────────────────────────────────
 
-// 打开 Electron 文件选择对话框
+// 打开文件选择对话框
 async function selectFile() {
-  const result = await window.electronAPI?.showOpenDialog({
-    title: '选择 PDM 导出文件',
-    filters: [{ name: 'Excel 文件', extensions: ['xlsx'] }],
-    properties: ['openFile'],
-  })
-  const path = result?.filePaths?.[0]
-  if (!path) return
-  selectedFilePath.value = path
-  selectedFileName.value = path.split(/[\\/]/).pop()
+  if (window.electronAPI) {
+    const result = await window.electronAPI.showOpenDialog({
+      title: '选择 PDM 导出文件',
+      filters: [{ name: 'Excel 文件', extensions: ['xlsx'] }],
+      properties: ['openFile'],
+    })
+    const path = result?.filePaths?.[0]
+    if (!path) return
+    selectedFilePath.value = path
+    selectedFileName.value = path.split(/[\\/]/).pop()
+    selectedFileObj.value = null
+  } else {
+    const file = await pickFile('.xlsx')
+    if (!file) return
+    selectedFilePath.value = ''
+    selectedFileName.value = file.name
+    selectedFileObj.value = file
+  }
   // 重置状态
   state.value = 'idle'
   columns.value = []
@@ -80,17 +91,24 @@ async function selectFile() {
   errorMap.value = {}
 }
 
-// 发送文件路径到后端处理
+// 发送文件到后端处理
 async function processFile() {
-  if (!selectedFilePath.value) {
+  if (!selectedFilePath.value && !selectedFileObj.value) {
     ElMessage.warning('请先选择 PDM 导出文件')
     return
   }
   state.value = 'processing'
   try {
-    const res = await http.post('/api/rd/pdm2bom/process', {
-      file_path: selectedFilePath.value,
-    })
+    let res
+    if (window.electronAPI) {
+      res = await http.post('/api/rd/pdm2bom/process', {
+        file_path: selectedFilePath.value,
+      })
+    } else {
+      const fd = new FormData()
+      fd.append('pdm_file', selectedFileObj.value)
+      res = await http.post('/api/rd/pdm2bom/process', fd)
+    }
     if (!res.success) {
       ElMessage.error(res.message || '处理失败')
       state.value = 'idle'
@@ -159,58 +177,66 @@ function decodeErrorMsg(buf, fallback = '导出失败') {
   }
 }
 
-// 导出 ERP 物料 + BOM（选一次文件夹，自动生成文件名）
+// 导出 ERP 物料 + BOM
 async function exportAll() {
-  // 先选目标文件夹
-  const dirResult = await window.electronAPI?.showOpenDialog({
-    title: '选择导出文件夹',
-    properties: ['openDirectory'],
-  })
-  if (!dirResult?.filePaths?.[0]) return
-  const dir = dirResult.filePaths[0]
-  const sep = dir.includes('/') ? '/' : '\\'
-  const erpPath = `${dir}${sep}ERP-${firstCode.value}.xlsx`
-  const bomPath = `${dir}${sep}BOM-${firstCode.value}.xlsx`
+  const erpName = `ERP-${firstCode.value}.xlsx`
+  const bomName = `BOM-${firstCode.value}.xlsx`
 
-  // 检查同名文件是否已存在
-  const existing = await window.electronAPI?.checkFilesExist([erpPath, bomPath]) ?? []
-  if (existing.length > 0) {
-    const names = existing.map(p => p.split(/[\\/]/).pop()).join('、')
-    try {
-      await ElMessageBox.confirm(
-        `以下文件已存在，是否覆盖？\n${names}`,
-        '文件已存在',
-        { confirmButtonText: '覆盖', cancelButtonText: '取消', type: 'warning' }
-      )
-    } catch {
-      return  // 用户取消
-    }
-  }
-
-  try {
-    const [resErp, resBom] = await Promise.all([
-      http.post('/api/rd/pdm2bom/export-erp', {
-        columns: columns.value,
-        table_data: tableData.value,
-      }, { responseType: 'arraybuffer' }),
-      http.post('/api/rd/pdm2bom/export-bom', {
-        columns: columns.value,
-        table_data: tableData.value,
-        total_level: totalLevel.value,
-      }, { responseType: 'arraybuffer' }),
-    ])
-    if (!isValidXlsx(resErp)) { ElMessage.error('ERP 导出失败：' + decodeErrorMsg(resErp)); return }
-    if (!isValidXlsx(resBom)) { ElMessage.error('BOM 导出失败：' + decodeErrorMsg(resBom)); return }
-    await window.electronAPI.saveFile(erpPath, resErp)
-    await window.electronAPI.saveFile(bomPath, resBom)
-    ElNotification({
-      title: '导出成功',
-      message: `ERP-${firstCode.value}.xlsx\nBOM-${firstCode.value}.xlsx\n\n已保存至：${dir}`,
-      type: 'success',
-      duration: 6000,
+  if (window.electronAPI) {
+    // 桌面端：选文件夹后写文件
+    const dirResult = await window.electronAPI.showOpenDialog({
+      title: '选择导出文件夹',
+      properties: ['openDirectory'],
     })
-  } catch {
-    ElMessage.error('导出失败')
+    if (!dirResult?.filePaths?.[0]) return
+    const dir = dirResult.filePaths[0]
+    const sep = dir.includes('/') ? '/' : '\\'
+    const erpPath = `${dir}${sep}${erpName}`
+    const bomPath = `${dir}${sep}${bomName}`
+
+    // 检查同名文件是否已存在
+    const existing = await window.electronAPI.checkFilesExist([erpPath, bomPath]) ?? []
+    if (existing.length > 0) {
+      const names = existing.map(p => p.split(/[\\/]/).pop()).join('、')
+      try {
+        await ElMessageBox.confirm(
+          `以下文件已存在，是否覆盖？\n${names}`,
+          '文件已存在',
+          { confirmButtonText: '覆盖', cancelButtonText: '取消', type: 'warning' }
+        )
+      } catch {
+        return  // 用户取消
+      }
+    }
+
+    try {
+      const [resErp, resBom] = await Promise.all([
+        http.post('/api/rd/pdm2bom/export-erp', { columns: columns.value, table_data: tableData.value }, { responseType: 'arraybuffer' }),
+        http.post('/api/rd/pdm2bom/export-bom', { columns: columns.value, table_data: tableData.value, total_level: totalLevel.value }, { responseType: 'arraybuffer' }),
+      ])
+      if (!isValidXlsx(resErp)) { ElMessage.error('ERP 导出失败：' + decodeErrorMsg(resErp)); return }
+      if (!isValidXlsx(resBom)) { ElMessage.error('BOM 导出失败：' + decodeErrorMsg(resBom)); return }
+      await window.electronAPI.saveFile(erpPath, resErp)
+      await window.electronAPI.saveFile(bomPath, resBom)
+      ElNotification({ title: '导出成功', message: `${erpName}\n${bomName}\n\n已保存至：${dir}`, type: 'success', duration: 6000 })
+    } catch {
+      ElMessage.error('导出失败')
+    }
+  } else {
+    // 网页端：直接触发浏览器下载
+    try {
+      const [resErp, resBom] = await Promise.all([
+        http.post('/api/rd/pdm2bom/export-erp', { columns: columns.value, table_data: tableData.value }, { responseType: 'arraybuffer' }),
+        http.post('/api/rd/pdm2bom/export-bom', { columns: columns.value, table_data: tableData.value, total_level: totalLevel.value }, { responseType: 'arraybuffer' }),
+      ])
+      if (!isValidXlsx(resErp)) { ElMessage.error('ERP 导出失败：' + decodeErrorMsg(resErp)); return }
+      if (!isValidXlsx(resBom)) { ElMessage.error('BOM 导出失败：' + decodeErrorMsg(resBom)); return }
+      downloadBlob(resErp, erpName)
+      downloadBlob(resBom, bomName)
+      ElNotification({ title: '导出成功', message: `${erpName} 和 ${bomName} 已开始下载`, type: 'success', duration: 4000 })
+    } catch {
+      ElMessage.error('导出失败')
+    }
   }
 }
 
@@ -276,7 +302,7 @@ function isErrorRow(ri) {
       </span>
       <button
         class="btn-process"
-        :disabled="!selectedFilePath || state === 'processing'"
+        :disabled="(!selectedFilePath && !selectedFileObj) || state === 'processing'"
         @click="processFile"
       >
         {{ state === 'processing' ? '处理中…' : '处理' }}

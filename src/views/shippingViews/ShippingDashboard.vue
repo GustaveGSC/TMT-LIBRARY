@@ -104,7 +104,7 @@ const PROVINCE_ADCODE = {
 // 通过 Vite glob 懒加载 src/assets/maps/ 下的省份地图 JSON
 // 省份地图文件命名规则：{adcode}_full.json，从 DataV 下载
 // 下载地址：https://geo.datav.aliyun.com/areas_v3/bound/{adcode}_full.json
-const PROVINCE_MAP_MODULES = import.meta.glob('@/assets/maps/*.json')
+const PROVINCE_MAP_MODULES = import.meta.glob('../../assets/maps/*.json')
 
 // 已注册地图缓存
 const registeredMaps = new Set()

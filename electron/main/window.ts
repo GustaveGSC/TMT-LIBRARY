@@ -7,7 +7,7 @@ let mainWindow: BrowserWindow | null = null
 // ── 登录窗口（小窗口，无边框，只显示卡片）──
 export function createLoginWindow(): BrowserWindow {
   mainWindow = new BrowserWindow({
-    width: 420,
+    width: 860,
     height: 640,
     frame: false,           // 去掉标题栏和边框
     transparent: false,      // 背景透明

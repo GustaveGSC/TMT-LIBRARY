@@ -56,6 +56,19 @@ async function waitForPython(timeoutMs = MAX_WAIT_MS): Promise<void> {
   throw new Error(`Python backend failed to start within ${timeoutMs}ms`)
 }
 
+// ── 清理同名僵尸进程 ─────────────────────────────
+function killZombieBackends(): void {
+  if (!app.isPackaged) return
+  try {
+    if (process.platform === 'win32') {
+      // 强制杀掉所有 backend.exe（含僵尸），避免端口占用和连接泄漏
+      spawnSync('taskkill', ['/f', '/im', 'backend.exe', '/t'], { stdio: 'ignore' })
+    } else {
+      spawnSync('pkill', ['-f', 'backend'], { stdio: 'ignore' })
+    }
+  } catch { /* 无残留进程时忽略 */ }
+}
+
 // ── 启动 Python ───────────────────────────────────
 export async function startPython(): Promise<void> {
   const executable = getPythonExecutable()
@@ -64,6 +77,9 @@ export async function startPython(): Promise<void> {
     console.warn('[python] backend/app.py not found, skipping')
     return
   }
+
+  // 启动前清理上次未正常退出留下的僵尸进程
+  killZombieBackends()
 
   const args = app.isPackaged
     ? []                                       // 生产：直接运行可执行文件

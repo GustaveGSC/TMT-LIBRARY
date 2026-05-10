@@ -3,6 +3,7 @@ import { ref, watch } from 'vue'
 import { ElMessageBox } from 'element-plus'
 import Cropper from 'cropperjs'
 import 'cropperjs/dist/cropper.css'
+import { pickFile } from '@/utils/download.js'
 
 export function useFinishedImage(props) {
   // ── 状态 ──────────────────────────────────────────
@@ -80,12 +81,24 @@ export function useFinishedImage(props) {
 
   async function addImageFromUpload() {
     addMenuVisible.value = false
-    const result = await window.electronAPI.showOpenDialog({
-      filters: [{ name: 'PNG 图片', extensions: ['png'] }],
-      properties: ['openFile'],
-    })
-    if (result.canceled || !result.filePaths.length) return
-    cropImgSrc.value        = await window.electronAPI.readFileAsDataURL(result.filePaths[0])
+    if (window.electronAPI) {
+      // Electron：原生文件对话框
+      const result = await window.electronAPI.showOpenDialog({
+        filters: [{ name: 'PNG 图片', extensions: ['png'] }],
+        properties: ['openFile'],
+      })
+      if (result.canceled || !result.filePaths.length) return
+      cropImgSrc.value = await window.electronAPI.readFileAsDataURL(result.filePaths[0])
+    } else {
+      // 网页端：HTML5 文件选择
+      const file = await pickFile('image/png')
+      if (!file) return
+      cropImgSrc.value = await new Promise((resolve) => {
+        const reader = new FileReader()
+        reader.onload = e => resolve(e.target.result)
+        reader.readAsDataURL(file)
+      })
+    }
     cropDialogVisible.value = true
   }
 

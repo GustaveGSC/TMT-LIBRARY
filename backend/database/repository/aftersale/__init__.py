@@ -3094,7 +3094,6 @@ class AftersaleRepository:
     def get_settings(self):
         """读取所有设置，缺失的键用默认值补全后返回 list[dict]"""
         from database.models.aftersale import AftersaleSetting
-        AftersaleSetting.__table__.create(bind=db.engine, checkfirst=True)
         rows = {r.key: r for r in AftersaleSetting.query.all()}
         result = []
         for key, meta in self._SETTINGS_DEFAULTS.items():
@@ -3108,7 +3107,6 @@ class AftersaleRepository:
         """更新单个设置，键不在白名单时拒绝"""
         import json
         from database.models.aftersale import AftersaleSetting
-        AftersaleSetting.__table__.create(bind=db.engine, checkfirst=True)
         if key not in self._SETTINGS_DEFAULTS:
             return False, f'未知设置项: {key}'
         row = AftersaleSetting.query.filter_by(key=key).first()

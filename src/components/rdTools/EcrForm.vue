@@ -6,6 +6,7 @@ import { Close, Plus, Setting, EditPen } from '@element-plus/icons-vue'
 import http from '@/api/http.js'
 import logoUrl from '@/assets/logo-banner.png'
 import { usePermission } from '@/composables/usePermission'
+import { downloadBlob, pickFile } from '@/utils/download.js'
 
 // ── 当前用户 & 权限 ────────────────────────────────
 const _user     = JSON.parse(localStorage.getItem('user') || '{}')
@@ -195,7 +196,9 @@ async function handleActivate(id) {
 
 // 多个 BOM 变更组，每组独立的文件选择和比对结果
 function newGroup() {
-  return { before_path: '', before_name: '', after_path: '', after_name: '', compareResult: null, compareLoading: false, confirmed: false }
+  return { before_path: '', before_name: '', after_path: '', after_name: '',
+           before_file: null, after_file: null,   // 网页端存储 File 对象
+           compareResult: null, compareLoading: false, confirmed: false }
 }
 const bomGroups = ref([newGroup()])
 
@@ -331,30 +334,47 @@ function removeBomGroup(idx) {
 }
 
 async function selectBomFile(type, idx) {
-  const result = await window.electronAPI?.showOpenDialog({
-    filters: [{ name: 'Excel 文件', extensions: ['xlsx'] }],
-    properties: ['openFile'],
-  })
-  if (result?.canceled || !result?.filePaths?.length) return
-  const filePath = result.filePaths[0]
-  const fileName = filePath.replace(/.*[/\\]/, '')
   const g = bomGroups.value[idx]
-  if (type === 'before') { g.before_path = filePath; g.before_name = fileName }
-  else                   { g.after_path  = filePath; g.after_name  = fileName }
+  if (window.electronAPI) {
+    const result = await window.electronAPI.showOpenDialog({
+      filters: [{ name: 'Excel 文件', extensions: ['xlsx'] }],
+      properties: ['openFile'],
+    })
+    if (result?.canceled || !result?.filePaths?.length) return
+    const filePath = result.filePaths[0]
+    const fileName = filePath.replace(/.*[/\\]/, '')
+    if (type === 'before') { g.before_path = filePath; g.before_name = fileName; g.before_file = null }
+    else                   { g.after_path  = filePath; g.after_name  = fileName; g.after_file  = null }
+  } else {
+    const file = await pickFile('.xlsx')
+    if (!file) return
+    if (type === 'before') { g.before_path = ''; g.before_name = file.name; g.before_file = file }
+    else                   { g.after_path  = ''; g.after_name  = file.name; g.after_file  = file }
+  }
   g.compareResult = null
   g.confirmed = false
 }
 
 async function handleCompare(idx) {
   const g = bomGroups.value[idx]
-  if (!g.before_path || !g.after_path) { ElMessage.warning('请先选择两个 BOM 文件'); return }
+  const hasBefore = g.before_path || g.before_file
+  const hasAfter  = g.after_path  || g.after_file
+  if (!hasBefore || !hasAfter) { ElMessage.warning('请先选择两个 BOM 文件'); return }
   g.compareLoading = true
   g.compareResult  = null
   try {
-    const res = await http.post('/api/rd/ecr/compare-bom', {
-      bom_before_path: g.before_path,
-      bom_after_path:  g.after_path,
-    })
+    let res
+    if (window.electronAPI) {
+      res = await http.post('/api/rd/ecr/compare-bom', {
+        bom_before_path: g.before_path,
+        bom_after_path:  g.after_path,
+      })
+    } else {
+      const fd = new FormData()
+      fd.append('bom_before', g.before_file)
+      fd.append('bom_after',  g.after_file)
+      res = await http.post('/api/rd/ecr/compare-bom', fd)
+    }
     if (res.success) {
       g.compareResult = res.data
       g.confirmed = false   // 重新比对后需要重新确认
@@ -388,13 +408,16 @@ async function handleExport() {
       changes: allChanges.value.length ? allChanges.value : null,
     }, { responseType: 'arraybuffer' })
 
-    const saveResult = await window.electronAPI?.showSaveDialog({
-      defaultPath: `${code} ${form.project} 变更申请单.xlsx`,
-      filters: [{ name: 'Excel', extensions: ['xlsx'] }],
-    })
-    if (saveResult?.canceled || !saveResult?.filePath) return
-
-    await window.electronAPI.saveFile(saveResult.filePath, res)
+    if (window.electronAPI) {
+      const saveResult = await window.electronAPI.showSaveDialog({
+        defaultPath: `${code} ${form.project} 变更申请单.xlsx`,
+        filters: [{ name: 'Excel', extensions: ['xlsx'] }],
+      })
+      if (saveResult?.canceled || !saveResult?.filePath) return
+      await window.electronAPI.saveFile(saveResult.filePath, res)
+    } else {
+      downloadBlob(res, `${code} ${form.project} 变更申请单.xlsx`)
+    }
     ElMessage.success('导出成功')
   } catch {
     ElMessage.error('导出失败，请重试')
@@ -675,7 +698,7 @@ function resetForm() {
                   {{ group.before_name || '未选择' }}
                 </span>
                 <el-icon v-if="group.before_name" class="file-clear"
-                  @click="group.before_path = ''; group.before_name = ''; group.compareResult = null"><Close /></el-icon>
+                  @click="group.before_path = ''; group.before_name = ''; group.before_file = null; group.compareResult = null"><Close /></el-icon>
               </div>
             </div>
             <div class="form-item">
@@ -686,13 +709,13 @@ function resetForm() {
                   {{ group.after_name || '未选择' }}
                 </span>
                 <el-icon v-if="group.after_name" class="file-clear"
-                  @click="group.after_path = ''; group.after_name = ''; group.compareResult = null"><Close /></el-icon>
+                  @click="group.after_path = ''; group.after_name = ''; group.after_file = null; group.compareResult = null"><Close /></el-icon>
               </div>
             </div>
           </div>
 
           <!-- 比对操作栏 -->
-          <div v-if="group.before_path && group.after_path" class="compare-bar">
+          <div v-if="(group.before_path || group.before_file) && (group.after_path || group.after_file)" class="compare-bar">
             <el-button size="small" :loading="group.compareLoading" @click="handleCompare(idx)">开始比对</el-button>
             <span v-if="group.compareResult" class="compare-stat">
               <template v-if="group.compareResult.stats.total === 0">无差异</template>
@@ -1080,6 +1103,8 @@ function resetForm() {
   min-height: 0;
   position: relative;
   overflow: hidden;
+  display: flex;        /* 让子元素 .ecr-scroll-area 的 flex: 1 生效 */
+  flex-direction: column;
 }
 
 /* ── 上方可滚动区域（表单 + 材料明细） ── */

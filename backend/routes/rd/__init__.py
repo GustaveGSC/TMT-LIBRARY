@@ -1106,18 +1106,35 @@ def _parse_ecr_rows_xls(ws):
 @rd_bp.post('/ecr/parse-ecr')
 def parse_ecr():
     """解析已导出的 ECR xlsx/xls，返回表单字段和变更明细。
-    请求体：{ ecr_path: str }"""
+    桌面端请求体：{ ecr_path: str }
+    网页端：multipart/form-data，字段名 ecr_file"""
     from result import Result
+    import tempfile
 
-    d    = request.get_json() or {}
-    path = (d.get('ecr_path') or '').strip()
-    if not path:
-        return Result.fail('请提供文件路径').to_response()
-    if not os.path.exists(path):
-        return Result.fail('文件不存在，请重新选择').to_response()
+    content_type = request.content_type or ''
+    if 'multipart' in content_type:
+        # 网页端：文件上传
+        f = request.files.get('ecr_file')
+        if not f:
+            return Result.fail('请上传 ECR 文件').to_response()
+        ext = os.path.splitext(f.filename)[1].lower() or '.xlsx'
+        tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
+        tmp_path = tmp.name
+        tmp.close()
+        f.save(tmp_path)
+        path = tmp_path
+        cleanup = True
+    else:
+        # 桌面端：JSON 路径
+        d    = request.get_json() or {}
+        path = (d.get('ecr_path') or '').strip()
+        cleanup = False
+        if not path:
+            return Result.fail('请提供文件路径').to_response()
+        if not os.path.exists(path):
+            return Result.fail('文件不存在，请重新选择').to_response()
 
     ext = os.path.splitext(path)[1].lower()
-
     try:
         if ext == '.xls':
             import xlrd
@@ -1135,6 +1152,9 @@ def parse_ecr():
 
     except Exception as e:
         return Result.fail(f'解析失败：{str(e)}').to_response()
+    finally:
+        if cleanup and os.path.exists(path):
+            os.unlink(path)
 
 
 @rd_bp.post('/ecr/export-ecn')
@@ -1164,31 +1184,53 @@ def export_ecn():
 
 @rd_bp.post('/ecr/compare-bom')
 def compare_bom():
+    """比对两个 BOM 文件。
+    桌面端请求体：{ bom_before_path, bom_after_path }
+    网页端：multipart/form-data，字段名 bom_before / bom_after"""
     from result import Result
-    d = request.get_json() or {}
-    before_path = (d.get('bom_before_path') or '').strip()
-    after_path  = (d.get('bom_after_path')  or '').strip()
+    import tempfile
 
-    if not before_path or not after_path:
-        return Result.fail('请先选择两个BOM文件').to_response()
-    if not os.path.exists(before_path):
-        return Result.fail('变更前文件不存在，请重新选择').to_response()
-    if not os.path.exists(after_path):
-        return Result.fail('变更审核中文件不存在，请重新选择').to_response()
-
-    # 文件合法性校验（变更前文件不校验状态）
-    err = _validate_bom(before_path, role='any')
-    if err:
-        return Result.fail(err).to_response()
-    err = _validate_bom(after_path, role='after')
-    if err:
-        return Result.fail(err).to_response()
-
+    content_type = request.content_type or ''
+    before_tmp = after_tmp = None
     try:
+        if 'multipart' in content_type:
+            # 网页端：文件上传
+            before_f = request.files.get('bom_before')
+            after_f  = request.files.get('bom_after')
+            if not before_f or not after_f:
+                return Result.fail('请上传两个BOM文件').to_response()
+            t1 = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False)
+            before_tmp = t1.name; t1.close(); before_f.save(before_tmp)
+            t2 = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False)
+            after_tmp  = t2.name; t2.close(); after_f.save(after_tmp)
+            before_path, after_path = before_tmp, after_tmp
+        else:
+            # 桌面端：JSON 路径
+            d = request.get_json() or {}
+            before_path = (d.get('bom_before_path') or '').strip()
+            after_path  = (d.get('bom_after_path')  or '').strip()
+            if not before_path or not after_path:
+                return Result.fail('请先选择两个BOM文件').to_response()
+            if not os.path.exists(before_path):
+                return Result.fail('变更前文件不存在，请重新选择').to_response()
+            if not os.path.exists(after_path):
+                return Result.fail('变更审核中文件不存在，请重新选择').to_response()
+
+        # 文件合法性校验（变更前文件不校验状态）
+        err = _validate_bom(before_path, role='any')
+        if err:
+            return Result.fail(err).to_response()
+        err = _validate_bom(after_path, role='after')
+        if err:
+            return Result.fail(err).to_response()
+
         result = _compare_bom(before_path, after_path)
         return Result.ok(result).to_response()
     except Exception as e:
         return Result.fail(f'比对失败：{str(e)}').to_response()
+    finally:
+        if before_tmp and os.path.exists(before_tmp): os.unlink(before_tmp)
+        if after_tmp  and os.path.exists(after_tmp):  os.unlink(after_tmp)
 
 
 # ── 变更提醒 CRUD ──────────────────────────────────
@@ -1482,71 +1524,92 @@ def _ptb_build_bom_data(columns, table_data, total_level):
 
 @rd_bp.post('/pdm2bom/process')
 def pdm2bom_process():
-    """解析 PDM 导出文件，校验必填列，返回表格数据与错误索引"""
+    """解析 PDM 导出文件，校验必填列，返回表格数据与错误索引。
+    桌面端请求体：{ file_path: str }
+    网页端：multipart/form-data，字段名 pdm_file"""
     from result import Result
     import openpyxl as _xl
+    import tempfile
 
-    d = request.get_json() or {}
-    file_path = (d.get('file_path') or '').strip()
-    if not file_path or not os.path.isfile(file_path):
-        return Result.fail('文件不存在或路径无效').to_response()
-    if not file_path.lower().endswith('.xlsx'):
-        return Result.fail('仅支持 .xlsx 格式').to_response()
+    content_type = request.content_type or ''
+    tmp_path = None
+    if 'multipart' in content_type:
+        # 网页端：文件上传
+        f = request.files.get('pdm_file')
+        if not f:
+            return Result.fail('请上传 PDM 导出文件').to_response()
+        if not f.filename.lower().endswith('.xlsx'):
+            return Result.fail('仅支持 .xlsx 格式').to_response()
+        tmp = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False)
+        tmp_path = tmp.name; tmp.close(); f.save(tmp_path)
+        file_path = tmp_path
+    else:
+        # 桌面端：JSON 路径
+        d = request.get_json() or {}
+        file_path = (d.get('file_path') or '').strip()
+        if not file_path or not os.path.isfile(file_path):
+            return Result.fail('文件不存在或路径无效').to_response()
+        if not file_path.lower().endswith('.xlsx'):
+            return Result.fail('仅支持 .xlsx 格式').to_response()
 
     try:
-        wb = _xl.load_workbook(file_path, read_only=True, data_only=True)
-        ws = wb.active
-        all_rows = list(ws.iter_rows(values_only=True))
-        wb.close()
-    except Exception as e:
-        return Result.fail(f'文件读取失败：{e}').to_response()
+        try:
+            wb = _xl.load_workbook(file_path, read_only=True, data_only=True)
+            ws = wb.active
+            all_rows = list(ws.iter_rows(values_only=True))
+            wb.close()
+        except Exception as e:
+            return Result.fail(f'文件读取失败：{e}').to_response()
 
-    if not all_rows:
-        return Result.fail('文件为空').to_response()
+        if not all_rows:
+            return Result.fail('文件为空').to_response()
 
-    # 第一行为列名
-    columns = [str(c) if c is not None else '' for c in all_rows[0]]
+        # 第一行为列名
+        columns = [str(c) if c is not None else '' for c in all_rows[0]]
 
-    # 校验关键列存在
-    if '品号' not in columns or '层次' not in columns:
-        return Result.fail('文件格式不符：缺少"品号"或"层次"列').to_response()
+        # 校验关键列存在
+        if '品号' not in columns or '层次' not in columns:
+            return Result.fail('文件格式不符：缺少"品号"或"层次"列').to_response()
 
-    code_idx  = columns.index('品号')
-    level_idx = columns.index('层次')
-    count_idx = columns.index('数量') if '数量' in columns else -1
+        code_idx  = columns.index('品号')
+        level_idx = columns.index('层次')
+        count_idx = columns.index('数量') if '数量' in columns else -1
 
-    # 过滤数据行：跳过空行、含'.'的品号、14ST10前缀
-    table_data = []
-    total_level = 0
-    for raw_row in all_rows[1:]:
-        if not any(v for v in raw_row if v is not None):
-            continue
-        code = str(raw_row[code_idx]) if raw_row[code_idx] is not None else ''
-        if '.' in code or code[:6] == '14ST10' or code == '-':
-            continue
-        level_val = str(raw_row[level_idx]) if raw_row[level_idx] is not None else ''
-        depth = len(level_val.split('.'))
-        if depth > total_level:
-            total_level = depth
-        table_data.append([str(v) if v is not None else '' for v in raw_row])
+        # 过滤数据行：跳过空行、含'.'的品号、14ST10前缀
+        table_data = []
+        total_level = 0
+        for raw_row in all_rows[1:]:
+            if not any(v for v in raw_row if v is not None):
+                continue
+            code = str(raw_row[code_idx]) if raw_row[code_idx] is not None else ''
+            if '.' in code or code[:6] == '14ST10' or code == '-':
+                continue
+            level_val = str(raw_row[level_idx]) if raw_row[level_idx] is not None else ''
+            depth = len(level_val.split('.'))
+            if depth > total_level:
+                total_level = depth
+            table_data.append([str(v) if v is not None else '' for v in raw_row])
 
-    # 必填列索引
-    required_col_indices = [columns.index(c) for c in _PTB_CHECKED_COLUMNS if c in columns]
+        # 必填列索引
+        required_col_indices = [columns.index(c) for c in _PTB_CHECKED_COLUMNS if c in columns]
 
-    # 逐行校验，记录缺失列
-    error_map = {}
-    for ri, row in enumerate(table_data):
-        missing = [ci for ci in required_col_indices if not row[ci]]
-        if missing:
-            error_map[str(ri)] = missing
+        # 逐行校验，记录缺失列
+        error_map = {}
+        for ri, row in enumerate(table_data):
+            missing = [ci for ci in required_col_indices if not row[ci]]
+            if missing:
+                error_map[str(ri)] = missing
 
-    return Result.ok({
-        'columns':             columns,
-        'table_data':          table_data,
-        'required_col_indices': required_col_indices,
-        'error_map':           error_map,
-        'total_level':         total_level,
-    }).to_response()
+        return Result.ok({
+            'columns':             columns,
+            'table_data':          table_data,
+            'required_col_indices': required_col_indices,
+            'error_map':           error_map,
+            'total_level':         total_level,
+        }).to_response()
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 
 @rd_bp.post('/pdm2bom/export-erp')
