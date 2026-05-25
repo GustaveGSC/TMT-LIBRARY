@@ -15,6 +15,7 @@
     "make-ico": "node scripts/make-ico.js",
     "upload-release": "node scripts/upload-release.js",
     "dev:web": "vite --config vite.config.web.ts",
+    "dev:all": "concurrently -n web,flask -c cyan,yellow \"npm run dev:web\" \"cd backend && python app.py\"",
     "build:web": "vite build --config vite.config.web.ts"
   },
   "dependencies": {
@@ -33,6 +34,7 @@
   "devDependencies": {
     "@vitejs/plugin-vue": "^4.5.0",
     "ali-oss": "^6.23.0",
+    "concurrently": "^9.2.1",
     "electron": "^28.0.0",
     "electron-builder": "^24.0.0",
     "electron-vite": "^2.0.0",

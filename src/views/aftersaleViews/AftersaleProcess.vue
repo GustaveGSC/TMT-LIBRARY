@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Delete, Setting, ArrowDown, Refresh, Loading } from '@element-plus/icons-vue'
 import http from '@/api/http.js'
 import { usePermission } from '@/composables/usePermission.js'
+import { isElectron } from '@/utils/platform'
 import AftersaleReasonLib from './AftersaleReasonLib.vue'
 
 // ── Props / Emits ─────────────────────────────────
@@ -357,12 +358,14 @@ async function selectOrder(order) {
             purchase_date: parsedPurchaseDate || null,
             seller_remark: order.seller_remark || null,
             buyer_remark:  order.buyer_remark  || null,
+            semantic:      isElectron,
           }).then(r => { if (r.success && r.data) apiResult = r.data })
         : Promise.resolve(),
       debugText.trim()
         ? http.post('/api/aftersale/auto-match', {
             text: debugText,
             buyer_remark: order.buyer_remark || '',
+            semantic: isElectron,
           }).then(r => { if (r.success && r.data) { reasonCandidates = r.data.items || []; reasonCleanedText = r.data.cleaned_text || '' } })
         : Promise.resolve(),
     ])
@@ -577,7 +580,7 @@ async function selectOrder(order) {
       }
       // 原因候选（per-segment auto-match）
       try {
-        const r = await http.post('/api/aftersale/auto-match', { text: seg, buyer_remark: '' })
+        const r = await http.post('/api/aftersale/auto-match', { text: seg, buyer_remark: '', semantic: isElectron })
         if (r.success && currentOrder.value?.ecommerce_order_no === orderNo) {
           item._reasonCandidates = r.data || []
         }
@@ -1502,11 +1505,13 @@ async function computeOrderBatchResult(order) {
             products, purchase_date: parsedPurchaseDate || null,
             seller_remark: order.seller_remark || null,
             buyer_remark:  order.buyer_remark  || null,
+            semantic:      isElectron,
           }).then(r => { if (r.success && r.data) apiResult = r.data })
         : Promise.resolve(),
       debugText.trim()
         ? http.post('/api/aftersale/auto-match', {
             text: debugText, buyer_remark: order.buyer_remark || '',
+            semantic: isElectron,
           }).then(r => { if (r.success && r.data) reasonCandidates = r.data.items || [] })
         : Promise.resolve(),
     ])

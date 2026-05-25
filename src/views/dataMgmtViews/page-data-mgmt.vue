@@ -4,7 +4,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import http from '@/api/http'
+import http, { getBaseURL } from '@/api/http'
 import WindowControls  from '@/components/common/WindowControls.vue'
 import DataImport       from './DataImport.vue'
 import ReturnImport     from './ReturnImport.vue'
@@ -71,7 +71,7 @@ async function handleResolveAll() {
     const taskId = res.data.task_id
 
     await new Promise((resolve, reject) => {
-      const es = new EventSource(`http://127.0.0.1:8765/api/shipping/import/progress/${taskId}`)
+      const es = new EventSource(`${getBaseURL()}/api/shipping/import/progress/${taskId}`)
       es.onmessage = (event) => {
         const data = JSON.parse(event.data)
         if (data.step === 'preparing') {

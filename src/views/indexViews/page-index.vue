@@ -19,7 +19,7 @@
               @click="handleEnter(mod)"
             >
               <div class="module-icon">
-                <component :is="mod.iconComp" :size="40" weight="duotone" color="#c4883a" />
+                <img :src="mod.icon" class="module-icon-img" alt="" />
               </div>
               <div class="module-name">{{ mod.name }}</div>
               <div class="module-desc">{{ mod.desc }}</div>
@@ -81,9 +81,9 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessageBox } from 'element-plus'
+import { ElMessageBox, ElMessage } from 'element-plus'
 import http from '@/api/http'
 import { checkUpdateType } from '@/utils/version'
 import { usePermission } from '@/composables/usePermission'
@@ -91,7 +91,11 @@ import { isElectron } from '@/utils/platform'
 import UserSettingsDrawer from '@/components/user/UserSettingsDrawer.vue'
 import UpdateDialog from '@/components/update/UpdateDialog.vue'
 import WindowControls from '@/components/common/WindowControls.vue'
-import { PhCube, PhTruck, PhDatabase, PhWrench, PhCode } from '@phosphor-icons/vue'
+import iconProduct   from '@/assets/icons/icon_product.png'
+import iconShipping  from '@/assets/icons/icon_shipping.png'
+import iconAftersale from '@/assets/icons/icon_aftersale.png'
+import iconDataMgmt  from '@/assets/icons/icon_data_mgmt.png'
+import iconRdTools   from '@/assets/icons/icon_rd_tools.png'
 
 const router         = useRouter()
 const version        = ref('1.0.0')
@@ -100,6 +104,18 @@ const updateDialog   = ref(null)
 
 const updateType = ref('none')
 const latestInfo = ref(null)
+
+// 移动端 web：本页需要纵向滚动，临时解除全局 overflow:hidden
+if (!isElectron) {
+  onMounted(() => {
+    document.documentElement.style.overflow = 'auto'
+    document.body.style.overflow = 'auto'
+  })
+  onBeforeUnmount(() => {
+    document.documentElement.style.overflow = ''
+    document.body.style.overflow = ''
+  })
+}
 
 onMounted(async () => {
   if (window.electronAPI) {
@@ -145,7 +161,7 @@ const moduleGroups = computed(() => [
         key: 'product',
         name: '产品库',
         desc: '产品信息管理与检索',
-        iconComp: PhCube,
+        icon: iconProduct,
         route: '/product',
         disabled: false,
         noPermission: !canViewProduct,
@@ -154,7 +170,7 @@ const moduleGroups = computed(() => [
         key: 'shipping',
         name: '发货数据',
         desc: '发货记录查询与统计',
-        iconComp: PhTruck,
+        icon: iconShipping,
         route: '/shipping',
         disabled: false,
         noPermission: !canViewShipping,
@@ -163,7 +179,7 @@ const moduleGroups = computed(() => [
         key: 'aftersale',
         name: '售后数据',
         desc: '售后记录查询与分析',
-        iconComp: PhWrench,
+        icon: iconAftersale,
         route: '/aftersale',
         disabled: false,
         noPermission: !canViewAftersale,
@@ -177,7 +193,7 @@ const moduleGroups = computed(() => [
         key: 'data-mgmt',
         name: '数据管理',
         desc: '导入数据与操作人配置',
-        iconComp: PhDatabase,
+        icon: iconDataMgmt,
         route: '/data-mgmt',
         disabled: false,
         noPermission: !canEditShipping,
@@ -187,7 +203,7 @@ const moduleGroups = computed(() => [
         key: 'rd-tools',
         name: '研发部工具',
         desc: 'PDM转BOM · 变更单填写',
-        iconComp: PhCode,
+        icon: iconRdTools,
         route: '/rd-tools',
         disabled: false,
         noPermission: !canViewRd,
@@ -196,8 +212,14 @@ const moduleGroups = computed(() => [
   },
 ])
 
+const MOBILE_UNSUPPORTED = ['data-mgmt', 'rd-tools']
+
 function handleEnter(mod) {
   if (mod.disabled || mod.noPermission) return
+  if (window.innerWidth <= 768 && MOBILE_UNSUPPORTED.includes(mod.key)) {
+    ElMessage({ message: '手机端不支持该功能', type: 'warning', duration: 2000 })
+    return
+  }
   router.push(mod.route)
 }
 
@@ -324,6 +346,7 @@ function handleUserSetting() { settingsDrawer.value?.open() }
   box-shadow: 0 4px 16px var(--shadow), inset 0 1px 0 rgba(255,255,255,0.8);
   transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
+.module-icon-img { width: 56px; height: 56px; object-fit: contain; }
 .module-emoji { font-size: 38px; line-height: 1; }
 .module-name { font-size: 13px; font-weight: 600; color: var(--text-primary); letter-spacing: 0.04em; transition: color 0.2s; }
 .module-desc { font-size: 11px; color: var(--text-muted); text-align: center; margin-top: -4px; }
@@ -422,6 +445,64 @@ function handleUserSetting() { settingsDrawer.value?.open() }
   background: linear-gradient(135deg, var(--accent), var(--accent-hover));
   display: flex; align-items: center; justify-content: center;
   font-size: 10px; font-weight: 700; color: #fff; flex-shrink: 0;
+}
+
+/* ── 移动端响应式（≤768px 竖屏）────────────────────────── */
+@media (max-width: 768px) {
+  /* 页面自然高度，允许滚动；底栏 fixed 钉在视口底部 */
+  .index-page {
+    height: auto;
+    min-height: 100vh;
+    overflow-x: hidden;
+    padding-bottom: 50px; /* 为 fixed 底栏留空 */
+  }
+  .main-area { flex: unset; padding: 16px 0 8px; }
+  .bottom-bar {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    z-index: 100;
+  }
+  .module-groups { padding: 8px 16px; gap: 14px; }
+  .module-group { padding: 12px 14px 14px; }
+  .modules { gap: 14px; }
+  .module-card { width: 100px; }
+  .module-icon { width: 72px; height: 72px; border-radius: 18px; }
+  .module-icon-img { width: 40px; height: 40px; }
+  .module-name { font-size: 12px; }
+  .module-desc { font-size: 10px; }
+  .bottom-bar { padding: 0 12px; }
+  .bar-logo-banner { height: 18px; }
+}
+@media (max-width: 400px) {
+  .module-card { width: 86px; }
+  .module-icon { width: 60px; height: 60px; border-radius: 14px; }
+  .module-icon-img { width: 34px; height: 34px; }
+  .modules { gap: 10px; }
+}
+
+/* ── 手机横屏：视口矮，页面可滚动，底栏 fixed ───────────── */
+@media (orientation: landscape) and (max-height: 600px) {
+  .index-page {
+    height: auto;
+    min-height: 100vh;
+    overflow-x: hidden;
+    padding-bottom: 50px;
+  }
+  .main-area { flex: unset; padding: 8px 0; }
+  .bottom-bar {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    z-index: 100;
+    padding: 0 12px;
+  }
+  .module-groups { padding: 6px 24px; gap: 10px; }
+  .module-group { padding: 10px 14px 12px; }
+  .modules { gap: 14px; }
+  .module-card { width: 90px; }
+  .module-icon { width: 60px; height: 60px; border-radius: 16px; }
+  .module-icon-img { width: 34px; height: 34px; }
+  .module-name { font-size: 11px; }
+  .module-desc { display: none; }
 }
 </style>
 

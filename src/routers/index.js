@@ -55,8 +55,29 @@ const router = createRouter({
   ]
 })
 
+const SESSION_DURATION = 8 * 60 * 60 * 1000 // 8小时
+
+function isSessionExpired() {
+  const loginTime = localStorage.getItem('login_time')
+  if (!loginTime) return true
+  return Date.now() - Number(loginTime) > SESSION_DURATION
+}
+
+function clearSession() {
+  localStorage.removeItem('user')
+  localStorage.removeItem('login_time')
+}
+
 // 路由权限守卫
 router.beforeEach((to) => {
+  // 非登录页且已有登录态，检查是否过期
+  if (to.path !== '/login' && localStorage.getItem('user')) {
+    if (isSessionExpired()) {
+      clearSession()
+      return '/login'
+    }
+  }
+
   const required = to.meta?.permission
   if (!required) return true
   const user = JSON.parse(localStorage.getItem('user') || '{}')

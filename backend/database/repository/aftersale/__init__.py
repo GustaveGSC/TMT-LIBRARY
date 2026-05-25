@@ -678,7 +678,7 @@ class AftersaleRepository:
     # 已确认工单语义向量缓存（confirm_case 后失效；None = 未构建）
     _CASE_VEC_CACHE = None
     # 向量缓存最多纳入的已确认工单数
-    _CASE_VEC_CACHE_LIMIT = 400
+    _CASE_VEC_CACHE_LIMIT = 150
 
     @classmethod
     def _invalidate_case_vec_cache(cls):
@@ -1132,12 +1132,13 @@ class AftersaleRepository:
 
     # ── 自动匹配 ────────────────────────────────────────────────────────────
 
-    def auto_match(self, text, buyer_remark=None):
+    def auto_match(self, text, buyer_remark=None, semantic=True):
         """
         两阶段自动匹配，返回按置信度降序排列的 Top5 建议。
         阶段1：关键词库匹配
         阶段2：历史案例相似度（difflib）
         buyer_remark 若非空，先从 text 中去除买家留言内容再匹配，减少噪声。
+        semantic=False 时跳过所有向量推理（web端使用）。
         """
         if not text or not text.strip():
             return []
@@ -1220,14 +1221,15 @@ class AftersaleRepository:
 
         # ── 提前编码 query_vec（两个语义阶段复用，避免重复推理）────────────────
         query_vec = None
-        try:
-            import model_manager
-            import numpy as np
-            _model = model_manager.get_model()
-            if _model is not None and text_lower.strip():
-                query_vec = model_manager.encode([text_lower])[0]   # (dim,)
-        except Exception:
-            pass
+        if semantic:
+            try:
+                import model_manager
+                import numpy as np
+                _model = model_manager.get_model()
+                if _model is not None and text_lower.strip():
+                    query_vec = model_manager.encode([text_lower])[0]   # (dim,)
+            except Exception:
+                pass
 
         # 阶段2：已确认工单历史匹配（始终运行，纠偏关键词排名）
         # 优先使用 bge 语义相似度；模型不可用时退回 difflib。
@@ -1826,7 +1828,7 @@ class AftersaleRepository:
         ]
         return {'channels': channels, 'provinces': provinces, 'categories': categories}
 
-    def suggest_product(self, product_codes, purchase_date_str=None, seller_remark=None, buyer_remark=None, products=None):
+    def suggest_product(self, product_codes, purchase_date_str=None, seller_remark=None, buyer_remark=None, products=None, semantic=True):
         """
         根据买家留言推断最可能的售后成品型号。
 
@@ -2604,12 +2606,12 @@ class AftersaleRepository:
 
         best_kw_matched = max((v[0] for v in kw_scores.values()), default=0)
 
-        # 阶段2：语义向量评分（仅在模型就绪时）
+        # 阶段2：语义向量评分（仅在模型就绪且允许语义时）
         sem_scores = {}  # alias_id → cosine_sim
         try:
             import model_manager
             import numpy as np
-            model = model_manager.get_model()
+            model = model_manager.get_model() if semantic else None
             if model is not None and combined_name.strip():
                 alias_ids_key = tuple(sorted(a.id for a in aliases))
                 if (not hasattr(self, '_alias_sem_cache') or

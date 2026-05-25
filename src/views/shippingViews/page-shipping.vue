@@ -56,6 +56,7 @@ function handleBack() {
 <style scoped>
 .shipping-page {
   width: 100vw; height: 100vh;
+  height: 100dvh; /* 动态视口高度，排除移动端浏览器地址栏/导航栏 */
   background: var(--bg);
   display: flex; flex-direction: column;
   overflow: hidden;
@@ -110,4 +111,9 @@ function handleBack() {
   display: flex; flex-direction: column;
 }
 
+/* ── 移动端响应式（≤768px） ──────────────────── */
+@media (max-width: 768px) {
+  .top-bar { height: 44px; padding: 0 10px; }
+  .page-title { font-size: 13px; }
+}
 </style>

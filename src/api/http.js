@@ -5,7 +5,7 @@ const http = axios.create({ timeout: 60000 })
 // 缓存 baseURL，避免每次请求都调用 IPC
 let baseURL = null
 
-const getBaseURL = () => {
+export const getBaseURL = () => {
   // 不用 IPC，直接返回固定地址
   if (window.electronAPI) {
     return 'http://127.0.0.1:8765'

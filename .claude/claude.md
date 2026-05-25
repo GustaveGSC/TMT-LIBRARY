@@ -13,6 +13,7 @@
 
 ## 技术栈
 - **桌面端**：Electron + Vue 3 + Vite（electron-vite）
+- **Web 端**：同一套 Vue 代码，`npm run build:web` → `dist-web/`，部署于 47.99.100.138（nginx + gunicorn）
 - **前端**：Vue 3 Composition API、Pinia、Element Plus、Axios
 - **后端**：Python Flask + SQLAlchemy + PyMySQL，端口 8765
 - **数据库**：MySQL（host: 47.99.100.138，库名: tmt_db）
@@ -47,6 +48,34 @@ backend/result.py        # Result.ok/fail → { success, message, data }
 | z-index | 强制更新遮罩 1000 < WindowControls 1500 < el-dialog 2000 |
 | 滚动条 | width:4px，透明轨道 |
 | 图标 | 导航用 PNG（`src/assets/icons/`），其他用 Element Plus 图标 |
+
+## 多端开发规范
+
+**优先级：Web 端 > 桌面端（Electron）**，新功能默认同时支持两端。
+
+### 环境判断
+```js
+import { isElectron } from '@/utils/platform'
+// isElectron = !!window.electronAPI
+```
+- 文件下载、本地对话框、窗口控制等功能用 `isElectron` 分支处理
+- Web 端不可用的 Electron 专属功能需优雅降级（隐藏或禁用，不报错）
+
+### 手机端适配规范
+- 使用 `isMobile = ref(window.innerWidth <= 768)` + `resize` 监听检测，`onBeforeUnmount` 时移除监听
+- 断点：`@media (max-width: 768px)`（竖屏手机），`@media (orientation: landscape) and (max-height: 600px)`（横屏手机）
+- 手机端表格：`v-if="!isMobile"` 隐藏非核心列，保留核心标识列和状态列
+- 手机端弹窗/抽屉：使用 `el-drawer direction="btt"` 替代 `el-dialog`，`isMobile` 判断切换
+- iOS Safari 滚动：抽屉打开时需 `document.body.style.position = 'fixed'`，关闭时还原（否则 body `overflow:hidden` 会拦截固定元素内的触摸滚动）
+- 全局 `html, body, #app { overflow: hidden }` 来自 `app.vue`，某页面需要滚动时在该页 `onMounted/onBeforeUnmount` 中临时修改 `document.documentElement/body.style.overflow`，不要改 `app.vue` 全局样式
+- 部署后用 Chrome DevTools → 手机模拟器（375px/iPhone SE）验证竖屏和横屏
+
+### 构建与部署
+```bash
+npm run build:web          # 构建 web 端 → dist-web/
+# 部署：手动 SCP 上传（Windows 路径）
+scp -r e:/Project/tmt-library/dist-web/. root@47.99.100.138:/var/www/tmt-library/
+```
 
 ## Vue 文件规范
 - 文件顺序：`<script setup>` → `<template>` → `<style scoped>`

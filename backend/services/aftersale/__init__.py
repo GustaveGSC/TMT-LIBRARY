@@ -203,6 +203,130 @@ class AftersaleService:
             'page_size': page_size,
         })
 
+    def export_cases(self, status, date_start, date_end,
+                     reason_id, channel_name, province, city, district,
+                     reason_category, reason_name, shipping_alias,
+                     model_code=None, search=None, sort_by=None, sort_order='desc'):
+        """导出符合筛选条件的全量工单为 xlsx，一行一条原因记录"""
+        import io
+        import openpyxl
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+        from openpyxl.utils import get_column_letter
+        from sqlalchemy.orm import selectinload
+
+        # 不分页，取全量
+        items, _ = _repo.get_cases(
+            page=1, page_size=999999,
+            status=status, date_start=date_start, date_end=date_end,
+            reason_id=reason_id, channel_name=channel_name,
+            province=province, city=city, district=district,
+            reason_category=reason_category, reason_name=reason_name,
+            shipping_alias=shipping_alias,
+            model_code=model_code, search=search,
+            sort_by=sort_by, sort_order=sort_order,
+        )
+
+        # 一次性加载所有 reasons（避免 N+1）
+        case_ids = [c.id for c in items]
+        reasons_map = {}
+        if case_ids:
+            cases_with_reasons = (
+                AftersaleCase.query
+                .filter(AftersaleCase.id.in_(case_ids))
+                .options(
+                    selectinload(AftersaleCase.case_reasons)
+                    .selectinload(AftersaleCaseReason.reason)
+                    .selectinload(AftersaleReason.category_obj),
+                    selectinload(AftersaleCase.case_reasons)
+                    .selectinload(AftersaleCaseReason.product_model),
+                    selectinload(AftersaleCase.case_reasons)
+                    .selectinload(AftersaleCaseReason.shipping_alias),
+                )
+                .all()
+            )
+            reasons_map = {c.id: c.case_reasons for c in cases_with_reasons}
+
+        # ── 构建 xlsx ─────────────────────────────────────────────
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = '售后数据'
+
+        # 表头样式
+        header_font    = Font(name='Microsoft YaHei UI', bold=True, size=10)
+        header_fill    = PatternFill('solid', fgColor='F5F0E8')
+        center_align   = Alignment(horizontal='center', vertical='center', wrap_text=False)
+        left_align     = Alignment(horizontal='left',   vertical='center', wrap_text=False)
+        thin_side      = Side(style='thin', color='C0C0C0')
+        thin_border    = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+        normal_font    = Font(name='Microsoft YaHei UI', size=10)
+
+        headers = [
+            ('订单号',      22),
+            ('售后日期',    12),
+            ('购买日期',    12),
+            ('间隔天数',    10),
+            ('产品型号',    14),
+            ('产品名称',    20),
+            ('一级原因',    14),
+            ('二级原因',    20),
+            ('发货物料简称', 16),
+            ('渠道',        14),
+            ('省份',        10),
+            ('城市',        10),
+            ('县区',        10),
+            ('商家备注',    30),
+            ('买家留言',    30),
+        ]
+
+        for col_idx, (label, width) in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col_idx, value=label)
+            cell.font      = header_font
+            cell.fill      = header_fill
+            cell.alignment = center_align
+            cell.border    = thin_border
+            ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+        ws.row_dimensions[1].height = 20
+        ws.freeze_panes = 'A2'
+
+        # 写数据行：每条 reason 一行，无 reason 时也写一行
+        row_idx = 2
+        for case in items:
+            reasons = reasons_map.get(case.id, [])
+            if not reasons:
+                reasons = [None]   # 确保空原因工单也输出一行
+            for cr in reasons:
+                def v(col_idx, value):
+                    cell = ws.cell(row=row_idx, column=col_idx, value=value)
+                    cell.font      = normal_font
+                    cell.border    = thin_border
+                    cell.alignment = left_align if col_idx in (1, 6, 9, 14, 15) else center_align
+
+                v(1,  case.ecommerce_order_no)
+                v(2,  case.shipped_date.strftime('%Y-%m-%d') if case.shipped_date else None)
+                v(3,  cr.purchase_date.strftime('%Y-%m-%d') if cr and cr.purchase_date else None)
+                v(4,  cr.days_since_purchase if cr else None)
+                v(5,  cr.product_model.model_code if cr and cr.product_model else None)
+                v(6,  cr.product_model.name       if cr and cr.product_model else None)
+                # 一级原因
+                cat_name = None
+                if cr and cr.reason and cr.reason.category_obj:
+                    cat_name = cr.reason.category_obj.name
+                v(7,  cat_name)
+                v(8,  cr.reason.name if cr and cr.reason else None)
+                v(9,  cr.shipping_alias.name if cr and cr.shipping_alias else None)
+                v(10, case.channel_name)
+                v(11, case.province)
+                v(12, case.city)
+                v(13, case.district)
+                v(14, case.seller_remark)
+                v(15, case.buyer_remark)
+                row_idx += 1
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
     def get_cases_reasons(self, case_ids):
         """批量返回指定工单的 reasons，用于前端两阶段加载"""
         if not case_ids:
@@ -287,21 +411,21 @@ class AftersaleService:
 
     # ── 产品型号推断 ────────────────────────────────────────────────────────
 
-    def suggest_product(self, data):
+    def suggest_product(self, data, semantic=True):
         products      = data.get('products', [])
         product_codes = [p.get('code') for p in products if p.get('code')]
         purchase_date = data.get('purchase_date')
         seller_remark = data.get('seller_remark')
         buyer_remark  = data.get('buyer_remark')
-        result = _repo.suggest_product(product_codes, purchase_date, seller_remark, buyer_remark, products)
+        result = _repo.suggest_product(product_codes, purchase_date, seller_remark, buyer_remark, products, semantic=semantic)
         return Result.ok(data=result)
 
     # ── 自动匹配 ────────────────────────────────────────────────────────────
 
-    def auto_match(self, text, buyer_remark=None):
+    def auto_match(self, text, buyer_remark=None, semantic=True):
         if not text:
             return Result.ok(data={'items': [], 'cleaned_text': ''})
-        result = _repo.auto_match(text, buyer_remark=buyer_remark)
+        result = _repo.auto_match(text, buyer_remark=buyer_remark, semantic=semantic)
         return Result.ok(data=result)
 
     # ── 统计 & 图表 ─────────────────────────────────────────────────────────

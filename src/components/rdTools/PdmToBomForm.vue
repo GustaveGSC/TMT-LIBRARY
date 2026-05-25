@@ -10,6 +10,7 @@ import { downloadBlob, pickFile } from '@/utils/download.js'
 // ── 响应式状态 ────────────────────────────────────
 // 'idle' | 'processing' | 'error' | 'ready'
 const state = ref('idle')
+const exporting = ref(false)
 const selectedFilePath = ref('')
 const selectedFileName = ref('')
 const selectedFileObj  = ref(null)   // 网页端存储 File 对象
@@ -179,37 +180,39 @@ function decodeErrorMsg(buf, fallback = '导出失败') {
 
 // 导出 ERP 物料 + BOM
 async function exportAll() {
+  if (exporting.value) return
+  exporting.value = true
   const erpName = `ERP-${firstCode.value}.xlsx`
   const bomName = `BOM-${firstCode.value}.xlsx`
 
-  if (window.electronAPI) {
-    // 桌面端：选文件夹后写文件
-    const dirResult = await window.electronAPI.showOpenDialog({
-      title: '选择导出文件夹',
-      properties: ['openDirectory'],
-    })
-    if (!dirResult?.filePaths?.[0]) return
-    const dir = dirResult.filePaths[0]
-    const sep = dir.includes('/') ? '/' : '\\'
-    const erpPath = `${dir}${sep}${erpName}`
-    const bomPath = `${dir}${sep}${bomName}`
+  try {
+    if (window.electronAPI) {
+      // 桌面端：选文件夹后写文件
+      const dirResult = await window.electronAPI.showOpenDialog({
+        title: '选择导出文件夹',
+        properties: ['openDirectory'],
+      })
+      if (!dirResult?.filePaths?.[0]) return
+      const dir = dirResult.filePaths[0]
+      const sep = dir.includes('/') ? '/' : '\\'
+      const erpPath = `${dir}${sep}${erpName}`
+      const bomPath = `${dir}${sep}${bomName}`
 
-    // 检查同名文件是否已存在
-    const existing = await window.electronAPI.checkFilesExist([erpPath, bomPath]) ?? []
-    if (existing.length > 0) {
-      const names = existing.map(p => p.split(/[\\/]/).pop()).join('、')
-      try {
-        await ElMessageBox.confirm(
-          `以下文件已存在，是否覆盖？\n${names}`,
-          '文件已存在',
-          { confirmButtonText: '覆盖', cancelButtonText: '取消', type: 'warning' }
-        )
-      } catch {
-        return  // 用户取消
+      // 检查同名文件是否已存在
+      const existing = await window.electronAPI.checkFilesExist([erpPath, bomPath]) ?? []
+      if (existing.length > 0) {
+        const names = existing.map(p => p.split(/[\\/]/).pop()).join('、')
+        try {
+          await ElMessageBox.confirm(
+            `以下文件已存在，是否覆盖？\n${names}`,
+            '文件已存在',
+            { confirmButtonText: '覆盖', cancelButtonText: '取消', type: 'warning' }
+          )
+        } catch {
+          return  // 用户取消
+        }
       }
-    }
 
-    try {
       const [resErp, resBom] = await Promise.all([
         http.post('/api/rd/pdm2bom/export-erp', { columns: columns.value, table_data: tableData.value }, { responseType: 'arraybuffer' }),
         http.post('/api/rd/pdm2bom/export-bom', { columns: columns.value, table_data: tableData.value, total_level: totalLevel.value }, { responseType: 'arraybuffer' }),
@@ -219,12 +222,8 @@ async function exportAll() {
       await window.electronAPI.saveFile(erpPath, resErp)
       await window.electronAPI.saveFile(bomPath, resBom)
       ElNotification({ title: '导出成功', message: `${erpName}\n${bomName}\n\n已保存至：${dir}`, type: 'success', duration: 6000 })
-    } catch {
-      ElMessage.error('导出失败')
-    }
-  } else {
-    // 网页端：直接触发浏览器下载
-    try {
+    } else {
+      // 网页端：直接触发浏览器下载
       const [resErp, resBom] = await Promise.all([
         http.post('/api/rd/pdm2bom/export-erp', { columns: columns.value, table_data: tableData.value }, { responseType: 'arraybuffer' }),
         http.post('/api/rd/pdm2bom/export-bom', { columns: columns.value, table_data: tableData.value, total_level: totalLevel.value }, { responseType: 'arraybuffer' }),
@@ -232,11 +231,14 @@ async function exportAll() {
       if (!isValidXlsx(resErp)) { ElMessage.error('ERP 导出失败：' + decodeErrorMsg(resErp)); return }
       if (!isValidXlsx(resBom)) { ElMessage.error('BOM 导出失败：' + decodeErrorMsg(resBom)); return }
       downloadBlob(resErp, erpName)
+      await new Promise(r => setTimeout(r, 500))
       downloadBlob(resBom, bomName)
       ElNotification({ title: '导出成功', message: `${erpName} 和 ${bomName} 已开始下载`, type: 'success', duration: 4000 })
-    } catch {
-      ElMessage.error('导出失败')
     }
+  } catch {
+    ElMessage.error('导出失败')
+  } finally {
+    exporting.value = false
   }
 }
 
@@ -395,9 +397,9 @@ function isErrorRow(ri) {
           共 {{ tableData.length }} 行数据，品号：{{ firstCode }}
         </div>
         <div class="export-buttons">
-          <button class="btn-export" @click="exportAll">
+          <button class="btn-export" :disabled="exporting" @click="exportAll">
             <el-icon><Download /></el-icon>
-            导出（ERP 物料 + BOM）
+            {{ exporting ? '导出中…' : '导出（ERP 物料 + BOM）' }}
           </button>
         </div>
       </div>
@@ -706,5 +708,6 @@ function isErrorRow(ri) {
   background: var(--accent);
   color: #fff;
 }
-.btn-export:hover { background: #e09050; }
+.btn-export:hover:not(:disabled) { background: #e09050; }
+.btn-export:disabled { opacity: 0.55; cursor: not-allowed; }
 </style>

@@ -255,6 +255,7 @@ async function handleLogin() {
         localStorage.removeItem('remembered_username')
       }
       localStorage.setItem('user', JSON.stringify(res.data))
+      localStorage.setItem('login_time', Date.now().toString())
       window.electronAPI ? window.electronAPI.loginSuccess() : router.push('/index')
     } else {
       toast.value?.show(res.message || '登录失败，请重试', 'error')
@@ -295,6 +296,7 @@ async function handleGuest() {
     const res = await http.get('/api/account/guest')
     if (res.success) {
       localStorage.setItem('user', JSON.stringify(res.data))
+      localStorage.setItem('login_time', Date.now().toString())
       window.electronAPI ? window.electronAPI.loginSuccess() : router.push('/index')
     } else {
       toast.value?.show(res.message || '游客登录失败', 'error')
@@ -967,5 +969,55 @@ async function handleGuest() {
     max-width: 100%;
     padding: 44px 32px 20px;
   }
+  /* Web 模式下全屏显示，不再限制为固定卡片 */
+  .login-shell--web {
+    align-items: stretch;
+    justify-content: stretch;
+    background: var(--bg);
+  }
+  .login-shell--web .login-page {
+    width: 100%;
+    height: 100%;
+    min-height: 100vh;
+    border-radius: 0;
+    box-shadow: none;
+    flex-shrink: 0;
+  }
+  .login-shell--web .right-panel {
+    height: 100%;
+    min-height: 100vh;
+    overflow-y: auto;
+  }
+}
+@media (max-width: 400px) {
+  .form-wrapper {
+    padding: 32px 20px 16px;
+  }
+}
+
+/* ── 手机横屏：表单可滚动 ────────────────────────────────── */
+@media (orientation: landscape) and (max-height: 520px) {
+  .login-shell--web .login-page {
+    width: 100%;
+    height: auto;
+    min-height: 100vh;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .login-shell--web {
+    align-items: flex-start;
+    background: var(--bg);
+  }
+  .right-panel {
+    min-height: 100vh;
+    overflow-y: auto;
+    align-items: flex-start;
+    padding-top: 20px;
+  }
+  .form-wrapper {
+    padding: 24px 32px 20px;
+  }
+  .left-panel { display: none; }
+  .login-page { grid-template-columns: 1fr; }
 }
 </style>

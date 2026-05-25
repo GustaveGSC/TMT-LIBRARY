@@ -1,4 +1,5 @@
-from flask import Blueprint, request
+import urllib.parse
+from flask import Blueprint, request, Response
 from services.aftersale import AftersaleService
 
 aftersale_bp = Blueprint('aftersale', __name__)
@@ -81,7 +82,8 @@ def get_reason_usage(reason_id):
 
 @aftersale_bp.post('/suggest-product')
 def suggest_product():
-    return _svc.suggest_product(request.get_json() or {}).to_response()
+    body = request.get_json() or {}
+    return _svc.suggest_product(body, semantic=body.get('semantic', True)).to_response()
 
 
 # ── 待处理订单 ──────────────────────────────────────────────────────────────
@@ -128,6 +130,49 @@ def get_cases():
         reason_category, reason_name, shipping_alias,
         model_code, search, sort_by=sort_by, sort_order=sort_order,
     ).to_response()
+
+
+@aftersale_bp.get('/cases/export')
+def export_cases():
+    status     = request.args.get('status')
+    date_start = request.args.get('date_start')
+    date_end   = request.args.get('date_end')
+    reason_id  = request.args.get('reason_id', type=int)
+    channel    = request.args.get('channel_name')
+    province   = request.args.get('province')
+    city       = request.args.get('city')
+    district   = request.args.get('district')
+    reason_category = request.args.get('reason_category')
+    reason_name     = request.args.get('reason_name')
+    shipping_alias  = request.args.get('shipping_alias')
+    model_code      = request.args.get('model_code')
+    search          = request.args.get('search')
+    sort_by         = request.args.get('sort_by')
+    sort_order      = request.args.get('sort_order', 'desc')
+    try:
+        xlsx_bytes = _svc.export_cases(
+            status=status, date_start=date_start, date_end=date_end,
+            reason_id=reason_id, channel_name=channel, province=province,
+            city=city, district=district, reason_category=reason_category,
+            reason_name=reason_name, shipping_alias=shipping_alias,
+            model_code=model_code, search=search,
+            sort_by=sort_by, sort_order=sort_order,
+        )
+    except Exception as e:
+        from result import Result
+        return Result.fail(f'导出失败：{str(e)}').to_response()
+
+    from datetime import date as _date
+    filename = f'售后数据_{_date.today().strftime("%Y%m%d")}.xlsx'
+    encoded  = urllib.parse.quote(filename)
+    return Response(
+        xlsx_bytes,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={
+            'Content-Disposition': f"attachment; filename*=UTF-8''{encoded}",
+            'Content-Length': str(len(xlsx_bytes)),
+        },
+    )
 
 
 @aftersale_bp.get('/cases/reasons')
@@ -230,7 +275,8 @@ def put_product_remark_dict():
 @aftersale_bp.post('/auto-match')
 def auto_match():
     body = request.get_json() or {}
-    return _svc.auto_match(body.get('text', ''), body.get('buyer_remark', '')).to_response()
+    semantic = body.get('semantic', True)
+    return _svc.auto_match(body.get('text', ''), body.get('buyer_remark', ''), semantic=semantic).to_response()
 
 
 # ── 统计 & 图表 ─────────────────────────────────────────────────────────────

@@ -78,7 +78,9 @@
       "Bash(taskkill //F //IM backend.exe)",
       "Bash(cmd //c \"taskkill /F /IM backend.exe\")",
       "Bash(cmd //c \"handle.exe \\\\\"e:\\\\\\\\Project\\\\\\\\tmt-library\\\\\\\\electron\\\\\\\\resources\\\\\\\\python-backend\\\\\\\\backend.exe\\\\\" 2>&1 | head -10\")",
-      "Bash(powershell -Command 'Get-Process | Where-Object { $_.Path -like '\\\\''*backend*'\\\\'' } | Select-Object Id, Name, Path')"
+      "Bash(powershell -Command 'Get-Process | Where-Object { $_.Path -like '\\\\''*backend*'\\\\'' } | Select-Object Id, Name, Path')",
+      "Bash(scp -r e:/Project/tmt-library/dist-web/. root@47.99.100.138:/var/www/tmt-library/)",
+      "Read(//c/Users/gusta/.tmt-library/models/bge-small-zh-v1.5/**)"
     ],
     "additionalDirectories": [
       "\\tmp",

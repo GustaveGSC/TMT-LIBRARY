@@ -559,4 +559,8 @@ watch(dateRange, onFilterChange)
 :deep(.el-date-editor .el-input__wrapper:hover) { border-color: var(--accent); }
 :deep(.el-date-editor .el-input__inner)         { font-size: 12px; }
 :deep(.el-date-editor .el-range-separator)      { color: var(--text-muted); font-size: 12px; }
+
+@media (max-width: 768px) {
+  .table-wrap { overflow: auto; }
+}
 </style>

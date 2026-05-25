@@ -10,6 +10,7 @@ import AftersaleTable        from './AftersaleTable.vue'
 import ModelDownloadDialog   from '@/components/aftersale/ModelDownloadDialog.vue'
 import http                  from '@/api/http.js'
 import { usePermission }     from '@/composables/usePermission'
+import { isElectron }        from '@/utils/platform'
 
 // ── 路由 ──────────────────────────────────────────
 const router = useRouter()
@@ -31,13 +32,15 @@ const modelDownloadDialog = ref(null)
 onMounted(async () => {
   window.electronAPI?.maximizeApp?.()
   await loadPendingCount()
-  // 检测语义模型是否已安装，未安装则提示下载
-  try {
-    const res = await http.get('/api/aftersale/model/status')
-    if (res.success && !res.data.installed) {
-      modelDownloadDialog.value?.open()
-    }
-  } catch { /* 模型检测失败不影响主流程 */ }
+  // 仅桌面端检测语义模型，网页端模型由服务器管理
+  if (isElectron) {
+    try {
+      const res = await http.get('/api/aftersale/model/status')
+      if (res.success && !res.data.installed) {
+        modelDownloadDialog.value?.open()
+      }
+    } catch { /* 模型检测失败不影响主流程 */ }
+  }
 })
 
 // ── 方法 ──────────────────────────────────────────
@@ -165,5 +168,12 @@ function onCaseConfirmed() {
 .main-content {
   flex: 1; overflow: hidden;
   display: flex; flex-direction: column;
+}
+
+/* ── 移动端响应式（≤768px） ──────────────────── */
+@media (max-width: 768px) {
+  .top-bar { height: auto; min-height: 44px; flex-wrap: wrap; padding: 6px 10px; }
+  .top-left { flex-wrap: wrap; gap: 4px; }
+  .main-content { overflow: auto; }
 }
 </style>

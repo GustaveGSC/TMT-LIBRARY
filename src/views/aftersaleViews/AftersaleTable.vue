@@ -1,7 +1,10 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
 import { ref, watch, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
 import http from '@/api/http.js'
+import { usePermission } from '@/composables/usePermission'
+import { downloadBlob } from '@/utils/download.js'
 
 // ── 列定义（动态宽度列） ───────────────────────────
 const COL_DEFS = [
@@ -108,6 +111,12 @@ const currentSortOrder = ref('desc')
 
 // 展开行
 const expandedRows = ref([])
+
+// 权限
+const { can } = usePermission()
+
+// 导出加载状态
+const exportLoading = ref(false)
 
 // ── 生命周期 ──────────────────────────────────────
 onMounted(() => {
@@ -222,6 +231,48 @@ function minDaysSincePurchase(row) {
   return vals.length ? Math.min(...vals) : null
 }
 
+// 导出当前筛选条件下的全量数据
+async function exportData() {
+  exportLoading.value = true
+  try {
+    const f = filters.value
+    const params = {
+      status:          statusFilter.value || undefined,
+      date_start:      dateRange.value?.[0] || undefined,
+      date_end:        dateRange.value?.[1] || undefined,
+      search:          f.search || undefined,
+      model_code:      f.model_code || undefined,
+      channel_name:    f.channel || undefined,
+      province:        f.province || undefined,
+      city:            f.city || undefined,
+      district:        f.district || undefined,
+      reason_category: f.reason_category || undefined,
+      reason_name:     f.reason_name || undefined,
+      shipping_alias:  f.shipping_alias || undefined,
+      sort_by:         currentSortBy.value || undefined,
+      sort_order:      currentSortOrder.value,
+    }
+    const res = await http.get('/api/aftersale/cases/export', { params, responseType: 'arraybuffer' })
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+    const filename = `售后数据_${today}.xlsx`
+    if (window.electronAPI) {
+      const saveResult = await window.electronAPI.showSaveDialog({
+        defaultPath: filename,
+        filters: [{ name: 'Excel', extensions: ['xlsx'] }],
+      })
+      if (saveResult?.canceled || !saveResult?.filePath) return
+      await window.electronAPI.saveFile(saveResult.filePath, res)
+    } else {
+      downloadBlob(res, filename)
+    }
+    ElMessage.success('导出成功')
+  } catch {
+    ElMessage.error('导出失败，请重试')
+  } finally {
+    exportLoading.value = false
+  }
+}
+
 defineExpose({ refresh: loadData })
 </script>
 
@@ -236,6 +287,12 @@ defineExpose({ refresh: loadData })
         value-format="YYYY-MM-DD" style="width:230px"
         @change="onToolbarFilterChange"
       />
+      <el-button
+        v-if="can('aftersale:export')"
+        size="small" :loading="exportLoading"
+        class="export-btn"
+        @click="exportData"
+      >导出</el-button>
       <span class="total-hint">共 {{ total }} 条</span>
     </div>
 
@@ -536,6 +593,10 @@ defineExpose({ refresh: loadData })
   display: flex; align-items: center; gap: 10px;
   margin-bottom: 10px; flex-wrap: wrap;
 }
+.export-btn {
+  background: var(--accent); color: #fff; border: none; border-radius: 8px;
+}
+.export-btn:hover { background: var(--accent-hover); }
 .total-hint {
   font-size: 12px; color: var(--text-muted); margin-left: auto;
 }
@@ -631,5 +692,9 @@ defineExpose({ refresh: loadData })
   padding: 2px 8px; background: #f5f0e8;
   border: 1px solid var(--border); border-radius: 4px;
   font-size: 11px; color: var(--text-primary);
+}
+
+@media (max-width: 768px) {
+  .table-wrap { overflow: visible; }
 }
 </style>

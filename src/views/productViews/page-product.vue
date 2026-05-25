@@ -639,4 +639,21 @@ onMounted(async () => {
 }
 .dlg-ph-icon { font-size: 36px; color: var(--text-muted); }
 .dlg-ph-text { font-size: 14px; color: var(--text-muted); }
+
+/* ── 移动端响应式（≤768px） ──────────────────── */
+@media (max-width: 768px) {
+  .top-bar { height: auto; min-height: 44px; flex-wrap: wrap; padding: 6px 10px; gap: 4px; }
+  .top-nav { padding: 0 2px; overflow-x: auto; flex-shrink: 0; }
+  .main-content { overflow: auto; }
+  .overview-body { padding: 16px 20px 16px; }
+  .stat-grid, .category-cards { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .tool-section { padding: 12px 16px; }
+  .tool-btns { flex-wrap: wrap; }
+  .quick-grid { flex-wrap: wrap; }
+}
+@media (max-width: 480px) {
+  .stat-grid, .category-cards { grid-template-columns: 1fr; }
+  .overview-body { padding: 12px 14px; }
+  .welcome-title { font-size: 20px; }
+}
 </style>

@@ -1,6 +1,6 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
-import { ref, reactive, computed, watch, nextTick, onMounted } from 'vue'
+import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useFinishedStore } from '@/stores/product'
 import { usePackagedStore  } from '@/stores/product'
@@ -10,6 +10,11 @@ import FinishedExpandRow from './FinishedExpandRow.vue'
 
 const finishedStore = useFinishedStore()
 const packagedStore = usePackagedStore()
+
+// ── 移动端检测 ─────────────────────────────────────
+const isMobile = ref(window.innerWidth <= 768)
+function onResize() { isMobile.value = window.innerWidth <= 768 }
+onBeforeUnmount(() => window.removeEventListener('resize', onResize))
 
 // storeToRefs 保证 sortField/sortOrder/status/lifecycle 响应式可读
 const { sortField, sortOrder, status, lifecycle } = storeToRefs(finishedStore)
@@ -176,6 +181,7 @@ watch(
   (len) => { if (len > 0) requestAnimationFrame(() => calcColWidths()) }
 )
 onMounted(() => {
+  window.addEventListener('resize', onResize)
   if (finishedStore.rawItems.length > 0) requestAnimationFrame(() => calcColWidths())
 })
 
@@ -291,7 +297,7 @@ watch(
           </el-table-column>
 
           <!-- ── 英文名称 ── -->
-          <el-table-column resizable :width="colWidths['name_en'] || 140" show-overflow-tooltip>
+          <el-table-column v-if="!isMobile" resizable :width="colWidths['name_en'] || 140" show-overflow-tooltip>
             <template #header>
               <div class="th-top"><span class="th-lbl">成品名称（英文）</span><button :class="['sort-btn', sortIcon('name_en') !== 'none' ? 'sort-' + sortIcon('name_en') : '']" @click.stop="sortBy('name_en')"></button></div>
               <div class="th-filter-wrap" @click.stop>
@@ -315,7 +321,7 @@ watch(
           </el-table-column>
 
           <!-- ── 系列编码 ── -->
-          <el-table-column resizable :width="colWidths['series_code'] || 120" show-overflow-tooltip>
+          <el-table-column v-if="!isMobile" resizable :width="colWidths['series_code'] || 120" show-overflow-tooltip>
             <template #header>
               <div class="th-top"><span class="th-lbl">系列编码</span><button :class="['sort-btn', sortIcon('series_code') !== 'none' ? 'sort-' + sortIcon('series_code') : '']" @click.stop="sortBy('series_code')"></button></div>
               <div class="th-filter-wrap" @click.stop>
@@ -327,7 +333,7 @@ watch(
           </el-table-column>
 
           <!-- ── 系列名称 ── -->
-          <el-table-column resizable :width="colWidths['series_name'] || 120" show-overflow-tooltip>
+          <el-table-column v-if="!isMobile" resizable :width="colWidths['series_name'] || 120" show-overflow-tooltip>
             <template #header>
               <div class="th-top"><span class="th-lbl">系列名称</span><button :class="['sort-btn', sortIcon('series_name') !== 'none' ? 'sort-' + sortIcon('series_name') : '']" @click.stop="sortBy('series_name')"></button></div>
               <div class="th-filter-wrap" @click.stop>
@@ -339,7 +345,7 @@ watch(
           </el-table-column>
 
           <!-- ── 型号编码 ── -->
-          <el-table-column resizable :width="colWidths['model_code'] || 120" show-overflow-tooltip>
+          <el-table-column v-if="!isMobile" resizable :width="colWidths['model_code'] || 120" show-overflow-tooltip>
             <template #header>
               <div class="th-top"><span class="th-lbl">型号编码</span><button :class="['sort-btn', sortIcon('model_code') !== 'none' ? 'sort-' + sortIcon('model_code') : '']" @click.stop="sortBy('model_code')"></button></div>
               <div class="th-filter-wrap" @click.stop>
@@ -351,7 +357,7 @@ watch(
           </el-table-column>
 
           <!-- ── 产成品清单 ── -->
-          <el-table-column resizable :width="colWidths['packaged_list'] || 160" show-overflow-tooltip>
+          <el-table-column v-if="!isMobile" resizable :width="colWidths['packaged_list'] || 160" show-overflow-tooltip>
             <template #header>
               <div class="th-top"><span class="th-lbl">产成品清单</span></div>
               <div class="th-filter-wrap" @click.stop>
@@ -366,7 +372,7 @@ watch(
           </el-table-column>
 
           <!-- ── 毛重 ── -->
-          <el-table-column resizable :width="colWidths['total_gross_weight'] || 120" show-overflow-tooltip align="right">
+          <el-table-column v-if="!isMobile" resizable :width="colWidths['total_gross_weight'] || 120" show-overflow-tooltip align="right">
             <template #header>
               <div class="th-top"><span class="th-lbl">毛重 (kg)</span><button :class="['sort-btn', sortIcon('total_gross_weight') !== 'none' ? 'sort-' + sortIcon('total_gross_weight') : '']" @click.stop="sortBy('total_gross_weight')"></button></div>
               <div class="th-filter-wrap" @click.stop>
@@ -378,7 +384,7 @@ watch(
           </el-table-column>
 
           <!-- ── 净重 ── -->
-          <el-table-column resizable :width="colWidths['total_net_weight'] || 120" show-overflow-tooltip align="right">
+          <el-table-column v-if="!isMobile" resizable :width="colWidths['total_net_weight'] || 120" show-overflow-tooltip align="right">
             <template #header>
               <div class="th-top"><span class="th-lbl">净重 (kg)</span><button :class="['sort-btn', sortIcon('total_net_weight') !== 'none' ? 'sort-' + sortIcon('total_net_weight') : '']" @click.stop="sortBy('total_net_weight')"></button></div>
               <div class="th-filter-wrap" @click.stop>
@@ -390,7 +396,7 @@ watch(
           </el-table-column>
 
           <!-- ── 体积 ── -->
-          <el-table-column resizable :width="colWidths['total_volume'] || 120" show-overflow-tooltip align="right">
+          <el-table-column v-if="!isMobile" resizable :width="colWidths['total_volume'] || 120" show-overflow-tooltip align="right">
             <template #header>
               <div class="th-top"><span class="th-lbl">体积 (m³)</span><button :class="['sort-btn', sortIcon('total_volume') !== 'none' ? 'sort-' + sortIcon('total_volume') : '']" @click.stop="sortBy('total_volume')"></button></div>
               <div class="th-filter-wrap" @click.stop>
@@ -402,7 +408,7 @@ watch(
           </el-table-column>
 
           <!-- ── 销售市场 ── -->
-          <el-table-column resizable :width="colWidths['market'] || 100" show-overflow-tooltip align="center">
+          <el-table-column v-if="!isMobile" resizable :width="colWidths['market'] || 100" show-overflow-tooltip align="center">
             <template #header>
               <div class="th-top"><span class="th-lbl">销售市场</span><button :class="['sort-btn', sortIcon('market') !== 'none' ? 'sort-' + sortIcon('market') : '']" @click.stop="sortBy('market')"></button></div>
               <div class="th-filter-wrap" @click.stop>
@@ -414,7 +420,7 @@ watch(
           </el-table-column>
 
           <!-- ── 上市年月 ── -->
-          <el-table-column resizable :width="colWidths['listed_yymm'] || 120" show-overflow-tooltip align="center">
+          <el-table-column v-if="!isMobile" resizable :width="colWidths['listed_yymm'] || 120" show-overflow-tooltip align="center">
             <template #header>
               <div class="th-top"><span class="th-lbl">上市年月</span><button :class="['sort-btn', sortIcon('listed_yymm') !== 'none' ? 'sort-' + sortIcon('listed_yymm') : '']" @click.stop="sortBy('listed_yymm')"></button></div>
               <div class="th-filter-wrap" @click.stop>
@@ -426,7 +432,7 @@ watch(
           </el-table-column>
 
           <!-- ── 下市年月 ── -->
-          <el-table-column resizable :width="colWidths['delisted_yymm'] || 120" show-overflow-tooltip align="center">
+          <el-table-column v-if="!isMobile" resizable :width="colWidths['delisted_yymm'] || 120" show-overflow-tooltip align="center">
             <template #header>
               <div class="th-top"><span class="th-lbl">下市年月</span><button :class="['sort-btn', sortIcon('delisted_yymm') !== 'none' ? 'sort-' + sortIcon('delisted_yymm') : '']" @click.stop="sortBy('delisted_yymm')"></button></div>
               <div class="th-filter-wrap" @click.stop>
@@ -438,7 +444,7 @@ watch(
           </el-table-column>
 
           <!-- ── 生命周期 ── -->
-          <el-table-column resizable :width="colWidths['_lifecycle'] || 120" show-overflow-tooltip align="center">
+          <el-table-column v-if="!isMobile" resizable :width="colWidths['_lifecycle'] || 120" show-overflow-tooltip align="center">
             <template #header>
               <div class="th-top"><span class="th-lbl">生命周期</span></div>
               <div class="th-fph"></div>
@@ -739,5 +745,19 @@ watch(
   font-size: 11px; color: #3a7bc8; background: #edf4ff;
   border: 1px solid #c5d9f5; border-radius: 3px; padding: 1px 5px;
   font-family: 'Microsoft YaHei UI','Microsoft YaHei',monospace;
+}
+
+@media (max-width: 768px) {
+  .table-wrap { overflow: auto; }
+  .card-topbar {
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 6px 10px;
+    justify-content: flex-start;
+  }
+  .status-tabs { flex-wrap: wrap; gap: 2px; }
+  .tab-btn { padding: 3px 10px; font-size: 11px; }
+  /* 分页器简化 */
+  :deep(.el-pagination__sizes) { display: none; }
 }
 </style>

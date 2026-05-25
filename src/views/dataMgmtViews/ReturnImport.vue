@@ -2,7 +2,7 @@
 // ── 导入 ──────────────────────────────────────────
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import http from '@/api/http'
+import http, { getBaseURL } from '@/api/http'
 
 // ── 响应式状态 ────────────────────────────────────
 const lastReturnDate = ref('')   // 数据库中最新的销退日期
@@ -149,7 +149,7 @@ async function doImport() {
 
     // Step 2：订阅 SSE 进度流
     await new Promise((resolve, reject) => {
-      const es = new EventSource(`http://127.0.0.1:8765/api/shipping/import/progress/${currentTaskId.value}`)
+      const es = new EventSource(`${getBaseURL()}/api/shipping/import/progress/${currentTaskId.value}`)
 
       es.onmessage = (event) => {
         const data = JSON.parse(event.data)

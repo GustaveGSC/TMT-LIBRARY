@@ -1,8 +1,8 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
-import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted, onBeforeUnmount, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
-import { ArrowDown, Delete, Setting } from '@element-plus/icons-vue'
+import { ArrowDown, Delete, Setting, Close } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import http from '@/api/http'
 import iconBar from '@/assets/icons/btn_bar.png'
@@ -742,9 +742,41 @@ const drillStack = ref([])
 const DRILLABLE_LEVELS = new Set(['category', 'series', 'channel', 'province', 'city'])
 
 // ECharts
-const chartEl   = ref(null)
-let   chartInst = null
-let   resizeObs = null
+const chartEl      = ref(null)
+const chartWrapEl  = ref(null)   // chart-wrap 容器，全屏时用于归还 chartEl
+let   chartInst    = null
+let   resizeObs    = null
+let   lpTimer      = null   // 移动端长按计时器
+let   lpActive     = false  // 长按是否仍有效
+
+// ── 全屏 ──────────────────────────────────────────
+const isFullscreen = ref(false)
+const fsPortrait   = ref(false)  // 进入全屏时是否为竖屏
+
+async function openFullscreen() {
+  fsPortrait.value   = window.innerWidth < window.innerHeight
+  isFullscreen.value = true
+  await nextTick()
+  // 把 ECharts canvas 移入全屏容器
+  const slot = document.querySelector('.fs-chart-slot')
+  if (slot && chartEl.value) slot.appendChild(chartEl.value)
+  requestAnimationFrame(() => chartInst?.resize())
+  // Android 尝试原生全屏（不锁定朝向，允许用户自由旋转）
+  try { await document.documentElement.requestFullscreen?.() } catch {}
+}
+
+async function closeFullscreen() {
+  // 归还 chartEl 到 chart-wrap（prepend 保持在 map-rank-panel 之前）
+  if (chartWrapEl.value && chartEl.value) chartWrapEl.value.prepend(chartEl.value)
+  isFullscreen.value = false
+  await nextTick()
+  requestAnimationFrame(() => chartInst?.resize())
+  try { document.fullscreenElement && await document.exitFullscreen?.() } catch {}
+}
+
+function onFsKeydown(e) {
+  if (e.key === 'Escape' && isFullscreen.value) closeFullscreen()
+}
 
 // ── 生命周期 ──────────────────────────────────────
 onMounted(async () => {
@@ -757,6 +789,33 @@ onMounted(async () => {
 onUnmounted(() => {
   resizeObs?.disconnect()
   if (chartInst) { chartInst.dispose(); chartInst = null }
+  clearTimeout(lpTimer)
+  try { document.fullscreenElement && document.exitFullscreen?.() } catch {}
+})
+
+// 移动端适配
+const isMobile       = ref(window.innerWidth <= 768)
+const filterPanelOpen = ref(false)
+
+function onWindowResize() {
+  isMobile.value = window.innerWidth <= 768
+  // 全屏中实时跟踪朝向，手机转横屏后取消旋转变换
+  if (isFullscreen.value) fsPortrait.value = window.innerWidth < window.innerHeight
+}
+onMounted(() => {
+  window.addEventListener('resize', onWindowResize)
+  window.addEventListener('keydown', onFsKeydown)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', onWindowResize)
+  window.removeEventListener('keydown', onFsKeydown)
+})
+
+// iOS Safari 固定定位滚动修复：筛选面板打开时锁定 body 位置
+watch(filterPanelOpen, (open) => {
+  if (!isMobile.value || window.electronAPI) return
+  document.body.style.position = open ? 'fixed' : ''
+  document.body.style.width    = open ? '100%' : ''
 })
 
 // ── 方法 ──────────────────────────────────────────
@@ -769,6 +828,12 @@ function onSeriesChange()   { filters.value.modelIds = [] }
 
 function toggleComparison(mode) {
   comparisonMode.value = comparisonMode.value === mode ? null : mode
+}
+
+// 移动端维度切换（el-select @change 调用）
+function onMobileDimChange(val) {
+  if (val !== 'province') cityMode.value = false
+  loadChartData()
 }
 
 function resetFilters() {
@@ -974,6 +1039,7 @@ function initChart() {
     if (!chartInst) {
       chartInst = echarts.init(chartEl.value, null, { renderer: 'canvas' })
       // 右击柱子 → 下钻（自定义分组条目跳过）
+      // 桌面端：右键下钻
       chartInst.on('contextmenu', (params) => {
         params.event?.event?.preventDefault?.()
         if (params.componentType !== 'series' || !['bar', 'pie'].includes(params.seriesType)) return
@@ -984,6 +1050,25 @@ function initChart() {
         if (hitGroup) drillDownGroup(hitGroup)
         else drillDown(label)
       })
+      // 移动端：长按 1s 下钻（触屏无右键）
+      chartInst.on('mousedown', (params) => {
+        if (!isMobile.value) return
+        if (params.componentType !== 'series' || !['bar', 'pie'].includes(params.seriesType)) return
+        const label = params.name
+        lpActive = true
+        lpTimer  = setTimeout(() => {
+          if (!lpActive) return
+          lpActive = false
+          const hitGroup = customGroups.value.find(
+            g => activeGroupIds.value.includes(g.id) && g.name === label
+          )
+          if (hitGroup) drillDownGroup(hitGroup)
+          else drillDown(label)
+        }, 1000)
+      })
+      chartInst.on('mouseup',    () => { clearTimeout(lpTimer); lpActive = false })
+      chartInst.on('mousemove',  () => { clearTimeout(lpTimer); lpActive = false })
+      chartInst.on('globalout',  () => { clearTimeout(lpTimer); lpActive = false })
       renderChart()
     } else {
       chartInst.resize()
@@ -1143,7 +1228,9 @@ function buildChartTitle(label) {
 
 // 公共工具区配置
 // withZoom=true 时包含区域缩放（仅直角坐标系图表使用）
+// 手机端不显示工具区（操作空间不足）
 function makeToolbox(withZoom = false) {
+  if (isMobile.value) return { feature: {} }
   return {
     right: 16, top: 12,
     feature: {
@@ -1244,7 +1331,7 @@ function buildBarOption(items) {
         }
         // 可继续下钻（非自定义分组）时显示操作提示
         if (!members && DRILLABLE_LEVELS.has(effectiveGroupBy.value)) {
-          s += `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #e0d4c0;color:#8a7a6a;font-size:12px">右击柱子查看详情</div>`
+          s += `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #e0d4c0;color:#8a7a6a;font-size:12px">${isMobile.value ? '长按柱子查看详情' : '右击柱子查看详情'}</div>`
         }
         return s + '</div>'
       },
@@ -1868,12 +1955,22 @@ watch(groupBy, () => {
 <template>
   <div class="dashboard-root">
 
+    <!-- 移动端遮罩：点击关闭筛选面板 -->
+    <transition name="fade">
+      <div v-if="isMobile && filterPanelOpen" class="filter-backdrop" @click="filterPanelOpen = false" />
+    </transition>
+
     <!-- ── 左侧筛选面板 ──────────────────────────── -->
-    <aside class="filter-panel">
+    <aside class="filter-panel" :class="{ 'is-open': filterPanelOpen }">
+      <!-- 移动端关闭按钮 -->
+      <button v-if="isMobile" class="filter-close-btn" @click="filterPanelOpen = false">
+        <el-icon><Close /></el-icon>
+        关闭筛选
+      </button>
 
       <!-- 查询 + 分组管理 -->
       <div class="panel-top-btns">
-        <button class="btn-query" @click="handleQuery" :disabled="loadingChart">
+        <button class="btn-query" @click="handleQuery(); filterPanelOpen = false" :disabled="loadingChart">
           {{ loadingChart ? '查询中…' : '查询' }}
         </button>
         <button class="btn-group-mgr" @click="showGroupMgr = true" title="管理自定义分组">
@@ -2095,6 +2192,32 @@ watch(groupBy, () => {
       <div class="chart-toolbar">
         <!-- 左侧：面包屑（有下钻时显示），无下钻时占位保证中间居中 -->
         <div class="ct-left">
+          <!-- 移动端：筛选按钮 + 维度选择 + 城市模式 -->
+          <template v-if="isMobile">
+            <button class="ct-filter-btn" @click="filterPanelOpen = true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15">
+                <path d="M3 6h18M6 12h12M9 18h6"/>
+              </svg>
+              筛选
+            </button>
+            <el-select
+              v-model="groupBy"
+              size="small"
+              class="mobile-dim-select"
+              @change="onMobileDimChange"
+            >
+              <el-option v-for="opt in GROUP_BY_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
+            </el-select>
+            <el-switch
+              v-if="groupBy === 'province'"
+              v-model="cityMode"
+              size="small"
+              active-text="城市"
+              active-color="#c4883a"
+              class="mobile-city-switch"
+              @change="loadChartData()"
+            />
+          </template>
           <div v-if="drillStack.length" class="drill-breadcrumb">
             <span class="bc-item bc-link" @click="drillBack(0)">index</span>
             <template v-for="(entry, i) in drillStack" :key="i">
@@ -2148,16 +2271,26 @@ watch(groupBy, () => {
           </button>
         </div>
 
-        <!-- 右侧：数据指标选择 -->
+        <!-- 右侧：数据指标选择 + 全屏按钮 -->
         <div class="ct-right">
-          <el-select v-model="dataMetric" size="default" class="metric-select" style="width: 150px">
+          <el-select v-model="dataMetric" :size="isMobile ? 'small' : 'default'" class="metric-select">
             <el-option v-for="m in METRIC_OPTIONS" :key="m.value" :label="m.label" :value="m.value" />
           </el-select>
+          <button class="ct-btn ct-fs-btn" :title="isFullscreen ? '退出全屏' : '全屏查看'" @click="isFullscreen ? closeFullscreen() : openFullscreen()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
+              <template v-if="!isFullscreen">
+                <path d="M8 3H5a2 2 0 00-2 2v3M21 8V5a2 2 0 00-2-2h-3M16 21h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/>
+              </template>
+              <template v-else>
+                <path d="M8 3v3a2 2 0 01-2 2H3M21 8h-3a2 2 0 01-2-2V3M3 16h3a2 2 0 012 2v3M16 21v-3a2 2 0 012-2h3"/>
+              </template>
+            </svg>
+          </button>
         </div>
       </div>
 
       <!-- 中间：图表 -->
-      <div v-loading="loadingChart" class="chart-wrap" :class="{ 'chart-wrap--with-table': showMapTable }" @contextmenu.prevent>
+      <div ref="chartWrapEl" v-loading="loadingChart" class="chart-wrap" :class="{ 'chart-wrap--with-table': showMapTable }" @contextmenu.prevent>
         <div ref="chartEl" class="chart-canvas"></div>
 
         <!-- 地域维度地图：右侧 Top10 排行表 -->
@@ -2174,8 +2307,8 @@ watch(groupBy, () => {
         </div>
       </div>
 
-      <!-- 底部：类别选择 -->
-      <div class="chart-footer">
+      <!-- 底部：类别选择（移动端已移入 toolbar，桌面端保留） -->
+      <div v-if="!isMobile" class="chart-footer">
         <div class="footer-placeholder">
           <div v-if="groupBy === 'province'" class="footer-city-mode">
             <el-switch v-model="cityMode" size="small" active-text="城市模式" active-color="#c4883a" @change="loadChartData()" />
@@ -2189,7 +2322,7 @@ watch(groupBy, () => {
             <span class="gb-label">{{ opt.label }}</span>
           </button>
         </div>
-        <div class="footer-date-range">{{ dateRangeText }}</div>
+        <div v-if="!isMobile" class="footer-date-range">{{ dateRangeText }}</div>
       </div>
 
     </div>
@@ -2337,6 +2470,50 @@ watch(groupBy, () => {
       </div>
     </el-dialog>
 
+    <!-- ── 全屏覆盖层（Teleport 到 body，避免 stacking context 干扰） ── -->
+  <teleport to="body">
+    <div v-if="isFullscreen" class="fs-overlay" :class="{ 'fs-portrait': fsPortrait }">
+
+      <!-- 全屏工具栏：面包屑 + 维度选择 + 关闭 -->
+      <div class="fs-toolbar">
+        <div class="fs-toolbar-left">
+          <!-- 维度选择 -->
+          <el-select v-model="groupBy" size="small" class="mobile-dim-select" @change="onMobileDimChange">
+            <el-option v-for="opt in GROUP_BY_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
+          </el-select>
+          <!-- 城市模式（地域维度时显示） -->
+          <el-switch
+            v-if="groupBy === 'province'"
+            v-model="cityMode"
+            size="small"
+            active-text="城市"
+            active-color="#c4883a"
+            class="mobile-city-switch"
+            @change="loadChartData()"
+          />
+          <!-- 下钻面包屑（维度选择右侧） -->
+          <div v-if="drillStack.length" class="drill-breadcrumb">
+            <span class="bc-item bc-link" @click="drillBack(0)">index</span>
+            <template v-for="(entry, i) in drillStack" :key="i">
+              <span class="bc-sep">/</span>
+              <span v-if="i < drillStack.length - 1" class="bc-item bc-link" @click="drillBack(i + 1)">{{ entry.label }}</span>
+              <span v-else class="bc-item bc-current">{{ entry.label }}</span>
+            </template>
+          </div>
+        </div>
+        <button class="fs-close-btn" title="退出全屏" @click="closeFullscreen">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+            <path d="M8 3v3a2 2 0 01-2 2H3M21 8h-3a2 2 0 01-2-2V3M3 16h3a2 2 0 012 2v3M16 21v-3a2 2 0 012-2h3"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- 图表容器：chartEl 将通过 JS 移入此处 -->
+      <div class="fs-chart-slot"></div>
+
+    </div>
+  </teleport>
+
   </div>
 </template>
 
@@ -2432,6 +2609,7 @@ watch(groupBy, () => {
 .bc-link { color: #3a7bc8; cursor: pointer; }
 .bc-link:hover { text-decoration: underline; background: rgba(58,123,200,0.08); }
 .bc-current { color: #3a3028; font-weight: 600; }
+.metric-select { width: 150px; }
 :deep(.metric-select .el-input__wrapper) { height: 32px; }
 :deep(.metric-select .el-input__inner) { height: 32px; line-height: 32px; }
 .ct-btn {
@@ -2598,4 +2776,187 @@ watch(groupBy, () => {
   cursor: pointer; transition: background 0.15s;
 }
 .btn-save-group:hover { background: var(--accent-hover); }
+
+/* ── 移动端适配（≤768px） ─────────────────────── */
+@media (max-width: 768px) {
+
+  /* ── 筛选遮罩 ── */
+  .filter-backdrop {
+    position: fixed; inset: 0; z-index: 199;
+    background: rgba(0,0,0,0.35);
+  }
+
+  /* ── 筛选面板：左侧抽屉 ── */
+  .filter-panel {
+    position: fixed; z-index: 200;
+    left: 0; top: 0; bottom: 0;
+    width: 82%; max-width: 320px;
+    transform: translateX(-100%);
+    transition: transform 0.28s ease;
+    background: var(--bg);
+    box-shadow: 4px 0 24px rgba(0,0,0,0.14);
+    overflow-y: auto; overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    padding: 0 10px 24px; /* 左右留 10px 边距 */
+  }
+  .filter-panel.is-open { transform: translateX(0); }
+
+  /* 关闭按钮横向出血到面板边缘 */
+  .filter-close-btn { margin: 0 -10px; width: calc(100% + 20px); }
+
+  /* ── 面板关闭按钮 ── */
+  .filter-close-btn {
+    width: 100%;
+    display: flex; align-items: center; gap: 6px;
+    padding: 14px 16px 10px;
+    border: none; background: transparent;
+    color: var(--text-muted); font-size: 13px; font-family: inherit;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 5px;
+  }
+
+  /* ── content-panel：toolbar(auto) + chart(1fr)，footer 已移除 ── */
+  .content-panel {
+    display: grid;
+    grid-template-rows: auto 1fr;
+    grid-template-columns: 1fr;
+    gap: 6px;
+    overflow: hidden;
+    min-height: 0;
+  }
+  .chart-wrap { min-height: 0; }
+
+  /* ── 工具栏：两行布局（第一行筛选+指标，第二行图表类型） ── */
+  .chart-toolbar {
+    flex-wrap: wrap;
+    padding: 2px 0 4px;
+    row-gap: 6px;
+    column-gap: 4px;
+    align-items: center;
+  }
+  .ct-left   { order: 1; flex: 1 0 auto; min-width: 0; }
+  .ct-right  { order: 2; flex: 0 0 auto; }
+  .ct-center { order: 3; flex: 0 0 100%; display: flex; justify-content: center; }
+
+  /* ── 工具栏内按钮：统一高度 26px ── */
+  .ct-filter-btn {
+    display: inline-flex; align-items: center; gap: 4px;
+    height: 26px; padding: 0 8px;
+    border: 1px solid var(--border); border-radius: 7px;
+    background: var(--bg-card); color: var(--text-muted);
+    font-size: 12px; font-family: inherit; cursor: pointer;
+    transition: all 0.15s; white-space: nowrap; flex-shrink: 0;
+  }
+  .ct-filter-btn:active { border-color: var(--accent); color: var(--accent); }
+  /* 图表类型图标行同比缩小 */
+  .ct-btn { height: 26px; padding: 0 3px; }
+  .ct-btn img { width: 20px; height: 20px; }
+  .ct-btn--labeled { padding: 0 5px; }
+  .ct-label { display: none; }
+  /* metric-select 统一为 26px 高、12px 字（mobile 已切为 size="small"） */
+  .metric-select { width: 105px; }
+  :deep(.metric-select .el-input__wrapper) { height: 26px; padding: 0 8px; }
+  :deep(.metric-select .el-input__inner)   { height: 26px; line-height: 26px; font-size: 12px; }
+
+  /* ── 移动端维度选择 el-select ── */
+  .mobile-dim-select { width: 68px; flex-shrink: 0; }
+  :deep(.mobile-dim-select .el-input__wrapper) { height: 26px; padding: 0 6px; }
+  :deep(.mobile-dim-select .el-input__inner)   { height: 26px; line-height: 26px; font-size: 12px; }
+  .mobile-city-switch { flex-shrink: 0; }
+  :deep(.mobile-city-switch .el-switch__label) { font-size: 11px; }
+}
+
+/* ── 横屏手机：最大化图表高度 ── */
+@media (orientation: landscape) and (max-height: 600px) {
+  /* 筛选面板收窄 */
+  .filter-panel { width: 55%; max-width: 260px; }
+
+  /* 工具栏强制单行（覆盖竖屏两行设置） */
+  .chart-toolbar { flex-wrap: nowrap; padding: 1px 0; row-gap: 0; column-gap: 0; }
+  .ct-left   { order: 0; flex: 1; min-width: 0; }
+  .ct-center { order: 0; flex: 0 0 auto; width: auto; display: flex; padding: 0; }
+  .ct-right  { order: 0; flex: 0 0 auto; }
+}
+
+/* ── 遮罩动画 ── */
+.fade-enter-active, .fade-leave-active { transition: opacity 0.22s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+
+/* ── 全屏按钮（嵌入 ct-right，风格与 ct-btn 一致） ── */
+.ct-fs-btn { margin-left: 4px; }
+
+/* ── 全屏覆盖层 ── */
+.fs-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+
+/* 竖屏时旋转 90° 以横屏展示；手机转横后 fsPortrait=false，此规则移除，overlay 恢复 inset:0 */
+.fs-overlay.fs-portrait {
+  width: 100dvh;
+  height: 100dvw;
+  top: calc((100dvh - 100dvw) / 2);
+  left: calc((100dvw - 100dvh) / 2);
+  transform: rotate(90deg);
+  transform-origin: center center;
+}
+
+/* 全屏内工具栏 */
+.fs-toolbar {
+  flex-shrink: 0;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+  background: rgba(255,255,255,0.65);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(12px);
+  gap: 8px;
+}
+.fs-toolbar-left {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+}
+
+/* 图表容器：撑满覆盖层剩余空间 */
+.fs-chart-slot {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+/* ECharts canvas 在全屏容器内撑满 */
+.fs-chart-slot :deep(.chart-canvas) {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* 退出全屏按钮（在 toolbar 右侧） */
+.fs-close-btn {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+.fs-close-btn:hover { border-color: var(--accent); color: var(--accent); }
 </style>
