@@ -24,7 +24,8 @@ PUT    /api/account/permissions/:id
 GET    /api/version/latest
 GET    /api/version/list
 POST   /api/version/
-POST   /api/version/upload
+POST   /api/version/presign   # 生成 OSS 预签名 PUT URL，body: {filename} → {presign_url, oss_url}；前端直传 OSS 用
+POST   /api/version/upload    # 服务器中转上传 OSS（已不推荐，保留兼容）
 
 POST   /api/product/import/preview
 POST   /api/product/import

@@ -59,11 +59,18 @@
       <!-- 右：版本徽章 + 用户 -->
       <div class="bar-right">
 
-        <!-- 版本徽章：点击检查/查看更新 -->
+        <!-- 版本徽章：点击检查/查看更新（桌面端） -->
         <button v-if="isElectron" class="version-badge" :class="{ 'has-update': updateType !== 'none' }" @click="handleUpdate">
           <span class="version-text">v{{ version }}</span>
           <span v-if="updateType !== 'none'" class="version-dot"></span>
         </button>
+
+        <!-- 下载桌面版按钮（Web 端） -->
+        <button
+          v-if="!isElectron"
+          class="download-badge"
+          @click="router.push('/download')"
+        >↓ 下载桌面版</button>
 
         <div class="bar-divider"></div>
 
@@ -429,6 +436,21 @@ function handleUserSetting() { settingsDrawer.value?.open() }
   background: #e05040;
   border: 1.5px solid var(--bg);
 }
+
+.download-badge {
+  display: flex; align-items: center;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  font-size: 11px;
+  color: var(--text-muted);
+  text-decoration: none;
+  font-family: inherit;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.download-badge:hover { border-color: var(--accent); color: var(--accent); }
 
 .bar-btn {
   position: relative;

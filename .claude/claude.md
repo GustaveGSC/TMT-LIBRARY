@@ -21,10 +21,10 @@
 
 ## 关键路径
 ```
-electron/main/index.ts   # 主进程、IPC、updater 生命周期
+electron/main/index.ts   # 主进程、IPC、updater 生命周期；桌面端直连云端后端（不再启动本地 Flask）
 electron/main/window.ts  # 登录窗 420×640 / 主窗 800×600，frame:false，bg:#ede8dc
-electron/main/python.ts  # Flask 子进程，退出用 spawnSync taskkill
-src/api/http.js          # axios baseURL:127.0.0.1:8765，拦截器已解一层 res.data
+electron/main/python.ts  # 已不使用（桌面端改为直连云端）
+src/api/http.js          # axios；getBaseURL() 已 export：Electron→http://47.99.100.138，Web→VITE_API_BASE 或代理
 src/routers/index.js     # Hash路由：/login /index /product /shipping /data-mgmt /aftersale /rd-tools /admin/*
 src/styles/themes.css    # 全局CSS变量（勿硬编码颜色）
 backend/app.py           # Flask 工厂；SQLAlchemy QueuePool(size=2, pre_ping, recycle=1800) + connect/read/write 超时（见源码）
@@ -121,5 +121,5 @@ const { isAdmin, can, canEditProduct, canViewProduct, canDeleteProduct } = usePe
 ## 版本规则
 - `Beta x.x.x` 或主/次版本变更 → 强制更新
 - 仅修订版变更 → 可选更新（红点提示）
-- 当前版本：`1.1.1`（以 package.json 为准）
+- 当前版本：`1.1.4`（以 package.json 为准）
 - OSS上传 key 格式：`tmt-library/releases/{filename}`（含前缀）
