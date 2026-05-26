@@ -6,9 +6,9 @@ const http = axios.create({ timeout: 60000 })
 let baseURL = null
 
 export const getBaseURL = () => {
-  // 不用 IPC，直接返回固定地址
   if (window.electronAPI) {
-    return 'http://127.0.0.1:8765'
+    // 桌面端直接使用云端后端，不再本地启动 Flask
+    return 'http://47.99.100.138'
   }
   return import.meta.env.VITE_API_BASE ?? 'http://127.0.0.1:8765'
 }

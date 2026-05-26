@@ -2,13 +2,12 @@ import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import * as fs from 'fs'
 import * as path from 'path'
 import { createLoginWindow, createMainWindow } from './window'
-import { startPython, stopPython } from './python'
 import { destroyUpdater, initUpdater } from './updater'
 
 let loginWin: BrowserWindow | null = null
 let mainWin: BrowserWindow | null = null
 
-ipcMain.handle('get-api-base', () => 'http://127.0.0.1:8765')
+ipcMain.handle('get-api-base', () => 'http://47.99.100.138')
 
 // 监听登录成功事件，关闭登录窗口，打开主窗口
 ipcMain.on('login-success', () => {
@@ -67,7 +66,6 @@ ipcMain.on('unmaximize-app', () => {
 })
 
 ipcMain.on('quit-app', () => {
-  stopPython()   // 关闭 Python 后台
   app.quit()
 })
 
@@ -90,16 +88,10 @@ function cleanUpdaterCache() {
 
 app.whenReady().then(async () => {
   cleanUpdaterCache()
-  if (app.isPackaged) await startPython()
   loginWin = createLoginWindow()
   initUpdater(loginWin)   // 登录页也需要 updater（强制更新遮罩使用同一套逻辑）
 })
 
 app.on('window-all-closed', () => {
-  stopPython()
   if (process.platform !== 'darwin') app.quit()
-})
-
-app.on('before-quit', () => {
-  stopPython()
 })

@@ -254,6 +254,7 @@ function handleUserSetting() { settingsDrawer.value?.open() }
   background: var(--bg);
   display: flex;
   flex-direction: column;
+  justify-content: center;
   position: relative;
   overflow: hidden;
   font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
