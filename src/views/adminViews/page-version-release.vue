@@ -8,11 +8,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import http, { getBaseURL } from '@/api/http'
-import axios from 'axios'
-
-// 上传专用实例：不设 timeout，大文件传输时间不可预测
-const uploadHttp = axios.create({ timeout: 0, baseURL: getBaseURL() })
+import http from '@/api/http'
 import WindowControls from '@/components/common/WindowControls.vue'
 
 // ── 路由 ──────────────────────────────────
@@ -75,18 +71,30 @@ const uploading     = ref(false)
 const uploadPercent = ref(0)
 const uploadStage   = ref('')
 
-// 上传单个文件到 OSS，返回 URL；progress 回调接收 0~1
+// 上传单个文件到 OSS（直传），返回 OSS URL；progress 回调接收 0~1
 async function uploadToOss(file, onProgress) {
-  const fd = new FormData()
-  fd.append('file', file)
-  fd.append('type', 'installer')
-  const res = await uploadHttp.post('/api/version/upload', fd, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-    onUploadProgress: e => onProgress(e.loaded / e.total),
+  // 1. 从后端获取预签名 PUT URL
+  const res = await http.post('/api/version/presign', { filename: file.name })
+  if (!res.success) throw new Error(res.message || '获取上传凭证失败')
+  const { presign_url, oss_url } = res.data
+
+  // 2. 直接 PUT 到 OSS，带进度回调
+  await new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.upload.onprogress = e => {
+      if (e.lengthComputable) onProgress(e.loaded / e.total)
+    }
+    xhr.onload = () => {
+      if (xhr.status === 200) resolve()
+      else reject(new Error(`OSS 上传失败: ${xhr.status} ${xhr.responseText}`))
+    }
+    xhr.onerror = () => reject(new Error('上传连接失败'))
+    xhr.open('PUT', presign_url)
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream')
+    xhr.send(file)
   })
-  const data = res.data
-  if (!data.success) throw new Error(data.message || '上传失败')
-  return data.data.url
+
+  return oss_url
 }
 
 async function handleSubmit() {

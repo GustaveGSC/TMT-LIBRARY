@@ -83,6 +83,24 @@ def create_version():
     return version_service.create(version, description, download_url, mac_download_url).to_response()
 
 
+@version_bp.post("/presign")
+def presign_upload():
+    """生成 OSS 预签名 PUT URL，供前端直接上传文件到 OSS（避免经过服务器中转）。"""
+    body     = request.get_json() or {}
+    filename = body.get("filename", "").strip()
+    if not filename:
+        return Result.fail("文件名不能为空").to_response()
+    key = f"tmt-library/releases/{filename}"
+    try:
+        bucket      = get_bucket()
+        presign_url = bucket.sign_url('PUT', key, 3600,
+                                      headers={'Content-Type': 'application/octet-stream'})
+        oss_url     = f"{OSS_BASE_URL}/{key}"
+        return Result.ok(data={"presign_url": presign_url, "oss_url": oss_url}).to_response()
+    except Exception as e:
+        return Result.fail(f"生成签名失败：{str(e)}").to_response()
+
+
 @version_bp.post("/upload")
 def upload_file():
     file = request.files.get("file")
