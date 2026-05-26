@@ -8,7 +8,7 @@ import ProductImage  from './ProductImage.vue'
 import ProductChart  from './ProductChart.vue'
 import { ArrowLeft, Upload, Setting, Folder, Collection, Memo, Timer } from '@element-plus/icons-vue'
 import { usePermission } from '@/composables/usePermission'
-import http from '@/api/http'
+import http, { getBaseURL } from '@/api/http'
 
 // ── 权限 ──────────────────────────────────────────
 const { canEditProduct } = usePermission()
@@ -122,7 +122,7 @@ async function handleLifecycleUpdate() {
 
     await new Promise((resolve, reject) => {
       const es = new EventSource(
-        `http://127.0.0.1:8765/api/product/lifecycle/progress/${taskId}`
+        `${getBaseURL()}/api/product/lifecycle/progress/${taskId}`
       )
       es.onmessage = (event) => {
         const data = JSON.parse(event.data)

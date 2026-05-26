@@ -8,11 +8,11 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import http from '@/api/http'
+import http, { getBaseURL } from '@/api/http'
 import axios from 'axios'
 
 // 上传专用实例：不设 timeout，大文件传输时间不可预测
-const uploadHttp = axios.create({ timeout: 0, baseURL: 'http://127.0.0.1:8765' })
+const uploadHttp = axios.create({ timeout: 0, baseURL: getBaseURL() })
 import WindowControls from '@/components/common/WindowControls.vue'
 
 // ── 路由 ──────────────────────────────────

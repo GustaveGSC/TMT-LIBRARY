@@ -2,7 +2,7 @@
 // ── 导入 ──────────────────────────────────────────
 import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
-import http from '@/api/http'
+import http, { getBaseURL } from '@/api/http'
 
 // ── 响应式状态 ────────────────────────────────────
 const running = ref(false)
@@ -33,7 +33,7 @@ async function handleUpdate() {
     // 订阅 SSE 进度流
     await new Promise((resolve, reject) => {
       const es = new EventSource(
-        `http://127.0.0.1:8765/api/product/lifecycle/progress/${taskId}`
+        `${getBaseURL()}/api/product/lifecycle/progress/${taskId}`
       )
       es.onmessage = (event) => {
         const data = JSON.parse(event.data)
