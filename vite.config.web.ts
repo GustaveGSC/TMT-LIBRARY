@@ -22,7 +22,11 @@ export default defineConfig({
   server: {
     port: 5174,
     proxy: {
-      '/api': 'http://127.0.0.1:8765'
+      '/api': {
+        target: 'http://47.99.100.138',
+        changeOrigin: true,
+        bypass: (req) => req.url?.match(/\.(?:js|ts|vue)(\?|$)/) ? req.url : undefined
+      }
     }
   }
 })
