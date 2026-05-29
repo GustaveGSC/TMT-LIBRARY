@@ -80,7 +80,14 @@
       "Bash(cmd //c \"handle.exe \\\\\"e:\\\\\\\\Project\\\\\\\\tmt-library\\\\\\\\electron\\\\\\\\resources\\\\\\\\python-backend\\\\\\\\backend.exe\\\\\" 2>&1 | head -10\")",
       "Bash(powershell -Command 'Get-Process | Where-Object { $_.Path -like '\\\\''*backend*'\\\\'' } | Select-Object Id, Name, Path')",
       "Bash(scp -r e:/Project/tmt-library/dist-web/. root@47.99.100.138:/var/www/tmt-library/)",
-      "Read(//c/Users/gusta/.tmt-library/models/bge-small-zh-v1.5/**)"
+      "Read(//c/Users/gusta/.tmt-library/models/bge-small-zh-v1.5/**)",
+      "Bash(sshpass -p 'TMT08011409gsc' ssh -o StrictHostKeyChecking=no root@47.99.100.138 'systemctl status gunicorn | head -15 && echo \"---\" && cd /opt/tmt-library/backend && python3.11 -c \"from services.aftersale import AftersaleService; import inspect; src = inspect.getsource\\(AftersaleService.get_chart_data\\); print\\(\\\\\"OK\\\\\" if \\\\\"reason_category\\\\\" in src else \\\\\"OLD\\\\\"\\)\" 2>&1')",
+      "Bash(ssh -o StrictHostKeyChecking=no -o PasswordAuthentication=yes root@47.99.100.138 'systemctl status gunicorn | head -15')",
+      "Bash(scp e:/Project/tmt-library/backend/routes/aftersale/__init__.py e:/Project/tmt-library/backend/services/aftersale/__init__.py e:/Project/tmt-library/backend/database/repository/aftersale/__init__.py e:/Project/tmt-library/backend/database/models/aftersale/__init__.py tmt:/var/www/tmt-library/backend/routes/aftersale/)",
+      "Bash(rsync -az --checksum e:/Project/tmt-library/dist-web-build/. tmt:/var/www/tmt-library/)",
+      "Bash(ssh tmt:*)",
+      "Bash(ssh -o ServerAliveInterval=10 tmt \"fuser -k 8765/tcp 2>/dev/null; sleep 1; systemctl restart gunicorn && sleep 2 && systemctl is-active gunicorn\")",
+      "Bash(scp -o ServerAliveInterval=10 -r e:/Project/tmt-library/dist-web/. tmt:/var/www/tmt-library/)"
     ],
     "additionalDirectories": [
       "\\tmp",

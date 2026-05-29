@@ -115,10 +115,11 @@ GET    /api/aftersale/filter-options                  # 表格筛选选项（raw
                                                       #   返回：{channels, provinces, cities, districts,
                                                       #          reason_categories, reason_names,
                                                       #          shipping_aliases, return_aliases, model_codes}
-POST   /api/aftersale/auto-match                      # body: {text}
+POST   /api/aftersale/auto-match                      # body: {text, buyer_remark?, semantic?, model_id?}
+                                                      #   model_id 可选：对历史无关联原因软降权 40%（冷启动时不过滤）
                                                       #   返回 Top5：reason_id, name, category_name, confidence,
-                                                      #   source('keyword'|'history'), matched_keywords[], keyword_score,
-                                                      #   history_score, total_score（历史阶段仅关键词候选不足时启用）
+                                                      #   source('keyword'|'history'|'case'|'semantic'), matched_keywords[],
+                                                      #   keyword_score, case_score, history_score, semantic_score, total_score
 GET    /api/aftersale/reason-keyword-rules            # 读取词典（仅 enabled 行；stopwords/fault_terms/component_terms/short_keep_terms 为 string[]）
 PUT    /api/aftersale/reason-keyword-rules            # 全量覆盖词典表（先 delete 再插入）；body 同 GET 的 data 形状：
                                                       #   { stopwords[], fault_terms[], component_terms[], short_keep_terms[],
@@ -133,6 +134,7 @@ POST   /api/aftersale/reasons                         # 创建原因
 PUT    /api/aftersale/reasons/:id                     # 更新原因
 DELETE /api/aftersale/reasons/:id                     # 删除原因
 GET    /api/aftersale/reasons/:id/usage               # 查询使用次数
+POST   /api/aftersale/reasons/:source_id/merge-into/:target_id  # 合并原因（迁移引用+合并关键词+删除 source）
 GET    /api/aftersale/reason-categories               # 所有一级分类
 GET    /api/aftersale/shipping-ignore-terms           # 发货物料匹配过滤词列表
 POST   /api/aftersale/shipping-ignore-terms           # 新增过滤词 {term}
@@ -150,7 +152,8 @@ GET    /api/aftersale/stats                           # 统计摘要（pending/c
 GET    /api/aftersale/chart-options                   # 图表筛选选项（channels/provinces/categories）
 POST   /api/aftersale/chart-filter-options            # 联动筛选选项，body: {date_start?, date_end?, channel_names?, provinces?, cities?, model_ids?, reason_ids?, reason_category_ids?, shipping_alias_ids?, return_alias_ids?}
                                                       #   返回：{channels, provinces, cities, model_ids, reason_ids, shipping_alias_ids, return_alias_ids}（跨维度联动过滤）
-POST   /api/aftersale/chart-data                      # 图表聚合数据，body: {group_by('product'|'reason'|'shipping_alias'|'channel'|'province'), date_start?, date_end?, max_days_since_purchase?, channel_names?, provinces?, cities?, model_ids?, category_ids?, series_ids?, reason_ids?, reason_category_ids?, shipping_alias_ids?, return_alias_ids?}
+POST   /api/aftersale/chart-data                      # 图表聚合数据，body: {group_by('product'|'reason_category'|'reason'|'shipping_alias'|'channel'|'province'), date_start?, date_end?, max_days_since_purchase?, channel_names?, provinces?, cities?, model_ids?, category_ids?, series_ids?, reason_ids?, reason_category_ids?, shipping_alias_ids?, return_alias_ids?}
+                                                      #   reason_category：按一级分类聚合；reason：按具体原因聚合（通常在 reason_category 下钻后使用）
 ```
 
 ## /api/product/stats 返回结构

@@ -4,6 +4,7 @@ import { ref, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Edit, Delete, Check, Close } from '@element-plus/icons-vue'
 import http from '@/api/http.js'
+import AftersaleCasesDrawer from '@/components/aftersale/AftersaleCasesDrawer.vue'
 
 // ── Props / Emits ─────────────────────────────────
 const props = defineProps({
@@ -66,9 +67,22 @@ const categories  = ref([])
 const activeCatId = ref(null)
 const groups      = ref([])
 const editingCat  = ref(null)   // null | { id: number|null, name: string }
-const reasonForm  = ref(null)   // null | { id?, name, keywords, sort_order, category_id }
+const reasonForm  = ref(null)   // null | { id?, name, keywords, negative_keywords, sort_order, category_id }
 const reasonError = ref('')
 const kwInput     = ref('')
+const negKwInput  = ref('')
+
+// 查看数据抽屉
+const casesDrawer      = ref(false)
+const casesDrawerFilter = ref({})
+const casesDrawerTitle  = ref('')
+
+function openCasesDrawer() {
+  if (!reasonForm.value?.id) return
+  casesDrawerFilter.value = { reason_id: reasonForm.value.id }
+  casesDrawerTitle.value  = `「${reasonForm.value.name}」相关售后数据`
+  casesDrawer.value = true
+}
 
 // ── 发货物料简称库状态 ─────────────────────────────
 const shippingAliases = ref([])
@@ -77,6 +91,18 @@ const editingShipping = ref(null)
 const shippingError   = ref('')
 const shipCodeInput   = ref('')   // 产品代码输入框
 const shippingSearch  = ref('')   // 发货简称搜索词
+
+// 简称「查看数据」抽屉
+const shippingCasesDrawer      = ref(false)
+const shippingCasesDrawerFilter = ref({})
+const shippingCasesDrawerTitle  = ref('')
+
+function openShippingCasesDrawer() {
+  if (!editingShipping.value?.id) return
+  shippingCasesDrawerFilter.value = { shipping_alias: editingShipping.value.id }
+  shippingCasesDrawerTitle.value  = `「${editingShipping.value.name}」相关售后数据`
+  shippingCasesDrawer.value = true
+}
 
 // ── 发货物料匹配过滤词状态 ─────────────────────────
 const ignoreTerms      = ref([])    // [{id, term}]
@@ -377,24 +403,27 @@ async function deleteCategory(cat) {
 function startNewReason() {
   editingCat.value = null
   reasonForm.value = {
-    id: null, name: '', keywords: '', sort_order: 0,
+    id: null, name: '', keywords: '', negative_keywords: '', sort_order: 0,
     category_id: activeCatId.value,
   }
   reasonError.value = ''
   kwInput.value     = ''
+  negKwInput.value  = ''
 }
 
 function startEditReason(reason) {
   editingCat.value = null
   reasonForm.value = {
-    id:          reason.id,
-    name:        reason.name,
-    keywords:    reason.keywords || '',
-    sort_order:  reason.sort_order || 0,
-    category_id: reason.category_id ?? activeCatId.value,
+    id:                reason.id,
+    name:              reason.name,
+    keywords:          reason.keywords || '',
+    negative_keywords: reason.negative_keywords || '',
+    sort_order:        reason.sort_order || 0,
+    category_id:       reason.category_id ?? activeCatId.value,
   }
   reasonError.value = ''
   kwInput.value     = ''
+  negKwInput.value  = ''
 }
 
 function cancelReason() {
@@ -406,15 +435,48 @@ async function submitReason() {
   const name = (reasonForm.value?.name || '').trim()
   if (!name) { reasonError.value = '名称不能为空'; return }
 
+  const isNew = reasonForm.value.id === null
+
+  // 编辑时检测是否与已有原因重名（排除自身）
+  if (!isNew) {
+    const allReasons = groups.value.flatMap(g => g.reasons || [])
+    const duplicate = allReasons.find(r => r.name === name && r.id !== reasonForm.value.id)
+    if (duplicate) {
+      try {
+        await ElMessageBox.confirm(
+          `原因「${name}」已存在。是否将当前原因合并进「${name}」？\n合并后历史工单引用将指向「${name}」，关键词取两者并集，当前原因将被删除。`,
+          '合并原因',
+          { confirmButtonText: '合并', cancelButtonText: '取消', type: 'warning' }
+        )
+      } catch { return }
+
+      submitting.value = true
+      try {
+        const res = await http.post(`/api/aftersale/reasons/${reasonForm.value.id}/merge-into/${duplicate.id}`)
+        if (res.success) {
+          ElMessage.success('已合并')
+          reasonForm.value = null
+          await loadAll()
+          emit('updated')
+        } else {
+          reasonError.value = res.message || '合并失败'
+        }
+      } finally {
+        submitting.value = false
+      }
+      return
+    }
+  }
+
   submitting.value = true
   try {
     const payload = {
       name,
-      category_id: reasonForm.value.category_id ?? null,
-      keywords:    reasonForm.value.keywords || '',
-      sort_order:  Number(reasonForm.value.sort_order) || 0,
+      category_id:       reasonForm.value.category_id ?? null,
+      keywords:          reasonForm.value.keywords || '',
+      negative_keywords: reasonForm.value.negative_keywords || '',
+      sort_order:        Number(reasonForm.value.sort_order) || 0,
     }
-    const isNew = reasonForm.value.id === null
     const res = isNew
       ? await http.post('/api/aftersale/reasons', payload)
       : await http.put(`/api/aftersale/reasons/${reasonForm.value.id}`, payload)
@@ -479,6 +541,27 @@ function onKwConfirm() {
   kwInput.value = ''
 }
 
+// 负向关键词操作（平行于正向关键词）
+function negKws(str) { return (str || '').split(',').map(s => s.trim()).filter(Boolean) }
+function addNegKeyword(keyword) {
+  const kw = (keyword || '').trim()
+  if (!kw || !reasonForm.value) return
+  const existing = negKws(reasonForm.value.negative_keywords)
+  if (!existing.includes(kw)) {
+    reasonForm.value.negative_keywords = [...existing, kw].join(',')
+  }
+}
+function removeNegKeyword(idx) {
+  if (!reasonForm.value) return
+  const list = negKws(reasonForm.value.negative_keywords)
+  list.splice(idx, 1)
+  reasonForm.value.negative_keywords = list.join(',')
+}
+function onNegKwConfirm() {
+  addNegKeyword(negKwInput.value)
+  negKwInput.value = ''
+}
+
 // ── 发货物料简称操作 ───────────────────────────────
 
 function startNewShipping() {
@@ -523,6 +606,38 @@ async function submitShipping() {
   const name = (editingShipping.value?.name || '').trim()
   if (!name) { shippingError.value = '简称不能为空'; return }
 
+  const isNew = editingShipping.value.id === null
+
+  // 编辑时检测是否与已有简称重名（排除自身）
+  if (!isNew) {
+    const duplicate = shippingAliases.value.find(a => a.name === name && a.id !== editingShipping.value.id)
+    if (duplicate) {
+      try {
+        await ElMessageBox.confirm(
+          `简称「${name}」已存在。是否将当前简称合并进「${name}」？\n合并后历史工单引用将指向「${name}」，关键词取两者并集，当前简称将被删除。`,
+          '合并简称',
+          { confirmButtonText: '合并', cancelButtonText: '取消', type: 'warning' }
+        )
+      } catch { return }
+
+      submitting.value = true
+      try {
+        const res = await http.post(`/api/aftersale/shipping-aliases/${editingShipping.value.id}/merge-into/${duplicate.id}`)
+        if (res.success) {
+          ElMessage.success('已合并')
+          editingShipping.value = null
+          await loadAll()
+          emit('updated')
+        } else {
+          shippingError.value = res.message || '合并失败'
+        }
+      } finally {
+        submitting.value = false
+      }
+      return
+    }
+  }
+
   submitting.value = true
   try {
     const payload = {
@@ -530,7 +645,6 @@ async function submitShipping() {
       keywords:   editingShipping.value.keywords,
       sort_order: Number(editingShipping.value.sort_order) || 0,
     }
-    const isNew = editingShipping.value.id === null
     const res = isNew
       ? await http.post('/api/aftersale/shipping-aliases', payload)
       : await http.put(`/api/aftersale/shipping-aliases/${editingShipping.value.id}`, payload)
@@ -798,6 +912,20 @@ async function deleteAmbiguousTerm(item) {
             </div>
 
             <div class="form-row">
+              <label class="form-label">负向关键词
+                <span class="form-label-hint">命中时降低匹配分</span>
+              </label>
+              <div class="tag-editor">
+                <div class="tag-list">
+                  <el-tag v-for="(kw, i) in negKws(reasonForm.negative_keywords)" :key="i"
+                    closable size="small" type="danger" @close="removeNegKeyword(i)">{{ kw }}</el-tag>
+                </div>
+                <el-input v-model="negKwInput" size="small" placeholder="输入负向关键词，回车添加"
+                  style="margin-top:6px" @keyup.enter="onNegKwConfirm" />
+              </div>
+            </div>
+
+            <div class="form-row">
               <label class="form-label">排序</label>
               <el-input-number v-model="reasonForm.sort_order" :min="0" :step="1"
                 controls-position="right" style="width:100px" />
@@ -806,6 +934,11 @@ async function deleteAmbiguousTerm(item) {
             <div v-if="reasonError" class="form-error">{{ reasonError }}</div>
             <div class="form-actions">
               <el-button size="small" @click="cancelReason">取消</el-button>
+              <el-button
+                v-if="reasonForm.id"
+                size="small"
+                @click="openCasesDrawer"
+              >查看数据</el-button>
               <el-button size="small" type="primary" :loading="submitting" @click="submitReason">
                 {{ reasonForm.id ? '保存' : '创建' }}
               </el-button>
@@ -900,6 +1033,11 @@ async function deleteAmbiguousTerm(item) {
             <div v-if="shippingError" class="form-error">{{ shippingError }}</div>
             <div class="form-actions">
               <el-button size="small" @click="cancelShipping">取消</el-button>
+              <el-button
+                v-if="editingShipping.id"
+                size="small"
+                @click="openShippingCasesDrawer"
+              >查看数据</el-button>
               <el-button size="small" type="primary" :loading="submitting" @click="submitShipping">
                 {{ editingShipping.id ? '保存' : '创建' }}
               </el-button>
@@ -1159,6 +1297,18 @@ async function deleteAmbiguousTerm(item) {
 
     </div>
   </el-dialog>
+
+  <AftersaleCasesDrawer
+    v-model="casesDrawer"
+    :filter="casesDrawerFilter"
+    :title="casesDrawerTitle"
+  />
+
+  <AftersaleCasesDrawer
+    v-model="shippingCasesDrawer"
+    :filter="shippingCasesDrawerFilter"
+    :title="shippingCasesDrawerTitle"
+  />
 </template>
 
 <style scoped>

@@ -8,6 +8,7 @@ import iconReason   from '@/assets/icons/btn_reason.png'
 import iconMaterial from '@/assets/icons/btn_material.png'
 import iconShip     from '@/assets/icons/btn_ship.png'
 import iconRegion   from '@/assets/icons/btn_region.png'
+import AftersaleCasesDrawer from '@/components/aftersale/AftersaleCasesDrawer.vue'
 
 // ── 常量 ──────────────────────────────────────────
 const FONT = "'Microsoft YaHei UI','Microsoft YaHei','PingFang SC',sans-serif"
@@ -21,8 +22,9 @@ const DATE_SHORTCUTS = [
 ]
 
 // 子维度 Tab（不含产品，产品是默认视图）
+// 原因 Tab 默认进入一级分类视图（reason_category），右击可下钻至具体原因（reason）
 const DIMS = [
-  { key: 'reason',         label: '原因', icon: iconReason   },
+  { key: 'reason_category', label: '原因', icon: iconReason   },
   { key: 'shipping_alias', label: '物料', icon: iconMaterial },
   { key: 'channel',        label: '渠道', icon: iconShip     },
   { key: 'province',       label: '地域', icon: iconRegion   },
@@ -44,7 +46,7 @@ const sections = reactive({
 // 筛选值
 const filters = ref({
   dateRange:            (() => { const s = new Date(); s.setMonth(s.getMonth() - 1); return [s, new Date()] })(),
-  maxDaysSincePurchase: 1825, // 售后间隔上限（天），null = 不限
+  maxDaysSincePurchase: null, // 售后间隔上限（天），null = 不限
   categoryIds:          [],
   seriesIds:            [],
   modelIds:             [],
@@ -72,9 +74,12 @@ const available = ref({
   shipping_alias_ids: null,
 })
 
-const loadingOpts      = ref(false)
-const filterCollapsed  = ref(false)
-const hideNoSales      = ref(false)  // 隐藏无同期发货的数据项
+const loadingOpts         = ref(false)
+const filterCollapsed     = ref(false)
+// 无同期发货数据处理模式：all=全显示 | hide=隐藏但不影响占比计算 | exclude=从所有计算中剔除
+const noSalesMode         = ref('all')
+// 原因维度跳过分类级别，直接进入具体原因视图
+const skipReasonCategory  = ref(false)
 let   _filterTimer = null
 let   _chartTimer  = null
 let   _chartCache  = new Map()       // key: groupBy值('product'/'reason'/...)，value: 接口返回 data
@@ -86,10 +91,17 @@ const loadingChart = ref(false)
 const chartEl      = ref(null)
 let   chartInst    = null
 
-// 产品维度下钻面包屑：[{ label, savedCategoryIds, savedSeriesIds, savedModelIds }]
+// 数据抽屉
+const casesDrawer       = ref(false)
+const casesDrawerFilter = ref({})
+const casesDrawerTitle  = ref('售后数据')
+
+// 产品维度下钻面包屑：[{ label, savedCategoryIds, savedSeriesIds, savedModelIds, savedChartData }]
 const drillStack = ref([])
 // 防止 drillDown/drillBack 修改 filters 时触发清栈
-let   _isDrilling = false
+let   _isDrilling    = false
+// 下钻返回时暂存待恢复的图表快照，loadChartData 命中后直接渲染，跳过 API 请求
+let   _drillBackData = null
 
 // ── 计算属性 ──────────────────────────────────────
 
@@ -211,6 +223,7 @@ onBeforeUnmount(() => {
 // 任意筛选变化 → 清空图表缓存 + 防抖刷新联动候选选项（始终自动）
 watch(filters, () => {
   _chartCache.clear()
+  if (!_isDrilling) _drillBackData = null  // 手动筛选时取消待恢复的下钻快照
   clearTimeout(_filterTimer)
   _filterTimer = setTimeout(() => loadCrossFilterOptions(), 300)
 }, { deep: true })
@@ -238,10 +251,25 @@ watch(
 )
 
 // 维度 Tab 切换 → 刷新图表
-watch(groupBy, () => loadChartData())
+watch(groupBy, () => {
+  if (!_isDrilling) _drillBackData = null  // 手动切 Tab 时取消待恢复的下钻快照
+  loadChartData()
+})
 
-// 隐藏无同期发货 → 直接重渲染（不重新请求数据）
-watch(hideNoSales, () => renderChart())
+// 无同期发货模式切换 → 清除缓存并重新请求数据
+// exclude 模式涉及后端系列过滤，必须重新请求；hide/all 切换也清缓存保证数据一致
+watch(noSalesMode, () => {
+  _chartCache.clear()
+  loadChartData()
+})
+
+// 产品层级变化时：若处于"隐藏"模式但已不在系列层级，自动回到"所有数据"
+// hide 模式只对系列层级有意义（隐藏本期无销售的系列），切到品类/型号层自动重置
+watch(effectiveProductLevel, (newLevel) => {
+  if (noSalesMode.value === 'hide' && newLevel !== 'series') {
+    noSalesMode.value = 'all'
+  }
+})
 
 // ── 方法 ──────────────────────────────────────────
 
@@ -260,18 +288,20 @@ async function loadStaticOptions() {
 function buildFilterBody() {
   const [start, end] = filters.value.dateRange || []
   return {
-    date_start:              start ? formatDate(start) : undefined,
-    date_end:                end   ? formatDate(end)   : undefined,
-    max_days_since_purchase: filters.value.maxDaysSincePurchase ?? undefined,
-    category_ids:            filters.value.categoryIds,
-    series_ids:              filters.value.seriesIds,
-    model_ids:               filters.value.modelIds,
-    reason_ids:              filters.value.reasonIds,
-    reason_category_ids:     filters.value.reasonCategoryIds,
-    shipping_alias_ids:      filters.value.shippingAliasIds,
-    channel_names:           filters.value.channelNames,
-    provinces:               filters.value.provinces,
-    cities:                  filters.value.cities,
+    date_start:               start ? formatDate(start) : undefined,
+    date_end:                 end   ? formatDate(end)   : undefined,
+    max_days_since_purchase:  filters.value.maxDaysSincePurchase ?? undefined,
+    category_ids:             filters.value.categoryIds,
+    series_ids:               filters.value.seriesIds,
+    model_ids:                filters.value.modelIds,
+    reason_ids:               filters.value.reasonIds,
+    reason_category_ids:      filters.value.reasonCategoryIds,
+    shipping_alias_ids:       filters.value.shippingAliasIds,
+    channel_names:            filters.value.channelNames,
+    provinces:                filters.value.provinces,
+    cities:                   filters.value.cities,
+    // exclude 模式：后端剔除同期无发货的系列所属工单
+    exclude_no_sales_series:  noSalesMode.value === 'exclude',
   }
 }
 
@@ -295,6 +325,15 @@ async function loadChartData() {
     return
   }
 
+  // 下钻返回：直接使用快照，填充缓存后跳过 API 请求
+  if (_drillBackData !== null) {
+    _chartCache.set(cacheKey, _drillBackData)
+    chartData.value = _drillBackData
+    _drillBackData  = null
+    renderChart()
+    return
+  }
+
   loadingChart.value = true
   try {
     const body = { ...buildFilterBody(), group_by: cacheKey }
@@ -303,7 +342,11 @@ async function loadChartData() {
       _chartCache.set(cacheKey, res.data)
       chartData.value = res.data
       renderChart()
+    } else {
+      console.error('[Chart] API error:', res.message)
     }
+  } catch (err) {
+    console.error('[Chart] Request failed:', err)
   } finally {
     loadingChart.value = false
   }
@@ -373,13 +416,15 @@ function buildChartTitle() {
     return '全部区域'
   }
 
-  const dimLabel = groupBy.value ? (DIMS.find(d => d.key === groupBy.value)?.label ?? '') + '分布' : '产品分布'
+  // reason 和 reason_category 都属于原因维度
+  const _dimKeyLabel = groupBy.value === 'reason' ? '原因' : (DIMS.find(d => d.key === groupBy.value)?.label ?? '')
+  const dimLabel = groupBy.value ? _dimKeyLabel + '分布' : '产品分布'
   const gby = groupBy.value
   let parts
-  if (gby === 'channel')        parts = [channelDesc(), prodDesc(), reasonDesc(), regionDesc()]
-  else if (gby === 'province')  parts = [regionDesc(), prodDesc(), reasonDesc(), channelDesc()]
-  else if (gby === 'reason')    parts = [reasonDesc(), prodDesc(), channelDesc(), regionDesc()]
-  else                          parts = [prodDesc(), reasonDesc(), channelDesc(), regionDesc()]
+  if (gby === 'channel')                     parts = [channelDesc(), prodDesc(), reasonDesc(), regionDesc()]
+  else if (gby === 'province')              parts = [regionDesc(), prodDesc(), reasonDesc(), channelDesc()]
+  else if (gby === 'reason' || gby === 'reason_category') parts = [reasonDesc(), prodDesc(), channelDesc(), regionDesc()]
+  else                                       parts = [prodDesc(), reasonDesc(), channelDesc(), regionDesc()]
 
   // 去掉"全部"的默认项，只保留有意义的描述
   const defaults = new Set(['全部品类', '全部原因', '全部渠道', '全部区域'])
@@ -429,26 +474,33 @@ function renderChart() {
   if (!chartInst || !chartData.value) return
   let items = chartData.value.items || []
   // 仅产品视图下过滤"无同期发货"数据（维度视图 sale_ratio 本就全为 null，不适用此逻辑）
-  if (hideNoSales.value && groupBy.value === null) {
+  // hide 模式：从图表中隐藏，但占比计算仍基于全量（保留 allItems 传入）
+  // exclude 模式：从图表和所有占比计算中完全剔除
+  const allItems = items.slice()  // 全量快照（hide 模式下用于占比分母）
+  if (noSalesMode.value !== 'all' && groupBy.value === null) {
     items = items.filter(i => i.sale_ratio !== null && i.sale_ratio !== undefined)
   }
   if (!items.length) { chartInst.clear(); return }
 
   if (groupBy.value === null) {
     // 产品视图：柱状图 + 占比折线 + 累计占比（Pareto）
-    chartInst.setOption(buildProductOption(items), true)
+    // hide 模式：传 allItems 作为占比分母；exclude 模式：传 null（用过滤后数据计算）
+    const baseItems = noSalesMode.value === 'hide' ? allItems : null
+    chartInst.setOption(buildProductOption(items, baseItems), true)
   } else {
     // 子维度视图：标准柱状图
     chartInst.setOption(buildDimOption(items), true)
   }
 }
 
-/** 产品视图图表配置：柱 + 占比折线 + 累计折线，右击可下钻 */
-function buildProductOption(items) {
+/** 产品视图图表配置：柱 + 占比折线 + 累计折线，右击可下钻
+ * baseItems: hide 模式下传全量数据作为占比分母；null 则用 items 自身 */
+function buildProductOption(items, baseItems = null) {
   const names  = items.map(i => i.name)
   const values = items.map(i => i.value)
-  // 过滤后用实际 items 之和重新作分母，保证占比基于当前可见数据
-  const total  = values.reduce((s, v) => s + v, 0) || 1
+  // baseItems 非 null 时（hide 模式）：占比分母基于全量；否则基于当前可见 items
+  const totalBase = baseItems ?? items
+  const total  = totalBase.map(i => i.value).reduce((s, v) => s + v, 0) || 1
 
   const pctData      = values.map(v => total > 0 ? Math.round(v / total * 1000) / 10 : 0)
   const rawSaleRatio  = items.map(i => i.sale_ratio ?? null)
@@ -573,7 +625,7 @@ function buildProductOption(items) {
         name: levelLabel, type: 'bar', data: values, yAxisIndex: 0,
         itemStyle: { color: '#c4883a', borderRadius: [3, 3, 0, 0] },
         emphasis: { itemStyle: { color: '#e09050' } },
-        label: { show: names.length <= 16, position: 'top', fontSize: 12, color: '#3a3028', fontFamily: FONT, fontWeight: 'bold' },
+        label: { show: true, position: 'top', fontSize: 12, color: '#3a3028', fontFamily: FONT, fontWeight: 'bold' },
       },
       {
         name: '占比', type: 'line', data: pctData, yAxisIndex: 1,
@@ -596,7 +648,7 @@ function buildProductOption(items) {
         itemStyle: { color: '#7a5cbf' },
         label: {
           show: true, fontSize: 11, color: '#7a5cbf', fontFamily: FONT,
-          formatter: p => p.value === 101 ? '' : `${p.value}%`,
+          formatter: p => p.value === 101 ? '' : `${(+p.value).toFixed(2)}%`,
         },
         markLine: (() => {
           const overall = chartData.value.summary?.overall_ratio
@@ -643,7 +695,8 @@ function buildDimOption(items) {
   }
 
   const rotate   = names.length > 8 ? 30 : 0
-  const dimLabel = DIMS.find(d => d.key === groupBy.value)?.label ?? ''
+  // reason 和 reason_category 都属于原因维度
+  const dimLabel = groupBy.value === 'reason' ? '原因' : (DIMS.find(d => d.key === groupBy.value)?.label ?? '')
   const ROW = (marker, name, val) =>
     `<div style="display:flex;justify-content:space-between;align-items:center;gap:20px;line-height:1.8">` +
     `<span>${marker}${name}</span><span style="font-weight:600">${val}</span></div>`
@@ -676,15 +729,17 @@ function buildDimOption(items) {
         const shipped   = dataItem?.shipped   ?? 0
         const srColor   = '#7a5cbf'
         const srMarker  = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${srColor};margin-right:4px"></span>`
+        const xName = params[0]?.name ?? ''
         let s = `<div style="font-family:${FONT};font-size:13px;min-width:150px">`
-        s += `<div style="font-weight:600;margin-bottom:4px;color:#3a3028">${params[0]?.name}</div>`
+        s += `<div style="font-weight:600;margin-bottom:4px;color:#3a3028">${xName}</div>`
         if (bar)   s += ROW(bar.marker,   '件数',    bar.value)
         if (pct)   s += ROW(pct.marker,   '占比',    `${pct.value}%`)
         if (cumul) s += ROW(cumul.marker, '累计占比', `${cumul.value}%`)
         if (hasSaleRatio || shipped > 0 || saleRatio !== null) {
           s += ROW(srMarker, '销售占比', fmtSaleRatio(saleRatio))
         }
-        s += `<div style="margin-top:6px;border-top:1px solid #e0d4c0;padding-top:4px;color:#8a7a6a;font-size:11px">右击查看产品详情</div>`
+        const drillHint = groupBy.value === 'reason_category' ? '右击查看具体原因' : '右击查看产品详情'
+        s += `<div style="margin-top:6px;border-top:1px solid #e0d4c0;padding-top:4px;color:#8a7a6a;font-size:11px">${drillHint}</div>`
         return s + '</div>'
       },
     },
@@ -752,7 +807,7 @@ function buildDimOption(items) {
         itemStyle: { color: '#7a5cbf' },
         label: {
           show: true, fontSize: 11, color: '#7a5cbf', fontFamily: FONT,
-          formatter: p => p.value === 101 ? '' : `${p.value}%`,
+          formatter: p => p.value === 101 ? '' : `${(+p.value).toFixed(2)}%`,
         },
         markLine: (() => {
           const overall = chartData.value.summary?.overall_ratio
@@ -790,24 +845,34 @@ function drillDim(dimName) {
     savedChannelNames:     [...filters.value.channelNames],
     savedProvinces:        [...filters.value.provinces],
     savedCities:           [...filters.value.cities],
+    savedChartData:        chartData.value,
   })
   _isDrilling = true
-  if (key === 'reason') {
+  if (key === 'reason_category') {
+    // 一级分类下钻：筛选该分类 → 切换到具体原因视图（reason）
+    const group = allReasonGroups.value.find(g => g.category_name === dimName)
+    if (group) filters.value.reasonCategoryIds = [group.category_id]
+    groupBy.value = 'reason'
+  } else if (key === 'reason') {
+    // 具体原因下钻：筛选该原因 → 切到产品视图
     let id = null
     for (const g of allReasonGroups.value) {
       const r = (g.reasons || []).find(r => r.name === dimName)
       if (r) { id = r.id; break }
     }
     if (id != null) filters.value.reasonIds = [id]
+    groupBy.value = null
   } else if (key === 'shipping_alias') {
     const alias = allShippingAliases.value.find(a => a.name === dimName)
     if (alias) filters.value.shippingAliasIds = [alias.id]
+    groupBy.value = null
   } else if (key === 'channel') {
     filters.value.channelNames = [dimName]
+    groupBy.value = null
   } else if (key === 'province') {
     filters.value.provinces = [dimName]
+    groupBy.value = null
   }
-  groupBy.value = null
   nextTick(() => { _isDrilling = false })
 }
 
@@ -817,12 +882,13 @@ function drillDown(label) {
   const level = effectiveProductLevel.value
   if (level === 'model') return
 
-  // 保存当前 filter 快照
+  // 保存当前 filter 快照与图表数据快照（用于返回时直接恢复，跳过 API 请求）
   drillStack.value.push({
     label,
     savedCategoryIds: [...filters.value.categoryIds],
     savedSeriesIds:   [...filters.value.seriesIds],
     savedModelIds:    [...filters.value.modelIds],
+    savedChartData:   chartData.value,
   })
 
   _isDrilling = true
@@ -834,7 +900,10 @@ function drillDown(label) {
     filters.value.modelIds    = []
   } else if (level === 'series') {
     let seriesId = null
+    // 必须在当前已选品类范围内查找，避免跨品类同名系列拿到错误 id
+    const selectedCatIds = new Set(filters.value.categoryIds)
     for (const c of categoryTree.value) {
+      if (selectedCatIds.size > 0 && !selectedCatIds.has(c.id)) continue
       const s = (c.series || []).find(s => s.code === label)
       if (s) { seriesId = s.id; break }
     }
@@ -847,7 +916,8 @@ function drillDown(label) {
 
 function drillBack(idx) {
   const snap = drillStack.value[idx]
-  _isDrilling = true
+  _isDrilling    = true
+  _drillBackData = snap.savedChartData ?? null  // 暂存快照，loadChartData 命中后跳过 API 请求
   filters.value.categoryIds = snap.savedCategoryIds
   filters.value.seriesIds   = snap.savedSeriesIds
   filters.value.modelIds    = snap.savedModelIds
@@ -859,6 +929,9 @@ function drillBack(idx) {
     filters.value.provinces          = snap.savedProvinces
     filters.value.cities             = snap.savedCities
     groupBy.value = snap.savedGroupBy
+  } else {
+    // 产品下钻返回：强制回到产品视图（快照是产品数据，维度视图须同步重置）
+    groupBy.value = null
   }
   drillStack.value = drillStack.value.slice(0, idx)
   nextTick(() => { _isDrilling = false })
@@ -869,7 +942,19 @@ function drillBack(idx) {
 function toggleSection(key) { sections[key] = !sections[key] }
 
 // Tab 可取消（再次点击 = 回到产品视图）
-function selectDim(key) { groupBy.value = groupBy.value === key ? null : key }
+// 原因 Tab：reason_category 和 reason 都属于原因维度，均视为激活态；再次点击回到产品视图
+// skipReasonCategory 勾选时：原因 Tab 直接进入具体原因（reason）视图，跳过分类层级
+function selectDim(key) {
+  if (key === 'reason_category') {
+    if (groupBy.value === 'reason_category' || groupBy.value === 'reason') {
+      groupBy.value = null
+    } else {
+      groupBy.value = skipReasonCategory.value ? 'reason' : 'reason_category'
+    }
+  } else {
+    groupBy.value = groupBy.value === key ? null : key
+  }
+}
 
 function onCategoryChange() { filters.value.seriesIds = []; filters.value.modelIds = [] }
 function onSeriesChange()   { filters.value.modelIds = [] }
@@ -881,11 +966,97 @@ function resetFilters() {
   groupBy.value    = null
   Object.assign(filters.value, {
     dateRange:            (() => { const s = new Date(); s.setMonth(s.getMonth() - 1); return [s, new Date()] })(),
-    maxDaysSincePurchase: 1825,
+    maxDaysSincePurchase: null,
     categoryIds: [], seriesIds: [], modelIds: [],
     reasonCategoryIds: [], reasonIds: [], shippingAliasIds: [],
     channelNames: [], provinces: [], cities: [],
   })
+}
+
+// ── 数据抽屉 ──────────────────────────────────────
+
+/** 右上角「查看数据」按钮：将当前图表所有筛选条件完整传递给 cases 列表 */
+function openCasesDrawer() {
+  const [start, end] = filters.value.dateRange || []
+  const csv = arr => arr.length ? arr.join(',') : undefined
+  casesDrawerFilter.value = {
+    date_start:               start ? formatDate(start) : undefined,
+    date_end:                 end   ? formatDate(end)   : undefined,
+    max_days_since_purchase:  filters.value.maxDaysSincePurchase ?? undefined,
+    model_ids:                csv(filters.value.modelIds),
+    series_ids:               csv(filters.value.seriesIds),
+    category_ids:             csv(filters.value.categoryIds),
+    reason_ids:               csv(filters.value.reasonIds),
+    reason_category_ids:      csv(filters.value.reasonCategoryIds),
+    shipping_alias_ids:       csv(filters.value.shippingAliasIds),
+    channel_names:            csv(filters.value.channelNames),
+    provinces:                csv(filters.value.provinces),
+    cities:                   csv(filters.value.cities),
+  }
+  casesDrawerTitle.value = buildDrawerTitle()
+  casesDrawer.value = true
+}
+
+/** 根据当前筛选状态构建抽屉标题 */
+function buildDrawerTitle() {
+  const parts = []
+  // 产品：型号 > 系列 > 品类
+  if (filters.value.modelIds.length === 1) {
+    outer: for (const c of categoryTree.value) for (const s of c.series || []) {
+      const m = (s.models || []).find(m => m.id === filters.value.modelIds[0])
+      if (m) { parts.push(m.model_code); break outer }
+    }
+  } else if (filters.value.modelIds.length > 1) {
+    parts.push('多个型号')
+  } else if (filters.value.seriesIds.length === 1) {
+    for (const c of categoryTree.value) {
+      const s = (c.series || []).find(s => s.id === filters.value.seriesIds[0])
+      if (s) { parts.push(s.code); break }
+    }
+  } else if (filters.value.seriesIds.length > 1) {
+    parts.push('多个系列')
+  } else if (filters.value.categoryIds.length === 1) {
+    const cat = categoryTree.value.find(c => c.id === filters.value.categoryIds[0])
+    if (cat) parts.push(cat.name)
+  } else if (filters.value.categoryIds.length > 1) {
+    parts.push('多个品类')
+  }
+  // 原因：具体原因 > 原因分类
+  if (filters.value.reasonIds.length === 1) {
+    for (const g of allReasonGroups.value) {
+      const r = (g.reasons || []).find(r => r.id === filters.value.reasonIds[0])
+      if (r) { parts.push(r.name); break }
+    }
+  } else if (filters.value.reasonIds.length > 1) {
+    parts.push('多个原因')
+  } else if (filters.value.reasonCategoryIds.length === 1) {
+    const grp = allReasonGroups.value.find(g => g.category_id === filters.value.reasonCategoryIds[0])
+    if (grp) parts.push(grp.category_name)
+  } else if (filters.value.reasonCategoryIds.length > 1) {
+    parts.push('多个原因分类')
+  }
+  // 发货物料
+  if (filters.value.shippingAliasIds.length === 1) {
+    const a = allShippingAliases.value.find(a => a.id === filters.value.shippingAliasIds[0])
+    if (a) parts.push(a.name)
+  } else if (filters.value.shippingAliasIds.length > 1) {
+    parts.push('多个物料')
+  }
+  // 渠道
+  if (filters.value.channelNames.length === 1) parts.push(filters.value.channelNames[0])
+  else if (filters.value.channelNames.length > 1) parts.push('多个渠道')
+  // 地域
+  const regionSrc = filters.value.cities.length ? filters.value.cities : filters.value.provinces
+  if (regionSrc.length === 1) parts.push(regionSrc[0])
+  else if (regionSrc.length > 1) parts.push('多个区域')
+  // 日期
+  const [start, end] = filters.value.dateRange || []
+  const dateStr = start && end ? `${formatDate(start)} ~ ${formatDate(end)}` : ''
+  const desc = parts.join(' · ')
+  if (desc && dateStr) return `售后数据 · ${desc} · ${dateStr}`
+  if (desc) return `售后数据 · ${desc}`
+  if (dateStr) return `售后数据 · ${dateStr}`
+  return '售后数据'
 }
 
 // 查询按钮：手动触发图表刷新（时间筛选变更后必须通过此按钮）
@@ -1131,7 +1302,7 @@ defineExpose({ refresh })
               v-for="dim in DIMS"
               :key="dim.key"
               class="gb-btn"
-              :class="{ active: groupBy === dim.key }"
+              :class="{ active: groupBy === dim.key || (dim.key === 'reason_category' && groupBy === 'reason') }"
               @click="selectDim(dim.key)"
             >
               <img :src="dim.icon" class="gb-icon" />
@@ -1140,8 +1311,7 @@ defineExpose({ refresh })
           </div>
         </div>
         <div class="ct-right">
-          <el-checkbox v-model="hideNoSales" class="hide-no-sales-check">隐藏当前未销售产品数据</el-checkbox>
-          <button class="btn-view-data">查看数据</button>
+          <button class="btn-view-data" @click="openCasesDrawer">查看数据</button>
         </div>
       </div>
 
@@ -1151,8 +1321,28 @@ defineExpose({ refresh })
         <div ref="chartEl" class="chart-canvas"></div>
       </div>
 
+      <!-- 图表底部控制栏 -->
+      <div class="chart-bottom-bar">
+        <div class="cbb-left">
+          <el-checkbox v-model="skipReasonCategory" class="chart-ctrl-check">跳过原因分类</el-checkbox>
+        </div>
+        <div class="cbb-right">
+          <el-radio-group v-model="noSalesMode" class="no-sales-radio">
+            <el-radio value="all">所有数据</el-radio>
+            <el-radio value="hide" :disabled="groupBy !== null || effectiveProductLevel !== 'series'">隐藏当前未销售产品数据</el-radio>
+            <el-radio value="exclude">不记录当前未销售产品数据</el-radio>
+          </el-radio-group>
+        </div>
+      </div>
 
     </div>
+
+    <!-- 数据抽屉 -->
+    <AftersaleCasesDrawer
+      v-model="casesDrawer"
+      :filter="casesDrawerFilter"
+      :title="casesDrawerTitle"
+    />
 
   </div>
 </template>
@@ -1268,18 +1458,31 @@ defineExpose({ refresh })
   cursor: pointer; transition: all 0.15s;
 }
 .btn-view-data:hover { border-color: var(--accent); color: var(--accent); }
-.hide-no-sales-check {
-  margin-right: 10px;
-  font-size: 12px;
-  color: var(--text-muted);
+
+/* 图表底部控制栏 */
+.chart-bottom-bar {
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 4px 6px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 9px;
 }
-:deep(.hide-no-sales-check .el-checkbox__label) {
-  font-size: 12px;
-  color: var(--text-muted);
-  font-family: var(--font-family);
+.cbb-left  { display: flex; align-items: center; }
+.cbb-right { display: flex; align-items: center; }
+
+.chart-ctrl-check { font-size: 12px; }
+:deep(.chart-ctrl-check .el-checkbox__label) {
+  font-size: 12px; color: var(--text-muted); font-family: var(--font-family);
 }
-:deep(.hide-no-sales-check .el-checkbox__inner) {
-  border-radius: 4px;
+:deep(.chart-ctrl-check .el-checkbox__inner) { border-radius: 4px; }
+
+.no-sales-radio { display: flex; align-items: center; gap: 4px; }
+:deep(.no-sales-radio .el-radio__label) {
+  font-size: 12px; color: var(--text-muted); font-family: var(--font-family); padding-left: 5px;
+}
+:deep(.no-sales-radio .el-radio) { margin-right: 4px; height: auto; }
+:deep(.no-sales-radio .el-radio.is-checked .el-radio__label) { color: var(--accent); }
+:deep(.no-sales-radio .el-radio__input.is-checked .el-radio__inner) {
+  background: var(--accent); border-color: var(--accent);
 }
 
 /* 折叠按钮 */

@@ -34,23 +34,25 @@ class AftersaleReason(db.Model):
     # 关联一级分类，nullable 允许暂未归类的原因
     category_id = db.Column(db.Integer,     db.ForeignKey('aftersale_reason_category.id',
                                              ondelete='SET NULL'), nullable=True)
-    keywords    = db.Column(db.Text,        nullable=True)   # 逗号分隔关键词
-    sort_order  = db.Column(db.Integer,     nullable=False, default=0)
-    use_count   = db.Column(db.Integer,     nullable=False, default=0)  # 被引用次数
-    created_at  = db.Column(db.DateTime,    nullable=False, default=now_cst)
+    keywords           = db.Column(db.Text,        nullable=True)   # 逗号分隔关键词
+    negative_keywords  = db.Column(db.Text,        nullable=True)   # 逗号分隔负向关键词
+    sort_order         = db.Column(db.Integer,     nullable=False, default=0)
+    use_count          = db.Column(db.Integer,     nullable=False, default=0)  # 被引用次数
+    created_at         = db.Column(db.DateTime,    nullable=False, default=now_cst)
 
     case_reasons = db.relationship('AftersaleCaseReason', backref='reason', lazy=True)
 
     def to_dict(self):
         return {
-            'id':            self.id,
-            'name':          self.name,
-            'category_id':   self.category_id,
-            'category_name': self.category_obj.name if self.category_obj else None,
-            'keywords':      self.keywords or '',
-            'sort_order':    self.sort_order,
-            'use_count':     self.use_count,
-            'created_at':    self.created_at.strftime('%Y-%m-%d') if self.created_at else None,
+            'id':                self.id,
+            'name':              self.name,
+            'category_id':       self.category_id,
+            'category_name':     self.category_obj.name if self.category_obj else None,
+            'keywords':          self.keywords or '',
+            'negative_keywords': self.negative_keywords or '',
+            'sort_order':        self.sort_order,
+            'use_count':         self.use_count,
+            'created_at':        self.created_at.strftime('%Y-%m-%d') if self.created_at else None,
         }
 
 
@@ -154,9 +156,10 @@ class AftersaleCase(db.Model):
     """售后工单，每个电商订单号一条，聚合该订单所有物料"""
     __tablename__ = 'aftersale_case'
     __table_args__ = (
-        db.Index('ix_aftersale_case_order_no',     'ecommerce_order_no'),
-        db.Index('ix_aftersale_case_shipped_date', 'shipped_date'),
-        db.Index('ix_aftersale_case_status',       'status'),
+        db.Index('ix_aftersale_case_order_no',      'ecommerce_order_no'),
+        db.Index('ix_aftersale_case_shipped_date',  'shipped_date'),
+        db.Index('ix_aftersale_case_status',        'status'),
+        db.Index('ix_aftersale_case_status_date',   'status', 'shipped_date'),
     )
 
     id                 = db.Column(db.Integer,     primary_key=True, autoincrement=True)
@@ -270,6 +273,11 @@ class AftersaleCaseReason(db.Model):
             'model_id':            self.model_id,
             'model_code':          self.product_model.model_code if self.product_model else None,
             'model_name':          self.product_model.name       if self.product_model else None,
+            'series_id':              self.product_model.series_id              if self.product_model else None,
+            'series_code':            self.product_model.series.code             if self.product_model and self.product_model.series else None,
+            'series_name':            self.product_model.series.name             if self.product_model and self.product_model.series else None,
+            'product_category_id':    self.product_model.series.category_id      if self.product_model and self.product_model.series else None,
+            'product_category_name':  self.product_model.series.category.name    if self.product_model and self.product_model.series and self.product_model.series.category else None,
             'shipping_alias_id':   self.shipping_alias_id,
             'shipping_alias_name': self.shipping_alias.name   if self.shipping_alias   else None,
 

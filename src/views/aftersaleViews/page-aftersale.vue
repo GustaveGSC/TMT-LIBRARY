@@ -32,11 +32,11 @@ const modelDownloadDialog = ref(null)
 onMounted(async () => {
   window.electronAPI?.maximizeApp?.()
   await loadPendingCount()
-  // 仅桌面端检测语义模型，网页端模型由服务器管理
-  if (isElectron) {
+  // 仅桌面端检测语义模型（本地 IPC，不经过服务器）
+  if (isElectron && window.electronAPI?.modelManager) {
     try {
-      const res = await http.get('/api/aftersale/model/status')
-      if (res.success && !res.data.installed) {
+      const status = await window.electronAPI.modelManager.status()
+      if (!status.installed) {
         modelDownloadDialog.value?.open()
       }
     } catch { /* 模型检测失败不影响主流程 */ }

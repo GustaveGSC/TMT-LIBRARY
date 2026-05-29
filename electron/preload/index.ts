@@ -63,6 +63,31 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 用系统默认浏览器打开外部链接
   openExternal: (url: string) => shell.openExternal(url),
+
+  // ── 语义模型管理 ───────────────────────────────
+  modelManager: {
+    /** 检查安装状态 { installed, ready } */
+    status: (): Promise<{ installed: boolean; ready: boolean }> =>
+      ipcRenderer.invoke('model:status'),
+
+    /** 触发后台下载（进度通过 onProgress 事件推送） */
+    download: (): Promise<void> =>
+      ipcRenderer.invoke('model:download'),
+
+    /** 主动轮询当前下载进度 */
+    getProgress: () => ipcRenderer.invoke('model:progress'),
+
+    /** 订阅下载进度事件，返回取消订阅函数 */
+    onProgress: (cb: (data: any) => void): (() => void) => {
+      const handler = (_: Electron.IpcRendererEvent, data: any) => cb(data)
+      ipcRenderer.on('model:progress', handler)
+      return () => ipcRenderer.removeListener('model:progress', handler)
+    },
+
+    /** 对文本列表编码，返回归一化向量矩阵 number[][] */
+    encode: (texts: string[]): Promise<number[][]> =>
+      ipcRenderer.invoke('model:encode', texts),
+  },
 })
 
 // 类型声明（在 src/env.d.ts 中引用）

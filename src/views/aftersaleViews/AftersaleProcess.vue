@@ -86,6 +86,9 @@ const reasonCategories = ref([])   // [{id, name, sort_order}]
 // 原因按分类分组（含二级原因列表）
 const reasonGroups = ref([])       // [{category_id, category_name, reasons:[{id,name,...}]}]
 
+// 本地语义评分：原因向量缓存（跨工单复用，原因库更新后自动失效）
+let _reasonVecCache = { key: '', vecs: /** @type {number[][]|null} */(null) }
+
 // 售后内容列表
 // 每项：{ category_id, series_id, model_id,
 //         shipping_alias_id, reason_category_id, reason_id }
@@ -104,18 +107,21 @@ const matchStatus = computed(() => {
 
   const hasProduct = !!d.source
   const hasAlias   = !!d.alias_id
-  const hasReason  = (d.reason_candidates?.length > 0)  // 仅关键词匹配算有原因；纯历史建议不计入
+  // 检查原因是否已实际填入第一条内容（区别于"有候选但未达填入阈值"的情况）
+  const hasReason  = !!(contentItems.value[0]?.reason_id)
 
   // 可忽略：售后产品未找到匹配
   if (!hasProduct) {
     return { level: 'ignore', label: '可忽略', tip: '未匹配到售后产品，该工单可能无需处理' }
   }
 
-  // 可直接确认：系列高置信 + 型号高/空置信 + 日期有效 + 有原因 + 有发货简称
-  const seriesOk = d.series_confidence === 'high'
-  const modelOk  = d.model_confidence === 'high' || d.model_confidence == null
-  const dateOk   = d.date_ok !== false
-  if (hasProduct && seriesOk && modelOk && dateOk && hasReason && hasAlias) {
+  // 可直接确认：系列高置信 + 型号高/空置信 + 日期有效 + 原因已填且置信度充足 + 有发货简称
+  const seriesOk      = d.series_confidence === 'high'
+  const modelOk       = d.model_confidence === 'high' || d.model_confidence == null
+  const dateOk        = d.date_ok !== false
+  const topCandScore  = d.reason_candidates?.[0]?.total_score ?? 0
+  const reasonConfOk  = topCandScore >= 0.55   // 关键词命中或强历史语义才算置信充足
+  if (hasProduct && seriesOk && modelOk && dateOk && hasReason && reasonConfOk && hasAlias) {
     return { level: 'auto', label: '直接确认', tip: '系列与型号高置信匹配，购买日期在售，原因与简称均已匹配' }
   }
 
@@ -126,6 +132,7 @@ const matchStatus = computed(() => {
   else if (!modelOk)      reasons.push('型号置信度低')
   if (!dateOk)            reasons.push('购买日期不在生命周期内')
   if (!hasReason)         reasons.push('未匹配到售后原因')
+  else if (!reasonConfOk) reasons.push('原因置信度不足')
   if (!hasAlias)          reasons.push('未匹配到发货简称')
   return { level: 'confirm', label: '待核实', tip: reasons.join('；') || '请核实匹配结果后确认' }
 })
@@ -262,6 +269,87 @@ async function loadAliases() {
     shippingIgnoreTerms.value  = ignoreRes.value.data
 }
 
+// ── 本地语义评分（桌面端专用）────────────────────────────────────────────────
+// 用 bge-small 对原因名+关键词编码，与 query 做余弦相似度，补充服务端未召回的候选。
+// candidates 数组原地修改，函数返回 void。
+async function _augmentSemantic(candidates, queryText) {
+  if (!isElectron || !window.electronAPI?.modelManager) return
+  if (!queryText?.trim()) return
+  try {
+    const status = await window.electronAPI.modelManager.status()
+    if (!status.ready) return
+
+    // 展平所有原因，附带 category_id / category_name
+    const flatReasons = reasonGroups.value.flatMap(g =>
+      (g.reasons || []).map(r => ({
+        id: r.id, name: r.name, keywords: r.keywords || '',
+        category_id: g.category_id, category_name: g.category_name,
+      }))
+    )
+    if (!flatReasons.length) return
+
+    // 原因向量缓存：用 id+keywords 作 key，原因库变化时自动重算
+    const cacheKey = flatReasons.map(r => `${r.id}:${r.keywords}`).join('|')
+    if (_reasonVecCache.key !== cacheKey || !_reasonVecCache.vecs) {
+      const docs = flatReasons.map(r => {
+        const kws = r.keywords.split(',').filter(k => k.trim()).join('，')
+        return r.name + (kws ? '，' + kws : '')
+      })
+      _reasonVecCache.vecs = await window.electronAPI.modelManager.encode(docs)
+      _reasonVecCache.key  = cacheKey
+    }
+
+    // 编码 query
+    const [[...qv]] = await window.electronAPI.modelManager.encode([queryText])
+
+    // 余弦相似度（bge 已归一化，直接点积即为 cosine）
+    const dot = (a, b) => a.reduce((s, v, i) => s + v * b[i], 0)
+
+    for (let i = 0; i < flatReasons.length; i++) {
+      const r   = flatReasons[i]
+      const sim = dot(qv, _reasonVecCache.vecs[i])
+      if (sim < 0.35) continue
+
+      const existing = candidates.find(c => c.reason_id === r.id)
+      if (existing) {
+        // 已有候选：追加语义分并重算总分
+        existing.semantic_score = Math.max(existing.semantic_score || 0, sim)
+        const kw = existing.keyword_score || 0
+        const cs = existing.case_score    || 0
+        const hs = existing.history_score || 0
+        let total = kw + cs * 0.75 + existing.semantic_score * 0.45 + hs * 0.35
+        if (kw <= 0) total *= 0.85
+        existing.total_score = total
+        existing.confidence  = Math.min(0.99, total / 2.2)
+        if (existing.semantic_score >= kw && existing.semantic_score >= cs && existing.semantic_score >= hs) {
+          existing.source = 'semantic'
+        }
+      } else if (sim >= 0.55) {
+        // 语义独立触发（阈值 0.55，与服务端一致）
+        const total = sim * 0.45 * 0.85   // 无关键词命中 → *0.85
+        candidates.push({
+          reason_id:       r.id,
+          name:            r.name,
+          category_id:     r.category_id,
+          category_name:   r.category_name,
+          semantic_score:  sim,
+          keyword_score:   0,
+          case_score:      0,
+          history_score:   0,
+          total_score:     total,
+          confidence:      Math.min(0.99, total / 2.2),
+          source:          'semantic',
+          matched_keywords: [],
+        })
+      }
+    }
+
+    // 重排序、截取 top5
+    candidates.sort((a, b) => (b.total_score || 0) - (a.total_score || 0))
+    candidates.splice(5)
+  } catch { /* 语义评分失败不影响主流程 */ }
+}
+
 // 同时加载原因分类（全部）和原因分组（含二级）
 async function loadReasonOptions() {
   const [catRes, reasonRes] = await Promise.all([
@@ -342,9 +430,10 @@ async function selectOrder(order) {
   const debugSellerRemark = order.seller_remark || ''
 
   // ── 来源1：产品代码 + 历史工单（后端）+ 原因候选（并发）──
-  let apiResult        = null   // 原始 API 返回（含 suggested_shipping_alias）
-  let reasonCandidates = []     // auto-match 返回的原因候选列表
-  let reasonCleanedText = ''   // auto-match 清洗后的参与匹配文本
+  let apiResult          = null   // 原始 API 返回（含 suggested_shipping_alias）
+  let reasonCandidates   = []     // auto-match 返回的原因候选列表
+  let reasonCleanedText  = ''     // auto-match 清洗后的参与匹配文本
+  let topReasonAliases   = []     // auto-match 返回的 top 原因历史简称分布（用于亲和度加权）
 
   try {
     await Promise.all([
@@ -358,19 +447,30 @@ async function selectOrder(order) {
             purchase_date: parsedPurchaseDate || null,
             seller_remark: order.seller_remark || null,
             buyer_remark:  order.buyer_remark  || null,
-            semantic:      isElectron,
+            semantic:      false,   // 语义推理已移至本地
           }).then(r => { if (r.success && r.data) apiResult = r.data })
         : Promise.resolve(),
       debugText.trim()
         ? http.post('/api/aftersale/auto-match', {
             text: debugText,
             buyer_remark: order.buyer_remark || '',
-            semantic: isElectron,
-          }).then(r => { if (r.success && r.data) { reasonCandidates = r.data.items || []; reasonCleanedText = r.data.cleaned_text || '' } })
+            semantic: false,   // 语义评分改为本地执行
+          }).then(r => {
+            if (r.success && r.data) {
+              reasonCandidates  = r.data.items || []
+              reasonCleanedText = r.data.cleaned_text || ''
+              topReasonAliases  = r.data.top_reason_aliases || []
+            }
+          })
         : Promise.resolve(),
     ])
   } catch (e) {
     console.warn('[selectOrder] API error, proceeding without suggestions', e)
+  }
+
+  // 本地语义评分（桌面端）：用 bge 补充服务端未召回的候选，并对已有候选重排序
+  if (debugText.trim()) {
+    await _augmentSemantic(reasonCandidates, reasonCleanedText || debugText)
   }
 
   // API 型号匹配（需有 category_id 才算匹配到型号）
@@ -380,7 +480,7 @@ async function selectOrder(order) {
   const textMatch = matchTextToModel(order.buyer_remark, null, parsedPurchaseDate)
 
   // ── 简称候选（前端实时计算）────────────────────────
-  const shippingAliasCandidates = computeShippingAliasCandidates(order.products, order.seller_remark, apiResult?.product_tokens || [])
+  const shippingAliasCandidates = computeShippingAliasCandidates(order.products, order.seller_remark, apiResult?.product_tokens || [], topReasonAliases)
 
   // 防止切换工单太快导致覆盖
   if (currentOrder.value?.ecommerce_order_no !== orderNo) return
@@ -578,11 +678,14 @@ async function selectOrder(order) {
         item.model_id    = tm.model_id
         item.confidence  = scoreToConfidence(tm.score)
       }
-      // 原因候选（per-segment auto-match）
+      // 原因候选（per-segment auto-match，传入已匹配的 model_id 用于产品-原因软降权）
       try {
-        const r = await http.post('/api/aftersale/auto-match', { text: seg, buyer_remark: '', semantic: isElectron })
+        const r = await http.post('/api/aftersale/auto-match', { text: seg, buyer_remark: '', semantic: false, model_id: item.model_id || null })
         if (r.success && currentOrder.value?.ecommerce_order_no === orderNo) {
-          item._reasonCandidates = r.data || []
+          const segCandidates = r.data?.items || []
+          // 本地语义评分补充
+          await _augmentSemantic(segCandidates, r.data?.cleaned_text || seg)
+          item._reasonCandidates = segCandidates
         }
       } catch (_) { /* ignore */ }
     }))
@@ -1081,7 +1184,7 @@ function scoreToConfidence(score) {
  * 绝对命中数优先（主键），覆盖率（matched/len(kws)）仅作次级排序。
  * 兼容历史数据：keywords 可能是物料名称或物料代码，二者都参与命中。
  */
-function computeShippingAliasCandidates(products, sellerRemark = '', cleanedTokens = []) {
+function computeShippingAliasCandidates(products, sellerRemark = '', cleanedTokens = [], topReasonAliases = []) {
   if (!products?.length || !shippingAliasOptions.value.length) return []
   const productTexts = new Set(
     products
@@ -1104,6 +1207,13 @@ function computeShippingAliasCandidates(products, sellerRemark = '', cleanedToke
   // 商家备注归一（小写）用于歧义二次评分
   const remarkLower = (sellerRemark || '').toLowerCase()
 
+  // 原因-简称亲和度：top 原因历史上最常配对的简称，用于在关键词得分相近时破平局
+  // affinity_bonus 最大 0.5，不超过关键词覆盖率满分，避免纯亲和度压倒明显不匹配的候选
+  const maxAffCount = topReasonAliases[0]?.count || 0
+  const affinityMap = maxAffCount > 0
+    ? new Map(topReasonAliases.map(ra => [ra.alias_id, ra.count / maxAffCount]))
+    : new Map()
+
   return shippingAliasOptions.value
     .map(alias => {
       const kws = alias.keywords || []
@@ -1111,6 +1221,17 @@ function computeShippingAliasCandidates(products, sellerRemark = '', cleanedToke
       const matched = kws.filter(k => matchTokens.has((k || '').toLowerCase().trim()))
       if (!matched.length) return null
       const score = matched.length / kws.length
+
+      // 简称名完全命中：产品 token 里包含与简称名相同的词时，给予强加成
+      // 例：产品 token "气弹簧" 命中 alias.name "气弹簧"，直接判定主力匹配
+      const aliasNameLower = alias.name.toLowerCase().trim()
+      const name_bonus = matchTokens.has(aliasNameLower) ? 0.5 : 0
+
+      // 原因亲和度加成
+      const affinity_ratio  = affinityMap.get(alias.id) || 0
+      const affinity_bonus  = affinity_ratio * 0.5
+      const affinity_count  = topReasonAliases.find(ra => ra.alias_id === alias.id)?.count || 0
+      const combined_score  = score + name_bonus + affinity_bonus
 
       // 歧义词命中时：用商家备注对简称名称做相似度评分
       let remark_score = null
@@ -1137,15 +1258,17 @@ function computeShippingAliasCandidates(products, sellerRemark = '', cleanedToke
         id: alias.id, name: alias.name,
         score, matched_count: matched.length, matched_keywords: matched,
         remark_score, is_ambiguous: hasAmbiguous,
+        affinity_count, combined_score,
       }
     })
     .filter(Boolean)
     .sort((a, b) => {
-      // 歧义时优先按备注分排序，无备注分则回退到原排序
+      // 歧义时优先按备注分排序，无备注分则回退到综合分
       if (a.is_ambiguous && a.remark_score !== null) {
-        return (b.remark_score - a.remark_score) || (b.matched_count - a.matched_count) || (b.score - a.score)
+        return (b.remark_score - a.remark_score) || (b.combined_score - a.combined_score)
       }
-      return (b.matched_count - a.matched_count) || (b.score - a.score)
+      // 非歧义：按综合分（关键词覆盖率 + 亲和度加成）降序，关键词命中数作为次级
+      return (b.combined_score - a.combined_score) || (b.matched_count - a.matched_count)
     })
 }
 
@@ -1497,6 +1620,7 @@ async function computeOrderBatchResult(order) {
 
   let apiResult        = null
   let reasonCandidates = []
+  let topReasonAliases = []
 
   try {
     await Promise.all([
@@ -1505,22 +1629,32 @@ async function computeOrderBatchResult(order) {
             products, purchase_date: parsedPurchaseDate || null,
             seller_remark: order.seller_remark || null,
             buyer_remark:  order.buyer_remark  || null,
-            semantic:      isElectron,
+            semantic:      false,   // 语义推理已移至本地
           }).then(r => { if (r.success && r.data) apiResult = r.data })
         : Promise.resolve(),
       debugText.trim()
         ? http.post('/api/aftersale/auto-match', {
             text: debugText, buyer_remark: order.buyer_remark || '',
-            semantic: isElectron,
-          }).then(r => { if (r.success && r.data) reasonCandidates = r.data.items || [] })
+            semantic: false,
+          }).then(r => {
+            if (r.success && r.data) {
+              reasonCandidates = r.data.items || []
+              topReasonAliases = r.data.top_reason_aliases || []
+            }
+          })
         : Promise.resolve(),
     ])
   } catch (_) { /* ignore */ }
 
+  // 本地语义评分
+  if (debugText.trim()) {
+    await _augmentSemantic(reasonCandidates, debugText)
+  }
+
   const apiMatch  = apiResult?.category_id ? apiResult : null
   const textMatch = matchTextToModel(order.buyer_remark, null, parsedPurchaseDate)
   const productTokens = apiResult?.product_tokens || []
-  const shippingCands = computeShippingAliasCandidates(products, order.seller_remark, productTokens)
+  const shippingCands = computeShippingAliasCandidates(products, order.seller_remark, productTokens, topReasonAliases)
 
   // ── 确定简称 ──────────────────────────────────────
   const historyAliasId = apiResult?.suggested_shipping_alias_id || null
@@ -2349,9 +2483,9 @@ async function ignoreCase() {
                         </template>
                         <template v-else>
                           <div class="cand-bar-wrap" style="width:60px;display:inline-flex;margin-left:6px;vertical-align:middle">
-                            <div class="cand-bar" :style="{ width: `${Math.round((matchDebug.shipping_alias_candidates.find(c => c.id === matchDebug.alias_id).score) * 100)}%` }" />
+                            <div class="cand-bar" :style="{ width: `${Math.min(100, Math.round(((matchDebug.shipping_alias_candidates.find(c => c.id === matchDebug.alias_id).combined_score) ?? (matchDebug.shipping_alias_candidates.find(c => c.id === matchDebug.alias_id).score)) * 100))}%` }" />
                           </div>
-                          <span class="cand-score">{{ Math.round(matchDebug.shipping_alias_candidates.find(c => c.id === matchDebug.alias_id).score * 100) }}</span>
+                          <span class="cand-score">{{ Math.min(100, Math.round(((matchDebug.shipping_alias_candidates.find(c => c.id === matchDebug.alias_id).combined_score) ?? (matchDebug.shipping_alias_candidates.find(c => c.id === matchDebug.alias_id).score)) * 100)) }}</span>
                         </template>
                       </template>
                     </template>
@@ -2384,10 +2518,11 @@ async function ignoreCase() {
                       <span class="cand-score">{{ Math.round(c.remark_score * 100) }}</span>
                     </template>
                     <template v-else>
+                      <!-- combined_score = 关键词覆盖率 + 亲和度加成（最大 0.5），cap 100% -->
                       <div class="cand-bar-wrap">
-                        <div class="cand-bar" :style="{ width: `${Math.round(c.score * 100)}%` }" />
+                        <div class="cand-bar" :style="{ width: `${Math.min(100, Math.round((c.combined_score ?? c.score) * 100))}%` }" />
                       </div>
-                      <span class="cand-score">{{ Math.round(c.score * 100) }}</span>
+                      <span class="cand-score">{{ Math.min(100, Math.round((c.combined_score ?? c.score) * 100)) }}</span>
                     </template>
                   </div>
                 </div>

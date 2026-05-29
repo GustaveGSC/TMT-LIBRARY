@@ -529,7 +529,7 @@ async function handleGuest() {
         <div class="card-footer">
           <img src="@/assets/logo.png" class="footer-logo" alt="logo" />
           <span class="footer-name">两平米软件库</span>
-          <span class="footer-version">v{{ version }}</span>
+          <span v-if="isElectron" class="footer-version">v{{ version }}</span>
         </div>
       </div>
     </div>

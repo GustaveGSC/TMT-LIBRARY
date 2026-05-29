@@ -1,6 +1,6 @@
 {
   "name": "tmt-library",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -21,6 +21,7 @@
   "dependencies": {
     "@electron-toolkit/utils": "^4.0.0",
     "@phosphor-icons/vue": "^2.2.1",
+    "@xenova/transformers": "^2.17.2",
     "axios": "^1.13.6",
     "cropperjs": "^1.6.2",
     "echarts": "^5.6.0",

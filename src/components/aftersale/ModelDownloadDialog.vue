@@ -1,7 +1,6 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
 import { ref, computed, onUnmounted } from 'vue'
-import http from '@/api/http.js'
 
 // ── 响应式状态 ────────────────────────────────────
 const visible     = ref(false)
@@ -9,19 +8,19 @@ const downloading = ref(false)
 const progress    = ref(null)   // 下载状态对象
 const error       = ref('')
 
-let pollTimer = null
+let unsubscribeProgress = null  // 取消进度事件订阅
 
 // ── 计算属性 ──────────────────────────────────────
 const percent     = computed(() => progress.value?.percent ?? 0)
-const currentFile = computed(() => progress.value?.current_file ?? '')
-const fileIndex   = computed(() => progress.value?.file_index ?? 0)
-const fileTotal   = computed(() => progress.value?.file_total ?? 0)
+const currentFile = computed(() => progress.value?.currentFile ?? '')
+const fileIndex   = computed(() => progress.value?.fileIndex ?? 0)
+const fileTotal   = computed(() => progress.value?.fileTotal ?? 0)
 const isDone      = computed(() => progress.value?.done === true)
 const isError     = computed(() => !!progress.value?.error || !!error.value)
 const errorMsg    = computed(() => progress.value?.error || error.value)
 
 // ── 生命周期 ──────────────────────────────────────
-onUnmounted(() => stopPoll())
+onUnmounted(() => stopListen())
 
 // ── 方法 ──────────────────────────────────────────
 // 由父组件调用，检测到模型未安装时打开
@@ -33,48 +32,45 @@ async function handleDownload() {
   downloading.value = true
   error.value = ''
   try {
-    const res = await http.post('/api/aftersale/model/download')
-    if (!res.success) {
-      error.value = res.message || '启动下载失败'
-      downloading.value = false
-      return
-    }
-    startPoll()
+    // 订阅主进程推送的进度事件
+    startListen()
+    await window.electronAPI.modelManager.download()
   } catch {
-    error.value = '网络错误，请重试'
+    error.value = '启动下载失败，请重试'
     downloading.value = false
+    stopListen()
   }
 }
 
-function startPoll() {
-  pollTimer = setInterval(async () => {
-    try {
-      const res = await http.get('/api/aftersale/model/progress')
-      if (res.success) {
-        progress.value = res.data
-        if (res.data.done || res.data.error) {
-          stopPoll()
-          downloading.value = false
-        }
-      }
-    } catch { /* 网络抖动忽略 */ }
-  }, 800)
+function startListen() {
+  // 避免重复订阅
+  stopListen()
+  unsubscribeProgress = window.electronAPI.modelManager.onProgress((data) => {
+    progress.value = data
+    if (data.done || data.error) {
+      downloading.value = false
+      stopListen()
+    }
+  })
 }
 
-function stopPoll() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+function stopListen() {
+  if (unsubscribeProgress) {
+    unsubscribeProgress()
+    unsubscribeProgress = null
+  }
 }
 
 function handleClose() {
   if (downloading.value) return   // 下载中不允许关闭
   visible.value = false
-  stopPoll()
+  stopListen()
   emit('close')
 }
 
 function handleDone() {
   visible.value = false
-  stopPoll()
+  stopListen()
   emit('installed')
 }
 
@@ -95,7 +91,7 @@ defineExpose({ open })
     <template #header>
       <div class="dialog-header">
         <span class="dialog-title">语义匹配模型</span>
-        <span class="dialog-sub">bge-small-zh-v1.5 · 约 90 MB</span>
+        <span class="dialog-sub">bge-small-zh-v1.5 · 约 24 MB</span>
       </div>
     </template>
 
@@ -107,7 +103,7 @@ defineExpose({ open })
           <div class="desc-text">
             <p>检测到<strong>语义匹配模型</strong>尚未安装。</p>
             <p>安装后，售后工单匹配将增加语义理解能力，可识别描述不规范、关键词缺失的备注内容。</p>
-            <p class="desc-hint">模型文件将从云端下载到本地，约 90 MB，下载完成后永久生效。</p>
+            <p class="desc-hint">模型文件将下载到本地，约 24 MB，下载完成后永久生效。</p>
           </div>
         </div>
         <button class="btn-download" @click="handleDownload">立即下载安装</button>

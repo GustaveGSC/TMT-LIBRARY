@@ -486,7 +486,6 @@ class ShippingRepository:
         """返回渠道层级、省份层级、active产品ID，均按日期范围过滤"""
         from database.models.product.category import ProductCategory, ProductSeries, ProductModel
         from database.models.product.finished import ProductFinished
-        from sqlalchemy import collate as sa_collate
         from datetime import datetime as _dt
 
         sof = ShippingOrderFinished
@@ -563,8 +562,7 @@ class ShippingRepository:
             ProductModel.id.label('mod_id'),
         ).select_from(sof).join(
             ProductFinished,
-            sa_collate(sof.finished_code, 'utf8mb4_unicode_ci') ==
-            sa_collate(ProductFinished.code, 'utf8mb4_unicode_ci')
+            sof.finished_code == ProductFinished.code
         ).join(ProductModel,    ProductFinished.model_id    == ProductModel.id
         ).join(ProductSeries,   ProductModel.series_id      == ProductSeries.id
         ).join(ProductCategory, ProductSeries.category_id   == ProductCategory.id
@@ -603,7 +601,7 @@ class ShippingRepository:
         """
         from database.models.product.category import ProductCategory, ProductSeries, ProductModel
         from database.models.product.finished import ProductFinished
-        from sqlalchemy import func, collate as sa_collate
+        from sqlalchemy import func
 
         from database.models.product.erp_code_rules import ErpCodeRule
 
@@ -645,8 +643,7 @@ class ShippingRepository:
             )
             if needs_model_join:
                 q = q.join(ProductFinished,
-                           sa_collate(sof.finished_code, 'utf8mb4_unicode_ci') ==
-                           sa_collate(ProductFinished.code, 'utf8mb4_unicode_ci'))
+                           sof.finished_code == ProductFinished.code)
                 q = q.join(ProductModel, ProductFinished.model_id == ProductModel.id)
             if needs_series_join:
                 q = q.join(ProductSeries, ProductModel.series_id == ProductSeries.id)
@@ -800,7 +797,6 @@ class ShippingRepository:
         from datetime import datetime as _dt
         from database.models.product.category import ProductSeries, ProductModel
         from database.models.product.finished import ProductFinished
-        from sqlalchemy import collate as sa_collate
 
         sof = ShippingOrderFinished
 
@@ -813,8 +809,7 @@ class ShippingRepository:
             ProductCategory.name.label('category_name'),
         ).outerjoin(
             ProductFinished,
-            sa_collate(sof.finished_code, 'utf8mb4_unicode_ci') ==
-            sa_collate(ProductFinished.code, 'utf8mb4_unicode_ci'),
+            sof.finished_code == ProductFinished.code,
         ).outerjoin(
             ProductModel, ProductFinished.model_id == ProductModel.id,
         ).outerjoin(

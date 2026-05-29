@@ -2,7 +2,7 @@ from datetime import datetime, timezone, timedelta
 from database.base import db
 from database.models.product.finished import ProductFinished
 from database.models.shipping import ShippingOrderFinished, ShippingOperatorType
-from sqlalchemy import func, collate
+from sqlalchemy import func
 
 
 # ── 时区 ──────────────────────────────────────────────────────────────────────
@@ -67,7 +67,7 @@ def update_lifecycle(progress_cb=None) -> dict:
             func.max(func.date_format(ShippingOrderFinished.shipped_date, '%Y-%m')).label('last_month'),
         )
         .join(ShippingOrderFinished,
-              collate(ShippingOrderFinished.finished_code, 'utf8mb4_unicode_ci') == ProductFinished.code)
+              ShippingOrderFinished.finished_code == ProductFinished.code)
         .filter(
             ProductFinished.status == 'recorded',
             ProductFinished.model_id.isnot(None),

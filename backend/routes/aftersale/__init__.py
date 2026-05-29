@@ -29,6 +29,11 @@ def delete_shipping_alias(alias_id):
     return _svc.delete_shipping_alias(alias_id).to_response()
 
 
+@aftersale_bp.post('/shipping-aliases/<int:source_id>/merge-into/<int:target_id>')
+def merge_shipping_alias(source_id, target_id):
+    return _svc.merge_shipping_alias(source_id, target_id).to_response()
+
+
 # ── 一级分类 ───────────────────────────────────────────────────────────────
 
 @aftersale_bp.get('/reason-categories')
@@ -78,6 +83,21 @@ def get_reason_usage(reason_id):
     return _svc.get_reason_usage(reason_id).to_response()
 
 
+@aftersale_bp.get('/case-edit-options')
+def get_case_edit_options():
+    return _svc.get_case_edit_options().to_response()
+
+
+@aftersale_bp.patch('/case-reasons/<int:cr_id>')
+def update_case_reason(cr_id):
+    return _svc.update_case_reason(cr_id, request.get_json() or {}).to_response()
+
+
+@aftersale_bp.post('/reasons/<int:source_id>/merge-into/<int:target_id>')
+def merge_reason(source_id, target_id):
+    return _svc.merge_reason(source_id, target_id).to_response()
+
+
 # ── 产品型号推断 ──────────────────────────────────────────────────────────────
 
 @aftersale_bp.post('/suggest-product')
@@ -107,6 +127,13 @@ def get_pending_count():
 
 @aftersale_bp.get('/cases')
 def get_cases():
+    def _ints(key):
+        raw = request.args.get(key, '')
+        return [int(x) for x in raw.split(',') if x.strip().lstrip('-').isdigit()]
+    def _strs(key):
+        raw = request.args.get(key, '')
+        return [x for x in raw.split(',') if x.strip()]
+
     page       = int(request.args.get('page', 1))
     page_size  = int(request.args.get('page_size', 50))
     status     = request.args.get('status')
@@ -124,11 +151,22 @@ def get_cases():
     model_code      = request.args.get('model_code')
     sort_by         = request.args.get('sort_by')
     sort_order      = request.args.get('sort_order', 'desc')
+    max_days        = request.args.get('max_days_since_purchase', type=int)
     return _svc.get_cases(
         page, page_size, status, date_start, date_end,
         reason_id, channel, province, city, district,
         reason_category, reason_name, shipping_alias,
         model_code, search, sort_by=sort_by, sort_order=sort_order,
+        max_days_since_purchase=max_days,
+        model_ids=_ints('model_ids'),
+        series_ids=_ints('series_ids'),
+        category_ids=_ints('category_ids'),
+        reason_ids=_ints('reason_ids'),
+        reason_category_ids=_ints('reason_category_ids'),
+        shipping_alias_ids=_ints('shipping_alias_ids'),
+        channel_names=_strs('channel_names'),
+        provinces=_strs('provinces'),
+        cities=_strs('cities'),
     ).to_response()
 
 
@@ -276,7 +314,8 @@ def put_product_remark_dict():
 def auto_match():
     body = request.get_json() or {}
     semantic = body.get('semantic', True)
-    return _svc.auto_match(body.get('text', ''), body.get('buyer_remark', ''), semantic=semantic).to_response()
+    model_id = body.get('model_id') or None
+    return _svc.auto_match(body.get('text', ''), body.get('buyer_remark', ''), semantic=semantic, model_id=model_id).to_response()
 
 
 # ── 统计 & 图表 ─────────────────────────────────────────────────────────────

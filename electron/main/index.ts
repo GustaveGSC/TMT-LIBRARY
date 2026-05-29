@@ -3,6 +3,11 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { createLoginWindow, createMainWindow } from './window'
 import { destroyUpdater, initUpdater } from './updater'
+import {
+  isModelInstalled, isModelReady,
+  getDownloadState, startDownload,
+  loadModel, encodeTexts,
+} from './model'
 
 let loginWin: BrowserWindow | null = null
 let mainWin: BrowserWindow | null = null
@@ -86,10 +91,31 @@ function cleanUpdaterCache() {
   } catch { /* 清理失败不影响启动 */ }
 }
 
+// ── 语义模型 IPC ──────────────────────────────────────────────────────────────
+ipcMain.handle('model:status', () => ({
+  installed: isModelInstalled(),
+  ready:     isModelReady(),
+}))
+
+ipcMain.handle('model:download', (event) => {
+  startDownload(event.sender)
+})
+
+ipcMain.handle('model:progress', () => getDownloadState())
+
+ipcMain.handle('model:encode', async (_event, texts: string[]) => {
+  return await encodeTexts(texts)
+})
+
 app.whenReady().then(async () => {
   cleanUpdaterCache()
   loginWin = createLoginWindow()
   initUpdater(loginWin)   // 登录页也需要 updater（强制更新遮罩使用同一套逻辑）
+
+  // 已安装则后台静默加载模型，不阻塞启动
+  if (isModelInstalled()) {
+    loadModel().catch(() => { /* 加载失败静默忽略 */ })
+  }
 })
 
 app.on('window-all-closed', () => {

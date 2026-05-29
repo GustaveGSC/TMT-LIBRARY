@@ -9,6 +9,11 @@ files:
   - out/**/*                # electron-vite 构建产物
   - "!**/*.{ts,map}"
 
+# ── 原生模块解压（onnxruntime-node 包含 .node 二进制文件，不能打进 asar）──────
+asarUnpack:
+  - "node_modules/onnxruntime-node/**"
+  - "node_modules/sharp/**"
+
 # ── 额外资源：Python 可执行文件 ─────────────────────
 extraResources:
   - from: electron/resources/python-backend

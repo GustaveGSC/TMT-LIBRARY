@@ -14,15 +14,13 @@ OSS_BASE     = 'https://tmt-oss.oss-cn-hangzhou.aliyuncs.com/tmt-library/models/
 MODEL_DIR_NAME = 'bge-small-zh-v1.5'
 
 # 模型文件列表及预估大小（bytes），用于进度计算
+# 注意：桌面端（Electron）现在直接在本地下载 ONNX 文件并推理，不再经过服务器。
+# 此处仅保留服务端下载路径（供 Web 端将来使用），目前服务端不加载模型。
 MODEL_FILES = [
-    ('config.json',                        762),
-    ('config_sentence_transformers.json',  512),
-    ('tokenizer_config.json',              434),
-    ('tokenizer.json',                     433_781),
-    ('modules.json',                       349),
-    ('sentence_bert_config.json',          52),
-    ('1_Pooling/config.json',              190),
-    ('model.safetensors',                  95_823_472),  # ~91 MB，主权重文件
+    ('config.json',               762),
+    ('tokenizer_config.json',     434),
+    ('tokenizer.json',            433_781),
+    ('onnx/model_quantized.onnx', 23_000_000),  # ~23 MB，ONNX 量化版
 ]
 
 TOTAL_BYTES_APPROX = sum(size for _, size in MODEL_FILES)
@@ -34,9 +32,9 @@ def get_model_dir() -> Path:
     return base
 
 def is_model_installed() -> bool:
-    """检查核心模型文件是否存在"""
+    """检查核心模型文件是否存在（ONNX 量化版）"""
     model_dir = get_model_dir()
-    required = ['config.json', 'tokenizer.json', 'model.safetensors']
+    required = ['tokenizer.json', 'onnx/model_quantized.onnx']
     return all((model_dir / f).exists() for f in required)
 
 # ── 下载状态 ──────────────────────────────────────────────────────────────────

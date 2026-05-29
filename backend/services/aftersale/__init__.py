@@ -99,6 +99,7 @@ class AftersaleService:
             name=name,
             category_id=data.get('category_id'),
             keywords=data.get('keywords', ''),
+            negative_keywords=data.get('negative_keywords', ''),
             sort_order=data.get('sort_order', 0),
         )
         return Result.ok(data=reason.to_dict())
@@ -112,6 +113,7 @@ class AftersaleService:
             name=name,
             category_id=data.get('category_id'),
             keywords=data.get('keywords', ''),
+            negative_keywords=data.get('negative_keywords', ''),
             sort_order=data.get('sort_order'),
         )
         if not reason:
@@ -130,6 +132,20 @@ class AftersaleService:
     def get_reason_usage(self, reason_id):
         usage = _repo.get_reason_usage(reason_id)
         return Result.ok(data={'usage_count': usage})
+
+    def merge_reason(self, source_id, target_id):
+        if source_id == target_id:
+            return Result.fail('不能将原因合并到自身')
+        ok = _repo.merge_reason(source_id, target_id)
+        if not ok:
+            return Result.fail('原因不存在')
+        return Result.ok()
+
+    def get_case_edit_options(self):
+        return _repo.get_case_edit_options()
+
+    def update_case_reason(self, cr_id, data):
+        return _repo.update_case_reason(cr_id, data)
 
     # ── 发货物料简称库 ─────────────────────────────────────────────────────────
 
@@ -167,6 +183,14 @@ class AftersaleService:
             return Result.fail('简称不存在')
         return Result.ok()
 
+    def merge_shipping_alias(self, source_id, target_id):
+        if source_id == target_id:
+            return Result.fail('不能将简称合并到自身')
+        ok = _repo.merge_shipping_alias(source_id, target_id)
+        if not ok:
+            return Result.fail('简称不存在')
+        return Result.ok(message='已合并')
+
     # ── 待处理订单 ──────────────────────────────────────────────────────────
 
     def get_pending_orders(self, page, page_size, search, date_start, date_end):
@@ -185,7 +209,12 @@ class AftersaleService:
     def get_cases(self, page, page_size, status, date_start, date_end,
                   reason_id, channel_name, province, city, district,
                   reason_category, reason_name, shipping_alias,
-                  model_code=None, search=None, sort_by=None, sort_order='desc'):
+                  model_code=None, search=None, sort_by=None, sort_order='desc',
+                  model_ids=None, series_ids=None, category_ids=None,
+                  reason_ids=None, reason_category_ids=None,
+                  shipping_alias_ids=None, channel_names=None,
+                  provinces=None, cities=None,
+                  max_days_since_purchase=None):
         items, total = _repo.get_cases(
             page=page, page_size=page_size,
             status=status, date_start=date_start, date_end=date_end,
@@ -195,6 +224,11 @@ class AftersaleService:
             shipping_alias=shipping_alias,
             model_code=model_code, search=search,
             sort_by=sort_by, sort_order=sort_order,
+            model_ids=model_ids, series_ids=series_ids, category_ids=category_ids,
+            reason_ids=reason_ids, reason_category_ids=reason_category_ids,
+            shipping_alias_ids=shipping_alias_ids, channel_names=channel_names,
+            provinces=provinces, cities=cities,
+            max_days_since_purchase=max_days_since_purchase,
         )
         return Result.ok(data={
             'items':     [c.to_dict(include_reasons=False) for c in items],
@@ -213,6 +247,7 @@ class AftersaleService:
         from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
         from openpyxl.utils import get_column_letter
         from sqlalchemy.orm import selectinload
+        from database.models.product.category import ProductModel
 
         # 不分页，取全量
         items, _ = _repo.get_cases(
@@ -238,7 +273,8 @@ class AftersaleService:
                     .selectinload(AftersaleCaseReason.reason)
                     .selectinload(AftersaleReason.category_obj),
                     selectinload(AftersaleCase.case_reasons)
-                    .selectinload(AftersaleCaseReason.product_model),
+                    .selectinload(AftersaleCaseReason.product_model)
+                    .selectinload(ProductModel.series),
                     selectinload(AftersaleCase.case_reasons)
                     .selectinload(AftersaleCaseReason.shipping_alias),
                 )
@@ -332,6 +368,7 @@ class AftersaleService:
         if not case_ids:
             return Result.ok(data={})
         from sqlalchemy.orm import selectinload
+        from database.models.product.category import ProductModel, ProductSeries
         cases = (
             AftersaleCase.query
             .filter(AftersaleCase.id.in_(case_ids))
@@ -340,7 +377,9 @@ class AftersaleService:
                 .selectinload(AftersaleCaseReason.reason)
                 .selectinload(AftersaleReason.category_obj),
                 selectinload(AftersaleCase.case_reasons)
-                .selectinload(AftersaleCaseReason.product_model),
+                .selectinload(AftersaleCaseReason.product_model)
+                .selectinload(ProductModel.series)
+                .selectinload(ProductSeries.category),
                 selectinload(AftersaleCase.case_reasons)
                 .selectinload(AftersaleCaseReason.shipping_alias),
             )
@@ -422,10 +461,10 @@ class AftersaleService:
 
     # ── 自动匹配 ────────────────────────────────────────────────────────────
 
-    def auto_match(self, text, buyer_remark=None, semantic=True):
+    def auto_match(self, text, buyer_remark=None, semantic=True, model_id=None):
         if not text:
             return Result.ok(data={'items': [], 'cleaned_text': ''})
-        result = _repo.auto_match(text, buyer_remark=buyer_remark, semantic=semantic)
+        result = _repo.auto_match(text, buyer_remark=buyer_remark, semantic=semantic, model_id=model_id)
         return Result.ok(data=result)
 
     # ── 统计 & 图表 ─────────────────────────────────────────────────────────
@@ -459,7 +498,7 @@ class AftersaleService:
 
     def get_chart_data(self, data):
         group_by = data.get('group_by', 'reason')
-        if group_by not in ('product', 'reason', 'shipping_alias', 'channel', 'province'):
+        if group_by not in ('product', 'reason', 'reason_category', 'shipping_alias', 'channel', 'province'):
             return Result.fail('group_by 参数无效')
         max_days = data.get('max_days_since_purchase')
         filters = {
@@ -476,6 +515,7 @@ class AftersaleService:
             'reason_ids':              data.get('reason_ids') or [],
             'reason_category_ids':     data.get('reason_category_ids') or [],
             'shipping_alias_ids':      data.get('shipping_alias_ids') or [],
+            'exclude_no_sales_series': bool(data.get('exclude_no_sales_series')),
         }
         result = _repo.get_chart_data(filters)
         return Result.ok(data=result)
