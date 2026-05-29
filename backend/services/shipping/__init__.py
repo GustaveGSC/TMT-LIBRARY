@@ -1,14 +1,13 @@
 import csv
 import io
 import openpyxl
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import List, Dict
 from database.repository.shipping import shipping_repository
 from result import Result
 
-CST = timezone(timedelta(hours=8))
-def now_cst(): return datetime.now(CST).replace(tzinfo=None)
+from utils import now_cst
 
 # 直辖市省名集合：这些省的 city 字段统一填写为省名本身
 _MUNICIPALITY_PROVINCES = {'北京市', '天津市', '上海市', '重庆市'}
@@ -289,8 +288,11 @@ def _resolve_orders(order_nos: List[str], progress_cb=None):
     if progress_cb:
         progress_cb('preparing', message='正在加载产品库…', total=total_orders)
 
-    # 加载所有有产成品关联的成品
-    finished_list = ProductFinished.query.all()
+    # 加载所有成品及其产成品关联（selectinload 避免 N+1）
+    from sqlalchemy.orm import selectinload
+    finished_list = ProductFinished.query.options(
+        selectinload(ProductFinished.packaged_list)
+    ).all()
     # finished_map: finished_code → (finished_name, frozenset of packaged codes)
     finished_map = {}
     for f in finished_list:

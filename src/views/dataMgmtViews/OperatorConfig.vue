@@ -65,13 +65,30 @@ async function saveClassify() {
 async function resolveStale() {
   resolving.value = true
   try {
+    // 1. 启动后台任务
     const res = await http.post('/api/shipping/resolve')
-    if (res.success) {
-      ElMessage.success(`已刷新 ${res.data.resolved} 个订单的成品组合`)
-      staleCount.value = 0
-    } else {
-      ElMessage.error(res.message)
+    if (!res.success) { ElMessage.error(res.message); return }
+    const taskId = res.data.task_id
+
+    // 2. 轮询直到完成（最多 15 分钟 = 1125 次 × 800ms）
+    const MAX_POLLS = 1125
+    let done = false
+    for (let i = 0; i < MAX_POLLS; i++) {
+      await new Promise(r => setTimeout(r, 800))
+      const statusRes = await http.get(`/api/shipping/task-status/${taskId}`)
+      if (statusRes.success && statusRes.data.status === 'done') {
+        ElMessage.success(`已刷新 ${statusRes.data.data.resolved} 个订单的成品组合`)
+        staleCount.value = 0
+        done = true
+        break
+      }
+      if (statusRes.success && statusRes.data.status === 'error') {
+        ElMessage.error(statusRes.data.message || '刷新失败')
+        done = true
+        break
+      }
     }
+    if (!done) ElMessage.error('刷新超时，请重试')
   } catch {
     ElMessage.error('刷新失败')
   } finally {

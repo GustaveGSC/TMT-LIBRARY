@@ -1,6 +1,6 @@
 import re
 import difflib
-from datetime import datetime, timezone, timedelta, date
+from datetime import datetime, date
 from collections import defaultdict
 from typing import Optional
 from aftersale_logger import write_confirm_log
@@ -20,8 +20,7 @@ from database.models.aftersale import (
 from database.models.shipping import ShippingRecord, ShippingOperatorType
 from database.models.product.category import ProductModel
 
-CST = timezone(timedelta(hours=8))
-def now_cst(): return datetime.now(CST).replace(tzinfo=None)
+from utils import now_cst
 
 
 class AftersaleRepository:
@@ -332,10 +331,12 @@ class AftersaleRepository:
             .all()
         )
 
-        # 聚合每个订单的物料列表
+        # 批量查本页所有订单的物料（1 次 IN 查询，替代原来的 N+1）
+        order_nos = [row.ecommerce_order_no for row in rows]
+        products_map = self._get_batch_order_products(order_nos)
+
         items = []
         for row in rows:
-            products = self._get_order_products(row.ecommerce_order_no)
             items.append({
                 'ecommerce_order_no': row.ecommerce_order_no,
                 'shipped_date':       row.shipped_date.strftime('%Y-%m-%d') if row.shipped_date else None,
@@ -347,7 +348,7 @@ class AftersaleRepository:
                 'seller_remark':      row.seller_remark,
                 'buyer_remark':       row.buyer_remark,
                 'line_count':         row.line_count,
-                'products':           products,
+                'products':           products_map.get(row.ecommerce_order_no, []),
             })
 
         return items, total
@@ -373,7 +374,7 @@ class AftersaleRepository:
         ) or 0
 
     def _get_order_products(self, order_no):
-        """聚合订单下所有物料（按 product_code 分组，quantity 累加）"""
+        """聚合单个订单的物料（按 product_code 分组，quantity 累加）"""
         from sqlalchemy import func
         rows = (
             db.session.query(
@@ -389,6 +390,31 @@ class AftersaleRepository:
             {'code': r.product_code, 'name': r.product_name, 'quantity': float(r.quantity or 0)}
             for r in rows
         ]
+
+    def _get_batch_order_products(self, order_nos):
+        """批量聚合多个订单的物料，返回 {order_no: [products]} 字典（1 次 IN 查询）"""
+        if not order_nos:
+            return {}
+        from sqlalchemy import func
+        rows = (
+            db.session.query(
+                ShippingRecord.ecommerce_order_no,
+                ShippingRecord.product_code,
+                func.min(ShippingRecord.product_name).label('product_name'),
+                func.sum(ShippingRecord.quantity).label('quantity'),
+            )
+            .filter(ShippingRecord.ecommerce_order_no.in_(order_nos))
+            .group_by(ShippingRecord.ecommerce_order_no, ShippingRecord.product_code)
+            .all()
+        )
+        result: dict = {no: [] for no in order_nos}
+        for r in rows:
+            result[r.ecommerce_order_no].append({
+                'code': r.product_code,
+                'name': r.product_name,
+                'quantity': float(r.quantity or 0),
+            })
+        return result
 
     # ── 工单 CRUD ──────────────────────────────────────────────────────────
 
@@ -603,26 +629,20 @@ class AftersaleRepository:
                 now - self._filter_options_cache_ts < self._FILTER_OPTIONS_TTL):
             return self._filter_options_cache
 
-        def q(sql):
-            return sorted([
-                r[0] for r in db.session.execute(satext(sql)).fetchall()
-                if r[0] is not None and r[0] != ''
-            ])
+        def q_distinct(col):
+            """单列 DISTINCT，让 MySQL 可走列索引，避免全行扫描"""
+            return [
+                r[0] for r in db.session.execute(satext(
+                    f"SELECT DISTINCT {col} FROM aftersale_case "
+                    f"WHERE status='confirmed' AND {col} IS NOT NULL AND {col} != '' "
+                    f"ORDER BY {col}"
+                )).fetchall()
+            ]
 
-        # 4 个 DISTINCT 列合并为 1 次扫描，仅限已确认工单（表格默认只展示 confirmed）
-        rows = db.session.execute(satext(
-            "SELECT channel_name, province, city, district FROM aftersale_case WHERE status='confirmed'"
-        )).fetchall()
-        channels_s, provinces_s, cities_s, districts_s = set(), set(), set(), set()
-        for ch, pv, ct, dt in rows:
-            if ch: channels_s.add(ch)
-            if pv: provinces_s.add(pv)
-            if ct: cities_s.add(ct)
-            if dt: districts_s.add(dt)
-        channels  = sorted(channels_s)
-        provinces = sorted(provinces_s)
-        cities    = sorted(cities_s)
-        districts = sorted(districts_s)
+        channels  = q_distinct('channel_name')
+        provinces = q_distinct('province')
+        cities    = q_distinct('city')
+        districts = q_distinct('district')
 
         ship_alias_rows = db.session.execute(satext("""
             SELECT DISTINCT sa.id, sa.name FROM aftersale_shipping_alias sa

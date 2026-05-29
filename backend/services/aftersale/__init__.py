@@ -1,3 +1,4 @@
+import os
 from datetime import date
 from result import Result
 from database.repository.aftersale import AftersaleRepository
@@ -249,9 +250,10 @@ class AftersaleService:
         from sqlalchemy.orm import selectinload
         from database.models.product.category import ProductModel
 
-        # 不分页，取全量
-        items, _ = _repo.get_cases(
-            page=1, page_size=999999,
+        # 限制导出行数，防止超大数据集打满 DB/内存
+        EXPORT_MAX_ROWS = int(os.getenv('EXPORT_MAX_ROWS', 50000))
+        items, total = _repo.get_cases(
+            page=1, page_size=EXPORT_MAX_ROWS,
             status=status, date_start=date_start, date_end=date_end,
             reason_id=reason_id, channel_name=channel_name,
             province=province, city=city, district=district,
@@ -358,6 +360,10 @@ class AftersaleService:
                 v(14, case.seller_remark)
                 v(15, case.buyer_remark)
                 row_idx += 1
+
+        # 命中上限时在末行追加提示，让用户知晓数据被截断
+        if total > EXPORT_MAX_ROWS:
+            ws.append([f'⚠ 数据已超过 {EXPORT_MAX_ROWS} 条上限，仅导出前 {EXPORT_MAX_ROWS} 条。请缩小筛选范围后重新导出。'])
 
         buf = io.BytesIO()
         wb.save(buf)

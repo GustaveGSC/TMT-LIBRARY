@@ -748,6 +748,7 @@ let   chartInst    = null
 let   resizeObs    = null
 let   lpTimer      = null   // 移动端长按计时器
 let   lpActive     = false  // 长按是否仍有效
+let   _chartTimer  = null   // 筛选防抖计时器
 
 // ── 全屏 ──────────────────────────────────────────
 const isFullscreen = ref(false)
@@ -1921,14 +1922,17 @@ watch(dataMetric,      () => renderChart())
 watch(comparisonMode,  () => { if (groupBy.value === 'date') renderChart() })
 // 时间粒度切换（在时间维度下）→ 重新请求数据
 watch(selectedPeriod,  () => { if (groupBy.value === 'date') loadChartData() })
-// 产品/渠道/地域筛选变化 → 自动刷新图表
+// 产品/渠道/地域筛选变化 → 防抖 300ms 后刷新图表
 watch(
   () => [
     filters.value.categoryIds, filters.value.seriesIds,  filters.value.modelIds,
     filters.value.channelNames, filters.value.channelCodes,
     filters.value.provinces,   filters.value.cities,     filters.value.districts,
   ],
-  () => loadChartData(),
+  () => {
+    clearTimeout(_chartTimer)
+    _chartTimer = setTimeout(() => loadChartData(), 300)
+  },
   { deep: true }
 )
 // 日期变化 → 重新加载筛选候选（图表需点击查询才更新）

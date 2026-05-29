@@ -15,13 +15,9 @@ class FinishedService:
                           search_field: str = '', search_value: str = '',
                           status: str = '') -> Result:
         try:
-            # 状态筛选在 Python 层过滤（查询量不大，200条以内）
             total, items = FinishedRepository.query_finished_list(
-                page, size, search_field, search_value
+                page, size, search_field, search_value, status=status
             )
-            if status:
-                items = [i for i in items if i['status'] == status]
-                total = len(items)
             return Result.ok(data={
                 'total': total,
                 'page':  page,

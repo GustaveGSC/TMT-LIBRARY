@@ -1,8 +1,10 @@
-from flask import Blueprint, request
+from flask import Blueprint, request, g
 from services.product.erp_code_rules import erp_code_rule_service
+from auth import make_blueprint_guard
 from result import Result
 
 erp_code_rules_bp = Blueprint('erp_code_rules', __name__)
+erp_code_rules_bp.before_request(make_blueprint_guard('product:view', 'product:edit'))
 
 
 @erp_code_rules_bp.get('/')

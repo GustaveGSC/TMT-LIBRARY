@@ -1,7 +1,9 @@
-from flask import Blueprint, request
+from flask import Blueprint, request, g
 from services.product.param import ParamService
+from auth import make_blueprint_guard
 
 param_bp = Blueprint('param', __name__)
+param_bp.before_request(make_blueprint_guard('product:view', 'product:edit'))
 
 
 # ── 键名管理 ──────────────────────────────────────────────────────────────

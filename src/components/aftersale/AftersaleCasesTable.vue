@@ -477,8 +477,30 @@ async function exportData() {
   try {
     const today    = new Date().toISOString().slice(0, 10).replace(/-/g, '')
     const filename = `售后数据_${today}.xlsx`
-    const res = await http.get('/api/aftersale/cases/export', {
-      params:       buildParams(),
+
+    // 1. 启动后台导出任务
+    const startRes = await http.post('/api/aftersale/cases/export/start', buildParams())
+    if (!startRes.success) { ElMessage.error(startRes.message || '导出失败'); return }
+    const taskId = startRes.data.task_id
+
+    // 2. 轮询直到完成（最多 15 分钟 = 1125 次 × 800ms）
+    const MAX_POLLS = 1125
+    for (let i = 0; i < MAX_POLLS; i++) {
+      await new Promise(r => setTimeout(r, 800))
+      const statusRes = await http.get(`/api/aftersale/cases/export/status/${taskId}`)
+      if (statusRes.success && statusRes.data.status === 'done') break
+      if (statusRes.success && statusRes.data.status === 'error') {
+        ElMessage.error(statusRes.data.message || '导出失败')
+        return
+      }
+      if (i === MAX_POLLS - 1) {
+        ElMessage.error('导出超时，请重试')
+        return
+      }
+    }
+
+    // 3. 下载文件
+    const fileRes = await http.get(`/api/aftersale/cases/export/download/${taskId}`, {
       responseType: 'arraybuffer',
     })
     if (isElectron) {
@@ -487,9 +509,9 @@ async function exportData() {
         filters: [{ name: 'Excel', extensions: ['xlsx'] }],
       })
       if (save?.canceled || !save?.filePath) return
-      await window.electronAPI.saveFile(save.filePath, res)
+      await window.electronAPI.saveFile(save.filePath, fileRes)
     } else {
-      downloadBlob(res, filename)
+      downloadBlob(fileRes, filename)
     }
     ElMessage.success('导出成功')
   } catch {

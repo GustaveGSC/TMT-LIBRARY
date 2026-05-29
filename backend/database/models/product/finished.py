@@ -1,8 +1,5 @@
-from datetime import datetime, timezone, timedelta
 from database.base import db
-
-CST = timezone(timedelta(hours=8))
-def now_cst(): return datetime.now(CST).replace(tzinfo=None)
+from utils import now_cst
 
 # 成品和标签的关联中间表
 finished_tag = db.Table(
@@ -71,8 +68,8 @@ class ProductFinished(db.Model):
     packaged_list = db.relationship(
         'ProductPackaged',
         secondary=finished_packaged,
-        lazy='dynamic',
-        backref=db.backref('finished_list', lazy='dynamic'),
+        lazy='select',
+        backref=db.backref('finished_list', lazy='select'),
     )
 
     # 关联 product_tag（多对多）

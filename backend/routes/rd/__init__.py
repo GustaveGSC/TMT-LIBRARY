@@ -1,10 +1,12 @@
-from flask import Blueprint, request, Response
+from flask import Blueprint, request, Response, g
+from auth import require_auth, is_rd_admin, make_blueprint_guard
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
 import io, urllib.parse, os, re, sys
 
 rd_bp = Blueprint('rd', __name__)
+rd_bp.before_request(make_blueprint_guard('rd:view', 'rd:edit'))
 
 # ── 样式常量 ──────────────────────────────────────────
 
@@ -1235,12 +1237,8 @@ def compare_bom():
 
 # ── 变更提醒 CRUD ──────────────────────────────────
 
-def _check_rd_admin(request):
-    """从请求头 X-User-Permissions 判断是否有 rd:admin 权限（前端传递），
-    或从 X-User-Roles 判断是否为 admin 角色。返回 True / False。"""
-    roles       = (request.headers.get('X-User-Roles', '') or '').split(',')
-    permissions = (request.headers.get('X-User-Permissions', '') or '').split(',')
-    return 'admin' in roles or 'rd:admin' in permissions
+# 管理员权限校验：通过 @require_auth 装饰器验证 JWT token 后，使用 is_rd_admin() 检查权限
+# （原 _check_rd_admin 依赖客户端传递 X-User-* 头，已废弃）
 
 
 @rd_bp.get('/reminders')
@@ -1253,23 +1251,25 @@ def list_reminders():
 
 
 @rd_bp.get('/reminders/all')
+@require_auth
 def list_reminders_all():
     """返回全部提醒（含下架历史），仅 rd:admin 可用"""
     from result import Result
     from database.models.rd import EcrReminder
-    if not _check_rd_admin(request):
+    if not is_rd_admin():
         return Result.fail('权限不足：需要研发部管理员权限').to_response()
     items = EcrReminder.query.order_by(EcrReminder.created_at.desc()).all()
     return Result.ok([i.to_dict() for i in items]).to_response()
 
 
 @rd_bp.post('/reminders')
+@require_auth
 def create_reminder():
     """新建变更提醒，仅 rd:admin 可用"""
     from result import Result
     from database.base import db
     from database.models.rd import EcrReminder
-    if not _check_rd_admin(request):
+    if not is_rd_admin():
         return Result.fail('权限不足：需要研发部管理员权限').to_response()
     d = request.get_json() or {}
     content = (d.get('content') or '').strip()
@@ -1286,12 +1286,13 @@ def create_reminder():
 
 
 @rd_bp.put('/reminders/<int:rid>')
+@require_auth
 def update_reminder(rid):
     """编辑提醒内容/备注，仅 rd:admin 可用"""
     from result import Result
     from database.base import db
     from database.models.rd import EcrReminder
-    if not _check_rd_admin(request):
+    if not is_rd_admin():
         return Result.fail('权限不足：需要研发部管理员权限').to_response()
     item = EcrReminder.query.get(rid)
     if not item:
@@ -1307,12 +1308,13 @@ def update_reminder(rid):
 
 
 @rd_bp.put('/reminders/<int:rid>/deactivate')
+@require_auth
 def deactivate_reminder(rid):
     """下架（软删除）指定提醒，仅 rd:admin 可用"""
     from result import Result
     from database.base import db
     from database.models.rd import EcrReminder
-    if not _check_rd_admin(request):
+    if not is_rd_admin():
         return Result.fail('权限不足：需要研发部管理员权限').to_response()
     item = EcrReminder.query.get(rid)
     if not item:
@@ -1323,12 +1325,13 @@ def deactivate_reminder(rid):
 
 
 @rd_bp.put('/reminders/<int:rid>/activate')
+@require_auth
 def activate_reminder(rid):
     """重新上架已下架提醒，仅 rd:admin 可用"""
     from result import Result
     from database.base import db
     from database.models.rd import EcrReminder
-    if not _check_rd_admin(request):
+    if not is_rd_admin():
         return Result.fail('权限不足：需要研发部管理员权限').to_response()
     item = EcrReminder.query.get(rid)
     if not item:
@@ -1348,9 +1351,7 @@ def list_notes():
     from result import Result
     from database.models.rd import EcrNote
     from database.base import db
-    username = request.headers.get('X-Username', '').strip()
-    if not username:
-        return Result.fail('未识别用户').to_response()
+    username = g.current_user.get('username', '')
     items = EcrNote.query.filter_by(username=username).order_by(EcrNote.created_at.desc()).all()
     return Result.ok([i.to_dict() for i in items]).to_response()
 
@@ -1361,9 +1362,7 @@ def create_note():
     from result import Result
     from database.models.rd import EcrNote
     from database.base import db
-    username = request.headers.get('X-Username', '').strip()
-    if not username:
-        return Result.fail('未识别用户').to_response()
+    username = g.current_user.get('username', '')
     data = request.get_json(silent=True) or {}
     content = (data.get('content') or '').strip()
     if not content:
@@ -1380,7 +1379,7 @@ def update_note(nid):
     from result import Result
     from database.models.rd import EcrNote
     from database.base import db
-    username = request.headers.get('X-Username', '').strip()
+    username = g.current_user.get('username', '')
     note = EcrNote.query.get(nid)
     if not note or note.username != username:
         return Result.fail('笔记不存在或无权限').to_response()
@@ -1399,7 +1398,7 @@ def delete_note(nid):
     from result import Result
     from database.models.rd import EcrNote
     from database.base import db
-    username = request.headers.get('X-Username', '').strip()
+    username = g.current_user.get('username', '')
     note = EcrNote.query.get(nid)
     if not note or note.username != username:
         return Result.fail('笔记不存在或无权限').to_response()

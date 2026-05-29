@@ -1,10 +1,9 @@
 import re
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from typing import List, Dict, Tuple
 from database.repository.product.import_raw import ImportProductRepository
 
-CST = timezone(timedelta(hours=8))
-def now_cst(): return datetime.now(CST).replace(tzinfo=None)
+from utils import now_cst
 
 # 去除品名中"（已停用）"字样（兼容全角/半角括号）
 _DISCONTINUED_RE = re.compile(r'[（(]已停用[）)]')

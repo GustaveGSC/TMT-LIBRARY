@@ -1,6 +1,6 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
-import { ref, computed, onMounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import WindowControls from '@/components/common/WindowControls.vue'
 import ProductTable  from './ProductTable.vue'
@@ -28,6 +28,10 @@ const router = useRouter()
 // ── 当前页面 ──────────────────────────────────────
 const activePage  = ref('overview')
 const pageLoading = ref(false)
+
+// 懒加载：首次切换到 tab 时才挂载对应组件
+const mountedTabs = reactive({ table: false, image: false, chart: false })
+watch(activePage, page => { if (page in mountedTabs) mountedTabs[page] = true })
 
 // ── 各页面数据加载器（按需扩展）──────────────────
 const finishedStore = useFinishedStore()
@@ -344,14 +348,14 @@ onMounted(async () => {
 
       </div>
 
-      <!-- ② 表格视图：始终挂载，v-show 切换显示 -->
-      <ProductTable v-show="activePage === 'table'" />
+      <!-- ② 表格视图：首次切换时挂载，之后用 v-show 保留状态 -->
+      <ProductTable v-if="mountedTabs.table" v-show="activePage === 'table'" />
 
       <!-- ③ 图片视图 -->
-      <ProductImage v-show="activePage === 'image'" />
+      <ProductImage v-if="mountedTabs.image" v-show="activePage === 'image'" />
 
       <!-- ④ 图表视图 -->
-      <ProductChart v-show="activePage === 'chart'" />
+      <ProductChart v-if="mountedTabs.chart" v-show="activePage === 'chart'" />
 
     </main>
 

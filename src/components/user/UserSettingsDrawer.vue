@@ -91,6 +91,7 @@ async function handleLogout() {
       type:              'warning',
     })
     localStorage.removeItem('user')
+    localStorage.removeItem('tmt_token')
     visible.value = false
     if (window.electronAPI) {
       window.electronAPI.logout()

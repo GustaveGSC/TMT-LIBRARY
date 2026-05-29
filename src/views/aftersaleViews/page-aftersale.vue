@@ -1,6 +1,6 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
-import { ref, onMounted } from 'vue'
+import { ref, reactive, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import WindowControls        from '@/components/common/WindowControls.vue'
@@ -22,6 +22,10 @@ const { canEditAftersale } = usePermission()
 // 无编辑权限时不显示待处理 tab，默认进图表
 const activeTab    = ref(canEditAftersale ? 'process' : 'chart')   // 'process' | 'chart' | 'data'
 const pendingCount = ref(0)
+
+// 懒加载：记录哪些 Tab 已首次访问（首次访问时 v-if 变 true，之后用 v-show 保留状态）
+const mountedTabs = reactive({ process: canEditAftersale, chart: !canEditAftersale, data: false })
+watch(activeTab, tab => { mountedTabs[tab] = true })
 
 // 子组件引用（用于外部触发刷新）
 const dashboardRef        = ref(null)
@@ -93,11 +97,20 @@ function onCaseConfirmed() {
     <!-- ── 主内容区 ────────────────────────────── -->
     <main class="main-content">
       <AftersaleProcess
+        v-if="mountedTabs.process"
         v-show="activeTab === 'process'"
         @case-confirmed="onCaseConfirmed"
       />
-      <AftersaleDashboard ref="dashboardRef" v-show="activeTab === 'chart'" />
-      <AftersaleTable     ref="tableRef"     v-show="activeTab === 'data'" />
+      <AftersaleDashboard
+        v-if="mountedTabs.chart"
+        ref="dashboardRef"
+        v-show="activeTab === 'chart'"
+      />
+      <AftersaleTable
+        v-if="mountedTabs.data"
+        ref="tableRef"
+        v-show="activeTab === 'data'"
+      />
     </main>
 
   </div>

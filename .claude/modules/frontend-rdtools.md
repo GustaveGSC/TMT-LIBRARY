@@ -242,12 +242,9 @@
 | PUT | `/notes/<id>` | `rd:view` | 编辑笔记内容（只能改自己的） |
 | DELETE | `/notes/<id>` | `rd:view` | 删除笔记（只能删自己的） |
 
-`rd:admin` 权限通过请求头 `X-User-Roles` / `X-User-Permissions` 透传，前端在每次需要鉴权的调用中手动注入：
-```js
-headers: { 'X-User-Roles': roles.join(','), 'X-User-Permissions': permissions.join(',') }
-```
+`rd:admin` 权限由服务端从 JWT token 解析（`@require_auth` + `is_rd_admin()`），前端**无需**手动注入 `X-User-Roles` / `X-User-Permissions` 请求头（旧方案已移除）。鉴权凭据统一通过 `Authorization: Bearer <token>` 传递（`http.js` 请求拦截器自动注入）。
 
-笔记接口通过 `X-Username` 请求头识别用户，前端从 `localStorage.user.username` 取值注入。
+笔记接口仍通过 `X-Username` 请求头识别用户（待迁移至 JWT），前端从 `localStorage.user.username` 取值注入。
 
 ---
 

@@ -18,6 +18,10 @@ load_dotenv(os.path.join(BASE_DIR, '.env'), override=True)
 def create_app() -> Flask:
     app = Flask(__name__)
 
+    # ── JWT 密钥安全检查 ──────────────────────────────
+    if os.environ.get('JWT_SECRET', '') in ('', 'tmt-dev-secret-change-in-production'):
+        print('[WARNING] JWT_SECRET 使用默认开发值，生产环境请通过环境变量设置强密钥！', flush=True)
+
     # ── 数据库配置 ────────────────────────────────────
     app.config["SQLALCHEMY_DATABASE_URI"] = (
         f"mysql+pymysql://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}"
@@ -30,8 +34,8 @@ def create_app() -> Flask:
     # POOL_SIZE / MAX_OVERFLOW 可通过环境变量调整（网页端多用户场景需调大）
     app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
         "poolclass":     QueuePool,
-        "pool_size":     int(os.getenv("POOL_SIZE",    2)),
-        "max_overflow":  int(os.getenv("MAX_OVERFLOW", 1)),
+        "pool_size":     int(os.getenv("POOL_SIZE",    5)),
+        "max_overflow":  int(os.getenv("MAX_OVERFLOW", 5)),
         "pool_pre_ping": True,
         "pool_recycle":  1800,
         "connect_args": {

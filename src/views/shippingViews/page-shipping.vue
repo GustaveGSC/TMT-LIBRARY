@@ -1,6 +1,6 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
-import { ref, onMounted } from 'vue'
+import { ref, reactive, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import WindowControls    from '@/components/common/WindowControls.vue'
@@ -11,7 +11,10 @@ import ShippingTable     from './ShippingTable.vue'
 const router = useRouter()
 
 // ── 响应式状态 ────────────────────────────────────
-const activeTab = ref('chart') // 'chart' | 'data'
+const activeTab   = ref('chart') // 'chart' | 'data'
+// 懒加载：'data' Tab 首次访问时才挂载 ShippingTable
+const mountedTabs = reactive({ chart: true, data: false })
+watch(activeTab, tab => { mountedTabs[tab] = true })
 
 // ── 生命周期 ──────────────────────────────────────
 onMounted(() => {
@@ -46,8 +49,8 @@ function handleBack() {
 
     <!-- ── 主内容区 ────────────────────────────── -->
     <main class="main-content">
-      <ShippingDashboard v-show="activeTab === 'chart'" />
-      <ShippingTable     v-show="activeTab === 'data'" />
+      <ShippingDashboard v-if="mountedTabs.chart" v-show="activeTab === 'chart'" />
+      <ShippingTable     v-if="mountedTabs.data"  v-show="activeTab === 'data'" />
     </main>
 
   </div>

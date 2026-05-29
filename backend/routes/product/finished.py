@@ -2,13 +2,15 @@ import base64
 import os
 import re
 
-from flask import Blueprint, request
+from flask import Blueprint, request, g
 from services.product.finished import finished_service
 from database.repository.product.category import CategoryRepository
 from storage.client import get_bucket
+from auth import make_blueprint_guard
 from result import Result
 
 finished_bp = Blueprint('finished', __name__)
+finished_bp.before_request(make_blueprint_guard('product:view', 'product:edit'))
 
 
 # ── 成品列表 ──────────────────────────────────────────────────────────────

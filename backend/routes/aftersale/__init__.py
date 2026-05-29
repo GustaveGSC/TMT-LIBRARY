@@ -1,9 +1,28 @@
+import uuid
+import time
+import threading
 import urllib.parse
-from flask import Blueprint, request, Response
+from flask import Blueprint, request, Response, current_app, g
 from services.aftersale import AftersaleService
+from auth import make_blueprint_guard
+from result import Result
+
+# 异步导出任务：task_id → {'status': 'pending'|'done'|'error', 'data': bytes, 'message': str, '_at': float}
+_export_tasks: dict = {}
+_EXPORT_TTL = 1800  # 30 分钟后自动清理
+
+
+def _cleanup_export_tasks():
+    """清理超过 TTL 的任务（在每次新建任务时调用）"""
+    cutoff = time.time() - _EXPORT_TTL
+    stale = [k for k, v in _export_tasks.items() if v.get('_at', 0) < cutoff]
+    for k in stale:
+        _export_tasks.pop(k, None)
 
 aftersale_bp = Blueprint('aftersale', __name__)
 _svc = AftersaleService()
+
+aftersale_bp.before_request(make_blueprint_guard('aftersale:view', 'aftersale:edit', 'aftersale:export'))
 
 
 
@@ -170,45 +189,79 @@ def get_cases():
     ).to_response()
 
 
-@aftersale_bp.get('/cases/export')
-def export_cases():
-    status     = request.args.get('status')
-    date_start = request.args.get('date_start')
-    date_end   = request.args.get('date_end')
-    reason_id  = request.args.get('reason_id', type=int)
-    channel    = request.args.get('channel_name')
-    province   = request.args.get('province')
-    city       = request.args.get('city')
-    district   = request.args.get('district')
-    reason_category = request.args.get('reason_category')
-    reason_name     = request.args.get('reason_name')
-    shipping_alias  = request.args.get('shipping_alias')
-    model_code      = request.args.get('model_code')
-    search          = request.args.get('search')
-    sort_by         = request.args.get('sort_by')
-    sort_order      = request.args.get('sort_order', 'desc')
-    try:
-        xlsx_bytes = _svc.export_cases(
-            status=status, date_start=date_start, date_end=date_end,
-            reason_id=reason_id, channel_name=channel, province=province,
-            city=city, district=district, reason_category=reason_category,
-            reason_name=reason_name, shipping_alias=shipping_alias,
-            model_code=model_code, search=search,
-            sort_by=sort_by, sort_order=sort_order,
-        )
-    except Exception as e:
-        from result import Result
-        return Result.fail(f'导出失败：{str(e)}').to_response()
+@aftersale_bp.post('/cases/export/start')
+def export_cases_start():
+    """启动后台导出线程，立即返回 task_id；前端轮询 status 后再下载"""
+    body = request.get_json() or {}
+
+    def _extract(key, cast=None, default=None):
+        v = body.get(key, default)
+        if v is None:
+            return default
+        return cast(v) if cast else v
+
+    _cleanup_export_tasks()
+    task_id = str(uuid.uuid4())
+    _export_tasks[task_id] = {'status': 'pending', '_at': time.time()}
+    app = current_app._get_current_object()
+
+    kwargs = dict(
+        status         = _extract('status') or 'confirmed',
+        date_start     = _extract('date_start'),
+        date_end       = _extract('date_end'),
+        reason_id      = _extract('reason_id', int),
+        channel_name   = _extract('channel_name'),
+        province       = _extract('province'),
+        city           = _extract('city'),
+        district       = _extract('district'),
+        reason_category= _extract('reason_category'),
+        reason_name    = _extract('reason_name'),
+        shipping_alias = _extract('shipping_alias'),
+        model_code     = _extract('model_code'),
+        search         = _extract('search'),
+        sort_by        = _extract('sort_by'),
+        sort_order     = _extract('sort_order') or 'desc',
+    )
+
+    def run():
+        with app.app_context():
+            try:
+                xlsx_bytes = _svc.export_cases(**kwargs)
+                _export_tasks[task_id] = {'status': 'done', 'data': xlsx_bytes, '_at': time.time()}
+            except Exception as e:
+                _export_tasks[task_id] = {'status': 'error', 'message': str(e), '_at': time.time()}
+
+    threading.Thread(target=run, daemon=True).start()
+    return Result.ok(data={'task_id': task_id}).to_response()
+
+
+@aftersale_bp.get('/cases/export/status/<task_id>')
+def export_cases_status(task_id):
+    """轮询导出进度"""
+    task = _export_tasks.get(task_id)
+    if not task:
+        return Result.fail('任务不存在').to_response()
+    if task['status'] == 'error':
+        _export_tasks.pop(task_id, None)
+    return Result.ok(data={'status': task['status'], 'message': task.get('message', '')}).to_response()
+
+
+@aftersale_bp.get('/cases/export/download/<task_id>')
+def export_cases_download(task_id):
+    """下载已生成的 xlsx，下载后自动清理任务"""
+    task = _export_tasks.pop(task_id, None)
+    if not task or task['status'] != 'done':
+        return Result.fail('导出任务未完成或不存在').to_response()
 
     from datetime import date as _date
     filename = f'售后数据_{_date.today().strftime("%Y%m%d")}.xlsx'
     encoded  = urllib.parse.quote(filename)
     return Response(
-        xlsx_bytes,
+        task['data'],
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         headers={
             'Content-Disposition': f"attachment; filename*=UTF-8''{encoded}",
-            'Content-Length': str(len(xlsx_bytes)),
+            'Content-Length': str(len(task['data'])),
         },
     )
 

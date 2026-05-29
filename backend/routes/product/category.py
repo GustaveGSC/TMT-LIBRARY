@@ -1,8 +1,10 @@
-from flask import Blueprint, request
+from flask import Blueprint, request, g
 from services.product.category import category_service
+from auth import make_blueprint_guard
 from result import Result
 
 category_bp = Blueprint('category', __name__)
+category_bp.before_request(make_blueprint_guard('product:view', 'product:edit'))
 
 
 # ── 完整树 ────────────────────────────────────────────────────────────────

@@ -1,11 +1,29 @@
-from flask import Blueprint, request
+from flask import Blueprint, request, g
 from database.models.version import AppVersion
 from services.version import version_service
 from storage.client import get_bucket
+from auth import verify_token
 from result import Result
 import os
 
 version_bp = Blueprint('version', __name__)
+
+
+def _require_version_auth():
+    """GET 路由公开（供客户端检查更新）；写操作仅 admin。"""
+    if request.method == 'GET':
+        return None
+    raw  = request.headers.get('Authorization', '') or ''
+    token = raw.removeprefix('Bearer ').strip()
+    user = verify_token(token)
+    if not user:
+        return Result.fail('未登录或会话已过期').to_response(401)
+    g.current_user = user
+    if 'admin' not in user.get('roles', []):
+        return Result.fail('权限不足，需要管理员权限').to_response(403)
+
+
+version_bp.before_request(_require_version_auth)
 
 OSS_BASE_URL = os.getenv("OSS_BASE_URL", "").rstrip("/")
 OSS_PREFIX   = "tmt-library/releases/"   # 当前存放目录的 key 前缀

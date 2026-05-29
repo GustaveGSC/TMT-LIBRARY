@@ -1,10 +1,12 @@
-from flask import Blueprint, request
+from flask import Blueprint, request, g
 from services.product.import_raw import import_product_service
+from auth import make_blueprint_guard
 from result import Result
 import openpyxl
 import io
 
 product_bp = Blueprint('product', __name__)
+product_bp.before_request(make_blueprint_guard('product:view', 'product:edit'))
 
 # Excel 固定列索引（0-based）
 _COL_CODE       = 0

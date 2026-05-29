@@ -1,10 +1,9 @@
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from typing import List, Optional, Dict
 from database.base import db
 from database.models.product.param import ProductParamKey, ProductFinishedParam
 
-CST = timezone(timedelta(hours=8))
-def now_cst(): return datetime.now(CST).replace(tzinfo=None)
+from utils import now_cst
 
 VALID_GROUPS = ('dimension', 'config', 'brand', 'other')
 

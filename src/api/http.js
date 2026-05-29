@@ -13,9 +13,14 @@ export const getBaseURL = () => {
   return import.meta.env.VITE_API_BASE ?? 'http://127.0.0.1:8765'
 }
 
-// 请求拦截：动态设置 baseURL
+// 请求拦截：动态设置 baseURL，附加 JWT token
 http.interceptors.request.use(async config => {
   config.baseURL = await getBaseURL()
+  const token = localStorage.getItem('tmt_token')
+  if (token) {
+    config.headers = config.headers || {}
+    config.headers['Authorization'] = `Bearer ${token}`
+  }
   return config
 })
 
@@ -23,6 +28,14 @@ http.interceptors.request.use(async config => {
 http.interceptors.response.use(
   res => res.data,
   err => {
+    if (err.response?.status === 401) {
+      // token 过期或无效，清除会话并跳转登录页
+      localStorage.removeItem('user')
+      localStorage.removeItem('login_time')
+      localStorage.removeItem('tmt_token')
+      window.location.hash = '#/login'
+      return Promise.reject(err)
+    }
     if (err.response?.status === 400) {
       return Promise.resolve(err.response.data)
     }

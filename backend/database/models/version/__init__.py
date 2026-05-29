@@ -1,8 +1,5 @@
-from datetime import datetime, timezone, timedelta
 from database.base import db
-
-CST = timezone(timedelta(hours=8))
-def now_cst(): return datetime.now(CST).replace(tzinfo=None)
+from utils import now_cst
 
 
 class AppVersion(db.Model):

@@ -1,7 +1,9 @@
-from flask import Blueprint, request
+from flask import Blueprint, request, g
 from services.product.tag import TagService
+from auth import make_blueprint_guard
 
 bp = Blueprint('tag', __name__)
+bp.before_request(make_blueprint_guard('product:view', 'product:edit'))
 
 
 # ── 标签 CRUD ─────────────────────────────────────────────────────────────

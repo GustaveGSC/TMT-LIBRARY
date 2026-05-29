@@ -70,6 +70,7 @@ function isSessionExpired() {
 function clearSession() {
   localStorage.removeItem('user')
   localStorage.removeItem('login_time')
+  localStorage.removeItem('tmt_token')
 }
 
 // 路由权限守卫

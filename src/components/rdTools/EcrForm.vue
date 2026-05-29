@@ -13,13 +13,6 @@ const _user     = JSON.parse(localStorage.getItem('user') || '{}')
 const submitter = _user.display_name || _user.username || ''
 const { canAdminRd } = usePermission()
 
-// 构建请求头（权限透传到后端）
-function _authHeaders() {
-  return {
-    'X-User-Roles':       (_user.roles       || []).join(','),
-    'X-User-Permissions': (_user.permissions || []).join(','),
-  }
-}
 
 // ── 滚动容器引用（重置时归顶）──────────────────────
 const formLeftRef  = ref(null)
@@ -120,7 +113,7 @@ async function handleUpdateReminder(id) {
     const res = await http.put(`/api/rd/reminders/${id}`, {
       content: editForm.content.trim(),
       notes:   editForm.notes.trim(),
-    }, { headers: _authHeaders() })
+    })
     if (res.success) {
       const item = mgmtReminders.value.find(r => r.id === id)
       if (item) { item.content = res.data.content; item.notes = res.data.notes }
@@ -139,7 +132,7 @@ async function openMgmtDialog() {
   showMgmtDialog.value = true
   mgmtLoading.value = true
   try {
-    const res = await http.get('/api/rd/reminders/all', { headers: _authHeaders() })
+    const res = await http.get('/api/rd/reminders/all')
     if (res.success) mgmtReminders.value = res.data
     else ElMessage.error(res.message || '加载失败')
   } finally {
@@ -155,7 +148,7 @@ async function handleCreateReminder() {
       content:    newReminder.content.trim(),
       notes:      newReminder.notes.trim(),
       created_by: submitter,
-    }, { headers: _authHeaders() })
+    })
     if (res.success) {
       ElMessage.success('已创建')
       newReminder.content = ''
@@ -171,7 +164,7 @@ async function handleCreateReminder() {
 }
 
 async function handleDeactivate(id) {
-  const res = await http.put(`/api/rd/reminders/${id}/deactivate`, {}, { headers: _authHeaders() })
+  const res = await http.put(`/api/rd/reminders/${id}/deactivate`, {})
   if (res.success) {
     const item = mgmtReminders.value.find(r => r.id === id)
     if (item) item.is_active = false
@@ -183,7 +176,7 @@ async function handleDeactivate(id) {
 }
 
 async function handleActivate(id) {
-  const res = await http.put(`/api/rd/reminders/${id}/activate`, {}, { headers: _authHeaders() })
+  const res = await http.put(`/api/rd/reminders/${id}/activate`, {})
   if (res.success) {
     const item = mgmtReminders.value.find(r => r.id === id)
     if (item) item.is_active = true

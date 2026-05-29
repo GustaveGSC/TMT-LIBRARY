@@ -256,6 +256,7 @@ async function handleLogin() {
       }
       localStorage.setItem('user', JSON.stringify(res.data))
       localStorage.setItem('login_time', Date.now().toString())
+      if (res.data.token) localStorage.setItem('tmt_token', res.data.token)
       window.electronAPI ? window.electronAPI.loginSuccess() : router.push('/index')
     } else {
       toast.value?.show(res.message || '登录失败，请重试', 'error')
@@ -269,7 +270,7 @@ async function handleLogin() {
 async function handleRegister() {
   loading.value = true
   try {
-    const res = await http.post('/api/account/users', {
+    const res = await http.post('/api/account/register', {
       username:     registerForm.username,
       password:     registerForm.password,
       display_name: registerForm.displayName || undefined,
@@ -297,6 +298,7 @@ async function handleGuest() {
     if (res.success) {
       localStorage.setItem('user', JSON.stringify(res.data))
       localStorage.setItem('login_time', Date.now().toString())
+      if (res.data.token) localStorage.setItem('tmt_token', res.data.token)
       window.electronAPI ? window.electronAPI.loginSuccess() : router.push('/index')
     } else {
       toast.value?.show(res.message || '游客登录失败', 'error')

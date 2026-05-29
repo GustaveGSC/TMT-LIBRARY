@@ -1,19 +1,34 @@
 import uuid
+import time
 import queue
 import threading
 import json
-from flask import Blueprint, request, Response, stream_with_context, current_app
+from flask import Blueprint, request, Response, stream_with_context, current_app, g
 from services.shipping import shipping_service
+from auth import make_blueprint_guard
 from result import Result
 
 shipping_bp = Blueprint('shipping', __name__)
 
+shipping_bp.before_request(make_blueprint_guard('shipping:view', 'shipping:edit', 'shipping:export'))
+
 _ALLOWED_EXT = ('.xlsx', '.xls', '.csv')
 
-# 进度队列：task_id → queue.Queue
+# 进度队列：task_id → queue.Queue（用于 SSE 流式推送）
 _task_queues:  dict = {}
 # 取消标志：task_id → bool
 _cancel_flags: dict = {}
+# 简单任务结果：task_id → {'status': 'pending'|'done'|'error', 'data': ..., 'message': str, '_at': float}
+_task_results: dict = {}
+_TASK_RESULTS_TTL = 1800  # 30 分钟后自动清理
+
+
+def _cleanup_task_results():
+    """清理超过 TTL 的任务（在每次新建任务时调用）"""
+    cutoff = time.time() - _TASK_RESULTS_TTL
+    stale = [k for k, v in _task_results.items() if v.get('_at', 0) < cutoff]
+    for k in stale:
+        _task_results.pop(k, None)
 
 
 def _check_file(file, label: str):
@@ -187,12 +202,33 @@ def resolve_all():
 
 @shipping_bp.post('/resolve')
 def resolve_stale():
-    """手动刷新所有 is_stale 的成品组合"""
-    try:
-        result = shipping_service.resolve_stale()
-    except Exception as e:
-        return Result.fail(f'刷新失败：{str(e)}').to_response()
-    return Result.ok(data=result).to_response()
+    """手动刷新所有 is_stale 的成品组合（后台线程，立即返回 task_id）"""
+    _cleanup_task_results()
+    task_id = str(uuid.uuid4())
+    _task_results[task_id] = {'status': 'pending', '_at': time.time()}
+    app = current_app._get_current_object()
+
+    def run():
+        with app.app_context():
+            try:
+                result = shipping_service.resolve_stale()
+                _task_results[task_id] = {'status': 'done', 'data': result, '_at': time.time()}
+            except Exception as e:
+                _task_results[task_id] = {'status': 'error', 'message': str(e), '_at': time.time()}
+
+    threading.Thread(target=run, daemon=True).start()
+    return Result.ok(data={'task_id': task_id}).to_response()
+
+
+@shipping_bp.get('/task-status/<task_id>')
+def get_task_status(task_id):
+    """轮询任务结果；done 后自动清理"""
+    task = _task_results.get(task_id)
+    if not task:
+        return Result.fail('任务不存在').to_response()
+    if task['status'] in ('done', 'error'):
+        _task_results.pop(task_id, None)
+    return Result.ok(data=task).to_response()
 
 
 @shipping_bp.get('/stats')

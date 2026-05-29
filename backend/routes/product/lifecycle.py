@@ -2,10 +2,12 @@ import uuid
 import queue
 import threading
 import json
-from flask import Blueprint, Response, stream_with_context, current_app
+from flask import Blueprint, Response, stream_with_context, current_app, g
+from auth import make_blueprint_guard
 from result import Result
 
 lifecycle_bp = Blueprint('lifecycle', __name__)
+lifecycle_bp.before_request(make_blueprint_guard('product:view', 'product:edit'))
 
 # 进度队列：task_id → queue.Queue
 _task_queues: dict = {}

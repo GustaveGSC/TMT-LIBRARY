@@ -80,8 +80,10 @@ const filterCollapsed     = ref(false)
 const noSalesMode         = ref('all')
 // 原因维度跳过分类级别，直接进入具体原因视图
 const skipReasonCategory  = ref(false)
-let   _filterTimer = null
-let   _chartTimer  = null
+let   _filterTimer    = null
+let   _chartTimer     = null
+// 上次图表刷新时的非时间筛选快照（用于判断是否需要自动刷新图表）
+let   _lastChartSig   = ''
 let   _chartCache  = new Map()       // key: groupBy值('product'/'reason'/...)，value: 接口返回 data
 
 // 图表状态
@@ -208,6 +210,7 @@ const cityEnabled = computed(() => filters.value.provinces.length > 0)
 
 // ── 生命周期 ──────────────────────────────────────
 onMounted(async () => {
+  _lastChartSig = _nonTimeSig()
   initChart()  // 先挂载 ResizeObserver，等容器就绪后自动初始化
   await Promise.all([loadStaticOptions(), loadCrossFilterOptions()])
   await loadChartData()
@@ -220,28 +223,31 @@ onBeforeUnmount(() => {
 
 // ── Watch ─────────────────────────────────────────
 
-// 任意筛选变化 → 清空图表缓存 + 防抖刷新联动候选选项（始终自动）
+/** 当前非时间筛选的序列化快照（用于判断图表是否需要自动刷新） */
+function _nonTimeSig() {
+  const f = filters.value
+  return JSON.stringify([
+    f.categoryIds, f.seriesIds, f.modelIds,
+    f.reasonCategoryIds, f.reasonIds, f.shippingAliasIds,
+    f.channelNames, f.provinces, f.cities,
+  ])
+}
+
+// 合并两个 watch：任意筛选 → 联动选项（始终）；非时间筛选 → 图表（自动）
+// 两个定时器共用同一个 watch 回调，避免同一次筛选变化并发触发两个独立 watch
 watch(filters, () => {
   _chartCache.clear()
   if (!_isDrilling) _drillBackData = null  // 手动筛选时取消待恢复的下钻快照
   clearTimeout(_filterTimer)
+  clearTimeout(_chartTimer)
   _filterTimer = setTimeout(() => loadCrossFilterOptions(), 300)
-}, { deep: true })
-
-// 非时间筛选变化 → 防抖自动刷新图表（时间/间隔需手动点查询）
-watch(
-  () => [
-    filters.value.categoryIds, filters.value.seriesIds, filters.value.modelIds,
-    filters.value.reasonCategoryIds, filters.value.reasonIds,
-    filters.value.shippingAliasIds,
-    filters.value.channelNames, filters.value.provinces, filters.value.cities,
-  ],
-  () => {
-    clearTimeout(_chartTimer)
+  // 仅非时间筛选变化时自动刷新图表（时间/间隔类需手动点查询）
+  const sig = _nonTimeSig()
+  if (sig !== _lastChartSig) {
+    _lastChartSig = sig
     _chartTimer = setTimeout(() => loadChartData(), 300)
-  },
-  { deep: true }
-)
+  }
+}, { deep: true })
 
 // 产品筛选手动变化时清空下钻栈（drillDown/drillBack 期间用 _isDrilling 跳过）
 watch(

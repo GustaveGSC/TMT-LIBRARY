@@ -5,6 +5,7 @@ from database.models.product.erp_code_rules import ErpCodeRule
 from database.models.product.import_raw import ImportProductRaw
 from database.models.product.category import ProductModel, ProductSeries, ProductCategory
 from sqlalchemy import or_, func
+from sqlalchemy.orm import selectinload
 
 
 class FinishedRepository:
@@ -22,6 +23,7 @@ class FinishedRepository:
         search_value: str = '',
         sort_field: str = 'code',
         sort_order: str = 'asc',
+        status: str = '',
     ) -> Tuple[int, List[dict]]:
         """
         联合查询成品列表：
@@ -82,6 +84,13 @@ class FinishedRepository:
             if search_field in field_map:
                 query = query.filter(field_map[search_field])
 
+        # 状态筛选（下沉到 SQL 层，保证 total 准确）
+        # unrecorded = 无对应 product_finished 记录（LEFT JOIN 后 fin 为 NULL）
+        if status == 'unrecorded':
+            query = query.filter(ProductFinished.id.is_(None))
+        elif status:
+            query = query.filter(ProductFinished.status == status)
+
         total = query.count()
 
         # 排序映射
@@ -101,14 +110,19 @@ class FinishedRepository:
         if sort_order == 'desc':
             sort_col = sort_col.desc()
 
-        rows = query.order_by(sort_col).offset((page - 1) * size).limit(size).all()
+        rows = (
+            query
+            .options(selectinload(ProductFinished.packaged_list))
+            .order_by(sort_col)
+            .offset((page - 1) * size)
+            .limit(size)
+            .all()
+        )
 
         items = []
         for raw, fin, model, series, category, t_vol, t_gross, t_net in rows:
-            # 获取该成品关联的产成品 code 列表（用于包装列表列）
-            packaged_codes = []
-            if fin:
-                packaged_codes = [p.code for p in fin.packaged_list]
+            # packaged_list 已由 selectinload 预加载，无额外查询
+            packaged_codes = [p.code for p in fin.packaged_list] if fin else []
 
             item = {
                 # 主键（前端用于产成品/标签关联操作）
