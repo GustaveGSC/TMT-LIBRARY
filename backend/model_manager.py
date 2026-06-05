@@ -125,40 +125,83 @@ def _do_download():
             _state['running'] = False
 
 # ── 模型加载 ──────────────────────────────────────────────────────────────────
-_model      = None
-_model_lock = threading.Lock()
+# _model 为 (tokenizer, ort.InferenceSession) 元组，未加载时为 None
+_model          = None
+_model_lock     = threading.Lock()
+_model_loading  = False   # 后台加载中标志，避免重复启动线程
 
 def _load_model():
-    global _model
+    """在后台线程中加载模型，不阻塞 worker。"""
+    global _model, _model_loading
     with _model_lock:
         if _model is not None:
+            _model_loading = False
             return
         try:
-            from sentence_transformers import SentenceTransformer
-            _model = SentenceTransformer(str(get_model_dir()), device='cpu')
+            import onnxruntime as ort
+            from tokenizers import Tokenizer
+
+            model_dir = get_model_dir()
+            tok = Tokenizer.from_file(str(model_dir / 'tokenizer.json'))
+            tok.enable_truncation(max_length=512)
+            tok.enable_padding(pad_id=0, pad_token='[PAD]')
+
+            sess = ort.InferenceSession(
+                str(model_dir / 'onnx' / 'model_quantized.onnx'),
+                providers=['CPUExecutionProvider'],
+            )
+            _model = (tok, sess)
+            print('[model_manager] 语义模型已加载', flush=True)
         except Exception as e:
-            print(f'[model_manager] 模型加载失败: {e}')
+            print(f'[model_manager] 模型加载失败: {e}', flush=True)
+        finally:
+            _model_loading = False
 
 def get_model():
-    """获取已加载的模型实例，未安装或未加载返回 None"""
+    """获取已加载的模型实例。
+    未就绪时触发后台加载线程并返回 None（调用方应降级处理）。"""
+    global _model_loading
     if _model is not None:
         return _model
-    if is_model_installed():
-        _load_model()
-    return _model
+    if is_model_installed() and not _model_loading:
+        _model_loading = True
+        threading.Thread(target=_load_model, daemon=True, name='model-load').start()
+    return None  # 加载中或未安装，本次请求降级
 
 # ── 对外接口 ──────────────────────────────────────────────────────────────────
 def encode(texts: list[str]):
     """
-    对文本列表编码，返回归一化向量矩阵（numpy ndarray）。
+    对文本列表编码，返回归一化向量矩阵（numpy ndarray，shape=[n, hidden]）。
     模型未就绪时返回 None。
     """
     model = get_model()
     if model is None:
         return None
-    return model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
+    import numpy as np
+    tok, sess = model
+    enc  = tok.encode_batch(texts)
+    ids  = np.array([e.ids            for e in enc], dtype=np.int64)
+    mask = np.array([e.attention_mask for e in enc], dtype=np.int64)
+    tids = np.zeros_like(ids)
+    # ONNX 推理，取 last_hidden_state（index 0）
+    hidden = sess.run(None, {
+        'input_ids': ids, 'attention_mask': mask, 'token_type_ids': tids,
+    })[0]   # [batch, seq_len, hidden_size]
+    # mean pooling（按 attention_mask 加权平均）
+    m   = mask[:, :, None].astype(np.float32)
+    emb = (hidden * m).sum(axis=1) / m.sum(axis=1).clip(min=1e-9)
+    # L2 normalize → 归一化向量，cosine sim = dot product
+    norms = np.linalg.norm(emb, axis=1, keepdims=True).clip(min=1e-9)
+    return (emb / norms).astype(np.float32)
 
 def cosine_sim(a, b) -> float:
     """两个已归一化向量的余弦相似度（归一化后等于点积）"""
     import numpy as np
     return float(np.dot(a, b))
+
+# ── 启动时自动触发下载 ────────────────────────────────────────────────────────
+def _auto_start_download_if_needed():
+    """服务启动后若模型未安装，自动在后台下载；已安装则不预加载（懒加载，首次请求时再加载）"""
+    if not is_model_installed() and not _state['running']:
+        print('[model_manager] 语义模型未安装，开始后台下载...', flush=True)
+        start_download()

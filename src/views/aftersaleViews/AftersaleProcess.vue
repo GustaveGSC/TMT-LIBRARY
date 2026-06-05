@@ -51,6 +51,9 @@ const aftersaleDate = ref(null)   // 售后日期（来自 shipped_date，可编
 // 弹窗
 const showReasonLib = ref(false)
 
+// 非桌面端语义模型提示横幅
+const showSemanticBanner = ref(true)
+
 // 通用设置（从 DB 加载）
 const reasonAutoFillThreshold = ref(0.35)   // 默认值，加载后覆盖
 
@@ -447,14 +450,14 @@ async function selectOrder(order) {
             purchase_date: parsedPurchaseDate || null,
             seller_remark: order.seller_remark || null,
             buyer_remark:  order.buyer_remark  || null,
-            semantic:      false,   // 语义推理已移至本地
+            semantic:      isElectron,
           }).then(r => { if (r.success && r.data) apiResult = r.data })
         : Promise.resolve(),
       debugText.trim()
         ? http.post('/api/aftersale/auto-match', {
             text: debugText,
             buyer_remark: order.buyer_remark || '',
-            semantic: false,   // 语义评分改为本地执行
+            semantic: isElectron,
           }).then(r => {
             if (r.success && r.data) {
               reasonCandidates  = r.data.items || []
@@ -680,7 +683,7 @@ async function selectOrder(order) {
       }
       // 原因候选（per-segment auto-match，传入已匹配的 model_id 用于产品-原因软降权）
       try {
-        const r = await http.post('/api/aftersale/auto-match', { text: seg, buyer_remark: '', semantic: false, model_id: item.model_id || null })
+        const r = await http.post('/api/aftersale/auto-match', { text: seg, buyer_remark: '', semantic: isElectron, model_id: item.model_id || null })
         if (r.success && currentOrder.value?.ecommerce_order_no === orderNo) {
           const segCandidates = r.data?.items || []
           // 本地语义评分补充
@@ -1629,13 +1632,13 @@ async function computeOrderBatchResult(order) {
             products, purchase_date: parsedPurchaseDate || null,
             seller_remark: order.seller_remark || null,
             buyer_remark:  order.buyer_remark  || null,
-            semantic:      false,   // 语义推理已移至本地
+            semantic:      isElectron,
           }).then(r => { if (r.success && r.data) apiResult = r.data })
         : Promise.resolve(),
       debugText.trim()
         ? http.post('/api/aftersale/auto-match', {
             text: debugText, buyer_remark: order.buyer_remark || '',
-            semantic: false,
+            semantic: isElectron,
           }).then(r => {
             if (r.success && r.data) {
               reasonCandidates = r.data.items || []
@@ -1912,6 +1915,14 @@ async function ignoreCase() {
 
 <template>
   <div class="process-wrap">
+    <!-- ── 非桌面端提示横幅 ───────────────────── -->
+    <div v-if="!isElectron && showSemanticBanner" class="semantic-banner">
+      <span>请使用桌面端来启用语义模型辅助处理售后工单！</span>
+      <button class="banner-close" @click="showSemanticBanner = false">✕</button>
+    </div>
+
+    <!-- ── 主体（队列 + 详情，横向布局）───────── -->
+    <div class="process-body">
     <!-- ── 左侧待处理队列 ─────────────────────── -->
     <aside class="order-queue">
       <div class="queue-header">
@@ -2612,6 +2623,8 @@ async function ignoreCase() {
       </template>
     </div><!-- /work-area -->
 
+    </div><!-- /process-body -->
+
     <!-- 原因库管理弹窗 -->
     <AftersaleReasonLib
       v-model="showReasonLib"
@@ -2625,6 +2638,28 @@ async function ignoreCase() {
 <style scoped>
 /* ── 整体布局 ──────────────────────────────────── */
 .process-wrap {
+  flex: 1; display: flex; flex-direction: column; overflow: hidden;
+}
+
+/* ── 语义模型提示横幅 ─────────────────────────── */
+.semantic-banner {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 16px;
+  background: rgba(196, 136, 58, 0.08);
+  border-bottom: 1px solid rgba(196, 136, 58, 0.2);
+  font-size: 13px; color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.banner-close {
+  background: none; border: none; cursor: pointer;
+  color: var(--text-muted); font-size: 12px;
+  padding: 2px 6px; border-radius: 4px;
+  transition: background 0.15s;
+}
+.banner-close:hover { background: rgba(0,0,0,0.06); }
+
+/* ── 主体布局（横向，队列 + 详情）────────────── */
+.process-body {
   flex: 1; display: flex; overflow: hidden;
 }
 

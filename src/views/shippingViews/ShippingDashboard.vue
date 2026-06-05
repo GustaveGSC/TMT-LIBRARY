@@ -1033,49 +1033,54 @@ function formatDate(d) {
 }
 
 // ── ECharts ───────────────────────────────────────
+function _createChartInst() {
+  if (chartInst) return
+  const el = chartEl.value
+  if (!el?.offsetWidth || !el?.offsetHeight) return
+  chartInst = echarts.init(el, null, { renderer: 'canvas' })
+  // 桌面端：右键下钻
+  chartInst.on('contextmenu', (params) => {
+    params.event?.event?.preventDefault?.()
+    if (params.componentType !== 'series' || !['bar', 'pie'].includes(params.seriesType)) return
+    const label = params.name
+    const hitGroup = customGroups.value.find(
+      g => activeGroupIds.value.includes(g.id) && g.name === label
+    )
+    if (hitGroup) drillDownGroup(hitGroup)
+    else drillDown(label)
+  })
+  // 移动端：长按 1s 下钻（触屏无右键）
+  chartInst.on('mousedown', (params) => {
+    if (!isMobile.value) return
+    if (params.componentType !== 'series' || !['bar', 'pie'].includes(params.seriesType)) return
+    const label = params.name
+    lpActive = true
+    lpTimer  = setTimeout(() => {
+      if (!lpActive) return
+      lpActive = false
+      const hitGroup = customGroups.value.find(
+        g => activeGroupIds.value.includes(g.id) && g.name === label
+      )
+      if (hitGroup) drillDownGroup(hitGroup)
+      else drillDown(label)
+    }, 1000)
+  })
+  chartInst.on('mouseup',    () => { clearTimeout(lpTimer); lpActive = false })
+  chartInst.on('mousemove',  () => { clearTimeout(lpTimer); lpActive = false })
+  chartInst.on('globalout',  () => { clearTimeout(lpTimer); lpActive = false })
+  renderChart()
+}
+
 function initChart() {
   if (!chartEl.value) return
   resizeObs = new ResizeObserver(() => {
-    if (!chartEl.value?.offsetWidth || !chartEl.value?.offsetHeight) return
-    if (!chartInst) {
-      chartInst = echarts.init(chartEl.value, null, { renderer: 'canvas' })
-      // 右击柱子 → 下钻（自定义分组条目跳过）
-      // 桌面端：右键下钻
-      chartInst.on('contextmenu', (params) => {
-        params.event?.event?.preventDefault?.()
-        if (params.componentType !== 'series' || !['bar', 'pie'].includes(params.seriesType)) return
-        const label = params.name
-        const hitGroup = customGroups.value.find(
-          g => activeGroupIds.value.includes(g.id) && g.name === label
-        )
-        if (hitGroup) drillDownGroup(hitGroup)
-        else drillDown(label)
-      })
-      // 移动端：长按 1s 下钻（触屏无右键）
-      chartInst.on('mousedown', (params) => {
-        if (!isMobile.value) return
-        if (params.componentType !== 'series' || !['bar', 'pie'].includes(params.seriesType)) return
-        const label = params.name
-        lpActive = true
-        lpTimer  = setTimeout(() => {
-          if (!lpActive) return
-          lpActive = false
-          const hitGroup = customGroups.value.find(
-            g => activeGroupIds.value.includes(g.id) && g.name === label
-          )
-          if (hitGroup) drillDownGroup(hitGroup)
-          else drillDown(label)
-        }, 1000)
-      })
-      chartInst.on('mouseup',    () => { clearTimeout(lpTimer); lpActive = false })
-      chartInst.on('mousemove',  () => { clearTimeout(lpTimer); lpActive = false })
-      chartInst.on('globalout',  () => { clearTimeout(lpTimer); lpActive = false })
-      renderChart()
-    } else {
-      chartInst.resize()
-    }
+    if (chartInst) { chartInst.resize(); return }
+    _createChartInst()
   })
   resizeObs.observe(chartEl.value)
+  // Safari 保底：ResizeObserver 在 Safari 中可能首次以 0 尺寸触发后不再触发
+  requestAnimationFrame(() => _createChartInst())
+  setTimeout(() => _createChartInst(), 300)
 }
 
 /**
@@ -1427,6 +1432,8 @@ function buildLineOption(items) {
 }
 
 // 同比（YoY）：将日期序列按年拆分，各年同期数据并排对比
+// 上图：每个期号（月/季）一条折线，X 轴 = 年份跨度（"24→25" 等）
+// 下图：各年数量柱状，X 轴 = 期号
 function buildYoyOption(items) {
   const { field, label } = METRIC_MAP[dataMetric.value]
   const period = selectedPeriod.value
@@ -1485,19 +1492,19 @@ function buildYoyOption(items) {
     xLabels     = periodOrder
   }
 
-  const years   = [...yearMap.keys()].sort()
+  const years = [...yearMap.keys()].sort()
 
   const YEAR_COLORS = ['#c4883a', '#4a8fc0', '#6ab47a', '#9c6fba', '#e07070', '#f0a030', '#50c0c0']
 
-  // 柱状系列：每年一组
+  // 柱状系列（下图）：每年一组，绑定 xAxisIndex:1
   const barSeries = years.map((yr, idx) => {
     const clr  = YEAR_COLORS[idx % YEAR_COLORS.length]
-    // 缺失期号填 0（确保每年序列长度与 X 轴一致）
     const data = periodOrder.map(k => yearMap.get(yr)?.get(k) ?? 0)
     return {
       name: `${yr}年`,
       type: 'bar',
-      yAxisIndex: 0,
+      xAxisIndex: 1,
+      yAxisIndex: 1,   // yAxis[1] → gridIndex:1（下图）
       data,
       itemStyle: { color: clr, borderRadius: [2, 2, 0, 0] },
       label: {
@@ -1507,111 +1514,220 @@ function buildYoyOption(items) {
     }
   })
 
-  // 同比增长率折线系列：相邻两年之间，每个期号计算一个增长率
-  const RATE_COLORS = ['#9c6fba', '#50c0c0', '#e07c00', '#e07070']
-  const rateSeries = []
-  if (years.length >= 2) {
-    for (let i = 0; i < years.length - 1; i++) {
-      const fromYear  = years[i]
-      const toYear    = years[i + 1]
-      const rateColor = RATE_COLORS[i % RATE_COLORS.length]
-      const rateData  = periodOrder.map(k => {
-        const from = yearMap.get(fromYear)?.get(k) ?? 0
-        const to   = yearMap.get(toYear)?.get(k) ?? 0
-        if (from === 0) return null
-        return Math.round((to - from) / from * 1000) / 10   // 保留 1 位小数
-      })
-      rateSeries.push({
-        name: `${fromYear.slice(2)}→${toYear.slice(2)}增长率`,
-        type: 'line',
-        yAxisIndex: 1,
-        data: rateData,
-        smooth: false,
-        connectNulls: false,
-        symbol: 'circle',
-        symbolSize: 7,
-        lineStyle: { color: rateColor, width: 2, type: 'dashed' },
-        itemStyle: { color: rateColor, borderWidth: 2, borderColor: '#fff' },
-        label: {
-          show: true,
-          position: 'top',
-          fontFamily: FONT,
-          fontSize: 11,
-          fontWeight: '600',
-          color: rateColor,
-          formatter: p => p.value == null ? '' : (p.value >= 0 ? `▲${p.value}%` : `▼${Math.abs(p.value)}%`),
-        },
-      })
-    }
-  }
-
-  const hasRateLine = rateSeries.length > 0
-
   const titleText = `${buildChartTitle(label)} · 同比`
-  return {
-    backgroundColor: 'transparent',
-    title: {
-      text: titleText,
-      subtext: (() => {
-        const [start, end] = filters.value.dateRange || []
-        if (start && end) return `${formatDate(start)}  ~  ${formatDate(end)}`
-        if (start) return `${formatDate(start)} 起`
-        return '全部时间'
-      })(),
-      left: 10, top: 16,
-      textStyle:    { color: '#3a3028', fontFamily: FONT, fontSize: 14, fontWeight: '600' },
-      subtextStyle: { color: '#8a7a6a', fontFamily: FONT, fontSize: 12 },
-    },
-    toolbox: makeToolbox(true),
-    legend: {
-      top: 76, left: 'center', itemWidth: 18, itemHeight: 12, itemGap: 20,
-      textStyle: { color: '#6b5e4e', fontFamily: FONT, fontSize: 13 },
-    },
-    tooltip: {
-      trigger: 'axis', axisPointer: { type: 'shadow' }, textStyle: { fontFamily: FONT },
-      formatter(params) {
-        const periodLabel = params[0]?.name
-        const row = (marker, name, val) =>
-          `<div style="display:flex;justify-content:space-between;align-items:center;gap:20px;line-height:1.8">` +
-          `<span>${marker}${name}</span><span style="font-weight:600">${val ?? '-'}</span></div>`
-        let s = `<div style="font-family:${FONT};font-size:14px;min-width:160px">`
-        s += `<div style="margin-bottom:4px;font-weight:600;color:#3a3028">${periodLabel}</div>`
-        for (const p of params) {
-          if (p.value == null) continue
-          // 增长率系列后缀 %
-          const isRate   = p.seriesName.includes('增长率')
-          const display  = isRate ? `${p.value >= 0 ? '▲' : '▼'}${Math.abs(p.value)}%` : p.value
-          s += row(p.marker, p.seriesName, display)
-        }
-        return s + '</div>'
+  const subtextStr = (() => {
+    const [start, end] = filters.value.dateRange || []
+    if (start && end) return `${formatDate(start)}  ~  ${formatDate(end)}`
+    if (start) return `${formatDate(start)} 起`
+    return '全部时间'
+  })()
+
+  // 只有 1 年：纯柱状单图
+  if (years.length < 2) {
+    return {
+      backgroundColor: 'transparent',
+      title: {
+        text: titleText, subtext: subtextStr,
+        left: 10, top: 16,
+        textStyle:    { color: '#3a3028', fontFamily: FONT, fontSize: 14, fontWeight: '600' },
+        subtextStyle: { color: '#8a7a6a', fontFamily: FONT, fontSize: 12 },
       },
-    },
-    grid: { top: 116, left: 60, right: hasRateLine ? 70 : 30, bottom: 50 },
-    xAxis: {
-      type: 'category', data: xLabels,
-      axisLabel: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13 },
-      axisLine: { lineStyle: { color: '#e0d4c0' } },
-      axisTick: { lineStyle: { color: '#e0d4c0' } },
-    },
-    yAxis: [
-      {
+      toolbox: makeToolbox(true),
+      legend: {
+        top: 76, left: 'center', itemWidth: 18, itemHeight: 12, itemGap: 20,
+        textStyle: { color: '#6b5e4e', fontFamily: FONT, fontSize: 13 },
+      },
+      tooltip: {
+        trigger: 'axis', axisPointer: { type: 'shadow' }, textStyle: { fontFamily: FONT },
+      },
+      grid: { top: 116, left: 60, right: 30, bottom: 50 },
+      xAxis: {
+        type: 'category', data: xLabels,
+        axisLabel: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13 },
+        axisLine: { lineStyle: { color: '#e0d4c0' } },
+        axisTick: { lineStyle: { color: '#e0d4c0' } },
+      },
+      yAxis: [{
         type: 'value', name: '数量（PCS）',
         nameTextStyle: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13 },
         axisLabel: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13 },
         splitLine: { lineStyle: { color: '#f0e8d8' } },
         axisLine: { show: true, lineStyle: { color: '#e0d4c0' } },
         axisTick: { show: true, lineStyle: { color: '#e0d4c0' } },
+      }],
+      series: barSeries.map(s => ({ ...s, xAxisIndex: 0, yAxisIndex: 0 })),
+    }
+  }
+
+  // 2+ 年：上下双图布局
+  // 上图：每年一条折线，X 轴 = 期号（与下图对齐），Y 轴 = 相对基准年的增长率
+  // 基准年（最早年）增长率固定为 0，其他年份与基准年对比
+  // 同比增长率：每年与上一年对比
+  // series name 格式 "2025 vs 2024"，颜色与柱状图年份对齐
+  // 面积图：平滑折线 + 半透明面积填充，正增长暖色、负增长冷色通过 visualMap 区分
+  const rateSeries = years.slice(1).map((yr, idx) => {
+    const prevYr   = years[idx]
+    const colorIdx = idx + 1
+    const clr = YEAR_COLORS[colorIdx % YEAR_COLORS.length]
+    const rateData = periodOrder.map(k => {
+      const prev = yearMap.get(prevYr)?.get(k) ?? 0
+      const val  = yearMap.get(yr)?.get(k) ?? 0
+      if (prev === 0) return null
+      return Math.round((val - prev) / prev * 1000) / 10
+    })
+    return {
+      name: `${yr}年`,
+      type: 'line',
+      xAxisIndex: 0,
+      yAxisIndex: 0,
+      data: rateData,
+      smooth: true,
+      connectNulls: false,
+      symbol: 'circle',
+      symbolSize: 6,
+      lineStyle: { color: clr, width: 2 },
+      itemStyle: { color: clr },
+      areaStyle: { color: clr, opacity: 0.15 },
+      label: { show: false },
+      emphasis: {
+        label: {
+          show: true, position: 'top',
+          fontFamily: FONT, fontSize: 11, fontWeight: '600', color: clr,
+          formatter: p => {
+            if (p.value == null) return ''
+            return p.value > 0 ? `▲${p.value}%` : p.value < 0 ? `▼${Math.abs(p.value)}%` : '0%'
+          },
+        },
       },
-      ...(hasRateLine ? [{
-        type: 'value', name: '同比增长率',
-        nameTextStyle: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13 },
-        axisLabel: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13, formatter: '{value}%' },
+    }
+  })
+
+  // 只有一条增长率折线时，直接在图上显示数据标签（增长红色，下降蓝色，持平灰色）
+  if (rateSeries.length === 1) {
+    rateSeries[0].label = {
+      show: true, position: 'top',
+      fontFamily: FONT, fontSize: 11, fontWeight: '600',
+      formatter: p => {
+        if (p.value == null) return ''
+        if (p.value > 0) return `{pos|▲${p.value}%}`
+        if (p.value < 0) return `{neg|▼${Math.abs(p.value)}%}`
+        return `{zero|0%}`
+      },
+      rich: {
+        pos:  { color: '#d05a3c', fontFamily: FONT, fontSize: 11, fontWeight: '600' },
+        neg:  { color: '#4a8fc0', fontFamily: FONT, fontSize: 11, fontWeight: '600' },
+        zero: { color: '#8a7a6a', fontFamily: FONT, fontSize: 11, fontWeight: '600' },
+      },
+    }
+  }
+
+  return {
+    backgroundColor: 'transparent',
+    title: {
+      text: titleText, subtext: subtextStr,
+      left: 10, top: 16,
+      textStyle:    { color: '#3a3028', fontFamily: FONT, fontSize: 14, fontWeight: '600' },
+      subtextStyle: { color: '#8a7a6a', fontFamily: FONT, fontSize: 12 },
+    },
+    toolbox: makeToolbox(true),
+    legend: {
+      // 只显示年份项，排除 lollipop 茎系列（__stem__前缀）
+      data: years.map(yr => `${yr}年`),
+      top: 76, left: 'center', itemWidth: 18, itemHeight: 12, itemGap: 20,
+      textStyle: { color: '#6b5e4e', fontFamily: FONT, fontSize: 13 },
+    },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      textStyle: { fontFamily: FONT },
+      formatter(params) {
+        const xLabel = params[0]?.name
+
+        // 过滤茎系列，按年份合并数量（bar）和增长率（scatter）
+        const yearMap2 = {}  // "2025年" → { marker, quantity, rate }
+        for (const p of params) {
+          if (p.seriesName.startsWith('__stem__')) continue
+          const name = p.seriesName
+          if (!yearMap2[name]) yearMap2[name] = { marker: p.marker }
+          if (p.seriesType === 'bar')     yearMap2[name].quantity = p.value
+          if (p.seriesType === 'line')    yearMap2[name].rate     = p.value
+        }
+        const sortedYears = Object.keys(yearMap2).sort()
+
+        const cell = (val, align = 'right') =>
+          `<td style="padding:1px 0 1px 14px;font-weight:600;text-align:${align};white-space:nowrap">${val}</td>`
+        const rateStr = v => v == null ? '—' : v > 0 ? `▲${v}%` : v < 0 ? `▼${Math.abs(v)}%` : '0%'
+
+        let s = `<div style="font-family:${FONT};font-size:13px">`
+        s += `<div style="font-weight:600;color:#3a3028;font-size:14px;margin-bottom:6px">${xLabel}</div>`
+        s += `<table style="border-collapse:collapse;width:100%">`
+
+        // 表头
+        s += `<tr style="color:#8a7a6a;font-size:12px;border-bottom:1px solid #e8dfd0">`
+        s += `<th style="padding:0 0 4px;font-weight:400;text-align:left"></th>`
+        s += `<th style="padding:0 0 4px 14px;font-weight:400;text-align:right">数量（PCS）</th>`
+        s += `<th style="padding:0 0 4px 14px;font-weight:400;text-align:right">同比增长率</th>`
+        s += `</tr>`
+
+        // 数据行
+        for (const yr of sortedYears) {
+          const d = yearMap2[yr]
+          const rateColor = d.rate == null ? '#8a7a6a' : d.rate > 0 ? '#e07070' : d.rate < 0 ? '#4a8fc0' : '#8a7a6a'
+          s += `<tr style="line-height:1.9">`
+          s += `<td style="white-space:nowrap">${d.marker}${yr}</td>`
+          s += cell(d.quantity != null ? d.quantity : '—')
+          s += `<td style="padding:1px 0 1px 14px;font-weight:600;text-align:right;color:${rateColor};white-space:nowrap">${rateStr(d.rate)}</td>`
+          s += `</tr>`
+        }
+
+        s += `</table></div>`
+        return s
+      },
+    },
+    // 联动两图的 axisPointer，hover 任一图时两图同步高亮同一月份
+    axisPointer: { link: [{ xAxisIndex: 'all' }] },
+    grid: [
+      { top: 116, left: 60, right: 30, bottom: '68%' },  // [0] 上图：增长率
+      { top: '37%', left: 60, right: 30, bottom: 50 },   // [1] 下图：数量
+    ],
+    xAxis: [
+      {
+        // [0] 上图 X 轴：与下图相同期号，隐藏标签（上下对齐）
+        gridIndex: 0, type: 'category', data: xLabels,
+        axisLabel: { show: false },
+        axisTick:  { show: false },
+        axisLine:  { lineStyle: { color: '#e0d4c0' } },
         splitLine: { show: false },
+      },
+      {
+        // [1] 下图 X 轴：显示期号标签
+        gridIndex: 1, type: 'category', data: xLabels,
+        axisLabel: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13 },
+        axisLine:  { lineStyle: { color: '#e0d4c0' } },
+        axisTick:  { lineStyle: { color: '#e0d4c0' } },
+      },
+    ],
+    yAxis: [
+      {
+        // [0] 上图增长率轴（gridIndex: 0）
+        gridIndex: 0, type: 'value', name: '同比增长率',
+        nameTextStyle: { color: '#7a5c3a', fontFamily: FONT, fontSize: 12 },
+        axisLabel: { color: '#7a5c3a', fontFamily: FONT, fontSize: 12, formatter: '{value}%' },
+        splitLine: { lineStyle: { color: '#f0e8d8' } },
         axisLine: { show: true, lineStyle: { color: '#e0d4c0' } },
         axisTick: { show: true, lineStyle: { color: '#e0d4c0' } },
-      }] : []),
+      },
+      {
+        // [1] 下图数量轴（gridIndex: 1）
+        gridIndex: 1, type: 'value', name: '数量（PCS）',
+        nameTextStyle: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13 },
+        axisLabel: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13 },
+        splitLine: { lineStyle: { color: '#f0e8d8' } },
+        axisLine: { show: true, lineStyle: { color: '#e0d4c0' } },
+        axisTick: { show: true, lineStyle: { color: '#e0d4c0' } },
+      },
     ],
-    series: [...barSeries, ...rateSeries],
+    series: [...rateSeries, ...barSeries],
   }
 }
 

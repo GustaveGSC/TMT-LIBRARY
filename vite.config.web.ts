@@ -13,7 +13,7 @@ export default defineConfig({
     'import.meta.env.VITE_API_BASE': JSON.stringify(''),
   },
   build: {
-    outDir: resolve(__dirname, 'dist-web-build'),
+    outDir: resolve(__dirname, 'dist-web'),
     emptyOutDir: true,
     rollupOptions: {
       input: { index: resolve(__dirname, 'src/index.html') }

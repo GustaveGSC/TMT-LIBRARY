@@ -498,7 +498,7 @@ async function saveEdit() {
           const createRes = await http.post('/api/product/tags/', { name, color: '#c4883a' })
           if (createRes.success) {
             tag = createRes.data
-            tagOptions.value.push(tag)   // 更新本地缓存
+            finishedStore.tagOptions.push(tag)   // 同步到 store 缓存
           }
         }
         if (tag?.id) await http.post(`/api/product/tags/finished/${finishedId}/${tag.id}`)
@@ -563,15 +563,59 @@ async function ensurePackagedOptionsLoaded() {
   } catch {}
 }
 
-// ── 标签选项（懒加载）────────────────────────────
-const tagOptions = ref([])   // [{id, name, color}]
-const tagsLoaded = ref(false)
+// ── 标签选项（直接用 store，标签管理页更新后实时同步）────────────────────────────
+const tagOptions    = computed(() => finishedStore.tagOptions)
+const tagCategories = computed(() => finishedStore.tagCategories)
 async function ensureTagOptionsLoaded() {
-  if (tagsLoaded.value) return
-  try {
-    const res = await http.get('/api/product/tags/')
-    if (res.success) { tagOptions.value = res.data || []; tagsLoaded.value = true }
-  } catch {}
+  await finishedStore.loadTagOptions()
+}
+
+// 标签选择器搜索词（自定义 filter-method 驱动）
+const tagSearchQuery = ref('')
+function onTagFilterMethod(query) { tagSearchQuery.value = query }
+function onTagSelectClose()       { tagSearchQuery.value = '' }
+
+// 按分类分组并过滤
+const filteredTagGroups = computed(() => {
+  const q = tagSearchQuery.value.trim().toLowerCase()
+  return tagCategories.value
+    .map(cat => ({
+      ...cat,
+      filteredTags: tagOptions.value
+        .filter(t => t.category_id === cat.id && (!q || t.name.toLowerCase().includes(q))),
+    }))
+    .filter(g => g.filteredTags.length > 0)
+})
+
+// 未分类标签（含过滤）
+const filteredUncategorizedTags = computed(() => {
+  const q = tagSearchQuery.value.trim().toLowerCase()
+  return tagOptions.value.filter(t => !t.category_id && (!q || t.name.toLowerCase().includes(q)))
+})
+
+// 是否显示"新建"候选项：输入不为空且不是已有标签
+const showCreateTagOption = computed(() => {
+  const q = tagSearchQuery.value.trim()
+  if (!q) return false
+  if (editForm.tag_names.includes(q)) return false
+  return !tagOptions.value.some(t => t.name === q)
+})
+
+// 按分类 sort_order 排序后的 row.tags（查看模式用）
+function sortedTagsByCategory(tags) {
+  if (!tags?.length) return tags || []
+  // 优先使用 store 里已加载的分类（表格/图片页 onMounted 时已拉取）
+  const cats = finishedStore.tagCategories.length
+    ? finishedStore.tagCategories
+    : tagCategories.value
+  if (!cats.length) return tags
+  const orderMap = new Map(cats.map((c, i) => [c.id, c.sort_order ?? i]))
+  return [...tags].sort((a, b) => {
+    const oa = a.category_id != null ? (orderMap.get(a.category_id) ?? 9999) : 9999
+    const ob = b.category_id != null ? (orderMap.get(b.category_id) ?? 9999) : 9999
+    if (oa !== ob) return oa - ob
+    return (a.name || '').localeCompare(b.name || '')
+  })
 }
 
 // 判断标签名是否在 finished 原有关联里（不在则为本次新增）
@@ -794,61 +838,66 @@ function toggleSec(key) {
       <!-- 图片 + 信息并排 -->
       <div class="ec-row">
 
-        <!-- 图片区 -->
-        <div class="ec-img"
-          @mouseenter="imgHover = true"
-          @mouseleave="imgHover = false; addMenuVisible = false"
-        >
-          <!-- 有图片 -->
-          <template v-if="localCoverImage || row.cover_image">
-            <img
-              :src="localCoverImage || row.cover_image"
-              class="ec-img-photo"
-              :class="{ 'ec-img-photo--viewable': !editing }"
-              alt="封面图"
-              @click="!editing && previewImage()"
-            />
-          </template>
-          <!-- 无图片 -->
-          <template v-else>
-            <span class="ec-img-ico">🖼</span>
-            <span class="ec-img-hint">暂无图片</span>
-          </template>
+        <!-- 左列：1:1 图片 + 标签 -->
+        <div class="ec-left">
 
-          <!-- 编辑状态遮罩：4个按钮 -->
-          <div v-if="editing && imgHover" class="ec-img-overlay ec-img-overlay-edit">
-            <!-- 查看 -->
-            <button class="ov-btn" :disabled="!localCoverImage && !row.cover_image" @click.stop="previewImage">
-              <el-icon><ZoomIn /></el-icon>
-            </button>
-            <!-- 编辑（裁切） -->
-            <button class="ov-btn" :disabled="!localCoverImage && !row.cover_image" @click.stop="editImage">
-              <el-icon><EditPen /></el-icon>
-            </button>
-            <!-- 新增（有子菜单） -->
-            <div class="ov-btn-wrap">
-              <button class="ov-btn" @click.stop="addMenuVisible = !addMenuVisible">
-                <el-icon><Plus /></el-icon>
+          <!-- 图片区 -->
+          <div class="ec-img"
+            @mouseenter="imgHover = true"
+            @mouseleave="imgHover = false; addMenuVisible = false"
+          >
+            <!-- 有图片 -->
+            <template v-if="localCoverImage || row.cover_image">
+              <img
+                :src="localCoverImage || row.cover_image"
+                class="ec-img-photo"
+                :class="{ 'ec-img-photo--viewable': !editing }"
+                alt="封面图"
+                @click="!editing && previewImage()"
+              />
+            </template>
+            <!-- 无图片 -->
+            <template v-else>
+              <span class="ec-img-ico">🖼</span>
+              <span class="ec-img-hint">暂无图片</span>
+            </template>
+
+            <!-- 编辑状态遮罩：4个按钮 -->
+            <div v-if="editing && imgHover" class="ec-img-overlay ec-img-overlay-edit">
+              <!-- 查看 -->
+              <button class="ov-btn" :disabled="!localCoverImage && !row.cover_image" @click.stop="previewImage">
+                <el-icon><ZoomIn /></el-icon>
               </button>
-              <div v-if="addMenuVisible" class="ov-submenu">
-                <div class="ov-submenu-item" @click.stop="addImageFromUpload">使用新图片</div>
-                <div class="ov-submenu-item" @click.stop="addImageFromExisting">使用已有图片</div>
+              <!-- 编辑（裁切） -->
+              <button class="ov-btn" :disabled="!localCoverImage && !row.cover_image" @click.stop="editImage">
+                <el-icon><EditPen /></el-icon>
+              </button>
+              <!-- 新增（有子菜单） -->
+              <div class="ov-btn-wrap">
+                <button class="ov-btn" @click.stop="addMenuVisible = !addMenuVisible">
+                  <el-icon><Plus /></el-icon>
+                </button>
+                <div v-if="addMenuVisible" class="ov-submenu">
+                  <div class="ov-submenu-item" @click.stop="addImageFromUpload">使用新图片</div>
+                  <div class="ov-submenu-item" @click.stop="addImageFromExisting">使用已有图片</div>
+                </div>
               </div>
+              <!-- 删除 -->
+              <button class="ov-btn ov-btn-danger" :disabled="!localCoverImage && !row.cover_image" @click.stop="deleteImage">
+                <el-icon><Delete /></el-icon>
+              </button>
             </div>
-            <!-- 删除 -->
-            <button class="ov-btn ov-btn-danger" :disabled="!localCoverImage && !row.cover_image" @click.stop="deleteImage">
-              <el-icon><Delete /></el-icon>
-            </button>
           </div>
-        </div>
 
-        <!-- 图片预览（teleported 到 body，支持滚轮缩放/旋转） -->
-        <el-image-viewer
-          v-if="imgPreview && (localCoverImage || row.cover_image)"
-          :url-list="[localCoverImage || row.cover_image]"
-          :teleported="true"
-          @close="imgPreview = false"
-        />
+          <!-- 图片预览（teleported 到 body，支持滚轮缩放/旋转） -->
+          <el-image-viewer
+            v-if="imgPreview && (localCoverImage || row.cover_image)"
+            :url-list="[localCoverImage || row.cover_image]"
+            :teleported="true"
+            @close="imgPreview = false"
+          />
+
+        </div><!-- /ec-left -->
 
         <!-- 信息区：flex列，gap=5px，每行36px -->
         <div class="ec-card">
@@ -906,22 +955,6 @@ function toggleSec(key) {
               <span class="eg-val">
                 <span v-for="c in (row.packaged_list || [])" :key="c" class="pk-tag">{{ c }}</span>
                 <span v-if="!row.packaged_list?.length" class="eg-dim">—</span>
-              </span>
-            </div>
-          </div>
-
-          <!-- 行7：标签 -->
-          <div class="eg-row">
-            <div class="eg-cell eg-full">
-              <span class="eg-lbl">标签</span>
-              <span class="eg-val">
-                <span
-                  v-for="tag in (row.tags || [])"
-                  :key="tag.id"
-                  class="ec-tag"
-                  :style="{ background: tag.color + '22', borderColor: tag.color, color: tag.color }"
-                >{{ tag.name }}</span>
-                <span v-if="!(row.tags || []).length" class="eg-dim">—</span>
               </span>
             </div>
           </div>
@@ -1045,50 +1078,71 @@ function toggleSec(key) {
             </div>
           </div>
 
-          <!-- 行7：标签 → el-select，最多展示6个，新建标签 type=primary -->
-          <div class="eg-row eg-row-edit">
-            <div class="eg-cell eg-full">
-              <span class="eg-lbl eg-lbl-edit">标签</span>
-              <span class="eg-val eg-val-inp">
-                <el-select v-model="editForm.tag_names"
-                  multiple allow-create filterable placeholder="选择标签" class="ei-sel">
-                  <template #tag="{ data }">
-                    <el-tag
-                      v-for="item in data.slice(0, 6)"
-                      :key="item.value"
-                      :type="isExistingTag(item.value) ? undefined : 'primary'"
-                      size="small" closable
-                      @close="editForm.tag_names = editForm.tag_names.filter(n => n !== item.value)"
-                    >{{ item.value }}</el-tag>
-                    <el-tooltip v-if="data.length > 6" placement="top" effect="light">
-                      <template #content>
-                        <div class="tag-tip">
-                          <el-tag
-                            v-for="item in data.slice(6)"
-                            :key="item.value"
-                            :type="isExistingTag(item.value) ? undefined : 'primary'"
-                            size="small" closable
-                            @close="editForm.tag_names = editForm.tag_names.filter(n => n !== item.value)"
-                          >{{ item.value }}</el-tag>
-                        </div>
-                      </template>
-                      <el-tag type="info" size="small">+{{ data.length - 6 }}</el-tag>
-                    </el-tooltip>
-                  </template>
-                  <el-option
-                    v-for="tag in tagOptions"
-                    :key="tag.id"
-                    :value="tag.name"
-                    :label="tag.name" />
-                </el-select>
-              </span>
-            </div>
-          </div>
-
         </template>
 
       </div><!-- /ec-card -->
       </div><!-- /ec-row -->
+
+      <!-- 标签行：全宽，图片+信息区下方 -->
+      <div v-if="!editing" class="ec-tags-below">
+        <span
+          v-for="tag in sortedTagsByCategory(row.tags)"
+          :key="tag.id"
+          class="ec-tag"
+          :style="{ background: tag.color + '22', borderColor: tag.color, color: tag.color }"
+        >{{ tag.name }}</span>
+        <span v-if="!(row.tags || []).length" class="eg-dim">—</span>
+      </div>
+      <div v-else-if="canEditProduct" class="ec-tags-edit-below">
+        <el-select
+          v-model="editForm.tag_names"
+          multiple filterable
+          :filter-method="onTagFilterMethod"
+          @visible-change="v => { if (!v) onTagSelectClose() }"
+          collapse-tags collapse-tags-tooltip :max-collapse-tags="6"
+          placeholder="选择标签"
+          class="ei-sel"
+        >
+          <!-- 自定义新标签候选项 -->
+          <el-option
+            v-if="showCreateTagOption"
+            :value="tagSearchQuery.trim()"
+            :label="tagSearchQuery.trim()"
+            class="tag-create-opt"
+          >
+            <span class="tag-create-name">{{ tagSearchQuery.trim() }}</span>
+            <span class="tag-create-badge">new</span>
+          </el-option>
+          <!-- 已有标签（按分类分组，分类标题用禁选 option 实现以支持彩色圆点） -->
+          <template v-for="cat in filteredTagGroups" :key="cat.id">
+            <el-option :value="`__cat__${cat.id}`" :label="cat.name" disabled class="tag-group-hd">
+              <span class="tag-group-dot" :style="{ background: cat.color }"></span>
+              <span class="tag-group-name">{{ cat.name }}</span>
+            </el-option>
+            <el-option
+              v-for="tag in cat.filteredTags"
+              :key="tag.id"
+              :value="tag.name"
+              :label="tag.name"
+              class="tag-group-item"
+            />
+          </template>
+          <!-- 未分类 -->
+          <template v-if="filteredUncategorizedTags.length">
+            <el-option value="__cat__uncategorized" label="未分类" disabled class="tag-group-hd">
+              <span class="tag-group-dot" style="background: #bbb"></span>
+              <span class="tag-group-name">未分类</span>
+            </el-option>
+            <el-option
+              v-for="tag in filteredUncategorizedTags"
+              :key="tag.id"
+              :value="tag.name"
+              :label="tag.name"
+              class="tag-group-item"
+            />
+          </template>
+        </el-select>
+      </div>
 
       <!-- 折叠分组（参数 / 数据）── -->
       <div class="ec-sections">
@@ -1417,11 +1471,16 @@ function toggleSec(key) {
   gap: 10px;
 }
 
-/* 图片：宽度固定，高度自动跟随信息区（align-self:stretch） */
-.ec-img {
-  width: 282px;
+/* 左列：1:1 图片，宽度匹配 6 行信息高度（6×36+5×5=241px） */
+.ec-left {
+  width: 241px;
   flex-shrink: 0;
-  align-self: stretch;
+}
+
+/* 图片：填满左列宽度，1:1 正方形 */
+.ec-img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
   background: #f8f5f0;
   border: 1px solid #e8ddd0;
   border-radius: 8px;
@@ -1431,6 +1490,24 @@ function toggleSec(key) {
   overflow: hidden;
   cursor: default;
 }
+
+/* 查看模式标签行（全宽，自动换行） */
+.ec-tags-below {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px 10px;
+  background: #fff;
+  border-top: 1px solid #f0e8dc;
+}
+
+/* 编辑模式标签行（全宽） */
+.ec-tags-edit-below {
+  padding: 0 12px 10px;
+}
+.ec-tags-edit-below .ei-sel { width: 100%; flex: none; }
 .ec-img-ico  { font-size: 26px; opacity: 0.2; }
 .ec-img-hint { font-size: 11px; color: #c8bfb0; }
 
@@ -1695,6 +1772,37 @@ function toggleSec(key) {
 
 /* tooltip 内的 tag 列表 */
 .tag-tip { display: flex; flex-wrap: wrap; gap: 4px; max-width: 240px; }
+
+/* 自定义新标签候选项 */
+.tag-create-opt { display: flex; align-items: center; gap: 6px; }
+.tag-create-name { font-style: italic; color: #2c2420; }
+.tag-create-badge {
+  font-style: italic; font-size: 10px;
+  color: #e05050; font-weight: 600;
+  flex-shrink: 0;
+}
+
+/* 分类标题行（禁选 option 模拟） */
+.tag-group-hd.el-select-dropdown__item {
+  display: flex !important;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px !important;
+  height: 32px !important;
+  background: #faf7f2 !important;
+  cursor: default !important;
+  color: #3a3028 !important;
+  font-weight: 700 !important;
+  font-size: 13px !important;
+  border-top: 1px solid #f0e8dc;
+}
+.tag-group-hd.el-select-dropdown__item:first-child { border-top: none; }
+.tag-group-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.tag-group-name { font-size: 13px; font-weight: 700; color: #3a3028; }
+/* 分类下的标签项缩进 */
+.tag-group-item.el-select-dropdown__item { padding-left: 24px !important; }
 
 /* checkbox */
 .ei-check { flex-shrink: 0; margin-left: auto; }

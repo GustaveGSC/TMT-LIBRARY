@@ -10,7 +10,21 @@ from result import Result
 
 shipping_bp = Blueprint('shipping', __name__)
 
-shipping_bp.before_request(make_blueprint_guard('shipping:view', 'shipping:edit', 'shipping:export'))
+# SSE 进度端点由 EventSource 发起，浏览器不支持携带自定义 Header，
+# 用 task_id（UUID）作为访问凭证，从 before_request 中豁免。
+_SSE_ENDPOINTS = frozenset({'shipping.import_progress'})
+
+_VIEW_POST = ('/chart-data', '/chart-options', '/warehouses/filter')
+
+def _shipping_guard():
+    if request.endpoint in _SSE_ENDPOINTS:
+        return None
+    return make_blueprint_guard(
+        'shipping:view', 'shipping:edit', 'shipping:export',
+        view_post_paths=_VIEW_POST,
+    )()
+
+shipping_bp.before_request(_shipping_guard)
 
 _ALLOWED_EXT = ('.xlsx', '.xls', '.csv')
 

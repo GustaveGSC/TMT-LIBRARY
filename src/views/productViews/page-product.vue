@@ -375,7 +375,7 @@ onMounted(async () => {
     </el-dialog>
 
     <!-- ── 标签管理弹窗 ────────────────────────────── -->
-    <el-dialog v-model="showTagDialog" title="标签管理" width="600" align-center>
+    <el-dialog v-model="showTagDialog" title="标签管理" width="680" align-center>
       <ProductTag />
     </el-dialog>
 

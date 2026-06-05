@@ -1,6 +1,7 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
 import { ref, onMounted, computed } from 'vue'
+import { ElMessageBox } from 'element-plus'
 import { Plus, Delete, Edit, ArrowRight } from '@element-plus/icons-vue'
 import http from '@/api/http'
 
@@ -165,6 +166,18 @@ async function handleSubmit() {
 const deletingId = ref(null)
 
 async function handleDelete(type, data) {
+  const typeLabel = { category: '分类', series: '系列', model: '型号' }[type]
+  const nameLabel = type === 'category' ? data.name : data.code
+  try {
+    await ElMessageBox.confirm(
+      `确认删除${typeLabel}「${nameLabel}」？此操作不可撤销。`,
+      '删除确认',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch {
+    return
+  }
+
   deletingId.value = `${type}-${data.id}`
   try {
     let res
@@ -276,7 +289,9 @@ onMounted(loadTree)
                     <button class="btn-node" title="编辑" @click.stop="openEdit('series', ser, cat)">
                       <el-icon><Edit /></el-icon>
                     </button>
+                    <!-- 仅无下级型号时显示删除按钮 -->
                     <button
+                      v-if="!ser.models?.length"
                       class="btn-node danger"
                       title="删除"
                       :disabled="deletingId === `series-${ser.id}`"
@@ -379,9 +394,20 @@ onMounted(loadTree)
           </div>
 
           <!-- 底部按钮 -->
-          <button class="btn btn-primary" @click="openEdit(selected.type, selected.data, selected.parent)">
-            <el-icon><Edit /></el-icon> 编辑
-          </button>
+          <div class="detail-actions">
+            <button class="btn btn-primary" @click="openEdit(selected.type, selected.data, selected.parent)">
+              <el-icon><Edit /></el-icon> 编辑
+            </button>
+            <!-- 系列无下级型号时可删除 -->
+            <button
+              v-if="selected.type === 'series' && !selected.data.models?.length"
+              class="btn btn-danger"
+              :disabled="deletingId === `series-${selected.data.id}`"
+              @click="handleDelete('series', selected.data)"
+            >
+              <el-icon><Delete /></el-icon> 删除
+            </button>
+          </div>
         </div>
 
         <!-- 新增/编辑表单 -->
@@ -637,4 +663,7 @@ onMounted(loadTree)
 .btn-secondary:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .btn-primary { background: var(--accent); color: #fff; }
 .btn-primary:hover:not(:disabled) { filter: brightness(1.1); }
+.btn-danger { background: transparent; border: 1px solid rgba(208,90,60,0.35); color: #d05a3c; }
+.btn-danger:hover:not(:disabled) { background: rgba(208,90,60,0.08); border-color: #d05a3c; }
+.detail-actions { display: flex; gap: 8px; }
 </style>

@@ -1,6 +1,28 @@
 from database.base import db
 from utils import now_cst
 
+# 标签分类
+class ProductTagCategory(db.Model):
+    __tablename__ = 'product_tag_category'
+
+    id         = db.Column(db.Integer,    primary_key=True, autoincrement=True)
+    name       = db.Column(db.String(32), nullable=False, unique=True)
+    color      = db.Column(db.String(16), nullable=False, default='#c4883a')
+    sort_order = db.Column(db.Integer,    nullable=False, default=0)
+    created_at = db.Column(db.DateTime,   nullable=False, default=now_cst)
+
+    tags = db.relationship('ProductTag', backref='category', lazy='dynamic')
+
+    def to_dict(self) -> dict:
+        return {
+            'id':         self.id,
+            'name':       self.name,
+            'color':      self.color,
+            'sort_order': self.sort_order,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
+        }
+
+
 # 成品和标签的关联中间表
 finished_tag = db.Table(
     'product_finished_tag',
@@ -12,17 +34,24 @@ finished_tag = db.Table(
 class ProductTag(db.Model):
     __tablename__ = 'product_tag'
 
-    id         = db.Column(db.Integer,     primary_key=True, autoincrement=True)
-    name       = db.Column(db.String(32),  nullable=False, unique=True)
-    color      = db.Column(db.String(16),  nullable=False, default='#c4883a')
-    created_at = db.Column(db.DateTime,    nullable=False, default=now_cst)
+    id          = db.Column(db.Integer,     primary_key=True, autoincrement=True)
+    name        = db.Column(db.String(32),  nullable=False, unique=True)
+    color       = db.Column(db.String(16),  nullable=True)   # 保留旧字段（兼容），分类颜色优先
+    category_id = db.Column(db.Integer,     db.ForeignKey('product_tag_category.id'), nullable=True)
+    created_at  = db.Column(db.DateTime,    nullable=False, default=now_cst)
 
     def to_dict(self) -> dict:
+        # 颜色：优先取分类颜色，其次旧标签自身颜色，默认主色
+        resolved_color = (
+            self.category.color if self.category else
+            (self.color if self.color else '#c4883a')
+        )
         return {
-            'id':         self.id,
-            'name':       self.name,
-            'color':      self.color,
-            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
+            'id':          self.id,
+            'name':        self.name,
+            'color':       resolved_color,
+            'category_id': self.category_id,
+            'created_at':  self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
         }
 
 

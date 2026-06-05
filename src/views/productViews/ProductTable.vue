@@ -19,6 +19,36 @@ onBeforeUnmount(() => window.removeEventListener('resize', onResize))
 // storeToRefs 保证 sortField/sortOrder/status/lifecycle 响应式可读
 const { sortField, sortOrder, status, lifecycle } = storeToRefs(finishedStore)
 
+// 标签筛选（用 computed 避免 storeToRefs 在 Pinia v3 下对数组 ref 的兼容问题）
+const filterTags     = computed({ get: () => finishedStore.filterTags,     set: v => { finishedStore.filterTags = v } })
+const tagOptions     = computed(() => finishedStore.tagOptions)
+const tagCategories  = computed(() => finishedStore.tagCategories)
+
+// 树形标签数据（用于 el-tree-select：分类为禁选父节点，标签为叶节点）
+const tagTreeData = computed(() => {
+  const nodes = tagCategories.value
+    .filter(cat => (cat.tags || []).length > 0)
+    .map(cat => ({
+      value: `__cat__${cat.id}`,
+      label: cat.name,
+      disabled: true,
+      children: (cat.tags || []).map(t => ({ value: t.name, label: t.name })),
+    }))
+  const uncategorized = tagOptions.value.filter(t => !t.category_id)
+  if (uncategorized.length) {
+    nodes.push({
+      value: '__cat__uncategorized',
+      label: '未分类',
+      disabled: true,
+      children: uncategorized.map(t => ({ value: t.name, label: t.name })),
+    })
+  }
+  return nodes
+})
+
+// 挂载时懒加载标签选项
+onMounted(() => { finishedStore.loadTagOptions() })
+
 // ── 状态 tabs ─────────────────────────────────────
 const STATUS_TABS = [
   { value: '',           label: '全部'     },
@@ -75,6 +105,7 @@ function hideSugg(field) { setTimeout(() => { sugg[field].show = false }, 150) }
 function resetFilters() {
   Object.keys(finishedStore.filters).forEach(k => { finishedStore.filters[k] = '' })
   finishedStore.setSort('', '')
+  finishedStore.filterTags = []
   FILTER_FIELDS.forEach(f => { sugg[f].show = false })
 }
 
@@ -189,9 +220,9 @@ onMounted(() => {
 const PK_COL_DEFS = [
   { key: 'code',         header: '产成品编码',    pad: 40, min: 120, max: 240 },
   { key: 'name',         header: '产成品名称',    pad: 40, min: 120, max: 280 },
-  { key: 'length',       header: '包装长度 (mm)', pad: 32, min: 100, max: 160 },
-  { key: 'width',        header: '包装宽度 (mm)', pad: 32, min: 100, max: 160 },
-  { key: 'height',       header: '包装高度 (mm)', pad: 32, min: 100, max: 160 },
+  { key: 'length',       header: '包装长度 (cm)', pad: 32, min: 100, max: 160 },
+  { key: 'width',        header: '包装宽度 (cm)', pad: 32, min: 100, max: 160 },
+  { key: 'height',       header: '包装高度 (cm)', pad: 32, min: 100, max: 160 },
   { key: 'volume',       header: '包装体积 (m³)', pad: 32, min: 100, max: 160 },
   { key: 'gross_weight', header: '毛重 (kg)',     pad: 32, min: 80,  max: 120 },
   { key: 'net_weight',   header: '净重 (kg)',     pad: 32, min: 80,  max: 120 },
@@ -238,6 +269,19 @@ watch(
             @click="lifecycle = t.value"
           >{{ t.label }}</button>
         </div>
+        <!-- 标签筛选 -->
+        <el-tree-select
+          v-model="filterTags"
+          :data="tagTreeData"
+          node-key="value"
+          :props="{ label: 'label', children: 'children', disabled: 'disabled' }"
+          multiple filterable show-checkbox check-strictly
+          default-expand-all :render-after-expand="false"
+          collapse-tags collapse-tags-tooltip
+          placeholder="筛选标签"
+          class="tag-filter-select"
+          size="small"
+        />
       </div>
 
       <div v-if="finishedStore.error" class="error-bar">
@@ -502,9 +546,9 @@ watch(
             <template #default="{ row }"><span style="font-weight:700;color:#2c2420;font-size:12px;">{{ row.code }}</span></template>
           </el-table-column>
           <el-table-column resizable show-overflow-tooltip prop="name"         label="产成品名称"    :width="pkColWidths['name']         || 140"/>
-          <el-table-column resizable show-overflow-tooltip prop="length"       label="包装长度 (mm)" :width="pkColWidths['length']       || 110" align="right"><template #default="{ row }"><span class="dim">{{ row.length ?? '—' }}</span></template></el-table-column>
-          <el-table-column resizable show-overflow-tooltip prop="width"        label="包装宽度 (mm)" :width="pkColWidths['width']        || 110" align="right"><template #default="{ row }"><span class="dim">{{ row.width ?? '—' }}</span></template></el-table-column>
-          <el-table-column resizable show-overflow-tooltip prop="height"       label="包装高度 (mm)" :width="pkColWidths['height']       || 110" align="right"><template #default="{ row }"><span class="dim">{{ row.height ?? '—' }}</span></template></el-table-column>
+          <el-table-column resizable show-overflow-tooltip prop="length"       label="包装长度 (cm)" :width="pkColWidths['length']       || 110" align="right"><template #default="{ row }"><span class="dim">{{ row.length ?? '—' }}</span></template></el-table-column>
+          <el-table-column resizable show-overflow-tooltip prop="width"        label="包装宽度 (cm)" :width="pkColWidths['width']        || 110" align="right"><template #default="{ row }"><span class="dim">{{ row.width ?? '—' }}</span></template></el-table-column>
+          <el-table-column resizable show-overflow-tooltip prop="height"       label="包装高度 (cm)" :width="pkColWidths['height']       || 110" align="right"><template #default="{ row }"><span class="dim">{{ row.height ?? '—' }}</span></template></el-table-column>
           <el-table-column resizable show-overflow-tooltip prop="volume"       label="包装体积 (m³)" :width="pkColWidths['volume']       || 110" align="right"><template #default="{ row }"><span class="dim">{{ row.volume ?? '—' }}</span></template></el-table-column>
           <el-table-column resizable show-overflow-tooltip prop="gross_weight" label="毛重 (kg)"     :width="pkColWidths['gross_weight'] || 86"  align="right"><template #default="{ row }"><span class="dim">{{ row.gross_weight ?? '—' }}</span></template></el-table-column>
           <el-table-column resizable show-overflow-tooltip prop="net_weight"   label="净重 (kg)"     :width="pkColWidths['net_weight']   || 86"  align="right"><template #default="{ row }"><span class="dim">{{ row.net_weight ?? '—' }}</span></template></el-table-column>
@@ -551,11 +595,13 @@ watch(
 }
 
 .card-topbar {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   padding: 8px 14px; flex-shrink: 0;
   border-bottom: 1px solid var(--border);
   background: var(--bg-table-hover);
 }
+.tag-filter-select { width: 180px; }
+.tag-filter-select :deep(.el-select__wrapper) { font-size: 12px; }
 .status-tabs { display: flex; gap: 3px; }
 .tab-btn {
   padding: 4px 14px; border-radius: 6px; font-size: 12px;

@@ -87,6 +87,11 @@ class FinishedService:
         allowed = {'length', 'width', 'height', 'volume', 'gross_weight', 'net_weight'}
         data = {k: v for k, v in kwargs.items() if k in allowed}
 
+        # 若传入了尺寸，强制重算 volume，避免前端旧值与尺寸不符
+        l, w, h = data.get('length'), data.get('width'), data.get('height')
+        if l is not None and w is not None and h is not None:
+            data['volume'] = round(l * w * h / 1_000_000, 3)
+
         obj = FinishedRepository.get_packaged_by_code(code)
         if obj:
             obj = FinishedRepository.update_packaged(obj, name=name, **data)

@@ -2,8 +2,18 @@
 
 ## page-aftersale.vue 说明
 - 路由 `/aftersale`，`onMounted` 调用 `maximizeApp()`，返回按钮先 `unmaximizeApp()` 再 `router.back()`
-- 3个 Tab：**待处理**（红色 badge 显示待处理数）/ **图表** / **数据**
+- 4个 Tab：**概览** / **待处理**（红色 badge 显示待处理数，仅 aftersale:edit 可见）/ **图表** / **数据**
+  - 有编辑权限时默认进「待处理」，无权限时默认进「概览」
+  - 懒加载：首次切换到某 Tab 时才挂载组件（v-if/v-show 组合）
 - 挂载时调用 `GET /api/aftersale/pending/count` 初始化 badge，工单确认后更新
+- 工单确认后同步刷新 overviewRef / dashboardRef / tableRef
+
+## AftersaleOverview.vue 说明
+- 挂载时调用 `GET /api/aftersale/stats`（1次请求），数据展示：
+  - 4个统计卡片：待处理 / 本月售后量（当月 shipped_date confirmed 数）/ 累计已处理 / 已忽略
+  - 待处理 > 0 时卡片高亮警告色
+  - Top 5 高频原因（按 use_count 降序），含横向进度条和分类标签
+- 对外暴露 `refresh()` 方法，工单确认后由 page-aftersale 调用
 
 ## AftersaleProcess.vue 说明
 - 布局：左侧队列（280px）+ 右侧处理工作区（flex:1）

@@ -22,7 +22,10 @@ def _cleanup_export_tasks():
 aftersale_bp = Blueprint('aftersale', __name__)
 _svc = AftersaleService()
 
-aftersale_bp.before_request(make_blueprint_guard('aftersale:view', 'aftersale:edit', 'aftersale:export'))
+aftersale_bp.before_request(make_blueprint_guard(
+    'aftersale:view', 'aftersale:edit', 'aftersale:export',
+    view_post_paths=('/chart-data', '/chart-filter-options', '/suggest-product'),
+))
 
 
 
@@ -463,33 +466,3 @@ def get_settings():
 def update_setting():
     return _svc.update_setting(request.get_json() or {}).to_response()
 
-
-# ── 语义向量模型管理 ──────────────────────────────────────────────────────────
-
-@aftersale_bp.get('/model/status')
-def model_status():
-    import model_manager
-    from result import Result
-    installed = model_manager.is_model_installed()
-    ready     = model_manager.get_model() is not None
-    return Result.ok(data={
-        'installed': installed,
-        'ready':     ready,
-    }).to_response()
-
-
-@aftersale_bp.post('/model/download')
-def model_download():
-    import model_manager
-    from result import Result
-    if model_manager.is_model_installed():
-        return Result.ok(message='模型已安装').to_response()
-    started = model_manager.start_download()
-    return Result.ok(data={'started': started}).to_response()
-
-
-@aftersale_bp.get('/model/progress')
-def model_progress():
-    import model_manager
-    from result import Result
-    return Result.ok(data=model_manager.get_download_state()).to_response()

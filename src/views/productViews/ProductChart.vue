@@ -334,26 +334,30 @@ function buildChartOption(allData, visibleData, total) {
   }
 }
 
+function _createChartInst() {
+  if (chartInst) return
+  const el = chartEl.value
+  if (!el?.offsetWidth || !el?.offsetHeight) return
+  chartInst = echarts.init(el, null, { renderer: 'canvas' })
+  chartInst.on('legendselectchanged', (params) => {
+    legendSelected.value = { ...params.selected }
+    renderChart()
+  })
+  renderChart()
+}
+
 /** 初始化 ResizeObserver，等元素第一次有尺寸时再创建 ECharts 实例
  *  避免 v-show=false 时 offsetWidth=0 导致 ECharts 报错 */
 function initChart() {
   if (!chartEl.value) return
-
   resizeObs = new ResizeObserver(() => {
-    if (!chartEl.value?.offsetWidth || !chartEl.value?.offsetHeight) return
-    if (!chartInst) {
-      chartInst = echarts.init(chartEl.value, null, { renderer: 'canvas' })
-      // 监听 legend 点选，更新 legendSelected 并重绘
-      chartInst.on('legendselectchanged', (params) => {
-        legendSelected.value = { ...params.selected }
-        renderChart()
-      })
-      renderChart()
-    } else {
-      chartInst.resize()
-    }
+    if (chartInst) { chartInst.resize(); return }
+    _createChartInst()
   })
   resizeObs.observe(chartEl.value)
+  // Safari 保底：ResizeObserver 在 Safari 中可能首次以 0 尺寸触发后不再触发
+  requestAnimationFrame(() => _createChartInst())
+  setTimeout(() => _createChartInst(), 300)
 }
 
 /** 渲染 / 更新图表：按 legendSelected 过滤后传入 buildChartOption */

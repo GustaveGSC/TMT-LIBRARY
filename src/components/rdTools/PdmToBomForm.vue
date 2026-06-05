@@ -477,6 +477,7 @@ function isErrorRow(ri) {
 /* ── 内容区 ── */
 .ptb-content {
   flex: 1;
+  min-height: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -508,6 +509,7 @@ function isErrorRow(ri) {
 /* ── 错误表格面板 ── */
 .ptb-error-panel {
   flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -573,11 +575,15 @@ function isErrorRow(ri) {
 /* 表格滚动容器 */
 .table-scroll {
   flex: 1;
+  min-height: 0;
   overflow: auto;
+  scrollbar-width: thin;
 }
-.table-scroll::-webkit-scrollbar { width: 4px; height: 4px; }
-.table-scroll::-webkit-scrollbar-track { background: transparent; }
-.table-scroll::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.18); border-radius: 2px; }
+.table-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.table-scroll::-webkit-scrollbar-track { background: rgba(0,0,0,0.04); border-radius: 4px; }
+.table-scroll::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.28); border-radius: 4px; }
+.table-scroll::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.45); }
+.table-scroll::-webkit-scrollbar-corner { background: transparent; }
 
 .ptb-table {
   border-collapse: collapse;

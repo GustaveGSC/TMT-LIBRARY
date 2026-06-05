@@ -1664,7 +1664,9 @@ class AftersaleRepository:
             if query_vec is not None:
                 # 缓存原因向量：按原因列表 hash 决定是否重算
                 reason_ids_key = tuple(r.id for r in reasons)
-                if not hasattr(self, '_sem_cache') or self._sem_cache.get('key') != reason_ids_key:
+                if (not hasattr(self, '_sem_cache')
+                        or self._sem_cache.get('key') != reason_ids_key
+                        or self._sem_cache.get('vecs') is None):
                     # 用"原因名 + 关键词"拼接作为语义文档，比单纯用名称效果更好
                     reason_docs, reason_id_order = [], []
                     for r in reasons:
@@ -1673,11 +1675,15 @@ class AftersaleRepository:
                         reason_docs.append(doc)
                         reason_id_order.append(r.id)
                     reason_vecs = model_manager.encode(reason_docs)   # (N, dim)
-                    self._sem_cache = {
-                        'key':  reason_ids_key,
-                        'vecs': reason_vecs,
-                        'ids':  reason_id_order,
-                    }
+                    if reason_vecs is None:
+                        # 模型未就绪，不缓存 None，等下次请求重试
+                        reason_vecs = None
+                    else:
+                        self._sem_cache = {
+                            'key':  reason_ids_key,
+                            'vecs': reason_vecs,
+                            'ids':  reason_id_order,
+                        }
 
                 reason_vecs    = self._sem_cache['vecs']
                 reason_id_list = self._sem_cache['ids']
@@ -1816,10 +1822,19 @@ class AftersaleRepository:
     def get_stats(self):
         """摘要统计"""
         from sqlalchemy import func
+        from datetime import date
         total      = AftersaleCase.query.count()
         confirmed  = AftersaleCase.query.filter_by(status='confirmed').count()
         pending    = self.get_pending_count()
         ignored    = AftersaleCase.query.filter_by(status='ignored').count()
+
+        # 本月售后量（shipped_date 在当月且已确认；命中 ix_aftersale_case_status_date 索引）
+        today = date.today()
+        month_start = date(today.year, today.month, 1)
+        this_month = AftersaleCase.query.filter(
+            AftersaleCase.status == 'confirmed',
+            AftersaleCase.shipped_date >= month_start,
+        ).count()
 
         # 最常见 Top5 原因
         top_reasons = (
@@ -1843,10 +1858,11 @@ class AftersaleRepository:
             cat_names = {c.id: c.name for c in cats}
 
         return {
-            'total':     total,
-            'confirmed': confirmed,
-            'pending':   pending,
-            'ignored':   ignored,
+            'total':      total,
+            'confirmed':  confirmed,
+            'pending':    pending,
+            'ignored':    ignored,
+            'this_month': this_month,
             'top_reasons': [
                 {
                     'name':          r.name,

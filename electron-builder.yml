@@ -6,20 +6,15 @@ directories:
   output: release${version}
 
 files:
-  - out/**/*                # electron-vite 构建产物
+  - out/main/**/*           # 主进程
+  - out/preload/**/*        # preload
+  - "!out/renderer/**"      # renderer 改从 Web 服务加载，不打进包
   - "!**/*.{ts,map}"
 
 # ── 原生模块解压（onnxruntime-node 包含 .node 二进制文件，不能打进 asar）──────
 asarUnpack:
   - "node_modules/onnxruntime-node/**"
   - "node_modules/sharp/**"
-
-# ── 额外资源：Python 可执行文件 ─────────────────────
-extraResources:
-  - from: electron/resources/python-backend
-    to: python-backend
-    filter:
-      - "**/*"
 
 # ── Windows ──────────────────────────────────────────
 win:

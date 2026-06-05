@@ -448,32 +448,35 @@ function buildSubtitle() {
 
 // ── 图表 ──────────────────────────────────────────
 
-function initChart() {
-  if (!chartEl.value) return
-
-  // 用 ResizeObserver 等容器有实际尺寸后再初始化，避免 ECharts "0 width/height" 警告
-  const ro = new ResizeObserver((entries) => {
-    const { width, height } = entries[0].contentRect
-    if (!chartInst && width > 0 && height > 0) {
-      chartInst = echarts.init(chartEl.value, null, { renderer: 'canvas' })
-
-      // 右击柱子：产品视图下钻 / 维度视图切回产品
-      chartInst.on('contextmenu', (params) => {
-        params.event?.event?.preventDefault?.()
-        if (params.componentType !== 'series' || params.seriesType !== 'bar') return
-        if (groupBy.value === null && canDrillDown.value) {
-          drillDown(params.name)
-        } else if (groupBy.value !== null) {
-          drillDim(params.name)
-        }
-      })
-
-      renderChart()
-    } else if (chartInst) {
-      chartInst.resize()
+function _createChartInst() {
+  if (chartInst) return
+  const el = chartEl.value
+  if (!el?.offsetWidth || !el?.offsetHeight) return
+  chartInst = echarts.init(el, null, { renderer: 'canvas' })
+  // 右击柱子：产品视图下钻 / 维度视图切回产品
+  chartInst.on('contextmenu', (params) => {
+    params.event?.event?.preventDefault?.()
+    if (params.componentType !== 'series' || params.seriesType !== 'bar') return
+    if (groupBy.value === null && canDrillDown.value) {
+      drillDown(params.name)
+    } else if (groupBy.value !== null) {
+      drillDim(params.name)
     }
   })
+  renderChart()
+}
+
+function initChart() {
+  if (!chartEl.value) return
+  // 用 ResizeObserver 等容器有实际尺寸后再初始化，避免 ECharts "0 width/height" 警告
+  const ro = new ResizeObserver(() => {
+    if (chartInst) { chartInst.resize(); return }
+    _createChartInst()
+  })
   ro.observe(chartEl.value)
+  // Safari 保底：ResizeObserver 在 Safari 中可能首次以 0 尺寸触发后不再触发
+  requestAnimationFrame(() => _createChartInst())
+  setTimeout(() => _createChartInst(), 300)
 }
 
 function renderChart() {

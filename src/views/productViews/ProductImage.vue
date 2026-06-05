@@ -16,11 +16,12 @@ onBeforeUnmount(() => window.removeEventListener('resize', onResize))
 const finishedStore = useFinishedStore()
 
 // ── 本地筛选（独立于表格视图的 store filters）────
-const searchText   = ref('')
+const searchText      = ref('')
 const filterMarket    = ref('')   // '' | 'domestic' | 'foreign'
 const filterLifecycle = ref('')   // '' | 'listed' | 'delisted' | 'unknown'
-const filterSeries = ref([])   // 系列名称（多选）
-const sortBy       = ref('code') // 'code' | 'listed_yymm'
+const filterSeries    = ref([])   // 系列名称（多选）
+const filterTags      = ref([])   // 标签名称（多选）
+const sortBy          = ref('code') // 'code' | 'listed_yymm'
 
 // 系列选项（从 activeItems 提取，已排除禁用编码规则对应的成品）
 const seriesOptions = computed(() => {
@@ -65,6 +66,12 @@ const filteredItems = computed(() => {
   }
   if (filterSeries.value.length) {
     list = list.filter(r => filterSeries.value.includes(r.series_name))
+  }
+  if (filterTags.value.length) {
+    list = list.filter(r => {
+      const names = (r.tags || []).map(t => t.name)
+      return filterTags.value.every(tag => names.includes(tag))
+    })
   }
   if (searchText.value.trim()) {
     const q = searchText.value.trim().toLowerCase()
@@ -152,6 +159,7 @@ onMounted(async () => {
   if (!finishedStore.loaded) {
     await ensureTableData()
   }
+  finishedStore.loadTagOptions()
 })
 </script>
 
@@ -183,6 +191,42 @@ onMounted(async () => {
         class="series-select"
       >
         <el-option v-for="s in seriesOptions" :key="s" :label="s" :value="s" />
+      </el-select>
+
+      <!-- 标签筛选 -->
+      <el-select
+        v-model="filterTags"
+        multiple filterable clearable
+        collapse-tags collapse-tags-tooltip
+        placeholder="筛选标签"
+        class="series-select"
+      >
+        <el-option-group
+          v-for="group in finishedStore.tagCategories"
+          :key="group.id"
+          :label="group.name"
+        >
+          <el-option
+            v-for="tag in (group.tags || [])"
+            :key="tag.id"
+            :value="tag.name"
+            :label="tag.name"
+          >
+            <span class="tag-opt-dot" :style="{ background: group.color }"></span>
+            {{ tag.name }}
+          </el-option>
+        </el-option-group>
+        <el-option-group
+          v-if="finishedStore.tagOptions.filter(t => !t.category_id).length"
+          label="未分类"
+        >
+          <el-option
+            v-for="tag in finishedStore.tagOptions.filter(t => !t.category_id)"
+            :key="tag.id"
+            :value="tag.name"
+            :label="tag.name"
+          />
+        </el-option-group>
       </el-select>
 
       <!-- 生命周期筛选 -->
@@ -240,7 +284,7 @@ onMounted(async () => {
       <div v-if="!groupedItems.length" class="empty-state">
         <el-icon class="empty-icon"><Picture /></el-icon>
         <div class="empty-text">{{ finishedStore.loaded ? '没有匹配的成品' : '暂无数据' }}</div>
-        <div v-if="searchText || filterMarket || filterSeries.length" class="empty-hint">尝试清除筛选条件</div>
+        <div v-if="searchText || filterMarket || filterSeries.length || filterTags.length" class="empty-hint">尝试清除筛选条件</div>
       </div>
 
       <!-- 品类分组 -->
@@ -437,11 +481,15 @@ onMounted(async () => {
 .search-input::placeholder { color: var(--text-muted); }
 
 :deep(.series-select) {
-  width: 250px; flex-shrink: 0;
+  width: 160px; flex-shrink: 0;
 }
 :deep(.series-select .el-input__wrapper) {
   border-radius: 10px;
   font-size: 12px;
+}
+.tag-opt-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  margin-right: 5px; flex-shrink: 0; vertical-align: middle;
 }
 
 .filter-tabs {

@@ -26,16 +26,26 @@ def _require_version_auth():
 version_bp.before_request(_require_version_auth)
 
 OSS_BASE_URL = os.getenv("OSS_BASE_URL", "").rstrip("/")
-OSS_PREFIX   = "tmt-library/releases/"   # 当前存放目录的 key 前缀
+# OSS_BASE_URL 环境变量已包含 /tmt-library（如 https://tmt-oss.../tmt-library）
+# bucket key 前缀从 bucket 根算起，包含 tmt-library/releases/
+# 公开 URL = OSS_BASE_URL + /releases/filename（避免双重 tmt-library）
+OSS_PREFIX  = "tmt-library/releases/"   # bucket key 前缀（OSS 操作用）
+_URL_PREFIX = "releases/"               # URL 子路径（OSS_BASE_URL 后拼接）
+
+
+def _key_to_url(filename: str) -> str:
+    """bucket key 文件名 → 公开 URL"""
+    return f"{OSS_BASE_URL}/{_URL_PREFIX}{filename}"
 
 
 def _url_to_key(url: str):
-    """将 OSS URL 还原为 bucket key，例如：
+    """公开 URL → bucket key，例如：
     https://…/tmt-library/releases/xxx.exe  →  tmt-library/releases/xxx.exe"""
+    prefix = f"{OSS_BASE_URL}/{_URL_PREFIX}"
     if not url or not OSS_BASE_URL:
         return None
-    if url.startswith(OSS_BASE_URL + "/"):
-        return url[len(OSS_BASE_URL) + 1:]
+    if url.startswith(prefix):
+        return f"{OSS_PREFIX}{url[len(prefix):]}"
     return None
 
 
@@ -108,12 +118,12 @@ def presign_upload():
     filename = body.get("filename", "").strip()
     if not filename:
         return Result.fail("文件名不能为空").to_response()
-    key = f"tmt-library/releases/{filename}"
+    key = f"{OSS_PREFIX}{filename}"
     try:
         bucket      = get_bucket()
         presign_url = bucket.sign_url('PUT', key, 3600,
                                       headers={'Content-Type': 'application/octet-stream'})
-        oss_url     = f"{OSS_BASE_URL}/{key}"
+        oss_url     = _key_to_url(filename)
         return Result.ok(data={"presign_url": presign_url, "oss_url": oss_url}).to_response()
     except Exception as e:
         return Result.fail(f"生成签名失败：{str(e)}").to_response()
@@ -125,11 +135,10 @@ def upload_file():
     if not file:
         return Result.fail("未收到文件").to_response()
     filename = file.filename
-    key      = f"tmt-library/releases/{filename}"
+    key      = f"{OSS_PREFIX}{filename}"
     try:
         bucket   = get_bucket()
         bucket.put_object(key, file.stream)
-        base_url = os.getenv("OSS_BASE_URL", "").rstrip("/")
-        return Result.ok(data={"url": f"{base_url}/{key}", "key": key}).to_response()
+        return Result.ok(data={"url": _key_to_url(filename), "key": key}).to_response()
     except Exception as e:
         return Result.fail(f"上传失败：{str(e)}").to_response()

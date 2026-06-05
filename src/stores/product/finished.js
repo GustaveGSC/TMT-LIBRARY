@@ -48,6 +48,32 @@ export const useFinishedStore = defineStore('product/finished', () => {
   // '' = 全部  'listed' = 已上市  'delisted' = 已退市  'unknown' = 状态未知
   const lifecycle = ref('')
 
+  // ── 标签筛选（多选，tag name 数组）─────────────────
+  const filterTags = ref([])   // string[]
+
+  // ── 标签选项（懒加载，供两个视图共用）──────────────
+  const tagOptions      = ref([])   // [{id, name, color, category_id}]
+  const tagCategories   = ref([])   // [{id, name, color, tags:[]}]
+  const tagOptionsLoaded = ref(false)
+
+  async function loadTagOptions() {
+    if (tagOptionsLoaded.value) return
+    try {
+      const [tagRes, catRes] = await Promise.all([
+        http.get('/api/product/tags/'),
+        http.get('/api/product/tags/categories/'),
+      ])
+      if (tagRes.success) tagOptions.value    = tagRes.data || []
+      if (catRes.success) tagCategories.value = catRes.data || []
+      tagOptionsLoaded.value = true
+    } catch (_) { /* 失败不影响主流程 */ }
+  }
+
+  async function reloadTagOptions() {
+    tagOptionsLoaded.value = false
+    await loadTagOptions()
+  }
+
   // ── 排序 ──────────────────────────────────────────
   const sortField = ref('')
   const sortOrder = ref('')   // 'asc' | 'desc' | ''
@@ -114,6 +140,14 @@ export const useFinishedStore = defineStore('product/finished', () => {
       if (getter) list = list.filter(r => (getter(r) || '').toLowerCase().includes(v))
     }
 
+    // 标签筛选（所选标签全部命中，AND 逻辑）
+    if (filterTags.value.length) {
+      list = list.filter(r => {
+        const names = (r.tags || []).map(t => t.name)
+        return filterTags.value.every(tag => names.includes(tag))
+      })
+    }
+
     // 全局搜索（匹配 code / name / name_en，OR 逻辑）
     if (filters.global?.trim()) {
       const v = filters.global.trim().toLowerCase()
@@ -150,7 +184,7 @@ export const useFinishedStore = defineStore('product/finished', () => {
 
   // 过滤/排序条件变化时重置到第一页
   watch(
-    [() => ({ ...filters }), status, lifecycle, sortField, sortOrder],
+    [() => ({ ...filters }), status, lifecycle, filterTags, sortField, sortOrder],
     () => { currentPage.value = 1 },
     { deep: true }
   )
@@ -305,9 +339,11 @@ export const useFinishedStore = defineStore('product/finished', () => {
     loaded.value     = false
     loadingMore.value = false
     error.value      = ''
-    status.value    = ''
-    sortField.value = ''
-    sortOrder.value = ''
+    status.value     = ''
+    lifecycle.value  = ''
+    filterTags.value = []
+    sortField.value  = ''
+    sortOrder.value  = ''
     selected.value          = null
     selectedPackaged.value  = []
     Object.keys(filters).forEach(k => { filters[k] = '' })
@@ -326,7 +362,8 @@ export const useFinishedStore = defineStore('product/finished', () => {
     rawItems, activeItems,
     items, pagedItems, total, currentPage, pageSize,
     loading, loadingMore, loaded, error,
-    filters, status, lifecycle,
+    filters, status, lifecycle, filterTags,
+    tagOptions, tagCategories, tagOptionsLoaded, loadTagOptions, reloadTagOptions,
     sortField, sortOrder,
     selected, selectedPackaged,
     load, reload, refreshItem, select, resetPage, reset, getSuggestions, getTopSuggestions, setSort,

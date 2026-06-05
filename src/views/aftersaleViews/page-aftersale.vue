@@ -4,6 +4,7 @@ import { ref, reactive, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import WindowControls        from '@/components/common/WindowControls.vue'
+import AftersaleOverview     from './AftersaleOverview.vue'
 import AftersaleProcess      from './AftersaleProcess.vue'
 import AftersaleDashboard    from './AftersaleDashboard.vue'
 import AftersaleTable        from './AftersaleTable.vue'
@@ -19,15 +20,15 @@ const router = useRouter()
 const { canEditAftersale } = usePermission()
 
 // ── 响应式状态 ────────────────────────────────────
-// 无编辑权限时不显示待处理 tab，默认进图表
-const activeTab    = ref(canEditAftersale ? 'process' : 'chart')   // 'process' | 'chart' | 'data'
+const activeTab    = ref('overview')  // 'overview' | 'process' | 'chart' | 'data'
 const pendingCount = ref(0)
 
 // 懒加载：记录哪些 Tab 已首次访问（首次访问时 v-if 变 true，之后用 v-show 保留状态）
-const mountedTabs = reactive({ process: canEditAftersale, chart: !canEditAftersale, data: false })
+const mountedTabs = reactive({ overview: true, process: false, chart: false, data: false })
 watch(activeTab, tab => { mountedTabs[tab] = true })
 
 // 子组件引用（用于外部触发刷新）
+const overviewRef         = ref(null)
 const dashboardRef        = ref(null)
 const tableRef            = ref(null)
 const modelDownloadDialog = ref(null)
@@ -58,9 +59,10 @@ async function loadPendingCount() {
   if (res.success) pendingCount.value = res.data.count
 }
 
-// 处理工单确认后：更新待处理数 + 刷新图表和数据列表
+// 处理工单确认后：更新待处理数 + 刷新概览/图表/数据列表
 function onCaseConfirmed() {
   loadPendingCount()
+  overviewRef.value?.refresh()
   dashboardRef.value?.refresh()
   tableRef.value?.refresh()
 }
@@ -79,13 +81,14 @@ function onCaseConfirmed() {
         <span class="page-title">售后数据</span>
         <div class="title-divider"></div>
         <nav class="top-nav">
+          <button class="nav-item" :class="{ active: activeTab === 'overview' }" @click="activeTab = 'overview'">概览</button>
           <button
             v-if="canEditAftersale"
             class="nav-item"
             :class="{ active: activeTab === 'process' }"
             @click="activeTab = 'process'"
           >
-            待处理
+            工单处理
             <span v-if="pendingCount > 0" class="pending-badge">{{ pendingCount }}</span>
           </button>
           <button class="nav-item" :class="{ active: activeTab === 'chart' }" @click="activeTab = 'chart'">图表</button>
@@ -96,6 +99,11 @@ function onCaseConfirmed() {
 
     <!-- ── 主内容区 ────────────────────────────── -->
     <main class="main-content">
+      <AftersaleOverview
+        v-if="mountedTabs.overview"
+        ref="overviewRef"
+        v-show="activeTab === 'overview'"
+      />
       <AftersaleProcess
         v-if="mountedTabs.process"
         v-show="activeTab === 'process'"

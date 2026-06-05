@@ -89,6 +89,16 @@ def create_app() -> Flask:
     def health():
         return {"status": "ok"}
 
+    # ── 语义模型：启动时自动下载/加载 ────────────────
+    import threading
+    def _bg_model_init():
+        try:
+            import model_manager
+            model_manager._auto_start_download_if_needed()
+        except Exception as e:
+            print(f'[app] 语义模型初始化失败: {e}', flush=True)
+    threading.Thread(target=_bg_model_init, daemon=True, name='model-init').start()
+
     return app
 
 
@@ -98,11 +108,34 @@ def _run_migrations(db):
     try:
         from database.models.rd import EcrReminder, EcrNote
         from database.models.aftersale import AftersaleSetting
+        from database.models.product.finished import ProductTagCategory
         EcrReminder.__table__.create(bind=db.engine, checkfirst=True)
         EcrNote.__table__.create(bind=db.engine, checkfirst=True)
         AftersaleSetting.__table__.create(bind=db.engine, checkfirst=True)
+        ProductTagCategory.__table__.create(bind=db.engine, checkfirst=True)
     except Exception as e:
         print(f'[migration] 建表失败（可忽略）: {e}', flush=True)
+
+    # 为 product_tag 表补充 category_id 列
+    try:
+        with db.engine.connect() as conn:
+            row = conn.execute(db.text(
+                "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+                "WHERE TABLE_SCHEMA = DATABASE() "
+                "AND TABLE_NAME = 'product_tag' "
+                "AND COLUMN_NAME = 'category_id'"
+            )).fetchone()
+            if not row:
+                conn.execute(db.text(
+                    "ALTER TABLE product_tag "
+                    "ADD COLUMN category_id INT NULL, "
+                    "ADD CONSTRAINT fk_tag_category "
+                    "FOREIGN KEY (category_id) REFERENCES product_tag_category(id) ON DELETE SET NULL"
+                ))
+                conn.commit()
+                print('[migration] product_tag.category_id 列已添加', flush=True)
+    except Exception as e:
+        print(f'[migration] product_tag 迁移失败（可忽略）: {e}', flush=True)
 
     try:
         with db.engine.connect() as conn:
