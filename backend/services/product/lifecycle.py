@@ -115,6 +115,15 @@ def update_lifecycle(progress_cb=None) -> dict:
         shipping_data = shipping_by_model.get(model_id)
 
         for pf in finished_list:
+            # 纯外贸产品不参与生命周期推算，清空日期后跳过
+            if pf.market == 'foreign':
+                if pf.listed_yymm or pf.delisted_yymm:
+                    pf.listed_yymm   = None
+                    pf.delisted_yymm = None
+                    pf.updated_at    = _now_cst()
+                    updated_count   += 1
+                continue
+
             updates = {}
 
             if shipping_data is None:

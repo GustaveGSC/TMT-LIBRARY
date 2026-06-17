@@ -267,6 +267,41 @@ const selectedKey = computed(() => {
         <div v-else ref="listBodyRef" class="list-body">
 
           <!-- 有分类的 categories -->
+          <!-- 未分类标签组（固定在最顶部） -->
+          <div v-if="uncategorizedTags.length" class="cat-group">
+            <div class="cat-row uncat" @click="toggleCat(-1)">
+              <span class="expand-arrow">{{ expandedCats.has(-1) ? '▾' : '›' }}</span>
+              <span class="cat-dot" style="background:#aaa"></span>
+              <span class="cat-name">未分类</span>
+              <span class="cat-count">{{ uncategorizedTags.length }}</span>
+              <div class="row-actions">
+                <button class="btn-node" title="新增未分类标签" @click.stop="openNewTag(null)">
+                  <el-icon><Plus /></el-icon>
+                </button>
+              </div>
+            </div>
+            <template v-if="expandedCats.has(-1)">
+              <div
+                v-for="tag in uncategorizedTags" :key="tag.id"
+                class="tag-row"
+                :class="{ active: selectedKey === `tag-${tag.id}` }"
+                @click="openEditTag(tag)"
+              >
+                <span class="tag-dot" style="background:#aaa"></span>
+                <span class="tag-name">{{ tag.name }}</span>
+                <div class="row-actions">
+                  <button
+                    class="btn-node danger"
+                    :disabled="deletingKey === `tag-${tag.id}`"
+                    @click.stop="deleteTag(tag)"
+                  >
+                    <el-icon><Delete /></el-icon>
+                  </button>
+                </div>
+              </div>
+            </template>
+          </div>
+
           <div v-for="cat in categories" :key="cat.id" class="cat-group cat-group-sortable">
             <!-- 分类行 -->
             <div
@@ -317,41 +352,6 @@ const selectedKey = computed(() => {
                 </div>
               </div>
               <div v-if="!(cat.tags || []).length" class="tag-empty">暂无标签</div>
-            </template>
-          </div>
-
-          <!-- 未分类标签组（不可拖拽，固定在最后） -->
-          <div v-if="uncategorizedTags.length" class="cat-group">
-            <div class="cat-row uncat" @click="toggleCat(-1)">
-              <span class="expand-arrow">{{ expandedCats.has(-1) ? '▾' : '›' }}</span>
-              <span class="cat-dot" style="background:#aaa"></span>
-              <span class="cat-name">未分类</span>
-              <span class="cat-count">{{ uncategorizedTags.length }}</span>
-              <div class="row-actions">
-                <button class="btn-node" title="新增未分类标签" @click.stop="openNewTag(null)">
-                  <el-icon><Plus /></el-icon>
-                </button>
-              </div>
-            </div>
-            <template v-if="expandedCats.has(-1)">
-              <div
-                v-for="tag in uncategorizedTags" :key="tag.id"
-                class="tag-row"
-                :class="{ active: selectedKey === `tag-${tag.id}` }"
-                @click="openEditTag(tag)"
-              >
-                <span class="tag-dot" style="background:#aaa"></span>
-                <span class="tag-name">{{ tag.name }}</span>
-                <div class="row-actions">
-                  <button
-                    class="btn-node danger"
-                    :disabled="deletingKey === `tag-${tag.id}`"
-                    @click.stop="deleteTag(tag)"
-                  >
-                    <el-icon><Delete /></el-icon>
-                  </button>
-                </div>
-              </div>
             </template>
           </div>
 

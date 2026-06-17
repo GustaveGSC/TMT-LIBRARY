@@ -2,7 +2,7 @@
 // ── 导入 ──────────────────────────────────────────
 import { ref, onMounted, computed } from 'vue'
 import { ElMessageBox } from 'element-plus'
-import { Plus, Delete, Edit, ArrowRight } from '@element-plus/icons-vue'
+import { Plus, Delete, Edit, ArrowRight, Search, Refresh } from '@element-plus/icons-vue'
 import http from '@/api/http'
 
 // ── 树形数据 ──────────────────────────────────────
@@ -33,6 +33,35 @@ const panelTitle = computed(() => {
   return formMode.value === 'create' ? `新增${typeLabel}` : `编辑${typeLabel}`
 })
 
+// ── 搜索 ──────────────────────────────────────────
+const searchQuery = ref('')
+
+const filteredTree = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase()
+  if (!q) return tree.value
+  const result = []
+  for (const cat of tree.value) {
+    const catMatch = cat.name.toLowerCase().includes(q)
+    const filteredSeries = []
+    for (const ser of (cat.series || [])) {
+      const serMatch = ser.name.toLowerCase().includes(q) || ser.code.toLowerCase().includes(q)
+      const filteredModels = (ser.models || []).filter(m =>
+        m.code.toLowerCase().includes(q) || (m.name || '').toLowerCase().includes(q) || (m.name_en || '').toLowerCase().includes(q)
+      )
+      if (serMatch || filteredModels.length) {
+        filteredSeries.push({ ...ser, models: serMatch ? ser.models : filteredModels })
+      }
+    }
+    if (catMatch || filteredSeries.length) {
+      result.push({ ...cat, series: catMatch ? cat.series : filteredSeries })
+    }
+  }
+  return result
+})
+
+// 搜索时强制展开所有匹配分支
+const isSearching = computed(() => !!searchQuery.value.trim())
+
 // ── 展开/折叠状态 ─────────────────────────────────
 // 用普通对象 { id: true } 代替 Set，Vue 能追踪属性变化
 const expandedCategories = ref({})
@@ -52,11 +81,23 @@ async function loadTree() {
   try {
     const res = await http.get('/api/category/tree')
     if (res.success) {
-      tree.value = res.data
+      // 按编码排序：series 和 model 按 code 升序，category 按 name 升序
+      const sorted = res.data
+        .slice().sort((a, b) => a.name.localeCompare(b.name))
+        .map(cat => ({
+          ...cat,
+          series: (cat.series || [])
+            .slice().sort((a, b) => a.code.localeCompare(b.code))
+            .map(ser => ({
+              ...ser,
+              models: (ser.models || []).slice().sort((a, b) => a.code.localeCompare(b.code)),
+            })),
+        }))
+      tree.value = sorted
       // 默认全部展开
       const catExp = {}
       const serExp = {}
-      res.data.forEach(c => {
+      sorted.forEach(c => {
         catExp[c.id] = true
         ;(c.series || []).forEach(s => { serExp[s.id] = true })
       })
@@ -149,9 +190,14 @@ async function handleSubmit() {
     }
 
     if (res.success) {
+      // 编辑模式：记住当前选中节点 id/type，reload 后重新选中
+      const prevSelected = formMode.value === 'edit' && selected.value
+        ? { type: selected.value.type, id: selected.value.data.id }
+        : null
       formMode.value = ''
       createContext.value = null
       await loadTree()
+      if (prevSelected) restoreSelection(prevSelected.type, prevSelected.id)
     } else {
       formError.value = res.message || '操作失败'
     }
@@ -209,6 +255,19 @@ function handleCancel() {
   formError.value     = ''
 }
 
+// ── 编辑后恢复选中节点 ────────────────────────────
+function restoreSelection(type, id) {
+  for (const cat of tree.value) {
+    if (type === 'category' && cat.id === id) { selectNode('category', cat); return }
+    for (const ser of (cat.series || [])) {
+      if (type === 'series' && ser.id === id) { selectNode('series', ser, cat); return }
+      for (const mod of (ser.models || [])) {
+        if (type === 'model' && mod.id === id) { selectNode('model', mod, ser); return }
+      }
+    }
+  }
+}
+
 // ── 生命周期 ──────────────────────────────────────
 onMounted(loadTree)
 </script>
@@ -225,17 +284,30 @@ onMounted(loadTree)
       <div class="tree-panel">
         <div class="tree-header">
           <span class="tree-title">分类结构</span>
-          <button class="btn-tree-add" title="新增分类" @click="openCreate('category')">
-            <el-icon><Plus /></el-icon>
-          </button>
+          <div class="tree-header-actions">
+            <button class="btn-tree-add" title="刷新" :disabled="loading" @click="loadTree">
+              <el-icon :class="{ 'is-loading': loading }"><Refresh /></el-icon>
+            </button>
+            <button class="btn-tree-add" title="新增分类" @click="openCreate('category')">
+              <el-icon><Plus /></el-icon>
+            </button>
+          </div>
+        </div>
+
+        <!-- 搜索框 -->
+        <div class="tree-search">
+          <el-icon class="search-icon"><Search /></el-icon>
+          <input v-model="searchQuery" class="search-input" placeholder="搜索分类/系列/型号..." />
+          <button v-if="searchQuery" class="search-clear" @click="searchQuery = ''">✕</button>
         </div>
 
         <div v-if="loading" class="tree-state">加载中...</div>
         <div v-else-if="!tree.length" class="tree-state">暂无分类，点击 + 新增</div>
+        <div v-else-if="filteredTree.length === 0" class="tree-state">无匹配结果</div>
 
         <div v-else class="tree-body">
           <!-- Category 层 -->
-          <div v-for="cat in tree" :key="cat.id" class="tree-category">
+          <div v-for="cat in filteredTree" :key="cat.id" class="tree-category">
             <div
               class="tree-node node-category"
               :class="{ active: selected?.type === 'category' && selected?.data?.id === cat.id }"
@@ -267,7 +339,7 @@ onMounted(loadTree)
             </div>
 
             <!-- Series 层 -->
-            <template v-if="expandedCategories[cat.id]">
+            <template v-if="isSearching || expandedCategories[cat.id]">
               <div v-for="ser in cat.series" :key="ser.id" class="tree-series">
                 <div
                   class="tree-node node-series"
@@ -303,7 +375,7 @@ onMounted(loadTree)
                 </div>
 
                 <!-- Model 层 -->
-                <template v-if="expandedSeries[ser.id]">
+                <template v-if="isSearching || expandedSeries[ser.id]">
                   <div
                     v-for="mod in ser.models"
                     :key="mod.id"
@@ -366,7 +438,7 @@ onMounted(loadTree)
                 <span class="meta-value">{{ selected.data.name }}</span>
               </div>
               <div v-if="selected.type === 'model'" class="meta-row">
-                <span class="meta-label">英文名称</span>
+                <span class="meta-label">外贸名称</span>
                 <span class="meta-value">{{ selected.data.name_en || '—' }}</span>
               </div>
               <div v-if="selected.type === 'model'" class="meta-row">
@@ -452,16 +524,16 @@ onMounted(loadTree)
             />
           </div>
 
-          <!-- 英文名称：仅 model 显示，选填 -->
+          <!-- 外贸名称：仅 model 显示，选填 -->
           <div
             v-if="(createContext?.type || selected?.type) === 'model'"
             class="form-row"
           >
-            <label class="form-label">英文名称</label>
+            <label class="form-label">外贸名称</label>
             <input
               v-model="formData.name_en"
               class="form-input"
-              placeholder="输入英文名称（选填）"
+              placeholder="输入外贸名称（选填）"
               @keyup.enter="handleSubmit"
             />
           </div>
@@ -513,6 +585,7 @@ onMounted(loadTree)
   background: rgba(255,255,255,0.8); flex-shrink: 0;
 }
 .tree-title { font-size: 12px; font-weight: 600; color: #5a4e42; letter-spacing: 0.05em; }
+.tree-header-actions { display: flex; gap: 4px; }
 .btn-tree-add {
   width: 22px; height: 22px; border-radius: 5px;
   border: 1px solid var(--border); background: transparent;
@@ -520,6 +593,25 @@ onMounted(loadTree)
   cursor: pointer; font-size: 12px; transition: all 0.15s;
 }
 .btn-tree-add:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
+
+.tree-search {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px; border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.search-icon { font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
+.search-input {
+  flex: 1; height: 26px; border: none; background: transparent;
+  font-size: 12px; color: var(--text-primary); font-family: inherit;
+  outline: none;
+}
+.search-input::placeholder { color: var(--text-aux); }
+.search-clear {
+  background: none; border: none; cursor: pointer;
+  color: var(--text-muted); font-size: 11px; padding: 0 2px;
+  line-height: 1; transition: color 0.15s;
+}
+.search-clear:hover { color: var(--text-primary); }
 
 .tree-state {
   padding: 24px; text-align: center;

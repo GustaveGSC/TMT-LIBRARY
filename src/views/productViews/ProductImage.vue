@@ -23,6 +23,34 @@ const filterSeries    = ref([])   // 系列名称（多选）
 const filterTags      = ref([])   // 标签名称（多选）
 const sortBy          = ref('code') // 'code' | 'listed_yymm'
 
+// 标签下拉：可折叠分类
+const tagSearchQuery = ref('')
+function onTagFilterMethod(q) { tagSearchQuery.value = q }
+function onTagSelectClose()   { tagSearchQuery.value = '' }
+const collapsedTagCats = ref(new Set())
+function toggleTagCat(id) {
+  const s = new Set(collapsedTagCats.value)
+  s.has(id) ? s.delete(id) : s.add(id)
+  collapsedTagCats.value = s
+}
+function isTagCatCollapsed(id) {
+  if (tagSearchQuery.value.trim()) return false
+  return !collapsedTagCats.value.has(id)
+}
+const filteredTagGroups = computed(() => {
+  const q = tagSearchQuery.value.trim().toLowerCase()
+  return finishedStore.tagCategories
+    .map(cat => ({
+      ...cat,
+      filteredTags: (cat.tags || []).filter(t => !q || t.name.toLowerCase().includes(q)),
+    }))
+    .filter(g => g.filteredTags.length > 0)
+})
+const filteredUncategorizedTags = computed(() => {
+  const q = tagSearchQuery.value.trim().toLowerCase()
+  return finishedStore.tagOptions.filter(t => !t.category_id && (!q || t.name.toLowerCase().includes(q)))
+})
+
 // 系列选项（从 activeItems 提取，已排除禁用编码规则对应的成品）
 const seriesOptions = computed(() => {
   const seen = new Set()
@@ -197,36 +225,36 @@ onMounted(async () => {
       <el-select
         v-model="filterTags"
         multiple filterable clearable
+        :filter-method="onTagFilterMethod"
+        @visible-change="v => { if (!v) onTagSelectClose() }"
         collapse-tags collapse-tags-tooltip
         placeholder="筛选标签"
         class="series-select"
       >
-        <el-option-group
-          v-for="group in finishedStore.tagCategories"
-          :key="group.id"
-          :label="group.name"
-        >
-          <el-option
-            v-for="tag in (group.tags || [])"
-            :key="tag.id"
-            :value="tag.name"
-            :label="tag.name"
-          >
-            <span class="tag-opt-dot" :style="{ background: group.color }"></span>
-            {{ tag.name }}
+        <template v-for="cat in filteredTagGroups" :key="cat.id">
+          <el-option :value="`__cat__${cat.id}`" :label="cat.name" disabled class="tag-group-hd"
+            @mousedown.stop.prevent="toggleTagCat(cat.id)">
+            <span class="tag-group-dot" :style="{ background: cat.color }"></span>
+            <span class="tag-group-name">{{ cat.name }}</span>
+            <span class="tag-group-arrow" :class="{ collapsed: isTagCatCollapsed(cat.id) }">▾</span>
           </el-option>
-        </el-option-group>
-        <el-option-group
-          v-if="finishedStore.tagOptions.filter(t => !t.category_id).length"
-          label="未分类"
-        >
-          <el-option
-            v-for="tag in finishedStore.tagOptions.filter(t => !t.category_id)"
-            :key="tag.id"
-            :value="tag.name"
-            :label="tag.name"
-          />
-        </el-option-group>
+          <template v-if="!isTagCatCollapsed(cat.id)">
+            <el-option v-for="tag in cat.filteredTags" :key="tag.id"
+              :value="tag.name" :label="tag.name" class="tag-group-item" />
+          </template>
+        </template>
+        <template v-if="filteredUncategorizedTags.length">
+          <el-option value="__cat__uncategorized" label="未分类" disabled class="tag-group-hd"
+            @mousedown.stop.prevent="toggleTagCat('uncategorized')">
+            <span class="tag-group-dot" style="background:#bbb"></span>
+            <span class="tag-group-name">未分类</span>
+            <span class="tag-group-arrow" :class="{ collapsed: isTagCatCollapsed('uncategorized') }">▾</span>
+          </el-option>
+          <template v-if="!isTagCatCollapsed('uncategorized')">
+            <el-option v-for="tag in filteredUncategorizedTags" :key="tag.id"
+              :value="tag.name" :label="tag.name" class="tag-group-item" />
+          </template>
+        </template>
       </el-select>
 
       <!-- 生命周期筛选 -->
@@ -311,7 +339,7 @@ onMounted(async () => {
           >
             <!-- 图片区 -->
             <div class="img-area">
-              <img v-if="row.cover_image" :src="row.cover_image" class="img-actual" :alt="row.code" />
+              <img v-if="row.cover_image" :src="row.cover_image + (row.img_updated_at ? '?t=' + row.img_updated_at : '')" class="img-actual" :alt="row.code" />
               <div v-else class="img-placeholder">
                 <el-icon class="img-ph-icon"><Picture /></el-icon>
                 <span class="img-ph-text">暂无图片</span>
@@ -323,7 +351,7 @@ onMounted(async () => {
             <!-- 信息区 -->
             <div class="img-info">
               <div class="img-code">{{ row.code }}</div>
-              <div class="img-name">{{ row.name || '—' }}</div>
+              <div class="img-name">{{ row.model_name || row.name || '—' }}</div>
             </div>
           </div>
         </div>
@@ -370,7 +398,7 @@ onMounted(async () => {
 
         <!-- 图片（关闭按钮悬浮在图片右上角）-->
         <div class="drawer-img-wrap">
-          <img v-if="selectedRow.cover_image" :src="selectedRow.cover_image" class="drawer-img" :alt="selectedRow.code" />
+          <img v-if="selectedRow.cover_image" :src="selectedRow.cover_image + (selectedRow.img_updated_at ? '?t=' + selectedRow.img_updated_at : '')" class="drawer-img" :alt="selectedRow.code" />
           <div v-else class="drawer-img-empty">
             <el-icon class="drawer-img-empty-icon"><Picture /></el-icon>
             <span>暂无图片</span>
@@ -491,6 +519,19 @@ onMounted(async () => {
   display: inline-block; width: 8px; height: 8px; border-radius: 50%;
   margin-right: 5px; flex-shrink: 0; vertical-align: middle;
 }
+.tag-group-hd.el-select-dropdown__item {
+  display: flex !important; align-items: center; gap: 7px;
+  padding: 0 12px !important; height: 32px !important;
+  background: #faf7f2 !important; cursor: pointer !important;
+  color: #3a3028 !important; font-weight: 700 !important;
+  font-size: 13px !important; border-top: 1px solid #f0e8dc;
+}
+.tag-group-hd.el-select-dropdown__item:first-child { border-top: none; }
+.tag-group-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.tag-group-name { font-size: 13px; font-weight: 700; color: #3a3028; flex: 1; }
+.tag-group-arrow { font-size: 12px; color: #8a7a6a; transition: transform 0.2s; display: inline-block; }
+.tag-group-arrow.collapsed { transform: rotate(-90deg); }
+.tag-group-item.el-select-dropdown__item { padding-left: 24px !important; }
 
 .filter-tabs {
   display: flex; gap: 2px;

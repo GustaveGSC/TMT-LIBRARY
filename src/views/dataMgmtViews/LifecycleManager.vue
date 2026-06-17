@@ -1,7 +1,7 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
 import { ref, computed } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import http, { getBaseURL } from '@/api/http'
 
 // ── 响应式状态 ────────────────────────────────────
@@ -17,6 +17,15 @@ const progress = computed(() =>
 // ── 方法 ──────────────────────────────────────────
 async function handleUpdate() {
   if (running.value) return
+  try {
+    await ElMessageBox.confirm(
+      '将根据发货数据批量推算所有已录入成品的上市/退市日期，外贸产品的日期将被清空。确认执行？',
+      '更新生命周期',
+      { confirmButtonText: '确认执行', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch {
+    return
+  }
   running.value = true
   current.value = 0
   total.value   = 0

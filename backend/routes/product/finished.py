@@ -1,6 +1,7 @@
 import base64
 import os
 import re
+import time
 
 from flask import Blueprint, request, g
 from services.product.finished import finished_service
@@ -93,6 +94,10 @@ def save_finished():
         else:
             body['model_id'] = None
 
+    # model_id 成功解析时，若状态仍为未录入则自动升级为已录入
+    if body.get('model_id') and body.get('status') == 'unrecorded':
+        body['status'] = 'recorded'
+
     return finished_service.save_finished(code, **body).to_response()
 
 
@@ -169,6 +174,34 @@ def upload_cover_image():
         bucket.put_object(key, img_bytes)
         base_url = os.getenv('OSS_BASE_URL', '').rstrip('/')   # 已含 /tmt-library
         url      = f'{base_url}/{rel_path}'
-        return Result.ok(data={'url': url}).to_response()
+        # 更新 img_updated_at，用于前端缓存破坏
+        ts = int(time.time())
+        finished_service.save_finished(code, cover_image=url, img_updated_at=ts)
+        return Result.ok(data={'url': url, 'img_updated_at': ts}).to_response()
     except Exception as e:
         return Result.fail(f'上传失败：{str(e)}').to_response()
+
+
+@finished_bp.post('/finished/copy-cover-image')
+def copy_cover_image():
+    """把 from_code 的封面图复制一份到 to_code，两者图片文件独立互不影响。"""
+    body      = request.get_json() or {}
+    from_code = (body.get('from_code') or '').strip()
+    to_code   = (body.get('to_code')   or '').strip()
+    if not from_code or not to_code:
+        return Result.fail('参数缺失').to_response()
+    if from_code == to_code:
+        return Result.fail('来源与目标相同').to_response()
+
+    try:
+        bucket   = get_bucket()
+        src_key  = f'tmt-library/products/{from_code}.png'
+        dst_key  = f'tmt-library/products/{to_code}.png'
+        bucket.copy_object(bucket.bucket_name, src_key, dst_key)
+        base_url = os.getenv('OSS_BASE_URL', '').rstrip('/')
+        url      = f'{base_url}/products/{to_code}.png'
+        ts       = int(time.time())
+        finished_service.save_finished(to_code, cover_image=url, img_updated_at=ts)
+        return Result.ok(data={'url': url, 'img_updated_at': ts}).to_response()
+    except Exception as e:
+        return Result.fail(f'复制失败：{str(e)}').to_response()

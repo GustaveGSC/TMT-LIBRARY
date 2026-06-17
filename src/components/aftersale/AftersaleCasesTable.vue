@@ -244,8 +244,25 @@ function buildParams() {
 
 function pickReason(reasons) {
   if (!reasons?.length) return null
-  const rid = props.filter.reason_id
+  const rid  = props.filter.reason_id
   if (rid) { const match = reasons.find(r => r.reason_id === rid); if (match) return match }
+  const cf = filters.value
+  // 列筛选命中时，优先展示符合筛选条件的 reason
+  if (cf.model) {
+    const match = reasons.find(r => r.model_id === Number(cf.model)); if (match) return match
+  } else if (cf.series) {
+    const match = reasons.find(r => r.series_id === Number(cf.series)); if (match) return match
+  } else if (cf.product_category) {
+    const match = reasons.find(r => r.product_category_id === Number(cf.product_category)); if (match) return match
+  }
+  if (cf.reason_name) {
+    const match = reasons.find(r => r.reason_name === cf.reason_name); if (match) return match
+  } else if (cf.reason_category) {
+    const match = reasons.find(r => r.reason_category === cf.reason_category); if (match) return match
+  }
+  if (cf.shipping_alias) {
+    const match = reasons.find(r => r.shipping_alias_id === Number(cf.shipping_alias)); if (match) return match
+  }
   return reasons[0]
 }
 

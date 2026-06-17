@@ -221,4 +221,37 @@ product_finished_param
   value(VARCHAR 255), sort_order, created_at, updated_at
   # UNIQUE(finished_id, key_id)
   # 保存使用 Upsert（按 key_id 对比已有记录，更新/插入/删除）
+
+product_resource_type
+  id, name(VARCHAR 100 UNIQUE NOT NULL), sort_order(INT DEFAULT 0), created_at
+  # 资料类型；预置种子数据：说明书/安装视频/售后视频/专利/认证
+  # 有资料时禁止删除（Service 层校验，返回 fail）
+
+product_resource
+  id, title(VARCHAR 200 NOT NULL), type_id(FK→product_resource_type RESTRICT nullable),
+  url(VARCHAR 1000 NOT NULL), storage_key(VARCHAR 500 nullable),
+  source(VARCHAR 20 DEFAULT 'external'),   # 'oss' | 'external'
+  file_type(VARCHAR 20 DEFAULT 'link'),    # 'pdf' | 'image' | 'video' | 'link' | 'other'
+  original_filename(VARCHAR 300 nullable),
+  description(TEXT), created_at, updated_at
+  # type_id=NULL 为未分类（侧边栏"未分类"入口可筛选）
+  # storage_key 仅 source='oss' 时有值，用于生成签名 URL
+
+product_finished_resource          # 成品-资料 直接关联（多对多）
+  finished_id(FK→product_finished CASCADE),
+  resource_id(FK→product_resource CASCADE),
+  sort_order(INT DEFAULT 0),
+  PRIMARY KEY(finished_id, resource_id)
+
+product_resource_tag               # 资料-标签 关联（标签继承）
+  resource_id(FK→product_resource CASCADE),
+  tag_id(FK→product_tag CASCADE),
+  PRIMARY KEY(resource_id, tag_id)
+  # 产品若带有该标签，则自动继承此资料（link_type='tag'）
+
+product_resource_model             # 资料-型号 关联（型号继承）
+  resource_id(FK→product_resource CASCADE),
+  model_id(FK→product_model CASCADE),
+  PRIMARY KEY(resource_id, model_id)
+  # 产品若属于该型号，则自动继承此资料（link_type='model'）
 ```

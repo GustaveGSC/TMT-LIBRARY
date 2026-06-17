@@ -12,6 +12,8 @@ import GEditTagList from '@/components/common/GEditTagList.vue'
 import modelTipImg from '@/assets/images/image_model_tip.png'
 import { useFinishedImage } from '@/composables/useFinishedImage'
 import { useFinishedParams, GROUP_DEFS } from '@/composables/useFinishedParams'
+import { useProductResources } from '@/composables/useProductResources'
+import { Document, VideoPlay, Link, Picture } from '@element-plus/icons-vue'
 
 // ── Props ─────────────────────────────────────────
 const props = defineProps({
@@ -34,12 +36,23 @@ const moreMenuVisible = ref(false)  // ··· 更多菜单开关
 
 // ── 图片 / 裁剪（see useFinishedImage）────────────
 const {
-  imgHover, imgPreview, addMenuVisible,
+  imgHover, imgPreview, addMenuVisible, existingPickerVisible,
   localCoverImage, savedCoverImage,
   cropDialogVisible, cropImgSrc, cropImgRef, cropSquare,
   initCropper, applyCrop, closeCropDialog,
   previewImage, editImage, addImageFromUpload, addImageFromExisting, deleteImage,
+  selectExistingImage, pickerCopying,
 } = useFinishedImage(props)
+
+// ── 已有图片选择器 ────────────────────────────────
+const pickerSearch = ref('')
+const pickerItems = computed(() => {
+  const q = pickerSearch.value.trim().toLowerCase()
+  return finishedStore.rawItems.filter(r =>
+    r.cover_image && r.code !== props.row.code &&
+    (!q || r.code.toLowerCase().includes(q) || (r.name || '').toLowerCase().includes(q))
+  )
+})
 const editForm = reactive({
   name: '', name_en: '', status: '',
   listed_yymm: '', delisted_yymm: '',
@@ -251,7 +264,7 @@ async function copyCard() {
   const d = props.row
   const payload = {
     __type:        'tmt-finished-card',
-    name:          (d.status === 'recorded' && d.model_name) ? d.model_name : (d.name || ''),
+    name:          d.model_name || d.name || '',
     name_en:       d.name_en       || '',
     market:        d.market        || '',
     category_name: d.category_name || '',
@@ -533,7 +546,7 @@ function suggestName(query, cb) {
   const seen = new Set()
   const result = []
   for (const row of finishedStore.rawItems) {
-    const effective = (row.status === 'recorded' && row.model_name) ? row.model_name : (row.name || '')
+    const effective = row.model_name || row.name || ''
     if (!effective) continue
     const lower = effective.toLowerCase()
     if (q && !lower.includes(q)) continue
@@ -544,7 +557,7 @@ function suggestName(query, cb) {
   }
   cb(result)
 }
-// 英文名称：从 rawItems 本地匹配
+// 外贸名称：从 rawItems 本地匹配
 function suggestNameEn(query, cb) {
   const list = query
     ? finishedStore.getSuggestions('name_en', query)
@@ -574,6 +587,18 @@ async function ensureTagOptionsLoaded() {
 const tagSearchQuery = ref('')
 function onTagFilterMethod(query) { tagSearchQuery.value = query }
 function onTagSelectClose()       { tagSearchQuery.value = '' }
+
+// 标签分类折叠状态（默认全部折叠；搜索时全展开）
+const collapsedTagCats = ref(new Set())
+function toggleTagCat(id) {
+  const s = new Set(collapsedTagCats.value)
+  s.has(id) ? s.delete(id) : s.add(id)
+  collapsedTagCats.value = s
+}
+function isTagCatCollapsed(id) {
+  if (tagSearchQuery.value.trim()) return false  // 搜索时全展开
+  return !collapsedTagCats.value.has(id)         // 默认折叠（未在展开集中）
+}
 
 // 按分类分组并过滤
 const filteredTagGroups = computed(() => {
@@ -726,12 +751,12 @@ const validations = computed(() => {
     errs.name = '中文名称不能为空'
   }
 
-  // 英文名称：外贸时必填；有值时唯一
+  // 外贸名称：外贸时必填；有值时唯一
   const nameEn = editForm.name_en.trim()
   if (editForm.market_foreign && !nameEn) {
-    errs.name_en = '勾选外贸时英文名称不能为空'
+    errs.name_en = '勾选外贸时外贸名称不能为空'
   } else if (nameEn && finishedStore.rawItems.some(r => r.code !== code && r.name_en === nameEn)) {
-    errs.name_en = '与其他成品英文名称重复'
+    errs.name_en = '与其他成品外贸名称重复'
   }
 
   // 品类编码：必填
@@ -775,6 +800,153 @@ const {
   saveParamsFor, saveParamsOnly,
 } = useFinishedParams(props)
 
+// ── 资料（每个产品独立实例，避免多行展开时串台）──
+const {
+  types: resourceTypes, loadTypes: loadResourceTypes,
+  linkedResources, linkedLoading, linkedLoaded, linkedByType,
+  loadLinkedResources, linkResource, unlinkResource,
+  createResource, uploading: resourceUploading, uploadFile,
+} = useProductResources(() => props.row.code)
+
+// 资料区 tab（当前选中类型 type_id）
+const resActiveTab   = ref(null)
+const resSelectedId  = ref(null)   // 单击选中的文件 id
+
+// 资料弹窗（从资料库多选）
+const resourcePickerVisible  = ref(false)
+const resourcePickerSearch   = ref('')
+const resourcePickerTypeId   = ref(null)
+const resourcePickerList     = ref([])
+const resourcePickerLoading  = ref(false)
+const resourcePickerSelected = ref(new Set())   // 已选 resource_id 集合
+const resourcePickerLinking  = ref(false)
+
+async function openResourcePicker() {
+  resourcePickerVisible.value  = true
+  resourcePickerSearch.value   = ''
+  resourcePickerTypeId.value   = null
+  resourcePickerSelected.value = new Set()
+  await loadResourcePickerList()
+  if (!resourceTypes.value.length) loadResourceTypes()
+}
+
+async function loadResourcePickerList() {
+  resourcePickerLoading.value = true
+  try {
+    const params = { page: 1, size: 100 }
+    if (resourcePickerTypeId.value) params.type_id = resourcePickerTypeId.value
+    if (resourcePickerSearch.value.trim()) params.search = resourcePickerSearch.value.trim()
+    const res = await http.get('/api/resources', { params })
+    if (res.success) resourcePickerList.value = res.data.items
+  } finally {
+    resourcePickerLoading.value = false
+  }
+}
+
+function togglePickerSelect(id) {
+  const s = new Set(resourcePickerSelected.value)
+  if (s.has(id)) s.delete(id)
+  else s.add(id)
+  resourcePickerSelected.value = s
+}
+
+async function confirmPickResources() {
+  if (!resourcePickerSelected.value.size) return
+  resourcePickerLinking.value = true
+  try {
+    for (const id of resourcePickerSelected.value) {
+      await linkResource(id)
+    }
+    resourcePickerVisible.value = false
+  } finally {
+    resourcePickerLinking.value = false
+  }
+}
+
+// 新建资料弹窗（产品详情内）
+const resourceNewVisible = ref(false)
+const resourceNewForm    = ref({ title: '', type_id: null, url: '', file_type: 'link', source: 'external', storage_key: null, original_filename: null, description: '' })
+const resourceNewUploading = ref(false)
+
+async function pickFileForNew() {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = '.pdf,.png,.jpg,.jpeg,.webp'
+  input.onchange = async (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    const result = await uploadFile(file)
+    if (result) {
+      resourceNewForm.value.url               = result.url
+      resourceNewForm.value.storage_key       = result.storage_key
+      resourceNewForm.value.file_type         = result.file_type
+      resourceNewForm.value.original_filename = result.original_filename
+      resourceNewForm.value.source            = 'oss'
+    }
+  }
+  input.click()
+}
+
+async function submitNewResource() {
+  const payload = { ...resourceNewForm.value }
+  const r = await createResource(payload)
+  if (r) {
+    await linkResource(r.id)
+    resourceNewVisible.value = false
+    resourceNewForm.value = { title: '', type_id: null, url: '', file_type: 'link', source: 'external', storage_key: null, original_filename: null, description: '' }
+  }
+}
+
+function resourceFileIcon(type) {
+  return { pdf: Document, video: VideoPlay, image: Picture, link: Link }[type] || Document
+}
+
+// 资料预览弹窗
+const resPreviewVisible = ref(false)
+const resPreviewItem    = ref(null)
+function openResPreview(r) {
+  resPreviewItem.value    = r
+  resPreviewVisible.value = true
+}
+async function resGetSignedUrl(r, disposition = 'inline') {
+  if (!r) return null
+  if (!r.storage_key) return r.url
+  try {
+    const res = await http.get(`/api/resources/${r.id}/signed-url`, { params: { disposition } })
+    return res.success ? res.data.url : r.url
+  } catch { return r.url }
+}
+async function resOpenInTab(r) {
+  const win = window.open('', '_blank')
+  const url = await resGetSignedUrl(r, 'inline')
+  if (!url) { win?.close(); return }
+
+  if (r.file_type === 'pdf' || r.file_type === 'image') {
+    try {
+      const resp = await fetch(url)
+      const blob = await resp.blob()
+      const blobUrl = URL.createObjectURL(blob)
+      if (win) {
+        win.location.href = blobUrl
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 120_000)
+      }
+      return
+    } catch { /* 降级 */ }
+  }
+  if (win) win.location.href = url
+}
+async function resDownload(r) {
+  const url = await resGetSignedUrl(r, 'attachment')
+  if (!url) return
+  const a = document.createElement('a')
+  a.href = url
+  a.download = r.original_filename || r.title || 'download'
+  a.rel = 'noopener'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+}
+
 // ── 折叠分组（params 区首次展开时懒加载）─────────
 function toggleSec(key) {
   openSec[key] = !openSec[key]
@@ -784,6 +956,15 @@ function toggleSec(key) {
   if (key === 'data' && openSec[key]) {
     loadShippingMonthly()
     loadAftersaleMonthly()
+  }
+  if (key === 'resources' && openSec[key] && !linkedLoaded.value) {
+    loadLinkedResources().then(() => {
+      // 默认选中第一个 tab
+      if (resActiveTab.value === null && linkedByType.value.length) {
+        resActiveTab.value = linkedByType.value[0].type_id
+      }
+    })
+    if (!resourceTypes.value.length) loadResourceTypes()
   }
 }
 </script>
@@ -849,7 +1030,7 @@ function toggleSec(key) {
             <!-- 有图片 -->
             <template v-if="localCoverImage || row.cover_image">
               <img
-                :src="localCoverImage || row.cover_image"
+                :src="localCoverImage || (row.cover_image + (row.img_updated_at ? '?t=' + row.img_updated_at : ''))"
                 class="ec-img-photo"
                 :class="{ 'ec-img-photo--viewable': !editing }"
                 alt="封面图"
@@ -892,7 +1073,7 @@ function toggleSec(key) {
           <!-- 图片预览（teleported 到 body，支持滚轮缩放/旋转） -->
           <el-image-viewer
             v-if="imgPreview && (localCoverImage || row.cover_image)"
-            :url-list="[localCoverImage || row.cover_image]"
+            :url-list="[localCoverImage || (row.cover_image + (row.img_updated_at ? '?t=' + row.img_updated_at : ''))]"
             :teleported="true"
             @close="imgPreview = false"
           />
@@ -910,16 +1091,16 @@ function toggleSec(key) {
             <div class="eg-cell eg-full">
               <span class="eg-lbl">中文名称</span>
               <span class="eg-val">
-                <span class="eg-txt">{{ (row.status === 'recorded' && row.model_name) ? row.model_name : (row.name || '—') }}</span>
+                <span class="eg-txt">{{ row.model_name || row.name || '—' }}</span>
                 <span v-if="row.market === 'domestic' || row.market === 'both'" class="eg-inner-tag eg-tag-domestic">内销</span>
               </span>
             </div>
           </div>
 
-          <!-- 行2：英文名称 + 外贸tag -->
+          <!-- 行2：外贸名称 + 外贸tag -->
           <div class="eg-row">
             <div class="eg-cell eg-full">
-              <span class="eg-lbl">英文名称</span>
+              <span class="eg-lbl">外贸名称</span>
               <span class="eg-val">
                 <span class="eg-txt">{{ row.name_en || '—' }}</span>
                 <span v-if="row.market === 'foreign' || row.market === 'both'" class="eg-inner-tag eg-tag-foreign">外贸</span>
@@ -978,15 +1159,15 @@ function toggleSec(key) {
             </div>
           </div>
 
-          <!-- 行2：英文名称 + 外贸checkbox -->
+          <!-- 行2：外贸名称 + 外贸checkbox -->
           <div class="eg-row eg-row-edit">
             <div class="eg-cell eg-full">
               <el-tooltip :content="validations.name_en" :disabled="!validations.name_en" placement="top">
-                <span class="eg-lbl eg-lbl-edit" :class="{ 'eg-lbl-error': validations.name_en }">英文名称</span>
+                <span class="eg-lbl eg-lbl-edit" :class="{ 'eg-lbl-error': validations.name_en }">外贸名称</span>
               </el-tooltip>
               <span class="eg-val eg-val-inp">
                 <el-autocomplete v-model="editForm.name_en" :fetch-suggestions="suggestNameEn"
-                  placeholder="英文名称（选填）" class="ei-auto" clearable />
+                  placeholder="外贸名称（选填）" class="ei-auto" clearable />
                 <el-checkbox v-model="editForm.market_foreign" class="ei-check">外贸</el-checkbox>
               </span>
             </div>
@@ -1113,33 +1294,39 @@ function toggleSec(key) {
             <span class="tag-create-name">{{ tagSearchQuery.trim() }}</span>
             <span class="tag-create-badge">new</span>
           </el-option>
-          <!-- 已有标签（按分类分组，分类标题用禁选 option 实现以支持彩色圆点） -->
+          <!-- 已有标签（按分类分组，分类标题可折叠） -->
           <template v-for="cat in filteredTagGroups" :key="cat.id">
-            <el-option :value="`__cat__${cat.id}`" :label="cat.name" disabled class="tag-group-hd">
+            <el-option :value="`__cat__${cat.id}`" :label="cat.name" disabled class="tag-group-hd" @mousedown.stop="toggleTagCat(cat.id)">
               <span class="tag-group-dot" :style="{ background: cat.color }"></span>
               <span class="tag-group-name">{{ cat.name }}</span>
+              <span class="tag-group-arrow" :class="{ collapsed: isTagCatCollapsed(cat.id) }">▾</span>
             </el-option>
-            <el-option
-              v-for="tag in cat.filteredTags"
-              :key="tag.id"
-              :value="tag.name"
-              :label="tag.name"
-              class="tag-group-item"
-            />
+            <template v-if="!isTagCatCollapsed(cat.id)">
+              <el-option
+                v-for="tag in cat.filteredTags"
+                :key="tag.id"
+                :value="tag.name"
+                :label="tag.name"
+                class="tag-group-item"
+              />
+            </template>
           </template>
           <!-- 未分类 -->
           <template v-if="filteredUncategorizedTags.length">
-            <el-option value="__cat__uncategorized" label="未分类" disabled class="tag-group-hd">
+            <el-option value="__cat__uncategorized" label="未分类" disabled class="tag-group-hd" @mousedown.stop="toggleTagCat('uncategorized')">
               <span class="tag-group-dot" style="background: #bbb"></span>
               <span class="tag-group-name">未分类</span>
+              <span class="tag-group-arrow" :class="{ collapsed: isTagCatCollapsed('uncategorized') }">▾</span>
             </el-option>
-            <el-option
-              v-for="tag in filteredUncategorizedTags"
-              :key="tag.id"
-              :value="tag.name"
-              :label="tag.name"
-              class="tag-group-item"
-            />
+            <template v-if="!isTagCatCollapsed('uncategorized')">
+              <el-option
+                v-for="tag in filteredUncategorizedTags"
+                :key="tag.id"
+                :value="tag.name"
+                :label="tag.name"
+                class="tag-group-item"
+              />
+            </template>
           </template>
         </el-select>
       </div>
@@ -1299,6 +1486,70 @@ function toggleSec(key) {
 
           </div>
         </div>
+        <!-- 资料 section ─────────────────────────── -->
+        <div class="eg-sec">
+          <div class="eg-sec-hd" @click="toggleSec('resources')">
+            <span class="eg-arr">{{ isSec('resources') ? '▾' : '›' }}</span>资料
+            <!-- 编辑模式下的操作按钮 -->
+            <template v-if="isSec('resources') && canEditProduct && editing">
+              <button class="res-sec-btn" @click.stop="openResourcePicker">+ 选择</button>
+              <button class="res-sec-btn" @click.stop="resourceNewVisible = true; loadResourceTypes()">+ 新建</button>
+            </template>
+          </div>
+          <div v-if="isSec('resources')" class="eg-sec-bd eg-sec-bd-res">
+            <div v-if="linkedLoading" class="res-loading">加载中…</div>
+            <div v-else-if="!linkedResources.length" class="res-empty">暂无资料</div>
+            <template v-else>
+              <!-- 顶部 Tab + 文件网格布局 -->
+              <div class="res-layout">
+                <!-- 顶部类型 tab -->
+                <div class="res-tabs">
+                  <div
+                    v-for="g in linkedByType"
+                    :key="g.type_id"
+                    class="res-tab"
+                    :class="{ 'res-tab--active': resActiveTab === g.type_id }"
+                    @click="resActiveTab = g.type_id; resSelectedId = null"
+                  >{{ g.type_name }} ({{ g.items.length }})</div>
+                </div>
+                <!-- 文件网格 -->
+                <div class="res-files" @click.self="resSelectedId = null">
+                  <template v-for="g in linkedByType" :key="g.type_id">
+                    <template v-if="resActiveTab === g.type_id">
+                      <div
+                        v-for="r in g.items"
+                        :key="r.id"
+                        class="res-file"
+                        :class="{ 'res-file--selected': resSelectedId === r.id }"
+                        @click.stop="resSelectedId = r.id"
+                        @dblclick.stop="openResPreview(r)"
+                      >
+                        <button v-if="editing && r.link_type === 'direct'" class="res-file-unlink" title="解除关联" @click.stop="unlinkResource(r.id)">×</button>
+                        <!-- PDF 专属图标 -->
+                        <div v-if="r.file_type === 'pdf'" class="res-file-icon res-file-icon--pdf">
+                          <div class="pdf-icon-inner">
+                            <div class="pdf-icon-top">PDF</div>
+                            <div class="pdf-icon-lines">
+                              <span></span><span></span><span></span>
+                            </div>
+                          </div>
+                        </div>
+                        <!-- 其他类型图标 -->
+                        <div v-else class="res-file-icon">
+                          <el-icon><component :is="resourceFileIcon(r.file_type)" /></el-icon>
+                        </div>
+                        <div class="res-file-name" :title="r.title">{{ r.title }}</div>
+                        <div v-if="r.link_type === 'tag'" class="res-file-badge res-file-badge--tag" title="通过标签关联"></div>
+                        <div v-if="r.link_type === 'model'" class="res-file-badge res-file-badge--model" title="通过型号关联"></div>
+                      </div>
+                    </template>
+                  </template>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+
         <div class="eg-sec">
           <div class="eg-sec-hd" @click="toggleSec('data')">
             <span class="eg-arr">{{ isSec('data') ? '▾' : '›' }}</span>数据
@@ -1337,6 +1588,7 @@ function toggleSec(key) {
             </div>
           </div>
         </div>
+
       </div>
 
       <!-- 提交遮罩 -->
@@ -1348,6 +1600,183 @@ function toggleSec(key) {
     </div><!-- /ec-main -->
 
   </div>
+
+  <!-- ── 资料选择弹窗 ─────────────────────────────── -->
+  <el-dialog
+    v-model="resourcePickerVisible"
+    title="从资料库选择"
+    width="640"
+    append-to-body
+    :close-on-click-modal="false"
+  >
+    <div class="res-picker-toolbar">
+      <el-input
+        v-model="resourcePickerSearch"
+        placeholder="搜索资料名称…"
+        clearable
+        size="small"
+        style="width:200px"
+        @input="loadResourcePickerList"
+        @clear="loadResourcePickerList"
+      />
+      <el-select
+        v-model="resourcePickerTypeId"
+        placeholder="全部类型"
+        clearable
+        size="small"
+        style="width:140px"
+        @change="loadResourcePickerList"
+      >
+        <el-option v-for="t in resourceTypes" :key="t.id" :value="t.id" :label="t.name" />
+      </el-select>
+    </div>
+    <div class="res-picker-list">
+      <div v-if="resourcePickerLoading" class="res-loading">加载中…</div>
+      <div v-else-if="!resourcePickerList.length" class="res-empty">暂无资料</div>
+      <div
+        v-for="r in resourcePickerList"
+        :key="r.id"
+        class="res-picker-item"
+        :class="{ 'res-picker-item--selected': resourcePickerSelected.has(r.id) }"
+        @click="togglePickerSelect(r.id)"
+      >
+        <el-checkbox :model-value="resourcePickerSelected.has(r.id)" @click.stop="togglePickerSelect(r.id)" />
+        <el-icon class="res-item-icon"><component :is="resourceFileIcon(r.file_type)" /></el-icon>
+        <div class="res-picker-body">
+          <div class="res-picker-title">{{ r.title }}</div>
+          <div class="res-picker-meta">
+            <span v-if="r.type_name">{{ r.type_name }}</span>
+            <span>已关联 {{ r.linked_count }} 个产品</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <template #footer>
+      <el-button @click="resourcePickerVisible = false">取消</el-button>
+      <el-button
+        type="primary"
+        :disabled="!resourcePickerSelected.size"
+        :loading="resourcePickerLinking"
+        @click="confirmPickResources"
+      >关联所选（{{ resourcePickerSelected.size }}）</el-button>
+    </template>
+  </el-dialog>
+
+  <!-- ── 新建资料弹窗（产品详情内）──────────────── -->
+  <el-dialog
+    v-model="resourceNewVisible"
+    title="新建资料"
+    width="480"
+    append-to-body
+    :close-on-click-modal="false"
+  >
+    <el-form :model="resourceNewForm" label-width="70px" size="small">
+      <el-form-item label="标题">
+        <el-input v-model="resourceNewForm.title" />
+      </el-form-item>
+      <el-form-item label="类型">
+        <el-select v-model="resourceNewForm.type_id" clearable style="width:100%">
+          <el-option v-for="t in resourceTypes" :key="t.id" :value="t.id" :label="t.name" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="链接/文件">
+        <div style="display:flex;gap:8px;align-items:center;width:100%">
+          <el-input v-model="resourceNewForm.url" placeholder="https://… 或上传后自动填入" style="flex:1" />
+          <el-button size="small" :loading="resourceUploading" @click="pickFileForNew">上传</el-button>
+        </div>
+        <div v-if="resourceNewForm.original_filename" style="font-size:11px;color:#8a7a6a;margin-top:3px">{{ resourceNewForm.original_filename }}</div>
+      </el-form-item>
+      <el-form-item label="文件类型">
+        <el-select v-model="resourceNewForm.file_type" style="width:160px">
+          <el-option value="pdf"   label="PDF 文档" />
+          <el-option value="image" label="图片" />
+          <el-option value="video" label="视频链接" />
+          <el-option value="link"  label="外部链接" />
+          <el-option value="other" label="其他" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="备注">
+        <el-input v-model="resourceNewForm.description" type="textarea" :rows="2" />
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="resourceNewVisible = false">取消</el-button>
+      <el-button type="primary" :disabled="resourceUploading || !resourceNewForm.title || !resourceNewForm.url" @click="submitNewResource">保存并关联</el-button>
+    </template>
+  </el-dialog>
+
+  <!-- ── 资料预览弹窗 ──────────────────────────── -->
+  <el-dialog
+    v-model="resPreviewVisible"
+    :title="resPreviewItem?.title"
+    width="720"
+    append-to-body
+    align-center
+  >
+    <div class="res-preview-body">
+      <img
+        v-if="resPreviewItem?.file_type === 'image'"
+        :src="resPreviewItem?.url"
+        style="max-width:100%;max-height:60vh;object-fit:contain;display:block;margin:0 auto;"
+      />
+      <div v-else style="text-align:center;padding:40px 0;color:#8a7a6a;font-size:13px;">
+        <div style="font-size:38px;margin-bottom:10px;">
+          {{ resPreviewItem?.file_type === 'pdf' ? '📄' : resPreviewItem?.file_type === 'video' ? '🎬' : '🔗' }}
+        </div>
+        <div style="font-size:14px;color:#3a3028;font-weight:600;margin-bottom:6px;">{{ resPreviewItem?.original_filename || resPreviewItem?.title }}</div>
+        <div>该文件类型无法在此处预览，请点击下方按钮操作。</div>
+      </div>
+    </div>
+    <template #footer>
+      <div style="display:flex;justify-content:flex-end;gap:8px;">
+        <el-button @click="resPreviewVisible = false">关闭</el-button>
+        <el-button @click="resOpenInTab(resPreviewItem)">在新标签页打开</el-button>
+        <el-button type="primary" @click="resDownload(resPreviewItem)">下载</el-button>
+      </div>
+    </template>
+  </el-dialog>
+
+  <!-- ── 已有图片选择器 ─────────────────────────── -->
+  <el-dialog
+    v-model="existingPickerVisible"
+    title="选择已有产品图片"
+    width="760"
+    append-to-body
+    class="picker-dialog"
+    @closed="pickerSearch = ''"
+  >
+    <div class="picker-search-wrap">
+      <el-input
+        v-model="pickerSearch"
+        placeholder="搜索品号 / 中文名"
+        clearable
+        size="small"
+        class="picker-search"
+      />
+      <span class="picker-count">{{ pickerItems.length }} 个成品有图片</span>
+    </div>
+    <div class="picker-grid" :class="{ 'picker-grid--copying': pickerCopying }">
+      <div
+        v-for="item in pickerItems"
+        :key="item.code"
+        class="picker-card"
+        @click="!pickerCopying && selectExistingImage(item.code)"
+      >
+        <div class="picker-img-wrap">
+          <img :src="item.cover_image" class="picker-img" :alt="item.code" />
+        </div>
+        <div class="picker-info">
+          <div class="picker-code">{{ item.code }}</div>
+          <div class="picker-name">{{ item.model_name || item.name || '—' }}</div>
+        </div>
+      </div>
+      <div v-if="!pickerItems.length" class="picker-empty">没有匹配的已有图片</div>
+    </div>
+    <template #footer>
+      <span v-if="pickerCopying" class="picker-copying-hint">复制中，请稍候…</span>
+      <button class="crop-btn crop-btn-cancel" :disabled="pickerCopying" @click="existingPickerVisible = false">取消</button>
+    </template>
+  </el-dialog>
 
   <!-- ── 裁剪弹窗 ──────────────────────────────── -->
   <el-dialog
@@ -1612,7 +2041,14 @@ function toggleSec(key) {
   background: #fff;
   border: 1px solid #e8ddd0;
   border-radius: 6px;
-  overflow: hidden;
+}
+.eg-row-edit {
+  overflow: visible;
+  border: none;
+  background: transparent;
+}
+.eg-row-edit .eg-cell {
+  overflow: visible;
 }
 
 /* 每行里的格子 */
@@ -1731,28 +2167,30 @@ function toggleSec(key) {
 /* el-autocomplete：始终显示边框，白色背景 */
 .ei-auto { flex: 1; min-width: 0; }
 .ei-auto :deep(.el-input__wrapper) {
-  height: 26px; padding: 0 8px; border-radius: 4px;
+  height: 28px; padding: 0 8px; border-radius: 4px;
   box-shadow: none !important;
   border: 1px solid #e8ddd0;
   background: #fff;
   transition: border-color 0.15s;
+  overflow: visible;
 }
 .ei-auto :deep(.el-input__wrapper):hover      { border-color: #c4883a; }
 .ei-auto :deep(.el-input__wrapper.is-focus)   { border-color: #c4883a !important; }
-.ei-auto :deep(.el-input__inner) { height: 24px; font-size: 13px; color: #2c2420; background: #fff; }
+.ei-auto :deep(.el-input__inner) { font-size: 13px; color: #2c2420; background: #fff; overflow: visible; }
 
 /* el-date-picker：始终显示边框，白色背景 */
 .ei-date { flex: 1; min-width: 0; }
 .ei-date :deep(.el-input__wrapper) {
-  height: 26px; padding: 0 8px; border-radius: 4px;
+  height: 28px; padding: 0 8px; border-radius: 4px;
   box-shadow: none !important;
   border: 1px solid #e8ddd0;
   background: #fff;
   transition: border-color 0.15s;
+  overflow: visible;
 }
 .ei-date :deep(.el-input__wrapper):hover      { border-color: #c4883a; }
 .ei-date :deep(.el-input__wrapper.is-focus)   { border-color: #c4883a !important; }
-.ei-date :deep(.el-input__inner) { height: 24px; font-size: 13px; color: #2c2420; background: #fff; }
+.ei-date :deep(.el-input__inner) { font-size: 13px; color: #2c2420; background: #fff; overflow: visible; }
 
 /* el-select（多选，行6/7）：始终显示边框，高度与 autocomplete 一致 */
 .ei-sel { flex: 1; min-width: 0; }
@@ -1790,7 +2228,7 @@ function toggleSec(key) {
   padding: 0 12px !important;
   height: 32px !important;
   background: #faf7f2 !important;
-  cursor: default !important;
+  cursor: pointer !important;
   color: #3a3028 !important;
   font-weight: 700 !important;
   font-size: 13px !important;
@@ -1800,7 +2238,13 @@ function toggleSec(key) {
 .tag-group-dot {
   width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
 }
-.tag-group-name { font-size: 13px; font-weight: 700; color: #3a3028; }
+.tag-group-name { font-size: 13px; font-weight: 700; color: #3a3028; flex: 1; }
+.tag-group-arrow {
+  font-size: 12px; color: #8a7a6a;
+  transition: transform 0.2s;
+  display: inline-block;
+}
+.tag-group-arrow.collapsed { transform: rotate(-90deg); }
 /* 分类下的标签项缩进 */
 .tag-group-item.el-select-dropdown__item { padding-left: 24px !important; }
 
@@ -2044,4 +2488,188 @@ function toggleSec(key) {
 .sortable-ghost { opacity: 0.4; border: 1px dashed #c4883a !important; border-radius: 5px; }
 .sortable-chosen { background: #fff7ed; }
 
+/* ── 已有图片选择器弹窗 ─────────────────────────── */
+:global(.picker-dialog .el-dialog__body) {
+  padding: 12px 16px 0 !important;
+}
+.picker-search-wrap {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 12px;
+}
+.picker-search { flex: 1; }
+.picker-count { font-size: 12px; color: #8a7a6a; flex-shrink: 0; }
+.picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 10px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding-bottom: 4px;
+}
+.picker-grid::-webkit-scrollbar { width: 4px; }
+.picker-grid::-webkit-scrollbar-track { background: transparent; }
+.picker-grid::-webkit-scrollbar-thumb { background: #e0d4c0; border-radius: 2px; }
+.picker-card {
+  border: 1px solid #e0d4c0; border-radius: 10px; overflow: hidden;
+  cursor: pointer; transition: all 0.15s; background: #fff;
+}
+.picker-card:hover {
+  border-color: #c4883a;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 14px rgba(196,136,58,0.18);
+}
+.picker-img-wrap {
+  position: relative; width: 100%; padding-top: 100%; background: #f5f0e8;
+}
+.picker-img {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; display: block;
+}
+.picker-info {
+  padding: 6px 8px 8px;
+}
+.picker-code {
+  font-size: 10px; color: #c4883a; font-family: 'Microsoft YaHei UI', monospace;
+  letter-spacing: 0.04em; margin-bottom: 2px;
+}
+.picker-name {
+  font-size: 11px; color: #3a3028; font-weight: 500;
+  line-height: 1.4; word-break: break-all;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.picker-empty {
+  grid-column: 1 / -1; text-align: center;
+  padding: 40px 0; color: #8a7a6a; font-size: 13px;
+}
+.picker-grid--copying { opacity: 0.5; pointer-events: none; }
+.picker-copying-hint { font-size: 13px; color: #8a7a6a; margin-right: 12px; }
+
+/* ── 资料区块 ─────────────────────────────────── */
+.res-sec-btn {
+  margin-left: 8px; padding: 1px 8px;
+  border: 1px solid #c0d4f0; border-radius: 4px;
+  background: #edf4ff; color: #3a7bc8;
+  font-size: 11px; cursor: pointer; font-family: inherit;
+}
+.res-sec-btn:hover { background: #d4e8ff; }
+.eg-sec-bd-res { padding: 6px 12px 10px 30px !important; }
+.res-loading, .res-empty {
+  font-size: 12px; color: #8a7a6a;
+  padding: 10px 0; text-align: center;
+}
+
+/* ── 资料 顶部 Tab + 文件网格布局 ── */
+.res-layout {
+  border: 1px solid #ddd0b8;
+  border-radius: 8px;
+  background: #faf6ef;
+  overflow: hidden;
+}
+.res-tabs {
+  display: flex; flex-wrap: wrap;
+  border-bottom: 1px solid #ddd0b8;
+  background: #f2ece0;
+  padding: 0 4px;
+}
+.res-tab {
+  padding: 5px 12px;
+  font-size: 11px; color: #6b5e4e; cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: all 0.15s; white-space: nowrap;
+}
+.res-tab:hover { color: #3a3028; }
+.res-tab--active {
+  border-bottom-color: #c4883a;
+  color: #c4883a; font-weight: 600;
+  background: #faf6ef;
+}
+
+.res-files {
+  padding: 10px 12px;
+  display: flex; flex-wrap: wrap;
+  align-content: flex-start; gap: 4px;
+  min-height: 80px;
+}
+
+/* 单个文件项（类 Windows 资源管理器小图标视图）*/
+.res-file {
+  position: relative;
+  width: 72px;
+  display: flex; flex-direction: column; align-items: center;
+  padding: 8px 4px 6px;
+  border-radius: 6px; cursor: default; user-select: none;
+  transition: background 0.12s, border-color 0.12s;
+  border: 1.5px solid transparent;
+}
+.res-file:hover { background: #e8deca; }
+.res-file--selected {
+  background: #ddeeff;
+  border-color: #3a7bc8;
+}
+.res-file-icon {
+  width: 34px; height: 34px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 28px; color: #c4883a; margin-bottom: 5px;
+}
+/* PDF 专属图标 */
+.res-file-icon--pdf {
+  width: 34px; height: 34px; margin-bottom: 5px;
+}
+.pdf-icon-inner {
+  width: 100%; height: 100%;
+  background: #e53935; border-radius: 4px;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 2px;
+}
+.pdf-icon-top {
+  font-size: 9px; font-weight: 800; color: #fff;
+  letter-spacing: 0.04em; line-height: 1;
+}
+.pdf-icon-lines { display: flex; flex-direction: column; gap: 2px; width: 70%; }
+.pdf-icon-lines span {
+  display: block; height: 1.5px; background: rgba(255,255,255,0.6);
+  border-radius: 1px;
+}
+.res-file-name {
+  width: 100%; font-size: 10px; color: #3a3028; text-align: center;
+  line-height: 1.35; padding: 0 2px;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow: hidden; word-break: break-all;
+}
+
+.res-file-badge {
+  position: absolute; top: 5px; left: 5px;
+  width: 8px; height: 8px; border-radius: 50%;
+  border: 1.5px solid rgba(255,255,255,0.8);
+  pointer-events: none;
+}
+.res-file-badge--tag   { background: #3a7bc8; }
+.res-file-badge--model { background: #e08030; }
+.res-file-unlink {
+  position: absolute; top: 2px; right: 2px;
+  width: 15px; height: 15px;
+  border: 1px solid #f0a0a0; border-radius: 50%;
+  background: #fff5f5; color: #c05040;
+  font-size: 10px; cursor: pointer; font-family: inherit;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0; line-height: 1;
+}
+.res-file-unlink:hover { background: #ffe0e0; }
+
+/* ── 资料选择弹窗 ─────────────────────────────── */
+.res-picker-toolbar { display: flex; gap: 8px; margin-bottom: 12px; }
+.res-picker-list    { max-height: 360px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.res-picker-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #ede8dc; border-radius: 8px;
+  cursor: pointer; transition: all 0.15s;
+}
+.res-picker-item:hover { border-color: #c4883a; background: #faf7f2; }
+.res-picker-item--selected { border-color: #c4883a; background: #fdf7ee; }
+.res-picker-body { flex: 1; min-width: 0; }
+.res-picker-title { font-size: 13px; color: #3a3028; font-weight: 500; }
+.res-picker-meta  { display: flex; gap: 10px; font-size: 11px; color: #8a7a6a; margin-top: 2px; }
 </style>

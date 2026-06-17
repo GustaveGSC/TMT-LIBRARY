@@ -66,6 +66,7 @@ def create_app() -> Flask:
     from routes.aftersale import aftersale_bp
     from routes.product.lifecycle import lifecycle_bp
     from routes.rd import rd_bp
+    from routes.product.resource import resource_bp
 
     app.register_blueprint(account_bp,        url_prefix="/api/account")
     app.register_blueprint(version_bp,        url_prefix="/api/version")
@@ -79,6 +80,7 @@ def create_app() -> Flask:
     app.register_blueprint(aftersale_bp,      url_prefix="/api/aftersale")
     app.register_blueprint(lifecycle_bp,      url_prefix="/api/product/lifecycle")
     app.register_blueprint(rd_bp,             url_prefix="/api/rd")
+    app.register_blueprint(resource_bp,       url_prefix="/api/resources")
 
     # ── 数据库自动迁移（非破坏性，仅补充缺失变更）──────────
     with app.app_context():
@@ -109,10 +111,18 @@ def _run_migrations(db):
         from database.models.rd import EcrReminder, EcrNote
         from database.models.aftersale import AftersaleSetting
         from database.models.product.finished import ProductTagCategory
+        from database.models.product.resource import ProductResourceType, ProductResource, finished_resource, resource_tag, resource_model
         EcrReminder.__table__.create(bind=db.engine, checkfirst=True)
         EcrNote.__table__.create(bind=db.engine, checkfirst=True)
         AftersaleSetting.__table__.create(bind=db.engine, checkfirst=True)
         ProductTagCategory.__table__.create(bind=db.engine, checkfirst=True)
+        ProductResourceType.__table__.create(bind=db.engine, checkfirst=True)
+        ProductResource.__table__.create(bind=db.engine, checkfirst=True)
+        finished_resource.create(bind=db.engine, checkfirst=True)
+        resource_tag.create(bind=db.engine, checkfirst=True)
+        resource_model.create(bind=db.engine, checkfirst=True)
+        # 种子数据：预置资料类型
+        _seed_resource_types(db)
     except Exception as e:
         print(f'[migration] 建表失败（可忽略）: {e}', flush=True)
 
@@ -137,6 +147,24 @@ def _run_migrations(db):
     except Exception as e:
         print(f'[migration] product_tag 迁移失败（可忽略）: {e}', flush=True)
 
+    # 为 product_finished 补充 img_updated_at 列（阻断问题：列不存在会 Unknown column）
+    try:
+        with db.engine.connect() as conn:
+            row = conn.execute(db.text(
+                "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+                "WHERE TABLE_SCHEMA = DATABASE() "
+                "AND TABLE_NAME = 'product_finished' "
+                "AND COLUMN_NAME = 'img_updated_at'"
+            )).fetchone()
+            if not row:
+                conn.execute(db.text(
+                    "ALTER TABLE product_finished ADD COLUMN img_updated_at INT NULL"
+                ))
+                conn.commit()
+                print('[migration] product_finished.img_updated_at 列已添加', flush=True)
+    except Exception as e:
+        print(f'[migration] product_finished img_updated_at 迁移失败（可忽略）: {e}', flush=True)
+
     try:
         with db.engine.connect() as conn:
             # aftersale_product_remark_dict.type Enum 中补充 series_alias
@@ -154,6 +182,25 @@ def _run_migrations(db):
                 conn.commit()
     except Exception as e:
         print(f'[migration] 自动迁移失败（可忽略）: {e}', flush=True)
+
+
+def _seed_resource_types(db):
+    """幂等写入预置资料类型种子数据。"""
+    try:
+        from database.models.product.resource import ProductResourceType
+        preset = ['说明书', '安装视频', '售后视频', '专利', '认证']
+        existing = {t.name for t in ProductResourceType.query.all()}
+        new_types = [
+            ProductResourceType(name=name, sort_order=idx)
+            for idx, name in enumerate(preset)
+            if name not in existing
+        ]
+        if new_types:
+            db.session.add_all(new_types)
+            db.session.commit()
+            print(f'[seed] 新增资料类型: {[t.name for t in new_types]}', flush=True)
+    except Exception as e:
+        print(f'[seed] 资料类型种子数据写入失败（可忽略）: {e}', flush=True)
 
 
 if __name__ == "__main__":

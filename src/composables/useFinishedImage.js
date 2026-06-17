@@ -1,15 +1,17 @@
 // ── 成品展开行图片 / 裁剪逻辑 ──────────────────────────────────────
 import { ref, watch } from 'vue'
-import { ElMessageBox } from 'element-plus'
+import { ElMessageBox, ElMessage } from 'element-plus'
 import Cropper from 'cropperjs'
 import 'cropperjs/dist/cropper.css'
 import { pickFile } from '@/utils/download.js'
+import http from '@/api/http'
 
 export function useFinishedImage(props) {
   // ── 状态 ──────────────────────────────────────────
-  const imgHover        = ref(false)   // 编辑状态下鼠标悬停
-  const imgPreview      = ref(false)   // 预览弹窗开关
-  const addMenuVisible  = ref(false)   // 新增子菜单
+  const imgHover           = ref(false)   // 编辑状态下鼠标悬停
+  const imgPreview         = ref(false)   // 预览弹窗开关
+  const addMenuVisible     = ref(false)   // 新增子菜单
+  const existingPickerVisible = ref(false) // 已有图片选择器弹窗
 
   const localCoverImage = ref('')      // 裁剪后本地预览（base64），保存前显示用
   const savedCoverImage = ref('')      // 进入编辑时的快照，取消时回退
@@ -104,7 +106,28 @@ export function useFinishedImage(props) {
 
   function addImageFromExisting() {
     addMenuVisible.value = false
-    // TODO: 从已有图片库选择
+    existingPickerVisible.value = true
+  }
+
+  // 从已有成品图片选择器中确认选择：复制一份独立文件，再赋给当前产品
+  const pickerCopying = ref(false)
+  async function selectExistingImage(fromCode) {
+    const toCode = props.row.code
+    pickerCopying.value = true
+    try {
+      const res = await http.post('/api/product/finished/copy-cover-image', {
+        from_code: fromCode,
+        to_code:   toCode,
+      })
+      if (res.success) {
+        localCoverImage.value = res.data.url + '?t=' + res.data.img_updated_at
+        existingPickerVisible.value = false
+      } else {
+        ElMessage.error(res.message || '复制失败')
+      }
+    } finally {
+      pickerCopying.value = false
+    }
   }
 
   async function deleteImage() {
@@ -117,10 +140,11 @@ export function useFinishedImage(props) {
   }
 
   return {
-    imgHover, imgPreview, addMenuVisible,
+    imgHover, imgPreview, addMenuVisible, existingPickerVisible,
     localCoverImage, savedCoverImage,
     cropDialogVisible, cropImgSrc, cropImgRef, cropperInst, cropSquare,
     initCropper, applyCrop, closeCropDialog,
     previewImage, editImage, addImageFromUpload, addImageFromExisting, deleteImage,
+    selectExistingImage, pickerCopying,
   }
 }

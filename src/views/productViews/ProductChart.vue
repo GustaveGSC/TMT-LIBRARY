@@ -133,8 +133,7 @@ function buildSunburstData(items) {
     if (!modelMap.has(model)) modelMap.set(model, { count: 0, products: [] })
     const entry = modelMap.get(model)
     entry.count++
-    // 与表格保持一致：已录入且有 model_name 时用 model_name，否则用 name
-    const displayName = (r.status === 'recorded' && r.model_name) ? r.model_name : (r.name || '')
+    const displayName = r.model_name || r.name || ''
     entry.products.push({ name: displayName, name_en: r.name_en || '' })
   }
 

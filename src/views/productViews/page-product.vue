@@ -16,7 +16,8 @@ import ProductImport    from './ProductImport.vue'
 import ProductRules     from './ProductRules.vue'
 import ProductCategory  from './ProductCategory.vue'
 import ProductTag     from './ProductTag.vue'
-import ProductParam   from './ProductParam.vue'
+import ProductParam     from './ProductParam.vue'
+import ProductResources from './ProductResources.vue'
 import iconTable  from '@/assets/icons/icon_table.png'
 import iconImage  from '@/assets/icons/icon_image.png'
 import iconEchart from '@/assets/icons/icon_echart.png'
@@ -30,7 +31,7 @@ const activePage  = ref('overview')
 const pageLoading = ref(false)
 
 // 懒加载：首次切换到 tab 时才挂载对应组件
-const mountedTabs = reactive({ table: false, image: false, chart: false })
+const mountedTabs = reactive({ table: false, image: false, chart: false, resources: false })
 watch(activePage, page => { if (page in mountedTabs) mountedTabs[page] = true })
 
 // ── 各页面数据加载器（按需扩展）──────────────────
@@ -92,6 +93,10 @@ const navItems = [
   { key: 'table', label: '表格', img: iconTable  },
   { key: 'image', label: '图片', img: iconImage  },
   { key: 'chart', label: '图表', img: iconEchart },
+  {
+    key: 'resources', label: '资料',
+    svg: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z'
+  },
 ]
 
 // ── 概览数据 ──────────────────────────────────────
@@ -356,6 +361,9 @@ onMounted(async () => {
 
       <!-- ④ 图表视图 -->
       <ProductChart v-if="mountedTabs.chart" v-show="activePage === 'chart'" />
+
+      <!-- ⑤ 资料库 -->
+      <ProductResources v-if="mountedTabs.resources" v-show="activePage === 'resources'" />
 
     </main>
 

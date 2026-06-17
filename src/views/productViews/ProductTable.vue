@@ -24,26 +24,32 @@ const filterTags     = computed({ get: () => finishedStore.filterTags,     set: 
 const tagOptions     = computed(() => finishedStore.tagOptions)
 const tagCategories  = computed(() => finishedStore.tagCategories)
 
-// 树形标签数据（用于 el-tree-select：分类为禁选父节点，标签为叶节点）
-const tagTreeData = computed(() => {
-  const nodes = tagCategories.value
-    .filter(cat => (cat.tags || []).length > 0)
+// 标签下拉：可折叠分类
+const tagSearchQuery = ref('')
+function onTagFilterMethod(q) { tagSearchQuery.value = q }
+function onTagSelectClose()   { tagSearchQuery.value = '' }
+const collapsedTagCats = ref(new Set())
+function toggleTagCat(id) {
+  const s = new Set(collapsedTagCats.value)
+  s.has(id) ? s.delete(id) : s.add(id)
+  collapsedTagCats.value = s
+}
+function isTagCatCollapsed(id) {
+  if (tagSearchQuery.value.trim()) return false
+  return !collapsedTagCats.value.has(id)
+}
+const filteredTagGroups = computed(() => {
+  const q = tagSearchQuery.value.trim().toLowerCase()
+  return tagCategories.value
     .map(cat => ({
-      value: `__cat__${cat.id}`,
-      label: cat.name,
-      disabled: true,
-      children: (cat.tags || []).map(t => ({ value: t.name, label: t.name })),
+      ...cat,
+      filteredTags: (cat.tags || []).filter(t => !q || t.name.toLowerCase().includes(q)),
     }))
-  const uncategorized = tagOptions.value.filter(t => !t.category_id)
-  if (uncategorized.length) {
-    nodes.push({
-      value: '__cat__uncategorized',
-      label: '未分类',
-      disabled: true,
-      children: uncategorized.map(t => ({ value: t.name, label: t.name })),
-    })
-  }
-  return nodes
+    .filter(g => g.filteredTags.length > 0)
+})
+const filteredUncategorizedTags = computed(() => {
+  const q = tagSearchQuery.value.trim().toLowerCase()
+  return tagOptions.value.filter(t => !t.category_id && (!q || t.name.toLowerCase().includes(q)))
 })
 
 // 挂载时懒加载标签选项
@@ -164,7 +170,7 @@ function measureText(text) {
 const COL_DEFS = [
   { key: 'code',               header: '成品编码',        pad: 48, min: 120, max: 240 },
   { key: 'name',               header: '成品名称（中文）', pad: 48, min: 120, max: 300 },
-  { key: 'name_en',            header: '成品名称（英文）', pad: 48, min: 120, max: 280 },
+  { key: 'name_en',            header: '外贸名称', pad: 48, min: 120, max: 280 },
   { key: 'category_name',      header: '成品品类',         pad: 40, min: 120, max: 200 },
   { key: 'series_code',        header: '系列编码',         pad: 40, min: 120, max: 180 },
   { key: 'series_name',        header: '系列名称',         pad: 40, min: 120, max: 200 },
@@ -257,31 +263,60 @@ watch(
 
       <!-- 卡片顶栏 -->
       <div class="card-topbar">
-        <div class="status-tabs">
+        <div class="filter-tabs">
           <button v-for="t in STATUS_TABS" :key="t.value"
-            class="tab-btn" :class="{ active: status === t.value }"
+            class="filter-tab" :class="{ active: status === t.value }"
             @click="status = t.value"
           >{{ t.label }}</button>
         </div>
-        <div class="status-tabs">
+        <div class="filter-tabs">
           <button v-for="t in LIFECYCLE_TABS" :key="t.value"
-            class="tab-btn" :class="{ active: lifecycle === t.value }"
+            class="filter-tab" :class="{ active: lifecycle === t.value }"
             @click="lifecycle = t.value"
           >{{ t.label }}</button>
         </div>
         <!-- 标签筛选 -->
-        <el-tree-select
+        <el-select
           v-model="filterTags"
-          :data="tagTreeData"
-          node-key="value"
-          :props="{ label: 'label', children: 'children', disabled: 'disabled' }"
-          multiple filterable show-checkbox check-strictly
-          default-expand-all :render-after-expand="false"
+          multiple filterable
+          :filter-method="onTagFilterMethod"
+          @visible-change="v => { if (!v) onTagSelectClose() }"
           collapse-tags collapse-tags-tooltip
           placeholder="筛选标签"
           class="tag-filter-select"
-          size="small"
-        />
+        >
+          <template v-for="cat in filteredTagGroups" :key="cat.id">
+            <el-option :value="`__cat__${cat.id}`" :label="cat.name" disabled class="tag-group-hd"
+              @mousedown.stop.prevent="toggleTagCat(cat.id)">
+              <span class="tag-group-dot" :style="{ background: cat.color }"></span>
+              <span class="tag-group-name">{{ cat.name }}</span>
+              <span class="tag-group-arrow" :class="{ collapsed: isTagCatCollapsed(cat.id) }">▾</span>
+            </el-option>
+            <template v-if="!isTagCatCollapsed(cat.id)">
+              <el-option v-for="tag in cat.filteredTags" :key="tag.id"
+                :value="tag.name" :label="tag.name" class="tag-group-item" />
+            </template>
+          </template>
+          <template v-if="filteredUncategorizedTags.length">
+            <el-option value="__cat__uncategorized" label="未分类" disabled class="tag-group-hd"
+              @mousedown.stop.prevent="toggleTagCat('uncategorized')">
+              <span class="tag-group-dot" style="background:#bbb"></span>
+              <span class="tag-group-name">未分类</span>
+              <span class="tag-group-arrow" :class="{ collapsed: isTagCatCollapsed('uncategorized') }">▾</span>
+            </el-option>
+            <template v-if="!isTagCatCollapsed('uncategorized')">
+              <el-option v-for="tag in filteredUncategorizedTags" :key="tag.id"
+                :value="tag.name" :label="tag.name" class="tag-group-item" />
+            </template>
+          </template>
+        </el-select>
+        <!-- 刷新按钮（最右） -->
+        <button
+          class="btn-refresh"
+          :class="{ spinning: finishedStore.loading }"
+          title="刷新数据"
+          @click="finishedStore.reload()"
+        >↻</button>
       </div>
 
       <div v-if="finishedStore.error" class="error-bar">
@@ -337,13 +372,13 @@ watch(
                 <ul v-if="sugg.name.show" class="sg-list"><li v-for="s in sugg.name.list" :key="s" class="sg-item" @mousedown="applySugg('name',s)">{{ s }}</li></ul>
               </div>
             </template>
-            <template #default="{ row }"><span>{{ (row.status === 'recorded' && row.model_name) ? row.model_name : (row.name || '—') }}</span></template>
+            <template #default="{ row }"><span>{{ row.model_name || row.name || '—' }}</span></template>
           </el-table-column>
 
           <!-- ── 英文名称 ── -->
           <el-table-column v-if="!isMobile" resizable :width="colWidths['name_en'] || 140" show-overflow-tooltip>
             <template #header>
-              <div class="th-top"><span class="th-lbl">成品名称（英文）</span><button :class="['sort-btn', sortIcon('name_en') !== 'none' ? 'sort-' + sortIcon('name_en') : '']" @click.stop="sortBy('name_en')"></button></div>
+              <div class="th-top"><span class="th-lbl">外贸名称</span><button :class="['sort-btn', sortIcon('name_en') !== 'none' ? 'sort-' + sortIcon('name_en') : '']" @click.stop="sortBy('name_en')"></button></div>
               <div class="th-filter-wrap" @click.stop>
                 <input v-model="finishedStore.filters.name_en" class="th-fi" placeholder="筛选..." @input="onFilterInput('name_en', $event)" @blur="hideSugg('name_en')" @focus="onFilterFocus('name_en')"/>
                 <ul v-if="sugg.name_en.show" class="sg-list"><li v-for="s in sugg.name_en.list" :key="s" class="sg-item" @mousedown="applySugg('name_en',s)">{{ s }}</li></ul>
@@ -600,16 +635,47 @@ watch(
   border-bottom: 1px solid var(--border);
   background: var(--bg-table-hover);
 }
-.tag-filter-select { width: 180px; }
-.tag-filter-select :deep(.el-select__wrapper) { font-size: 12px; }
-.status-tabs { display: flex; gap: 3px; }
-.tab-btn {
-  padding: 4px 14px; border-radius: 6px; font-size: 12px;
-  border: 1px solid transparent; background: transparent;
-  color: var(--text-secondary); cursor: pointer; transition: all 0.15s; font-family: inherit;
+.filter-tabs {
+  display: flex; gap: 2px;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 10px; padding: 3px; flex-shrink: 0;
 }
-.tab-btn:hover  { background: var(--bg-table-header); color: var(--text-primary); }
-.tab-btn.active { background: var(--accent-bg); color: var(--accent); border-color: rgba(0,0,0,0.12); font-weight: 600; }
+.filter-tab {
+  padding: 4px 10px; border: none; border-radius: 7px;
+  background: transparent; color: var(--text-muted);
+  font-size: 12px; font-family: inherit;
+  cursor: pointer; transition: all 0.15s; white-space: nowrap;
+}
+.filter-tab:hover { color: var(--text-primary); }
+.filter-tab.active { background: var(--accent); color: #fff; font-weight: 500; }
+.tag-filter-select { width: 160px; flex-shrink: 0; }
+.tag-filter-select :deep(.el-select__wrapper),
+.tag-filter-select :deep(.el-input__wrapper) { font-size: 12px; border-radius: 10px; }
+.tag-group-hd.el-select-dropdown__item {
+  display: flex !important; align-items: center; gap: 7px;
+  padding: 0 12px !important; height: 32px !important;
+  background: #faf7f2 !important; cursor: pointer !important;
+  color: #3a3028 !important; font-weight: 700 !important;
+  font-size: 13px !important; border-top: 1px solid #f0e8dc;
+}
+.tag-group-hd.el-select-dropdown__item:first-child { border-top: none; }
+.tag-group-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.tag-group-name { font-size: 13px; font-weight: 700; color: #3a3028; flex: 1; }
+.tag-group-arrow { font-size: 12px; color: #8a7a6a; transition: transform 0.2s; display: inline-block; }
+.tag-group-arrow.collapsed { transform: rotate(-90deg); }
+.tag-group-item.el-select-dropdown__item { padding-left: 24px !important; }
+.btn-refresh {
+  flex-shrink: 0; margin-left: auto;
+  width: 26px; height: 26px;
+  border: none; border-radius: 6px;
+  background: transparent; color: var(--text-muted);
+  font-size: 17px; line-height: 1;
+  cursor: pointer; transition: all 0.15s;
+  display: flex; align-items: center; justify-content: center;
+}
+.btn-refresh:hover { color: var(--accent); background: var(--bg); }
+.btn-refresh.spinning { animation: spin-refresh 0.6s linear infinite; color: var(--accent); }
+@keyframes spin-refresh { to { transform: rotate(360deg); } }
 .total-hint { font-size: 12px; color: var(--text-muted); }
 .error-bar  { display: flex; align-items: center; gap: 10px; padding: 6px 14px; font-size: 12px; color: #d05a3c; background: #fff5f3; border-bottom: 1px solid #ffd6cc; flex-shrink: 0; }
 .btn-retry  { height: 22px; padding: 0 10px; border: 1px solid #d05a3c; border-radius: 5px; background: transparent; color: #d05a3c; font-size: 11px; font-family: inherit; cursor: pointer; transition: all 0.15s; white-space: nowrap; }
@@ -801,8 +867,8 @@ watch(
     padding: 6px 10px;
     justify-content: flex-start;
   }
-  .status-tabs { flex-wrap: wrap; gap: 2px; }
-  .tab-btn { padding: 3px 10px; font-size: 11px; }
+  .filter-tabs { flex-wrap: wrap; gap: 2px; }
+  .filter-tab { padding: 3px 8px; font-size: 11px; }
   /* 分页器简化 */
   :deep(.el-pagination__sizes) { display: none; }
 }

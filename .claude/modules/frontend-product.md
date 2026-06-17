@@ -76,6 +76,22 @@ src/stores/product/
 - eg-lbl 宽80px，居中，背景#faf7f2，右边框分隔
 - eg-row min-height:34px，不用固定height
 
+## FinishedExpandRow 资料区说明
+- **折叠区 ec-sections 包含三个子节**：资料 / 参数 / 数据（资料在最前）
+- **composable**：`useProductResources(() => props.row.code)`（每个实例独立，非全局单例）
+- **懒加载**：首次展开时调用 `GET /api/resources/finished/:code`
+- **三类资料来源**（后端合并返回，前端按 link_type 区分）：
+  - `link_type='direct'`：在该产品详情手动关联；可解除关联（编辑模式下显示 × 按钮）
+  - `link_type='tag'`：产品带有某标签，资料关联了该标签；只读（蓝色圆点 badge）
+  - `link_type='model'`：产品属于某型号，资料关联了该型号；只读（橙色圆点 badge）
+- **UI 结构**：
+  - 顶部 tab 切换类型（按 type_name 分组），默认选中第一个 tab
+  - 内容区：Windows 文件网格样式（单击选中蓝色高亮，双击打开预览）
+  - PDF 文件：红色自定义图标（非 Element Plus Document 图标）
+  - 文件名最多 3 行（-webkit-line-clamp: 3）
+  - 编辑模式下可：「从资料库选择」关联现有资料 / 「新建资料」后自动关联
+- **权限**：`canEditProduct` 控制编辑入口
+
 ## FinishedExpandRow 参数区说明
 - **折叠区 ec-sections 包含两个子节**：参数 / 数据
 - **参数节**：4个固定分组横排卡片（尺寸/配置/品牌/其他），由 `GROUP_DEFS` 定义
@@ -119,10 +135,25 @@ src/stores/product/
 - 布局：顶部4个分组 Tab（尺寸/配置/品牌/其他）+ 左侧键名列表 + 右侧编辑表单
 - 支持新增/编辑/排序/删除，删除前调接口返回 usage_count 做二次确认
 
+## ProductResources.vue 说明（资料库页面）
+- 产品库顶部导航新增"资料"tab，与表格/图片/图表平级
+- **布局**：左侧类型侧边栏（140px）+ 右侧资料卡片网格
+- **侧边栏**：「未分类」固定在最顶部（`type_id='none'` 传给后端），下方按 sort_order 排列各类型
+- **资料卡片**：预览区（图片缩略图 or PDF红色图标 or 文件类型图标）+ 标题（最多3行）+ 产品数
+  - PDF：红色自定义图标（非 Element Plus 图标），与 FinishedExpandRow 保持一致
+  - 卡片不显示类型和备注；备注在点击预览弹窗里显示
+  - `linked_count` = 三路 UNION 计数（直接+标签继承+型号继承）
+- **新建/编辑资料弹窗**：标题和类型为必填（校验阻断保存）
+  - 关联型号：el-cascader 多选，内部 tag 通过 CSS `:deep` 全隐藏，选中结果渲染为外部胶囊 chip（蓝色，model_code 加粗 + name 细体 + × 删除）；cascaderPlaceholder 动态显示"已选 N 个型号"
+  - 关联标签：el-select 多选，标签按分类分组折叠展示（与 ProductTable 搜索筛选相同模式）
+- **新建后跳转**：保存成功后自动切换到该资料所属类型 tab
+- **composable**：`useProductResources()`（无参，全局资料库模式）
+
 ## ProductTag.vue 说明
 - 弹窗内容：左侧标签列表（220px）+ 右侧编辑表单
 - 支持新增/编辑/删除，颜色选择器（8预设色 + 自定义）
 - 接口路径注意加尾斜杠：`/api/product/tags/`（GET/POST），`/api/product/tags/:id`（PUT/DELETE）
+- **未分类组**固定在列表最顶部（之前在底部，已调整）
 
 ## ProductRules.vue 说明
 - 顶部筛选tabs：全部/成品/产成品/半成品/物料

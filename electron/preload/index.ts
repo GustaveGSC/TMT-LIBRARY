@@ -61,8 +61,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 退出应用
   quitApp: () => ipcRenderer.send('quit-app'),
 
-  // 用系统默认浏览器打开外部链接
-  openExternal: (url: string) => shell.openExternal(url),
+  // 用系统默认浏览器打开外部链接（仅允许 http/https）
+  openExternal: (url: string) => {
+    const parsed = new URL(url)
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      shell.openExternal(url)
+    }
+  },
 
   // ── 语义模型管理 ───────────────────────────────
   modelManager: {

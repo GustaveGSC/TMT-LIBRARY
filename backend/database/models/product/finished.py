@@ -86,9 +86,10 @@ class ProductFinished(db.Model):
     listed_yymm   = db.Column(db.String(7),   nullable=True)
     delisted_yymm = db.Column(db.String(7),   nullable=True)
     market        = db.Column(db.String(16),  nullable=True)   # domestic/foreign/both
-    cover_image   = db.Column(db.String(500), nullable=True)
-    created_at    = db.Column(db.DateTime,    nullable=False, default=now_cst)
-    updated_at    = db.Column(db.DateTime,    nullable=False, default=now_cst, onupdate=now_cst)
+    cover_image      = db.Column(db.String(500), nullable=True)
+    img_updated_at   = db.Column(db.Integer,     nullable=True)   # 封面图更新时间戳（秒），用于缓存破坏
+    created_at       = db.Column(db.DateTime,    nullable=False, default=now_cst)
+    updated_at       = db.Column(db.DateTime,    nullable=False, default=now_cst, onupdate=now_cst)
 
     # 关联 product_model
     model = db.relationship('ProductModel', backref='finished_products', lazy='joined')
@@ -97,6 +98,14 @@ class ProductFinished(db.Model):
     packaged_list = db.relationship(
         'ProductPackaged',
         secondary=finished_packaged,
+        lazy='select',
+        backref=db.backref('finished_list', lazy='select'),
+    )
+
+    # 关联 product_resource（多对多；排序查询请走 ResourceRepository.get_product_resources，不依赖此 relationship）
+    resources = db.relationship(
+        'ProductResource',
+        secondary='product_finished_resource',
         lazy='select',
         backref=db.backref('finished_list', lazy='select'),
     )
@@ -121,7 +130,8 @@ class ProductFinished(db.Model):
             'listed_yymm':   self.listed_yymm,
             'delisted_yymm': self.delisted_yymm,
             'market':        self.market,
-            'cover_image':   self.cover_image,
+            'cover_image':     self.cover_image,
+            'img_updated_at':  self.img_updated_at,
             'tags':          [t.to_dict() for t in self.tags],
             'created_at':    self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
             'updated_at':    self.updated_at.strftime('%Y-%m-%d %H:%M:%S') if self.updated_at else None,
@@ -137,9 +147,9 @@ class ProductPackaged(db.Model):
     id           = db.Column(db.Integer,     primary_key=True, autoincrement=True)
     code         = db.Column(db.String(64),  nullable=False, unique=True)
     name         = db.Column(db.String(255), nullable=False)
-    length       = db.Column(db.Integer,     nullable=True)
-    width        = db.Column(db.Integer,     nullable=True)
-    height       = db.Column(db.Integer,     nullable=True)
+    length       = db.Column(db.Float,       nullable=True)
+    width        = db.Column(db.Float,       nullable=True)
+    height       = db.Column(db.Float,       nullable=True)
     volume       = db.Column(db.Float,       nullable=True)
     gross_weight = db.Column(db.Float,       nullable=True)
     net_weight   = db.Column(db.Float,       nullable=True)

@@ -7,7 +7,16 @@ from auth import make_blueprint_guard
 from result import Result
 
 lifecycle_bp = Blueprint('lifecycle', __name__)
-lifecycle_bp.before_request(make_blueprint_guard('product:view', 'product:edit'))
+
+_guard = make_blueprint_guard('product:view', 'product:edit')
+
+@lifecycle_bp.before_request
+def _lifecycle_guard():
+    from flask import request
+    # SSE 进度接口：EventSource 无法携带 Authorization，task_id 本身即一次性凭证，直接放行
+    if request.method == 'GET' and '/progress/' in request.path:
+        return None
+    return _guard()
 
 # 进度队列：task_id → queue.Queue
 _task_queues: dict = {}

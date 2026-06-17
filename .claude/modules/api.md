@@ -82,6 +82,27 @@ DELETE /api/product/tags/:id
 POST   /api/product/tags/finished/:finished_id/:tag_id
 DELETE /api/product/tags/finished/:finished_id/:tag_id
 
+GET    /api/resources/types                           # 列出所有资料类型（按 sort_order）；product:view
+POST   /api/resources/types                           # 新增类型 {name, sort_order}；admin only
+PUT    /api/resources/types/:type_id                  # 编辑类型；admin only
+DELETE /api/resources/types/:type_id                  # 删除类型（有资料时 fail）；admin only
+
+GET    /api/resources                                 # 列出资料库 ?type_id&search&page&size；type_id='none' 查未分类
+                                                      #   返回 {items, total}，每条含 linked_count（三路 UNION 计算）
+POST   /api/resources                                 # 新建资料 {title,type_id,url,source,file_type,storage_key,original_filename,description}
+PUT    /api/resources/:id                             # 编辑资料
+DELETE /api/resources/:id                             # 删除资料（同时解除所有关联）
+PUT    /api/resources/:id/tags                        # 设置关联标签 {tag_ids:[...]}（全量替换）
+PUT    /api/resources/:id/models                      # 设置关联型号 {model_ids:[...]}（全量替换）
+GET    /api/resources/:id/signed-url                  # 生成 OSS 签名 GET URL（?disposition=inline|attachment）
+POST   /api/resources/presign                         # 预签名直传 {ext} → {presign_url, oss_url, storage_key, file_type}
+                                                      #   OSS key 格式：tmt-library/resources/{YYYYMM}/{ts}_{uuid8}.{ext}
+
+GET    /api/resources/finished/:code                  # 获取产品关联资料（直接+标签继承+型号继承，去重，含 link_type）
+POST   /api/resources/finished/:code                  # 直接关联资料 {resource_id, sort_order}
+DELETE /api/resources/finished/:code/:resource_id     # 解除直接关联
+PUT    /api/resources/finished/:code/order            # 更新排序 {ordered_ids:[...]}
+
 GET    /api/product/params/keys                       # 所有键名按分组聚合
 POST   /api/product/params/keys                       # 创建键名 {name, group_name, sort_order?}
 PUT    /api/product/params/keys/:key_id               # 更新键名

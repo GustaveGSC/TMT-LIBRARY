@@ -40,7 +40,25 @@ ipcMain.handle('show-save-dialog', (_event, options) =>
   dialog.showSaveDialog(options)
 )
 
+// 允许写入的扩展名（ECR 导出用 .xlsx/.pdf，其余不应写入）
+const SAVE_ALLOWED_EXTS = new Set(['.xlsx', '.pdf', '.csv'])
+// 允许读取的图片扩展名
+const READ_ALLOWED_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif'])
+
+function isAllowedSavePath(filePath: string): boolean {
+  const ext = path.extname(filePath).toLowerCase()
+  return SAVE_ALLOWED_EXTS.has(ext)
+}
+
+function isAllowedReadPath(filePath: string): boolean {
+  const ext = path.extname(filePath).toLowerCase()
+  return READ_ALLOWED_EXTS.has(ext)
+}
+
 ipcMain.handle('save-file', (_event, filePath: string, data: ArrayBuffer) => {
+  if (!isAllowedSavePath(filePath)) {
+    throw new Error(`不允许写入该文件类型: ${path.extname(filePath)}`)
+  }
   fs.writeFileSync(filePath, Buffer.from(data))
 })
 
@@ -49,6 +67,9 @@ ipcMain.handle('check-files-exist', (_event, filePaths: string[]) => {
 })
 
 ipcMain.handle('read-file-as-data-url', (_event, filePath: string) => {
+  if (!isAllowedReadPath(filePath)) {
+    throw new Error(`不允许读取该文件类型: ${path.extname(filePath)}`)
+  }
   const data = fs.readFileSync(filePath)
   const ext  = path.extname(filePath).slice(1).toLowerCase()
   const mime = ext === 'png' ? 'image/png' : 'image/jpeg'
