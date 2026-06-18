@@ -4,7 +4,7 @@ import { ref, reactive, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import * as echarts from 'echarts'
 import http from '@/api/http'
 import { usePermission } from '@/composables/usePermission'
-import { ZoomIn, EditPen, Plus, Delete } from '@element-plus/icons-vue'
+import { ZoomIn, EditPen, Plus, Delete, Document, VideoPlay, Link, Picture } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFinishedStore } from '@/stores/product/finished'
 import { usePackagedStore } from '@/stores/product/packaged'
@@ -13,7 +13,6 @@ import modelTipImg from '@/assets/images/image_model_tip.png'
 import { useFinishedImage } from '@/composables/useFinishedImage'
 import { useFinishedParams, GROUP_DEFS } from '@/composables/useFinishedParams'
 import { useProductResources } from '@/composables/useProductResources'
-import { Document, VideoPlay, Link, Picture } from '@element-plus/icons-vue'
 
 // ── Props ─────────────────────────────────────────
 const props = defineProps({
@@ -805,7 +804,7 @@ const {
   types: resourceTypes, loadTypes: loadResourceTypes,
   linkedResources, linkedLoading, linkedLoaded, linkedByType,
   loadLinkedResources, linkResource, unlinkResource,
-  createResource, uploading: resourceUploading, uploadFile,
+  createResource, uploading: resourceUploading, uploadFile, cancelUpload: cancelResourceUpload,
 } = useProductResources(() => props.row.code)
 
 // 资料区 tab（当前选中类型 type_id）
@@ -871,7 +870,7 @@ const resourceNewUploading = ref(false)
 async function pickFileForNew() {
   const input = document.createElement('input')
   input.type = 'file'
-  input.accept = '.pdf,.png,.jpg,.jpeg,.webp'
+  input.accept = '.pdf,.png,.jpg,.jpeg,.webp,.mp4,.mov,.webm'
   input.onchange = async (e) => {
     const file = e.target.files[0]
     if (!file) return
@@ -904,9 +903,17 @@ function resourceFileIcon(type) {
 // 资料预览弹窗
 const resPreviewVisible = ref(false)
 const resPreviewItem    = ref(null)
-function openResPreview(r) {
+const resVideoSrc       = ref('')   // 视频播放器签名 URL
+async function openResPreview(r) {
   resPreviewItem.value    = r
+  resVideoSrc.value       = ''
   resPreviewVisible.value = true
+  if (r.file_type === 'video') {
+    resVideoSrc.value = await resGetSignedUrl(r, 'inline') || ''
+  }
+}
+function onResPreviewClose() {
+  resVideoSrc.value = ''   // 停止后台缓冲
 }
 async function resGetSignedUrl(r, disposition = 'inline') {
   if (!r) return null
@@ -945,6 +952,33 @@ async function resDownload(r) {
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
+}
+async function resShareResource(r) {
+  if (!r) return
+  let url
+  try {
+    const res = await http.get(`/api/resources/${r.id}/share`)
+    url = res.success ? res.data.url : null
+  } catch { url = null }
+  if (!url) { ElMessage.error('生成分享链接失败'); return }
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(url).catch(() => _execCopy(url))
+  } else {
+    _execCopy(url)
+  }
+  const tip = r.file_type === 'video' || r.file_type === 'image'
+    ? '分享链接已复制，有效期 7 天，可在微信直接查看'
+    : '分享链接已复制，有效期 7 天，在浏览器打开可预览'
+  ElMessage.success(tip)
+}
+function _execCopy(text) {
+  const el = document.createElement('textarea')
+  el.value = text
+  el.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none'
+  document.body.appendChild(el)
+  el.focus(); el.select()
+  try { document.execCommand('copy') } catch { /* ignore */ }
+  document.body.removeChild(el)
 }
 
 // ── 折叠分组（params 区首次展开时懒加载）─────────
@@ -1525,8 +1559,19 @@ function toggleSec(key) {
                         @dblclick.stop="openResPreview(r)"
                       >
                         <button v-if="editing && r.link_type === 'direct'" class="res-file-unlink" title="解除关联" @click.stop="unlinkResource(r.id)">×</button>
+                        <!-- 预览区 -->
+                        <!-- 图片：直接显示缩略图 -->
+                        <div v-if="r.file_type === 'image'" class="res-file-thumb">
+                          <img :src="r.url" class="res-file-thumb-img" loading="lazy" />
+                        </div>
+                        <!-- 视频：有封面用封面，否则用 video 第一帧 -->
+                        <div v-else-if="r.file_type === 'video'" class="res-file-thumb res-file-thumb--video">
+                          <img v-if="r.cover_url" :src="r.cover_url" class="res-file-thumb-img" loading="lazy" />
+                          <video v-else :src="r.url" preload="metadata" muted class="res-file-thumb-img" style="object-fit:cover" />
+                          <div class="res-file-thumb-play"><el-icon><VideoPlay /></el-icon></div>
+                        </div>
                         <!-- PDF 专属图标 -->
-                        <div v-if="r.file_type === 'pdf'" class="res-file-icon res-file-icon--pdf">
+                        <div v-else-if="r.file_type === 'pdf'" class="res-file-icon res-file-icon--pdf">
                           <div class="pdf-icon-inner">
                             <div class="pdf-icon-top">PDF</div>
                             <div class="pdf-icon-lines">
@@ -1683,6 +1728,7 @@ function toggleSec(key) {
         <div style="display:flex;gap:8px;align-items:center;width:100%">
           <el-input v-model="resourceNewForm.url" placeholder="https://… 或上传后自动填入" style="flex:1" />
           <el-button size="small" :loading="resourceUploading" @click="pickFileForNew">上传</el-button>
+          <el-button v-if="resourceUploading" size="small" type="danger" plain @click="cancelResourceUpload">取消</el-button>
         </div>
         <div v-if="resourceNewForm.original_filename" style="font-size:11px;color:#8a7a6a;margin-top:3px">{{ resourceNewForm.original_filename }}</div>
       </el-form-item>
@@ -1712,6 +1758,7 @@ function toggleSec(key) {
     width="720"
     append-to-body
     align-center
+    @close="onResPreviewClose"
   >
     <div class="res-preview-body">
       <img
@@ -1719,18 +1766,33 @@ function toggleSec(key) {
         :src="resPreviewItem?.url"
         style="max-width:100%;max-height:60vh;object-fit:contain;display:block;margin:0 auto;"
       />
+      <!-- 视频播放器 -->
+      <div v-else-if="resPreviewItem?.file_type === 'video'" style="text-align:center;">
+        <video
+          v-if="resVideoSrc"
+          :src="resVideoSrc"
+          controls
+          style="width:100%;max-height:60vh;border-radius:8px;background:#000;"
+        />
+        <div v-else style="padding:40px 0;color:#8a7a6a;font-size:13px;">加载中…</div>
+      </div>
       <div v-else style="text-align:center;padding:40px 0;color:#8a7a6a;font-size:13px;">
         <div style="font-size:38px;margin-bottom:10px;">
-          {{ resPreviewItem?.file_type === 'pdf' ? '📄' : resPreviewItem?.file_type === 'video' ? '🎬' : '🔗' }}
+          {{ resPreviewItem?.file_type === 'pdf' ? '📄' : '🔗' }}
         </div>
         <div style="font-size:14px;color:#3a3028;font-weight:600;margin-bottom:6px;">{{ resPreviewItem?.original_filename || resPreviewItem?.title }}</div>
         <div>该文件类型无法在此处预览，请点击下方按钮操作。</div>
+      </div>
+      <!-- 备注 -->
+      <div v-if="resPreviewItem?.description" style="margin-top:16px;padding:10px 14px;background:#f5f0e8;border-radius:8px;font-size:13px;color:#3a3028;line-height:1.6;">
+        <span style="font-weight:600;color:#6b5e4e;">备注：</span>{{ resPreviewItem.description }}
       </div>
     </div>
     <template #footer>
       <div style="display:flex;justify-content:flex-end;gap:8px;">
         <el-button @click="resPreviewVisible = false">关闭</el-button>
-        <el-button @click="resOpenInTab(resPreviewItem)">在新标签页打开</el-button>
+        <el-button @click="resShareResource(resPreviewItem)">分享链接</el-button>
+        <el-button v-if="resPreviewItem?.file_type !== 'video'" @click="resOpenInTab(resPreviewItem)">在新标签页打开</el-button>
         <el-button type="primary" @click="resDownload(resPreviewItem)">下载</el-button>
       </div>
     </template>
@@ -2592,13 +2654,13 @@ function toggleSec(key) {
   min-height: 80px;
 }
 
-/* 单个文件项（类 Windows 资源管理器小图标视图）*/
+/* 单个文件项 */
 .res-file {
   position: relative;
-  width: 72px;
+  width: 96px;
   display: flex; flex-direction: column; align-items: center;
-  padding: 8px 4px 6px;
-  border-radius: 6px; cursor: default; user-select: none;
+  padding: 6px 4px 6px;
+  border-radius: 8px; cursor: default; user-select: none;
   transition: background 0.12s, border-color 0.12s;
   border: 1.5px solid transparent;
 }
@@ -2607,29 +2669,49 @@ function toggleSec(key) {
   background: #ddeeff;
   border-color: #3a7bc8;
 }
-.res-file-icon {
-  width: 34px; height: 34px;
+/* 缩略图（图片/视频） */
+.res-file-thumb {
+  position: relative;
+  width: 84px; height: 56px;
+  border-radius: 6px; overflow: hidden;
+  background: #1a1a1a;
+  margin-bottom: 5px; flex-shrink: 0;
+}
+.res-file-thumb--video { background: #111; }
+.res-file-thumb-img {
+  width: 100%; height: 100%;
+  object-fit: cover; display: block;
+}
+.res-file-thumb-play {
+  position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
-  font-size: 28px; color: #c4883a; margin-bottom: 5px;
+  background: rgba(0,0,0,0.28);
+  font-size: 20px; color: #fff;
+  pointer-events: none;
+}
+.res-file-icon {
+  width: 44px; height: 44px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 34px; color: #c4883a; margin-bottom: 5px;
 }
 /* PDF 专属图标 */
 .res-file-icon--pdf {
-  width: 34px; height: 34px; margin-bottom: 5px;
+  width: 44px; height: 52px; margin-bottom: 5px;
 }
 .pdf-icon-inner {
   width: 100%; height: 100%;
-  background: #e53935; border-radius: 4px;
+  background: #e53935; border-radius: 5px;
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
-  gap: 2px;
+  gap: 3px;
 }
 .pdf-icon-top {
-  font-size: 9px; font-weight: 800; color: #fff;
+  font-size: 11px; font-weight: 800; color: #fff;
   letter-spacing: 0.04em; line-height: 1;
 }
-.pdf-icon-lines { display: flex; flex-direction: column; gap: 2px; width: 70%; }
+.pdf-icon-lines { display: flex; flex-direction: column; gap: 2px; width: 65%; }
 .pdf-icon-lines span {
-  display: block; height: 1.5px; background: rgba(255,255,255,0.6);
+  display: block; height: 2px; background: rgba(255,255,255,0.6);
   border-radius: 1px;
 }
 .res-file-name {

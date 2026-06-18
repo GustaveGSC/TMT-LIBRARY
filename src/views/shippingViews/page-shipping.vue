@@ -30,7 +30,7 @@ function handleBack() {
 
 <template>
   <div class="shipping-page">
-    <WindowControls :confirm-close="true" confirm-text="确认退出两平米软件库？" />
+    <WindowControls :confirm-close="true" confirm-text="确认退出两平米资料站？" />
 
     <!-- ── 顶部导航栏 ──────────────────────────── -->
     <header class="top-bar">

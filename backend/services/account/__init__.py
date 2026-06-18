@@ -20,10 +20,6 @@ class AccountService:
             return Result.fail(f"用户名 '{username}' 已存在")
         password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
         user = UserRepository.create(username, password_hash, display_name)
-        # 新用户自动绑定内置游客角色
-        guest_role = RoleRepository.get_by_name("guest")
-        if guest_role:
-            UserRepository.assign_role(user, guest_role)
         return Result.ok(user.to_dict(), message="用户创建成功")
 
     def update_user(self, user_id: int, **kwargs) -> Result:

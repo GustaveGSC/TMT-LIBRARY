@@ -19,7 +19,7 @@ const props = defineProps({
   // 关闭确认文案
   confirmText: {
     type:    String,
-    default: '确认退出两平米软件库？',
+    default: '确认退出两平米资料站？',
   },
   // 是否显示最大化按钮（登录窗口不需要）
   showMaximize: {

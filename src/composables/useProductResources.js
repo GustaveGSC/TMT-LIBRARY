@@ -110,38 +110,72 @@ export function useProductResources(codeGetter = null) {
   }
 
   // ── 文件直传 OSS ──────────────────────────────────
-  const uploading = ref(false)
+  const uploading     = ref(false)
+  const uploadPercent = ref(0)  // 0~100
+  const uploadCancelled = ref(false)
+
+  // 当前上传的中止句柄（XHR 或 AbortController）
+  let _currentXhr  = null
+  let _currentAbortCtrl = null
+
+  function cancelUpload() {
+    uploadCancelled.value = true
+    if (_currentXhr)       { _currentXhr.abort();       _currentXhr = null }
+    if (_currentAbortCtrl) { _currentAbortCtrl.abort(); _currentAbortCtrl = null }
+  }
 
   async function uploadFile(file) {
     const ext = file.name.split('.').pop().toLowerCase()
-    uploading.value = true
+    const isVideo = ['mp4', 'mov', 'webm'].includes(ext)
+    uploading.value       = true
+    uploadPercent.value   = 0
+    uploadCancelled.value = false
     try {
-      // 1. 获取预签名 URL
-      const presignRes = await http.post('/api/resources/presign', { ext })
+      // 1. 获取预签名 URL（视频统一用 mp4）
+      const uploadExt  = isVideo ? 'mp4' : ext
+      const presignRes = await http.post('/api/resources/presign', { ext: uploadExt })
       if (!presignRes.success) {
         ElMessage.error(presignRes.message || '获取上传凭证失败')
         return null
       }
       const { presign_url, oss_url, storage_key, file_type } = presignRes.data
 
-      // 2. 直传 OSS
+      // 2. 直传 OSS（视频用 XHR 以便显示进度和中止，其他用 fetch + AbortController）
       const contentTypeMap = {
         pdf: 'application/pdf',
         png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
+        mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm',
       }
-      const uploadRes = await fetch(presign_url, {
-        method: 'PUT',
-        headers: { 'Content-Type': contentTypeMap[ext] || 'application/octet-stream' },
-        body: file,
+      const contentType = contentTypeMap[uploadExt] || 'application/octet-stream'
+
+      // XHR 上传，所有类型统一支持进度显示和中止
+      await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        _currentXhr = xhr
+        xhr.open('PUT', presign_url)
+        xhr.setRequestHeader('Content-Type', contentType)
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) uploadPercent.value = Math.round(e.loaded / e.total * 100)
+        }
+        xhr.onload  = () => { _currentXhr = null; xhr.status < 300 ? resolve() : reject(new Error(`OSS 上传失败：${xhr.status}`)) }
+        xhr.onerror = () => { _currentXhr = null; reject(new Error('网络错误')) }
+        xhr.onabort = () => { _currentXhr = null; reject(Object.assign(new Error('已取消'), { isCancel: true })) }
+        xhr.send(file)
       })
-      if (!uploadRes.ok) throw new Error(`OSS 上传失败：${uploadRes.status}`)
 
       return { url: oss_url, storage_key, file_type, original_filename: file.name }
     } catch (e) {
+      if (e.isCancel || e.name === 'AbortError') {
+        // 用户主动取消，静默处理
+        return null
+      }
       ElMessage.error('上传失败：' + e.message)
       return null
     } finally {
-      uploading.value = false
+      uploading.value     = false
+      uploadPercent.value = 0
+      _currentXhr         = null
+      _currentAbortCtrl   = null
     }
   }
 
@@ -208,7 +242,14 @@ export function useProductResources(codeGetter = null) {
     resources, resourcesTotal, resourcesLoading, resourcesFilter,
     loadResources, createResource, updateResource, deleteResource, setResourceTags, setResourceModels,
     // 上传
-    uploading, uploadFile,
+    uploading, uploadPercent, uploadCancelled, uploadFile, cancelUpload,
+    resetUploadState: () => {
+      uploading.value       = false
+      uploadPercent.value   = 0
+      uploadCancelled.value = false
+      _currentXhr           = null
+      _currentAbortCtrl     = null
+    },
     // 产品关联资料
     linkedResources, linkedLoading, linkedLoaded, linkedByType,
     loadLinkedResources, linkResource, unlinkResource, updateLinkedOrder,

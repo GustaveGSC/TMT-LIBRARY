@@ -38,15 +38,18 @@ def has_permission(user: dict, perm: str) -> bool:
 
 
 def make_blueprint_guard(view_perm: str, edit_perm: str = None, export_perm: str = None,
-                         view_post_paths: tuple = ()):
+                         view_post_paths: tuple = (), public_paths: tuple = ()):
     """
     生成蓝图 before_request 守卫函数，减少各蓝图重复代码。
     - view_perm:        所有请求需要的基础权限
     - edit_perm:        写操作（POST/PUT/DELETE/PATCH）需要的额外权限（可为 None 则不校验）
     - export_perm:      路径含 /export 的 POST 请求所需权限（优先于 edit_perm）
     - view_post_paths:  POST 路径后缀白名单，匹配则只需 view_perm（查询型 POST 接口用）
+    - public_paths:     完全公开的路径后缀白名单，跳过所有鉴权
     """
     def guard():
+        if public_paths and any(request.path.endswith(p) for p in public_paths):
+            return None
         raw = request.headers.get('Authorization', '') or ''
         token = raw.removeprefix('Bearer ').strip()
         user = verify_token(token)

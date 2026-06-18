@@ -16,7 +16,7 @@ const {
   types, typesLoading, loadTypes, createType, updateType, deleteType,
   resources, resourcesTotal, resourcesLoading, resourcesFilter,
   loadResources, createResource, updateResource, deleteResource, setResourceTags, setResourceModels,
-  uploading, uploadFile,
+  uploading, uploadPercent, uploadFile, cancelUpload, resetUploadState,
 } = useProductResources()
 
 // ── 品类/系列/型号级联（el-cascader）────────────
@@ -171,6 +171,17 @@ const resourceForm          = ref({
   tag_ids: [], model_ids: [],
 })
 
+// 视频压缩体积记录
+const videoSizeInfo    = ref(null)   // { before, after } 单位字节
+const pendingFile      = ref(null)   // 待上传的 File 对象（选文件后暂存，保存时才上传）
+const pendingCoverFile = ref(null)   // 待上传的封面图片（仅视频资料可选）
+const coverPreviewUrl  = ref('')     // 封面本地预览 Object URL
+
+function formatSize(bytes) {
+  if (bytes >= 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB'
+  return (bytes / 1024).toFixed(0) + ' KB'
+}
+
 const FILE_TYPE_OPTIONS = [
   { value: 'pdf',   label: 'PDF 文档' },
   { value: 'image', label: '图片' },
@@ -185,9 +196,12 @@ const uploadMode     = ref('link')   // 'link' | 'file'
 function openResourceCreate() {
   editingResourceId.value = null
   resourceDialogTitle.value = '新建资料'
-  resourceForm.value = { title: '', type_id: null, url: '', source: 'external', file_type: 'link', storage_key: null, original_filename: null, description: '', tag_ids: [], model_ids: [] }
+  resourceForm.value = { title: '', type_id: null, url: '', source: 'external', file_type: 'link', storage_key: null, cover_storage_key: null, original_filename: null, description: '', tag_ids: [], model_ids: [] }
   cascaderModelValue.value = []
   uploadMode.value = 'link'
+  pendingFile.value = null
+  pendingCoverFile.value = null
+  if (coverPreviewUrl.value) { URL.revokeObjectURL(coverPreviewUrl.value); coverPreviewUrl.value = '' }
   loadAllTags(); loadCategoryTree()
   resourceDialogVisible.value = true
 }
@@ -197,11 +211,16 @@ async function openResourceEdit(r) {
   resourceForm.value = {
     title: r.title, type_id: r.type_id, url: r.url, source: r.source,
     file_type: r.file_type, storage_key: r.storage_key,
+    cover_storage_key: r.cover_storage_key || null,
     original_filename: r.original_filename, description: r.description || '',
     tag_ids: (r.tags || []).map(t => t.id),
     model_ids: r.model_ids || [],
   }
   uploadMode.value = r.source === 'oss' ? 'file' : 'link'
+  pendingFile.value = null
+  pendingCoverFile.value = null
+  if (coverPreviewUrl.value) { URL.revokeObjectURL(coverPreviewUrl.value); coverPreviewUrl.value = '' }
+  if (r.cover_url) coverPreviewUrl.value = r.cover_url
   await Promise.all([loadAllTags(), loadCategoryTree()])
   cascaderModelValue.value = modelIdsToPaths(resourceForm.value.model_ids)
   resourceDialogVisible.value = true
@@ -210,25 +229,76 @@ async function openResourceEdit(r) {
 async function pickFile() {
   const input = document.createElement('input')
   input.type = 'file'
-  input.accept = '.pdf,.png,.jpg,.jpeg,.webp'
-  input.onchange = async (e) => {
+  input.accept = '.pdf,.png,.jpg,.jpeg,.webp,.mp4,.mov,.webm'
+  input.onchange = (e) => {
     const file = e.target.files[0]
     if (!file) return
-    const result = await uploadFile(file)
-    if (result) {
-      resourceForm.value.url               = result.url
-      resourceForm.value.storage_key       = result.storage_key
-      resourceForm.value.file_type         = result.file_type
-      resourceForm.value.original_filename = result.original_filename
-      resourceForm.value.source            = 'oss'
-    }
+    // 只暂存文件，不上传，保存时才上传
+    pendingFile.value   = file
+    videoSizeInfo.value = null
+    // 根据扩展名预填 file_type
+    const ext = file.name.split('.').pop().toLowerCase()
+    const typeMap = { pdf: 'pdf', png: 'image', jpg: 'image', jpeg: 'image', webp: 'image', mp4: 'video', mov: 'video', webm: 'video' }
+    resourceForm.value.original_filename = file.name
+    resourceForm.value.file_type         = typeMap[ext] || 'other'
+    resourceForm.value.url               = ''   // 清空旧 url，保存后才有
+    resourceForm.value.storage_key       = null
+    resourceForm.value.source            = 'oss'
   }
   input.click()
+}
+
+function pickCoverFile() {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = '.png,.jpg,.jpeg,.webp'
+  input.onchange = (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    pendingCoverFile.value = file
+    if (coverPreviewUrl.value) URL.revokeObjectURL(coverPreviewUrl.value)
+    coverPreviewUrl.value = URL.createObjectURL(file)
+    // 清空已存储的旧封面 key（保存时会重新上传）
+    resourceForm.value.cover_storage_key = null
+  }
+  input.click()
+}
+
+function removeCover() {
+  pendingCoverFile.value = null
+  if (coverPreviewUrl.value) { URL.revokeObjectURL(coverPreviewUrl.value); coverPreviewUrl.value = '' }
+  resourceForm.value.cover_storage_key = null
 }
 
 async function submitResource() {
   if (!resourceForm.value.title.trim()) { ElMessage.warning('请填写标题'); return }
   if (!resourceForm.value.type_id) { ElMessage.warning('请选择资料类型'); return }
+
+  // 上传模式且有待上传文件 → 先上传，再写数据库
+  if (uploadMode.value === 'file' && pendingFile.value) {
+    const result = await uploadFile(pendingFile.value)
+    if (!result) return   // 上传失败，uploadFile 内已弹提示
+    resourceForm.value.url               = result.url
+    resourceForm.value.storage_key       = result.storage_key
+    resourceForm.value.file_type         = result.file_type
+    resourceForm.value.original_filename = result.original_filename
+    resourceForm.value.source            = 'oss'
+    pendingFile.value = null
+  }
+
+  // 若有待上传封面（视频资料可选）
+  if (pendingCoverFile.value) {
+    const coverResult = await uploadFile(pendingCoverFile.value)
+    if (!coverResult) return
+    resourceForm.value.cover_storage_key = coverResult.storage_key
+    pendingCoverFile.value = null
+  }
+
+  // 上传文件模式但没有待上传文件（编辑时未换文件）
+  if (uploadMode.value === 'file' && !resourceForm.value.url) {
+    ElMessage.warning('请先选择文件'); return
+  }
+
   const payload = { ...resourceForm.value }
   if (uploadMode.value === 'link') {
     payload.source      = 'external'
@@ -238,6 +308,7 @@ async function submitResource() {
       const ext = (payload.url || '').split('.').pop().toLowerCase()
       if (ext === 'pdf') payload.file_type = 'pdf'
       else if (['png','jpg','jpeg','webp'].includes(ext)) payload.file_type = 'image'
+      else if (['mp4','mov','webm'].includes(ext)) payload.file_type = 'video'
       else payload.file_type = 'link'
     }
   }
@@ -292,10 +363,19 @@ function fileTypeIconColor(type) {
 // ── 预览弹窗 ──────────────────────────────────────
 const previewVisible  = ref(false)
 const previewResource = ref(null)
+const videoSrc        = ref('')   // 视频播放器 src（签名 URL）
 
-function openPreview(r) {
+async function openPreview(r) {
   previewResource.value = r
+  videoSrc.value        = ''
   previewVisible.value  = true
+  if (r.file_type === 'video') {
+    videoSrc.value = await getSignedUrl(r, 'inline') || ''
+  }
+}
+
+function onPreviewClose() {
+  videoSrc.value = ''   // 停止后台缓冲
 }
 
 // 获取 OSS 签名 URL（inline 预览 / attachment 下载）
@@ -327,6 +407,38 @@ async function openInTab(r) {
     } catch { /* 失败降级到直接打开 */ }
   }
   if (win) win.location.href = url
+}
+
+async function shareResource(r) {
+  if (!r) return
+  let url
+  try {
+    const res = await http.get(`/api/resources/${r.id}/share`)
+    url = res.success ? res.data.url : null
+  } catch { url = null }
+  if (!url) { ElMessage.error('生成分享链接失败'); return }
+  copyText(url)
+  const tip = r.file_type === 'video' || r.file_type === 'image'
+    ? '分享链接已复制，有效期 7 天，可在微信直接查看'
+    : '分享链接已复制，有效期 7 天，在浏览器打开可预览'
+  ElMessage.success(tip)
+}
+
+function copyText(text) {
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(text).catch(() => _execCopy(text))
+  } else {
+    _execCopy(text)
+  }
+}
+function _execCopy(text) {
+  const el = document.createElement('textarea')
+  el.value = text
+  el.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none'
+  document.body.appendChild(el)
+  el.focus(); el.select()
+  try { document.execCommand('copy') } catch { /* ignore */ }
+  document.body.removeChild(el)
 }
 
 async function downloadResource(r) {
@@ -423,6 +535,15 @@ onMounted(async () => {
                     <div class="card-pdf-lines"><span></span><span></span><span></span></div>
                   </div>
                 </div>
+                <!-- 视频：有封面用封面图，OSS 视频用缩略帧，否则图标 -->
+                <div v-else-if="r.file_type === 'video'" class="card-video-wrap">
+                  <img v-if="r.cover_url" :src="r.cover_url" class="card-video-thumb" style="object-fit:contain;background:#000;" />
+                  <video v-else-if="r.storage_key" :src="r.url" preload="metadata" muted class="card-video-thumb" />
+                  <div v-else class="card-icon-wrap" style="background:#fce4ec;">
+                    <el-icon style="color:#c62828;"><VideoPlay /></el-icon>
+                  </div>
+                  <div class="card-video-play-overlay"><el-icon><VideoPlay /></el-icon></div>
+                </div>
                 <div
                   v-else
                   class="card-icon-wrap"
@@ -492,13 +613,23 @@ onMounted(async () => {
     </el-dialog>
 
     <!-- ── 资料预览弹窗 ─────────────────────────── -->
-    <el-dialog v-model="previewVisible" :title="previewResource?.title" width="760" align-center append-to-body>
+    <el-dialog v-model="previewVisible" :title="previewResource?.title" width="760" align-center append-to-body @close="onPreviewClose">
       <div class="preview-body">
         <img
           v-if="previewResource?.file_type === 'image'"
           :src="previewResource?.url"
           style="max-width:100%;max-height:60vh;object-fit:contain;display:block;margin:0 auto;"
         />
+        <!-- 视频播放器 -->
+        <div v-else-if="previewResource?.file_type === 'video'" style="text-align:center;">
+          <video
+            v-if="videoSrc"
+            :src="videoSrc"
+            controls
+            style="width:100%;max-height:60vh;border-radius:8px;background:#000;"
+          />
+          <div v-else style="padding:40px 0;color:#8a7a6a;font-size:13px;">加载中…</div>
+        </div>
         <div v-else style="text-align:center;padding:50px 0;color:#8a7a6a;font-size:13px;">
           <!-- PDF icon -->
           <div v-if="previewResource?.file_type === 'pdf'" style="display:flex;justify-content:center;margin-bottom:12px;">
@@ -507,9 +638,7 @@ onMounted(async () => {
               <div class="preview-pdf-lines"><span></span><span></span><span></span></div>
             </div>
           </div>
-          <div v-else style="font-size:40px;margin-bottom:12px;">
-            {{ previewResource?.file_type === 'video' ? '🎬' : '🔗' }}
-          </div>
+          <div v-else style="font-size:40px;margin-bottom:12px;">🔗</div>
           <div style="font-size:14px;color:#3a3028;font-weight:600;margin-bottom:8px;">{{ previewResource?.original_filename || previewResource?.title }}</div>
           <div>该文件类型无法在此处预览，请点击下方按钮操作。</div>
         </div>
@@ -521,14 +650,15 @@ onMounted(async () => {
       <template #footer>
         <div style="display:flex;justify-content:flex-end;gap:8px;">
           <el-button @click="previewVisible = false">关闭</el-button>
-          <el-button @click="openInTab(previewResource)">在新标签页打开</el-button>
+          <el-button @click="shareResource(previewResource)">分享链接</el-button>
+          <el-button v-if="previewResource?.file_type !== 'video'" @click="openInTab(previewResource)">在新标签页打开</el-button>
           <el-button type="primary" @click="downloadResource(previewResource)">下载</el-button>
         </div>
       </template>
     </el-dialog>
 
     <!-- ── 新建/编辑资料弹窗 ──────────────────────── -->
-    <el-dialog v-model="resourceDialogVisible" :title="resourceDialogTitle" width="560" align-center :close-on-click-modal="false">
+    <el-dialog v-model="resourceDialogVisible" :title="resourceDialogTitle" width="560" align-center :close-on-click-modal="false" @close="() => { resetUploadState(); videoSizeInfo.value = null; pendingFile.value = null; pendingCoverFile.value = null; if (coverPreviewUrl.value) { URL.revokeObjectURL(coverPreviewUrl.value); coverPreviewUrl.value = '' } }">
       <el-form :model="resourceForm" label-width="80px">
         <el-form-item label="标题">
           <el-input v-model="resourceForm.title" placeholder="资料名称" />
@@ -549,8 +679,30 @@ onMounted(async () => {
         </el-form-item>
         <el-form-item v-else label="文件">
           <div class="upload-area">
-            <el-button :loading="uploading" @click="pickFile">选择文件（PDF / 图片）</el-button>
-            <span v-if="resourceForm.original_filename" class="upload-filename">{{ resourceForm.original_filename }}</span>
+            <el-button :disabled="uploading" @click="pickFile">选择文件（PDF / 图片 / 视频）</el-button>
+            <span v-if="resourceForm.original_filename && !uploading" class="upload-filename">{{ resourceForm.original_filename }}</span>
+            <!-- 上传进度 -->
+            <div v-if="uploading" class="upload-progress-wrap">
+              <div class="upload-progress-label">
+                上传中…
+                <span class="upload-progress-pct">{{ uploadPercent }}%</span>
+                <el-button size="small" type="danger" plain style="margin-left:8px;padding:2px 8px;height:22px;" @click="cancelUpload">取消</el-button>
+              </div>
+              <div class="upload-progress-bar">
+                <div class="upload-progress-fill" :style="{ width: uploadPercent + '%' }" />
+              </div>
+            </div>
+          </div>
+        </el-form-item>
+        <!-- 封面上传（仅视频 + 上传文件模式） -->
+        <el-form-item v-if="uploadMode === 'file' && resourceForm.file_type === 'video'" label="视频封面">
+          <div class="cover-upload-area">
+            <div v-if="coverPreviewUrl" class="cover-preview-wrap">
+              <img :src="coverPreviewUrl" class="cover-preview-img" />
+              <el-button size="small" type="danger" plain class="cover-remove-btn" @click="removeCover">移除封面</el-button>
+            </div>
+            <el-button v-else size="small" @click="pickCoverFile">选择封面图片（可选）</el-button>
+            <div v-if="!coverPreviewUrl" class="cover-upload-hint">封面将显示在资料卡片上，支持 PNG / JPG / WEBP</div>
           </div>
         </el-form-item>
         <el-form-item label="文件类型">
@@ -706,12 +858,29 @@ onMounted(async () => {
 }
 .card-thumb {
   width: 100%; height: 100%;
-  object-fit: cover; display: block;
+  object-fit: contain; display: block;
+  background: #fff;
 }
 .card-icon-wrap {
   width: 100%; height: 100%;
   display: flex; align-items: center; justify-content: center;
   font-size: 40px;
+}
+.card-video-wrap {
+  width: 100%; height: 100%;
+  position: relative; overflow: hidden;
+  background: #000;
+}
+.card-video-thumb {
+  width: 100%; height: 100%;
+  object-fit: cover; display: block;
+}
+.card-video-play-overlay {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.25);
+  font-size: 36px; color: #fff;
+  pointer-events: none;
 }
 .card-ft-badge {
   position: absolute; bottom: 6px; left: 6px;
@@ -774,8 +943,22 @@ onMounted(async () => {
 .type-row-actions { display: flex; gap: 6px; }
 
 /* ── 上传 ──────────────────────────────────── */
-.upload-area     { display: flex; align-items: center; gap: 10px; }
+.upload-area     { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .upload-filename { font-size: 12px; color: var(--text-muted); }
+.upload-progress-wrap { width: 100%; }
+.upload-progress-label { display: flex; justify-content: space-between; font-size: 12px; color: #6b5e4e; margin-bottom: 4px; }
+.upload-progress-pct { font-weight: 600; color: #c4883a; }
+.upload-progress-bar { width: 100%; height: 6px; background: #e0d4c0; border-radius: 3px; overflow: hidden; }
+.upload-progress-fill { height: 100%; background: #c4883a; border-radius: 3px; transition: width 0.3s ease; }
+.upload-size-info { font-size: 12px; color: #6b5e4e; }
+.upload-size-ratio { color: #2e7d32; font-weight: 600; }
+
+/* ── 封面上传 ────────────────────────────────── */
+.cover-upload-area { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.cover-upload-hint { font-size: 12px; color: var(--text-muted); }
+.cover-preview-wrap { position: relative; display: inline-flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.cover-preview-img { width: 120px; height: 80px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); display: block; }
+.cover-remove-btn { align-self: flex-start; }
 
 /* ── 型号级联选择器 ──────────────────────────── */
 .model-select-wrap { width: 100%; display: flex; flex-direction: column; gap: 8px; }

@@ -143,7 +143,7 @@ function fmtTime(iso) {
 
 <template>
   <div class="log-page">
-    <WindowControls :confirm-close="true" confirm-text="确认退出两平米软件库？" />
+    <WindowControls :confirm-close="true" confirm-text="确认退出两平米资料站？" />
 
     <!-- 页头 -->
     <div class="page-header">

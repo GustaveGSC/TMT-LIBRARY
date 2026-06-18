@@ -103,3 +103,11 @@ class UserLoginLog(db.Model):
             "machine_name": self.machine_name,
             "login_at":     self.login_at.isoformat() if self.login_at else None,
         }
+
+
+class SiteConfig(db.Model):
+    """站点配置 key-value 表（自动建表，无需手动迁移）。"""
+    __tablename__ = "site_config"
+
+    key   = db.Column(db.String(64),  primary_key=True)
+    value = db.Column(db.Text,        nullable=False, default='')

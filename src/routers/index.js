@@ -56,6 +56,10 @@ const router = createRouter({
       component: () => import('@/views/rdToolsViews/page-rd-tools.vue'),
       meta: { permission: 'rd:view' }
     },
+    {
+      path: '/general-tools',
+      component: () => import('@/views/generalToolsViews/page-general-tools.vue'),
+    },
   ]
 })
 

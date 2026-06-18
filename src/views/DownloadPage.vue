@@ -49,7 +49,7 @@ function handleDownload() {
         <!-- 头部：icon + 名称 + 版本 -->
         <div class="app-header">
           <img :src="appIcon" class="app-icon" alt="icon" />
-          <div class="app-name">两平米软件库</div>
+          <div class="app-name">两平米资料站</div>
           <div class="app-version">v{{ latest?.version || '-' }}</div>
           <div class="app-desc">桌面端 · Windows</div>
         </div>

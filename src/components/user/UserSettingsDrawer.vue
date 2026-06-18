@@ -10,6 +10,39 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '@/api/http'
 
+// ── 登录页轮播语句管理 ────────────────────────
+const mottoDialogVisible = ref(false)
+const mottoList          = ref([])
+const mottoInput         = ref('')
+const mottoSaving        = ref(false)
+
+async function openMottoManager() {
+  mottoDialogVisible.value = true
+  const res = await http.get('/api/config/login-mottos')
+  if (res.success) mottoList.value = [...res.data]
+}
+function addMotto() {
+  const t = mottoInput.value.trim()
+  if (!t || mottoList.value.includes(t)) return
+  mottoList.value.push(t)
+  mottoInput.value = ''
+}
+function removeMotto(i) { mottoList.value.splice(i, 1) }
+async function saveMottos() {
+  if (!mottoList.value.length) {
+    ElMessage({ message: '语句列表不能为空', type: 'warning' }); return
+  }
+  mottoSaving.value = true
+  const res = await http.put('/api/config/login-mottos', { mottos: mottoList.value })
+  mottoSaving.value = false
+  if (res.success) {
+    ElMessage({ message: '保存成功', type: 'success' })
+    mottoDialogVisible.value = false
+  } else {
+    ElMessage({ message: res.message || '保存失败', type: 'error' })
+  }
+}
+
 // ── 路由 ──────────────────────────────────
 const router  = useRouter()
 const visible = ref(false)
@@ -251,6 +284,16 @@ defineExpose({ open })
           </div>
         </div>
 
+        <div class="section">
+          <div class="section-title nav" @click="openMottoManager">
+            <div class="nav-icon-wrap">
+              <span class="nav-icon">✏️</span>
+              <span>登录页配置</span>
+            </div>
+            <span class="section-arrow">›</span>
+          </div>
+        </div>
+
         <div class="drawer-divider"></div>
       </template>
 
@@ -264,6 +307,33 @@ defineExpose({ open })
 
     </div>
   </el-drawer>
+
+  <!-- 登录页轮播语句管理弹窗 -->
+  <el-dialog
+    v-model="mottoDialogVisible"
+    title="登录页轮播语句管理"
+    width="480px"
+    :close-on-click-modal="false"
+  >
+    <div class="motto-manager">
+      <div class="motto-tip">随机选择起始条目，之后顺序循环，每 4–7 秒切换一次。</div>
+      <div class="motto-list">
+        <div v-for="(item, i) in mottoList" :key="i" class="motto-item">
+          <span class="motto-text">{{ item }}</span>
+          <el-button type="danger" link size="small" @click="removeMotto(i)">删除</el-button>
+        </div>
+        <div v-if="!mottoList.length" class="motto-empty">暂无语句</div>
+      </div>
+      <div class="motto-add">
+        <el-input v-model="mottoInput" placeholder="输入新语句，回车添加" @keyup.enter="addMotto" clearable />
+        <el-button type="primary" @click="addMotto">添加</el-button>
+      </div>
+    </div>
+    <template #footer>
+      <el-button @click="mottoDialogVisible = false">取消</el-button>
+      <el-button type="primary" :loading="mottoSaving" @click="saveMottos">保存</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <style>
@@ -397,4 +467,24 @@ defineExpose({ open })
 }
 .expand-enter-from, .expand-leave-to { opacity: 0; max-height: 0; }
 .expand-enter-to, .expand-leave-from { opacity: 1; max-height: 400px; }
+
+/* ── 轮播语句管理弹窗（非 scoped，el-dialog 在 teleport 外） */
+</style>
+
+<style>
+.motto-manager { display: flex; flex-direction: column; gap: 14px; }
+.motto-tip { font-size: 12px; color: #8a7a6a; }
+.motto-list {
+  display: flex; flex-direction: column; gap: 6px;
+  max-height: 260px; overflow-y: auto;
+  border: 1px solid #e0d4c0; border-radius: 8px; padding: 8px;
+}
+.motto-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 8px; background: #faf6f0; border-radius: 6px;
+}
+.motto-text { font-size: 13px; color: #3a3028; }
+.motto-empty { font-size: 13px; color: #8a7a6a; text-align: center; padding: 12px; }
+.motto-add { display: flex; gap: 8px; }
+.motto-add .el-input { flex: 1; }
 </style>

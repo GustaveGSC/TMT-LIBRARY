@@ -1,3 +1,4 @@
+import os
 from database.base import db
 from utils import now_cst
 
@@ -51,6 +52,7 @@ class ProductResource(db.Model):
     type_id           = db.Column(db.Integer,      db.ForeignKey('product_resource_type.id', ondelete='RESTRICT'), nullable=True)
     url               = db.Column(db.String(1000), nullable=False)
     storage_key       = db.Column(db.String(500),  nullable=True)      # OSS key，source='oss' 时有值
+    cover_storage_key = db.Column(db.String(500),  nullable=True)      # 视频封面 OSS key（可选）
     source            = db.Column(db.String(20),   nullable=False, default='external')   # 'oss' | 'external'
     file_type         = db.Column(db.String(20),   nullable=False, default='link')       # 'pdf'|'image'|'video'|'link'|'other'
     original_filename = db.Column(db.String(300),  nullable=True)
@@ -69,6 +71,8 @@ class ProductResource(db.Model):
             'type_id':           self.type_id,
             'type_name':         self.resource_type.name if self.resource_type else None,
             'url':               self.url,
+            'cover_url':         (os.environ.get('OSS_BASE_URL', '').rstrip('/') + '/' + self.cover_storage_key.removeprefix('tmt-library/')) if self.cover_storage_key else None,
+            'cover_storage_key': self.cover_storage_key,
             'source':            self.source,
             'file_type':         self.file_type,
             'original_filename': self.original_filename,

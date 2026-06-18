@@ -6,7 +6,7 @@ import WindowControls from '@/components/common/WindowControls.vue'
 import ProductTable  from './ProductTable.vue'
 import ProductImage  from './ProductImage.vue'
 import ProductChart  from './ProductChart.vue'
-import { ArrowLeft, Upload, Setting, Folder, Collection, Memo, Timer } from '@element-plus/icons-vue'
+import { ArrowLeft, Upload, Setting, Folder, Collection, Memo, Timer, Tools } from '@element-plus/icons-vue'
 import { usePermission } from '@/composables/usePermission'
 import http, { getBaseURL } from '@/api/http'
 
@@ -83,6 +83,16 @@ const lifecycleTotal      = ref(0)
 const lifecycleProgress   = computed(() =>
   lifecycleTotal.value > 0 ? Math.round((lifecycleCurrent.value / lifecycleTotal.value) * 100) : 0
 )
+
+// ── 通用工具入口 ──────────────────────────────────
+const GENERAL_TOOLS = [
+  { key: 'video-compress', label: '视频压缩' },
+]
+
+function openTool(key) {
+  const base = location.href.split('#')[0]
+  window.open(`${base}#/general-tools?tool=${key}`, '_blank')
+}
 
 // ── 顶部导航配置 ──────────────────────────────────
 const navItems = [
@@ -201,7 +211,7 @@ onMounted(async () => {
 
 <template>
   <div class="product-page">
-    <WindowControls :confirm-close="true" confirm-text="确认退出两平米软件库？" />
+    <WindowControls :confirm-close="true" confirm-text="确认退出两平米资料站？" />
 
     <!-- ── 顶部导航栏 ──────────────────────────── -->
     <header class="top-bar">
@@ -232,6 +242,22 @@ onMounted(async () => {
           <span v-if="activePage === item.key" class="nav-indicator"></span>
         </button>
       </nav>
+
+      <!-- 右：工具下拉 -->
+      <el-dropdown trigger="click" @command="openTool" class="tools-dropdown">
+        <button class="btn-tools">
+          <el-icon><Tools /></el-icon>
+          <span>工具</span>
+          <svg class="tools-arrow" viewBox="0 0 10 6" width="10" height="6"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+        </button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item v-for="t in GENERAL_TOOLS" :key="t.key" :command="t.key">
+              {{ t.label }}
+            </el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
 
     </header>
 
@@ -454,6 +480,16 @@ onMounted(async () => {
 .title-divider { width: 1px; height: 16px; background: var(--border); margin-left: 8px; }
 
 .top-nav { display: flex; align-items: center; gap: 2px; flex: 1; padding: 0 8px; }
+.tools-dropdown { flex-shrink: 0; margin-left: 4px; }
+.btn-tools {
+  display: flex; align-items: center; gap: 5px;
+  padding: 6px 12px; border: 1px solid var(--border); border-radius: 7px;
+  background: transparent; color: var(--text-muted);
+  font-size: 13px; font-family: inherit;
+  cursor: pointer; transition: all 0.18s; white-space: nowrap;
+}
+.btn-tools:hover { background: rgba(196,136,58,0.07); color: var(--text-primary); border-color: var(--accent); }
+.tools-arrow { flex-shrink: 0; color: currentColor; opacity: 0.6; }
 .nav-item {
   position: relative;
   display: flex; align-items: center; gap: 6px;

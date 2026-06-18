@@ -203,27 +203,47 @@ def export_cases_start():
             return default
         return cast(v) if cast else v
 
+    def _ints(key):
+        raw = body.get(key, '')
+        if not raw:
+            return None
+        return [int(x) for x in str(raw).split(',') if x.strip().lstrip('-').isdigit()] or None
+
+    def _strs(key):
+        raw = body.get(key, '')
+        if not raw:
+            return None
+        return [x for x in str(raw).split(',') if x.strip()] or None
+
     _cleanup_export_tasks()
     task_id = str(uuid.uuid4())
     _export_tasks[task_id] = {'status': 'pending', '_at': time.time()}
     app = current_app._get_current_object()
 
     kwargs = dict(
-        status         = _extract('status') or 'confirmed',
-        date_start     = _extract('date_start'),
-        date_end       = _extract('date_end'),
-        reason_id      = _extract('reason_id', int),
-        channel_name   = _extract('channel_name'),
-        province       = _extract('province'),
-        city           = _extract('city'),
-        district       = _extract('district'),
-        reason_category= _extract('reason_category'),
-        reason_name    = _extract('reason_name'),
-        shipping_alias = _extract('shipping_alias'),
-        model_code     = _extract('model_code'),
-        search         = _extract('search'),
-        sort_by        = _extract('sort_by'),
-        sort_order     = _extract('sort_order') or 'desc',
+        status              = _extract('status') or 'confirmed',
+        date_start          = _extract('date_start'),
+        date_end            = _extract('date_end'),
+        reason_id           = _extract('reason_id', int),
+        channel_name        = _extract('channel_name'),
+        province            = _extract('province'),
+        city                = _extract('city'),
+        district            = _extract('district'),
+        reason_category     = _extract('reason_category'),
+        reason_name         = _extract('reason_name'),
+        shipping_alias      = _extract('shipping_alias'),
+        model_code          = _extract('model_code'),
+        search              = _extract('search'),
+        sort_by             = _extract('sort_by'),
+        sort_order          = _extract('sort_order') or 'desc',
+        category_ids        = _ints('category_ids'),
+        series_ids          = _ints('series_ids'),
+        model_ids           = _ints('model_ids'),
+        reason_ids          = _ints('reason_ids'),
+        reason_category_ids = _ints('reason_category_ids'),
+        shipping_alias_ids  = _ints('shipping_alias_ids'),
+        channel_names       = _strs('channel_names'),
+        provinces           = _strs('provinces'),
     )
 
     def run():

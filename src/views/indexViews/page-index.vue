@@ -3,7 +3,7 @@
     <div class="bg-circle bg-circle-1"></div>
     <div class="bg-circle bg-circle-2"></div>
 
-    <WindowControls :confirm-close="true" confirm-text="确认退出两平米软件库？" />
+    <WindowControls :confirm-close="true" confirm-text="确认退出两平米资料站？" />
 
     <main class="main-area">
       <div class="module-groups">
@@ -56,7 +56,7 @@
         <img src="@/assets/logo-banner.png" class="bar-logo-banner" alt="logo" />
       </div>
 
-      <!-- 右：版本徽章 + 用户 -->
+      <!-- 右：开发者工具（仅 author） + 版本徽章 + 用户 -->
       <div class="bar-right">
 
         <!-- 版本徽章：点击检查/查看更新（桌面端） -->
@@ -102,7 +102,8 @@ import iconProduct   from '@/assets/icons/icon_product.png'
 import iconShipping  from '@/assets/icons/icon_shipping.png'
 import iconAftersale from '@/assets/icons/icon_aftersale.png'
 import iconDataMgmt  from '@/assets/icons/icon_data_mgmt.png'
-import iconRdTools   from '@/assets/icons/icon_rd_tools.png'
+import iconRdTools      from '@/assets/icons/icon_rd_tools.png'
+import iconGeneralTools from '@/assets/icons/icon_general_tools.png'
 
 const router         = useRouter()
 const version        = ref('1.0.0')
@@ -214,6 +215,15 @@ const moduleGroups = computed(() => [
         route: '/rd-tools',
         disabled: false,
         noPermission: !canViewRd,
+      },
+      {
+        key: 'general-tools',
+        name: '通用工具',
+        desc: '视频压缩 · 更多工具',
+        icon: iconGeneralTools,
+        route: '/general-tools',
+        disabled: false,
+        noPermission: false,
       },
     ],
   },
@@ -558,4 +568,5 @@ function handleUserSetting() { settingsDrawer.value?.open() }
   color: #c4883a;
   letter-spacing: 0.02em;
 }
+
 </style>

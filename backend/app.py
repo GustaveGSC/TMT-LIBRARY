@@ -67,6 +67,7 @@ def create_app() -> Flask:
     from routes.product.lifecycle import lifecycle_bp
     from routes.rd import rd_bp
     from routes.product.resource import resource_bp
+    from routes.config import config_bp
 
     app.register_blueprint(account_bp,        url_prefix="/api/account")
     app.register_blueprint(version_bp,        url_prefix="/api/version")
@@ -81,6 +82,7 @@ def create_app() -> Flask:
     app.register_blueprint(lifecycle_bp,      url_prefix="/api/product/lifecycle")
     app.register_blueprint(rd_bp,             url_prefix="/api/rd")
     app.register_blueprint(resource_bp,       url_prefix="/api/resources")
+    app.register_blueprint(config_bp,         url_prefix="/api/config")
 
     # ── 数据库自动迁移（非破坏性，仅补充缺失变更）──────────
     with app.app_context():
@@ -112,6 +114,7 @@ def _run_migrations(db):
         from database.models.aftersale import AftersaleSetting
         from database.models.product.finished import ProductTagCategory
         from database.models.product.resource import ProductResourceType, ProductResource, finished_resource, resource_tag, resource_model
+        from database.models.account import SiteConfig
         EcrReminder.__table__.create(bind=db.engine, checkfirst=True)
         EcrNote.__table__.create(bind=db.engine, checkfirst=True)
         AftersaleSetting.__table__.create(bind=db.engine, checkfirst=True)
@@ -121,6 +124,7 @@ def _run_migrations(db):
         finished_resource.create(bind=db.engine, checkfirst=True)
         resource_tag.create(bind=db.engine, checkfirst=True)
         resource_model.create(bind=db.engine, checkfirst=True)
+        SiteConfig.__table__.create(bind=db.engine, checkfirst=True)
         # 种子数据：预置资料类型
         _seed_resource_types(db)
     except Exception as e:

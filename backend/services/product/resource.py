@@ -2,6 +2,7 @@ from sqlalchemy.exc import IntegrityError
 from result import Result
 from database.repository.product.resource import ResourceRepository
 from database.base import db
+from storage.client import get_bucket
 
 
 class ResourceService:
@@ -89,7 +90,17 @@ class ResourceService:
         r = ResourceRepository.get_resource(resource_id)
         if not r:
             return Result.fail('资料不存在')
+        storage_key       = r.storage_key
+        cover_storage_key = r.cover_storage_key
         ResourceRepository.delete_resource(r)
+        # 删除 OSS 文件（忽略失败，不影响主流程）
+        bucket = get_bucket()
+        for key in (storage_key, cover_storage_key):
+            if key:
+                try:
+                    bucket.delete_object(key)
+                except Exception:
+                    pass
         return Result.ok()
 
     # ── 产品-资料关联 ─────────────────────────────────────────────────────

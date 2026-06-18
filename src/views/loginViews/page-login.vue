@@ -23,13 +23,22 @@ const isFlipping  = ref(false)
 const version     = ref('1.0.0')
 const showPassword = ref(false)
 
-const mottos = [
-  '享受每一天的好心情',
-  '保持你的好奇心',
-  '今天也要元气满满',
-  '把每件小事做到位',
-]
-const motto = mottos[Math.floor(Math.random() * mottos.length)]
+// ── 左侧底部轮播语句（后端管理，无硬编码默认值） ─────────────
+const mottos      = ref([])
+const mottoIndex  = ref(0)   // 先设 0，onMounted 拿到列表后随机初始化
+const mottoVisible = ref(true)
+
+let mottoTimer = null
+
+function cycleMotto() {
+  mottoVisible.value = false
+  setTimeout(() => {
+    // 顺序循环（初次随机已在 onMounted 处理）
+    mottoIndex.value = (mottoIndex.value + 1) % mottos.value.length
+    mottoVisible.value = true
+    mottoTimer = setTimeout(cycleMotto, 4000 + Math.random() * 3000)
+  }, 400)
+}
 
 window.electronAPI?.getVersion().then(v => { version.value = v })
 
@@ -212,6 +221,19 @@ onMounted(async () => {
   refreshRects()
   scheduleBlink(purplePose)
   scheduleBlink(blackPose)
+
+  // 从后端获取轮播语句
+  try {
+    const res = await http.get('/api/config/login-mottos')
+    if (res.success && Array.isArray(res.data) && res.data.length) {
+      mottos.value = res.data
+    }
+  } catch { }
+  // 随机选择起始条目，后续顺序循环
+  if (mottos.value.length) {
+    mottoIndex.value = Math.floor(Math.random() * mottos.value.length)
+    mottoTimer = setTimeout(cycleMotto, 4000 + Math.random() * 3000)
+  }
 })
 
 onUnmounted(() => {
@@ -219,7 +241,8 @@ onUnmounted(() => {
   window.removeEventListener('resize', refreshRects)
   if (rafId) cancelAnimationFrame(rafId)
   blinkTimers.forEach(clearTimeout)
-  if (lookTimer) clearTimeout(lookTimer)
+  if (lookTimer)  clearTimeout(lookTimer)
+  if (mottoTimer) clearTimeout(mottoTimer)
 })
 
 // ── 表单方法 ─────────────────────────────────────────────────
@@ -291,24 +314,6 @@ function handleForgotPassword() {
   ElMessage({ message: '请联系管理员重置密码。', type: 'info', duration: 3000 })
 }
 
-async function handleGuest() {
-  loading.value = true
-  try {
-    const res = await http.get('/api/account/guest')
-    if (res.success) {
-      localStorage.setItem('user', JSON.stringify(res.data))
-      localStorage.setItem('login_time', Date.now().toString())
-      if (res.data.token) localStorage.setItem('tmt_token', res.data.token)
-      window.electronAPI ? window.electronAPI.loginSuccess() : router.push('/index')
-    } else {
-      toast.value?.show(res.message || '游客登录失败', 'error')
-    }
-  } catch {
-    toast.value?.show('网络错误，请重试', 'error')
-  } finally {
-    loading.value = false
-  }
-}
 </script>
 
 <template>
@@ -403,10 +408,11 @@ async function handleGuest() {
         </div>
       </div>
 
-      <!-- 底部装饰文字（每次随机） -->
+      <!-- 底部轮播语句 -->
       <div class="left-footer">
-        <span>{{ motto }}</span>
+        <span :style="{ opacity: mottoVisible ? 1 : 0 }">{{ mottos[mottoIndex] }}</span>
       </div>
+
     </div>
 
     <!-- ── 右侧表单面板 ────────────────────────────────── -->
@@ -473,12 +479,6 @@ async function handleGuest() {
               <span v-if="!loading">登 录</span>
               <span v-else class="loading-dot">···</span>
             </button>
-            <div class="divider">
-              <span class="divider-line"></span>
-              <span class="divider-text">或</span>
-              <span class="divider-line"></span>
-            </div>
-            <button class="btn-ghost" :disabled="loading" @click="handleGuest">游客模式进入</button>
           </div>
 
           <!-- 注册表单 -->
@@ -527,12 +527,13 @@ async function handleGuest() {
 
         </transition>
 
-        <!-- 页脚 -->
+        <!-- 页脚（固定在 form-wrapper 底部） -->
         <div class="card-footer">
           <img src="@/assets/logo.png" class="footer-logo" alt="logo" />
-          <span class="footer-name">两平米软件库</span>
+          <span class="footer-name">两平米资料站</span>
           <span v-if="isElectron" class="footer-version">v{{ version }}</span>
         </div>
+
       </div>
     </div>
   </div>
@@ -595,9 +596,18 @@ async function handleGuest() {
 
 
 .left-footer {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.5);
-  letter-spacing: 0.06em;
+  font-size: 15px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.82);
+  letter-spacing: 0.12em;
+  text-shadow: 0 1px 6px rgba(0,0,0,0.18);
+  min-height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.left-footer span {
+  transition: opacity 0.4s ease;
 }
 
 /* ── 角色舞台 ─────────────────────────────────────────────── */
@@ -738,8 +748,7 @@ async function handleGuest() {
 .right-panel {
   position: relative;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  flex-direction: column;
   min-height: 100vh;
   background: var(--bg);
   overflow: hidden;
@@ -762,11 +771,13 @@ async function handleGuest() {
 .form-wrapper {
   position: relative;
   z-index: 1;
+  flex: 1;                      /* 占满 right-panel 剩余空间 */
   width: 100%;
   max-width: 340px;
+  align-self: center;           /* 水平居中 */
   display: flex;
   flex-direction: column;
-  padding: 44px 40px 20px;
+  padding: 44px 40px 36px;
   animation: card-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 @keyframes card-in {
@@ -915,21 +926,38 @@ async function handleGuest() {
 .divider-line { flex: 1; height: 1px; background: var(--border); }
 .divider-text { font-size: 12px; color: var(--text-muted); }
 
-/* ── 页脚 ─────────────────────────────────────────────────── */
+/* ── 页脚（form-wrapper 内底部） ──────────────────────────── */
 .card-footer {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 8px;
   margin-top: auto;
-  padding-top: 20px;
+  padding-top: 16px;
+  padding-bottom: 4px;
 }
-.footer-logo { width: 30px; height: 30px; object-fit: contain; opacity: 0.35; }
-.footer-name { font-size: 12px; color: var(--text-muted); letter-spacing: 0.12em; }
+.footer-logo {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  opacity: 0.5;
+  flex-shrink: 0;
+}
+.footer-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.12em;
+}
 .footer-version {
-  font-size: 11px; color: var(--text-muted);
-  background: var(--accent-bg); border: 1px solid var(--border);
-  border-radius: 4px; padding: 1px 6px; opacity: 0.7;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--accent-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  opacity: 0.7;
+  flex-shrink: 0;
 }
 
 /* ── 辅助组件样式 ─────────────────────────────────────────── */
@@ -955,6 +983,9 @@ async function handleGuest() {
 .fade-slide-enter-active, .fade-slide-leave-active { transition: all 0.15s ease; }
 .fade-slide-enter-from { opacity: 0; transform: translateY(8px); }
 .fade-slide-leave-to   { opacity: 0; transform: translateY(-8px); }
+
+.motto-fade-enter-active, .motto-fade-leave-active { transition: opacity 0.4s ease; }
+.motto-fade-enter-from, .motto-fade-leave-to { opacity: 0; }
 
 /* ── 超窄屏回退（≤599px） ────────────────────────────────── */
 @media (max-width: 599px) {

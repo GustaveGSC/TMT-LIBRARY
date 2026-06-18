@@ -678,7 +678,7 @@ class AftersaleRepository:
             WHERE ac.status = 'confirmed'
         """)
 
-        reason_cats = q("""
+        reason_cats = qi("""
             SELECT DISTINCT c.name FROM aftersale_reason_category c
             JOIN aftersale_reason r ON r.category_id = c.id
             JOIN aftersale_case_reason cr ON cr.reason_id = r.id
@@ -686,14 +686,14 @@ class AftersaleRepository:
             WHERE ac.status = 'confirmed'
             ORDER BY c.name
         """)
-        reason_names = q("""
+        reason_names = qi("""
             SELECT DISTINCT r.name FROM aftersale_reason r
             JOIN aftersale_case_reason cr ON cr.reason_id = r.id
             JOIN aftersale_case ac ON cr.case_id = ac.id
             WHERE ac.status = 'confirmed'
             ORDER BY r.name
         """)
-        model_codes = q("""
+        model_codes = qi("""
             SELECT DISTINCT m.model_code FROM product_model m
             JOIN aftersale_case_reason cr ON cr.model_id = m.id
             JOIN aftersale_case ac ON cr.case_id = ac.id
@@ -1487,10 +1487,11 @@ class AftersaleRepository:
                     continue
                 if kw not in kw_list and len(kw_list) < self._KW_MAX_TOTAL:
                     kw_list.append(kw)
-                    # 晋升成功：建议用户考虑是否归类为故障词或部件词
+                    # 晋升成功：建议用户考虑是否归类为故障词或部件词；存 reason_id 供拒绝时撤销
                     self._upsert_dict_suggestion(
                         'promoted_keyword', kw,
-                        f'已自动晋升至原因「{reason.name}」，可酌情归类为故障词或部件词'
+                        f'已自动晋升至原因「{reason.name}」，可酌情归类为故障词或部件词',
+                        meta={'reason_id': rid},
                     )
                     if _log_reason is not None:
                         _log_reason['promoted'].append(kw)
@@ -3499,6 +3500,13 @@ class AftersaleRepository:
         if not sug or sug.status != 'pending':
             return None
         sug.status = 'rejected'
+        # promoted_keyword：关键词已自动写入 reason.keywords，拒绝时撤销晋升
+        if sug.type == 'promoted_keyword' and sug.meta and sug.meta.get('reason_id'):
+            reason = AftersaleReason.query.get(sug.meta['reason_id'])
+            if reason:
+                kw_list = [k for k in (reason.keywords or '').split(',') if k.strip() and k != sug.value]
+                reason.keywords = ','.join(kw_list) if kw_list else None
+                self._invalidate_reason_rule_cache()
         db.session.commit()
         return sug
 
