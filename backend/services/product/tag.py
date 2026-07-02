@@ -1,6 +1,30 @@
 from result import Result
+
+
+def _clean_tag_id_from_node(node, tag_id):
+    """从树形条件节点中移除指定 tag_id，返回清理后的节点或 None（节点为空时）"""
+    if 'tag_id' in node:
+        return None if node['tag_id'] == tag_id else node
+    items = [_clean_tag_id_from_node(item, tag_id) for item in node.get('items', [])]
+    items = [i for i in items if i is not None]
+    return {'op': node.get('op', 'AND'), 'items': items} if items else None
+
+
+def _clean_tag_id_from_condition(condition, tag_id):
+    """从 tag_condition（旧列表格式或新树形格式）中移除指定 tag_id"""
+    if condition is None:
+        return None
+    if isinstance(condition, list):
+        new_condition = [[tid for tid in group if tid != tag_id] for group in condition]
+        new_condition = [g for g in new_condition if g]
+        return new_condition if new_condition else None
+    if isinstance(condition, dict):
+        return _clean_tag_id_from_node(condition, tag_id)
+    return condition
 from database.repository.product.tag import TagRepository, TagCategoryRepository
 from database.repository.product.finished import FinishedRepository
+from database.models.product.resource import ProductResource
+from database.base import db
 
 
 class TagCategoryService:
@@ -115,6 +139,11 @@ class TagService:
         if not tag:
             return Result.fail('标签不存在')
         TagRepository.delete(tag)
+        # 从所有资料的 tag_condition 中清除已删除的 tag_id
+        resources = ProductResource.query.filter(ProductResource.tag_condition.isnot(None)).all()
+        for r in resources:
+            r.tag_condition = _clean_tag_id_from_condition(r.tag_condition, tag_id)
+        db.session.commit()
         return Result.ok(message='删除成功')
 
     # ── 成品关联 ──────────────────────────────────────────────────────────

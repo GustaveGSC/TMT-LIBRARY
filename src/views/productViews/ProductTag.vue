@@ -45,25 +45,26 @@ function initSortable() {
     handle: '.drag-handle',
     draggable: '.cat-group-sortable',
     ghostClass: 'drag-ghost',
-    onEnd({ oldIndex, newIndex }) {
-      if (oldIndex === newIndex) return
-      const moved = categories.value.splice(oldIndex, 1)[0]
-      categories.value.splice(newIndex, 0, moved)
-      saveCategoryOrder()
+    onEnd() {
+      if (sortableInstance) { sortableInstance.destroy(); sortableInstance = null }
+      // 从 DOM 当前顺序读取 category id，避免 oldIndex/newIndex 因"未分类"节点导致的偏移错误
+      const catById = Object.fromEntries(categories.value.map(c => [c.id, c]))
+      const sortedIds = Array.from(
+        listBodyRef.value.querySelectorAll('.cat-group-sortable[data-cat-id]')
+      ).map(el => parseInt(el.dataset.catId))
+      const newOrder = sortedIds.map(id => catById[id]).filter(Boolean)
+      if (!newOrder.length) { loadAll(); return }
+      Promise.all(
+        newOrder.map((cat, idx) =>
+          http.put(`/api/product/tags/categories/${cat.id}`, {
+            name: cat.name,
+            color: cat.color,
+            sort_order: idx * 10,
+          })
+        )
+      ).then(() => loadAll())
     },
   })
-}
-
-async function saveCategoryOrder() {
-  await Promise.all(
-    categories.value.map((cat, idx) =>
-      http.put(`/api/product/tags/categories/${cat.id}`, {
-        name: cat.name,
-        color: cat.color,
-        sort_order: idx * 10,
-      })
-    )
-  )
 }
 
 onBeforeUnmount(() => {
@@ -84,11 +85,8 @@ async function loadAll() {
     if (catRes.success)  categories.value = catRes.data || []
     else error.value = catRes.message || '加载分类失败'
     if (tagRes.success)  _allTags.value = tagRes.data || []
-    // 默认展开所有分类
-    expandedCats.value = new Set([
-      ...categories.value.map(c => c.id),
-      -1,   // 未分类
-    ])
+    // 默认合拢所有分类
+    expandedCats.value = new Set()
     // 同步刷新产品库的标签缓存，使编辑框候选项实时更新
     finishedStore.reloadTagOptions()
   } catch (e) {
@@ -302,7 +300,7 @@ const selectedKey = computed(() => {
             </template>
           </div>
 
-          <div v-for="cat in categories" :key="cat.id" class="cat-group cat-group-sortable">
+          <div v-for="cat in categories" :key="cat.id" class="cat-group cat-group-sortable" :data-cat-id="cat.id">
             <!-- 分类行 -->
             <div
               class="cat-row"

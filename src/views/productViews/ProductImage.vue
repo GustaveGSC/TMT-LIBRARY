@@ -344,6 +344,7 @@ onMounted(async () => {
                 <el-icon class="img-ph-icon"><Picture /></el-icon>
                 <span class="img-ph-text">暂无图片</span>
               </div>
+              <span v-if="row.cover_image_original" class="img-hd-badge">高清</span>
               <div class="img-hover-mask">
                 <span class="img-hover-text">查看详情</span>
               </div>
@@ -674,6 +675,19 @@ onMounted(async () => {
 }
 .img-ph-icon { font-size: 32px; color: var(--border); }
 .img-ph-text { font-size: 11px; color: var(--text-muted); }
+
+/* 高清 badge */
+.img-hd-badge {
+  position: absolute;
+  top: 6px; left: 6px; z-index: 1;
+  padding: 1px 5px;
+  font-size: 10px; font-weight: 600; line-height: 16px;
+  color: #fff;
+  background: rgba(80, 160, 80, 0.82);
+  border-radius: 4px;
+  pointer-events: none;
+  letter-spacing: 0.5px;
+}
 
 /* 悬停遮罩 */
 .img-hover-mask {

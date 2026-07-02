@@ -13,8 +13,9 @@ export function useFinishedImage(props) {
   const addMenuVisible     = ref(false)   // 新增子菜单
   const existingPickerVisible = ref(false) // 已有图片选择器弹窗
 
-  const localCoverImage = ref('')      // 裁剪后本地预览（base64），保存前显示用
-  const savedCoverImage = ref('')      // 进入编辑时的快照，取消时回退
+  const localCoverImage    = ref('')   // 裁剪后本地预览（base64），保存前显示用
+  const localOriginalImage = ref('')   // 原始高清图（base64），保存时一并上传到 OSS
+  const savedCoverImage    = ref('')   // 进入编辑时的快照，取消时回退
 
   const cropDialogVisible = ref(false)
   const cropImgSrc  = ref('')
@@ -63,6 +64,22 @@ export function useFinishedImage(props) {
     const y = Math.round((600 - h) / 2)
     ctx.drawImage(src, x, y, w, h)
     localCoverImage.value = out.toDataURL('image/png')
+
+    // 原始高清图：与缩略图相同裁剪区域+白底方形，保持裁剪原始分辨率（不缩小）
+    // 原始高清图：裁剪区域原始分辨率，不加白底（保留透明通道）
+    // 限制最大边长 2000px，避免大图 base64 传输过慢
+    const MAX_ORIG = 2000
+    if (src.width > MAX_ORIG || src.height > MAX_ORIG) {
+      const scale    = MAX_ORIG / Math.max(src.width, src.height)
+      const origOut  = document.createElement('canvas')
+      origOut.width  = Math.round(src.width  * scale)
+      origOut.height = Math.round(src.height * scale)
+      origOut.getContext('2d').drawImage(src, 0, 0, origOut.width, origOut.height)
+      localOriginalImage.value = origOut.toDataURL('image/png')
+    } else {
+      localOriginalImage.value = src.toDataURL('image/png')
+    }
+
     closeCropDialog()
   }
 
@@ -135,13 +152,14 @@ export function useFinishedImage(props) {
       await ElMessageBox.confirm('确认删除当前封面图片？', '删除确认', {
         confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning',
       })
-      localCoverImage.value = ''
+      localCoverImage.value    = ''
+      localOriginalImage.value = ''
     } catch {}
   }
 
   return {
     imgHover, imgPreview, addMenuVisible, existingPickerVisible,
-    localCoverImage, savedCoverImage,
+    localCoverImage, localOriginalImage, savedCoverImage,
     cropDialogVisible, cropImgSrc, cropImgRef, cropperInst, cropSquare,
     initCropper, applyCrop, closeCropDialog,
     previewImage, editImage, addImageFromUpload, addImageFromExisting, deleteImage,

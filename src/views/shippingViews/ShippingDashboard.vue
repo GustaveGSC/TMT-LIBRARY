@@ -933,11 +933,20 @@ function drillDown(label) {
     filters.value.modelIds    = []
   } else if (level === 'series') {
     let seriesId = null
-    for (const c of categoryTree.value) {
+    let parentCatId = null
+    // 优先在当前已选品类内查找（防止不同品类下同 code 的系列互相误匹配）
+    const searchCats = filters.value.categoryIds.length === 1
+      ? categoryTree.value.filter(c => c.id === filters.value.categoryIds[0])
+      : categoryTree.value
+    for (const c of searchCats) {
       const s = (c.series || []).find(s => s.code === label)
-      if (s) { seriesId = s.id; break }
+      if (s) { seriesId = s.id; parentCatId = c.id; break }
     }
     if (!seriesId) { drillStack.value.pop(); return }
+    // 若当前没有锁定品类，自动补全父品类（否则 seriesEnabled=false，下钻后 effectiveGroupBy 不推进）
+    if (!filters.value.categoryIds.length) {
+      filters.value.categoryIds = [parentCatId]
+    }
     filters.value.seriesIds = [seriesId]
     filters.value.modelIds  = []
   } else if (level === 'channel') {
@@ -1731,7 +1740,9 @@ function buildYoyOption(items) {
   }
 }
 
-// 环比（MoM）：按时间顺序显示柱状数据，叠加环比增长率折线
+// 环比（MoM）：上下双图布局
+// 上图：环比增长率折线（正红负蓝），下图：数量柱状图
+// 两图 X 轴联动，dataZoom 同步控制
 function buildMomOption(items) {
   const { field, label } = METRIC_MAP[dataMetric.value]
   const labels = items.map(i => i.label)
@@ -1744,16 +1755,19 @@ function buildMomOption(items) {
   })
 
   const titleText = `${buildChartTitle(label)} · 环比`
+  const subtextStr = (() => {
+    const [start, end] = filters.value.dateRange || []
+    if (start && end) return `${formatDate(start)}  ~  ${formatDate(end)}`
+    if (start) return `${formatDate(start)} 起`
+    return '全部时间'
+  })()
+
+  const rateColor = '#e07c00'
+
   return {
     backgroundColor: 'transparent',
     title: {
-      text: titleText,
-      subtext: (() => {
-        const [start, end] = filters.value.dateRange || []
-        if (start && end) return `${formatDate(start)}  ~  ${formatDate(end)}`
-        if (start) return `${formatDate(start)} 起`
-        return '全部时间'
-      })(),
+      text: titleText, subtext: subtextStr,
       left: 10, top: 16,
       textStyle:    { color: '#3a3028', fontFamily: FONT, fontSize: 14, fontWeight: '600' },
       subtextStyle: { color: '#8a7a6a', fontFamily: FONT, fontSize: 12 },
@@ -1767,61 +1781,104 @@ function buildMomOption(items) {
       trigger: 'axis', axisPointer: { type: 'shadow' }, textStyle: { fontFamily: FONT },
       formatter(params) {
         const periodLabel = params[0]?.name
-        const row = (marker, name, val) =>
-          `<div style="display:flex;justify-content:space-between;align-items:center;gap:20px;line-height:1.8">` +
-          `<span>${marker}${name}</span><span style="font-weight:600">${val ?? '-'}</span></div>`
-        let s = `<div style="font-family:${FONT};font-size:14px;min-width:160px">`
-        s += `<div style="margin-bottom:4px;font-weight:600;color:#3a3028">${periodLabel}</div>`
-        for (const p of params) {
-          if (p.value == null) continue
-          const display = p.seriesName === '环比增长率' ? `${p.value}%` : p.value
-          s += row(p.marker, p.seriesName, display)
-        }
-        return s + '</div>'
+        const rateStr = v => v == null ? '—' : v > 0 ? `▲${v}%` : v < 0 ? `▼${Math.abs(v)}%` : '0%'
+        const cell = (val, color) =>
+          `<td style="padding:1px 0 1px 14px;font-weight:600;text-align:right;white-space:nowrap${color ? `;color:${color}` : ''}">${val}</td>`
+        let s = `<div style="font-family:${FONT};font-size:13px">`
+        s += `<div style="font-weight:600;color:#3a3028;font-size:14px;margin-bottom:6px">${periodLabel}</div>`
+        s += `<table style="border-collapse:collapse;width:100%">`
+        s += `<tr style="color:#8a7a6a;font-size:12px;border-bottom:1px solid #e8dfd0">`
+        s += `<th style="padding:0 0 4px;font-weight:400;text-align:left"></th>`
+        s += `<th style="padding:0 0 4px 14px;font-weight:400;text-align:right">数量（PCS）</th>`
+        s += `<th style="padding:0 0 4px 14px;font-weight:400;text-align:right">环比增长率</th>`
+        s += `</tr>`
+        const barP  = params.find(p => p.seriesType === 'bar')
+        const lineP = params.find(p => p.seriesType === 'line')
+        const rv = lineP?.value
+        const rColor = rv == null ? '#8a7a6a' : rv > 0 ? '#d05a3c' : rv < 0 ? '#4a8fc0' : '#8a7a6a'
+        s += `<tr style="line-height:1.9">`
+        s += `<td style="white-space:nowrap">${barP?.marker ?? ''}${label}</td>`
+        s += cell(barP?.value != null ? barP.value : '—')
+        s += cell(rateStr(rv), rColor)
+        s += `</tr>`
+        s += `</table></div>`
+        return s
       },
     },
+    axisPointer: { link: [{ xAxisIndex: 'all' }] },
     dataZoom: [
-      { type: 'slider', xAxisIndex: 0, bottom: 14, height: 20, borderColor: '#e0d4c0', fillerColor: 'rgba(196,136,58,0.1)', handleStyle: { color: '#c4883a' }, textStyle: { color: '#7a5c3a', fontFamily: FONT, fontSize: 11 } },
-      { type: 'inside', xAxisIndex: 0 },
+      { type: 'slider', xAxisIndex: [0, 1], bottom: 14, height: 20, borderColor: '#e0d4c0', fillerColor: 'rgba(196,136,58,0.1)', handleStyle: { color: '#c4883a' }, textStyle: { color: '#7a5c3a', fontFamily: FONT, fontSize: 11 } },
+      { type: 'inside', xAxisIndex: [0, 1] },
     ],
-    grid: { top: 116, left: 60, right: 60, bottom: 82 },
-    xAxis: {
-      type: 'category', data: labels,
-      axisLabel: { rotate: labels.length > 10 ? 30 : 0, color: '#7a5c3a', fontFamily: FONT, fontSize: 13, interval: labels.length > 20 ? Math.floor(labels.length / 20) : 0 },
-      axisLine: { lineStyle: { color: '#e0d4c0' } },
-      axisTick: { lineStyle: { color: '#e0d4c0' } },
-    },
+    grid: [
+      { top: 116, left: 60, right: 30, bottom: '68%' },  // [0] 上图：环比增长率
+      { top: '37%', left: 60, right: 30, bottom: 50 },   // [1] 下图：数量
+    ],
+    xAxis: [
+      {
+        gridIndex: 0, type: 'category', data: labels,
+        axisLabel: { show: false },
+        axisTick:  { show: false },
+        axisLine:  { lineStyle: { color: '#e0d4c0' } },
+        splitLine: { show: false },
+      },
+      {
+        gridIndex: 1, type: 'category', data: labels,
+        axisLabel: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13 },
+        axisLine:  { lineStyle: { color: '#e0d4c0' } },
+        axisTick:  { lineStyle: { color: '#e0d4c0' } },
+      },
+    ],
     yAxis: [
       {
-        type: 'value', name: '数量（PCS）',
+        gridIndex: 0, type: 'value', name: '环比增长率',
+        nameTextStyle: { color: '#7a5c3a', fontFamily: FONT, fontSize: 12 },
+        axisLabel: { color: '#7a5c3a', fontFamily: FONT, fontSize: 12, formatter: '{value}%' },
+        splitLine: { lineStyle: { color: '#f0e8d8' } },
+        axisLine: { show: true, lineStyle: { color: '#e0d4c0' } },
+        axisTick: { show: true, lineStyle: { color: '#e0d4c0' } },
+      },
+      {
+        gridIndex: 1, type: 'value', name: '数量（PCS）',
         nameTextStyle: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13 },
         axisLabel: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13 },
         splitLine: { lineStyle: { color: '#f0e8d8' } },
         axisLine: { show: true, lineStyle: { color: '#e0d4c0' } },
         axisTick: { show: true, lineStyle: { color: '#e0d4c0' } },
       },
-      {
-        type: 'value', name: '环比增长率',
-        nameTextStyle: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13 },
-        axisLabel: { color: '#7a5c3a', fontFamily: FONT, fontSize: 13, formatter: '{value}%' },
-        splitLine: { show: false },
-        axisLine: { show: true, lineStyle: { color: '#e0d4c0' } },
-        axisTick: { show: true, lineStyle: { color: '#e0d4c0' } },
-      },
     ],
     series: [
       {
-        name: label, type: 'bar', data: values, yAxisIndex: 0,
-        itemStyle: { color: '#a8cce8', borderRadius: [2, 2, 0, 0] },
-        label: { show: true, position: 'top', color: '#2c2420', fontFamily: FONT, fontSize: 14, fontWeight: 'bold', formatter: '{c}' },
+        name: '环比增长率', type: 'line',
+        xAxisIndex: 0, yAxisIndex: 0,
+        data: momData,
+        smooth: true, connectNulls: false,
+        lineStyle: { color: rateColor, width: 2 },
+        itemStyle: { color: rateColor },
+        symbol: 'circle', symbolSize: 6,
+        areaStyle: { color: rateColor, opacity: 0.1 },
+        label: {
+          show: true, position: 'top',
+          fontFamily: FONT, fontSize: 11, fontWeight: '600',
+          formatter: p => {
+            if (p.value == null) return ''
+            if (p.value > 0) return `{pos|▲${p.value}%}`
+            if (p.value < 0) return `{neg|▼${Math.abs(p.value)}%}`
+            return `{zero|0%}`
+          },
+          rich: {
+            pos:  { color: '#d05a3c', fontFamily: FONT, fontSize: 11, fontWeight: '600' },
+            neg:  { color: '#4a8fc0', fontFamily: FONT, fontSize: 11, fontWeight: '600' },
+            zero: { color: '#8a7a6a', fontFamily: FONT, fontSize: 11, fontWeight: '600' },
+          },
+        },
       },
       {
-        name: '环比增长率', type: 'line', data: momData, yAxisIndex: 1,
-        smooth: true, connectNulls: false,
-        lineStyle: { color: '#e07c00', width: 2 },
-        itemStyle: { color: '#e07c00' },
-        symbol: 'circle', symbolSize: 5,
-        label: { show: true, position: 'top', color: '#e07c00', fontFamily: FONT, fontSize: 12, fontWeight: 'bold', formatter: p => p.value != null ? `${p.value}%` : '' },
+        name: label, type: 'bar',
+        xAxisIndex: 1, yAxisIndex: 1,
+        data: values,
+        itemStyle: { color: '#a8cce8', borderRadius: [2, 2, 0, 0] },
+        label: { show: true, position: 'top', color: '#2c2420', fontFamily: FONT, fontSize: 14, fontWeight: 'bold', formatter: '{c}' },
       },
     ],
   }

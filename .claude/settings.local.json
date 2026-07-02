@@ -87,13 +87,17 @@
       "Bash(rsync -az --checksum e:/Project/tmt-library/dist-web-build/. tmt:/var/www/tmt-library/)",
       "Bash(ssh tmt:*)",
       "Bash(ssh -o ServerAliveInterval=10 tmt \"fuser -k 8765/tcp 2>/dev/null; sleep 1; systemctl restart gunicorn && sleep 2 && systemctl is-active gunicorn\")",
-      "Bash(scp -o ServerAliveInterval=10 -r e:/Project/tmt-library/dist-web/. tmt:/var/www/tmt-library/)"
+      "Bash(scp -o ServerAliveInterval=10 -r e:/Project/tmt-library/dist-web/. tmt:/var/www/tmt-library/)",
+      "Bash(scp -r e:/Project/tmt-library/dist-web/. tmt:/var/www/tmt-library/)",
+      "Bash(powershell -ExecutionPolicy Bypass -Command \"Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser; Invoke-RestMethod -Uri https://get.scoop.sh | Invoke-Expression\")",
+      "Bash(powershell -Command \"[System.Environment]::GetEnvironmentVariable\\('PATH','User'\\) -split ';' | Select-String 'scoop'\")"
     ],
     "additionalDirectories": [
       "\\tmp",
       "e:\\Project\\tmt-library\\.claude",
       "e:\\Project\\tmt-library\\release\\win-unpacked",
-      "e:\\Project\\tmt-library\\backend"
+      "e:\\Project\\tmt-library\\backend",
+      "e:\\Project\\tmt-library\\src\\views"
     ]
   }
 }

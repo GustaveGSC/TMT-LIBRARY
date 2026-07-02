@@ -63,6 +63,14 @@ shipping_order_finished
   shipped_date, operator, channel_name, province,
   is_stale(产品库变更后标记), resolved_at
   # 按订单对发货/销退数据分别贪心匹配成品组合，写入三列数量
+
+packaged_equivalent
+  id, code_a(VARCHAR 64), code_b(VARCHAR 64), note(VARCHAR 255 NULL), created_at
+  # UNIQUE(code_a, code_b)；始终存 code_a < code_b（字典序）
+  # 声明两个产成品在发货匹配时可互换（如 A01 ↔ B01）
+  # _resolve_orders() 加载此表构建等效映射，匹配时任意等效码均可满足槽位需求
+  # 建表脚本：backend/create_packaged_equivalents.py
+  # 管理入口：数据管理页 → 数据配置 → 产成品通用件配置
 ```
 
 ## 售后数据
@@ -233,9 +241,14 @@ product_resource
   source(VARCHAR 20 DEFAULT 'external'),   # 'oss' | 'external'
   file_type(VARCHAR 20 DEFAULT 'link'),    # 'pdf' | 'image' | 'video' | 'link' | 'other'
   original_filename(VARCHAR 300 nullable),
-  description(TEXT), created_at, updated_at
+  description(TEXT), tag_condition(JSON nullable), created_at, updated_at
   # type_id=NULL 为未分类（侧边栏"未分类"入口可筛选）
   # storage_key 仅 source='oss' 时有值，用于生成签名 URL
+  # tag_condition=NULL → 旧 OR 逻辑（产品有任意关联标签即匹配）
+  # tag_condition={op:'AND'|'OR', items:[{tag_id,not?}|{op,items},...]} → 支持 AND/OR/NOT 任意嵌套
+  #   例：{"op":"AND","items":[{"tag_id":1},{"op":"OR","items":[{"tag_id":2},{"tag_id":3}]}]}
+  # product_resource_tag 中间表保留，存扁平 tag 集合（SQL 候选过滤用），Python 层再按 tag_condition 精确匹配
+  # 删除标签时自动从所有资料的 tag_condition 中清除（tag.py _clean_tag_id_from_condition）
 
 product_finished_resource          # 成品-资料 直接关联（多对多）
   finished_id(FK→product_finished CASCADE),

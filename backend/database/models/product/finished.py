@@ -86,8 +86,9 @@ class ProductFinished(db.Model):
     listed_yymm   = db.Column(db.String(7),   nullable=True)
     delisted_yymm = db.Column(db.String(7),   nullable=True)
     market        = db.Column(db.String(16),  nullable=True)   # domestic/foreign/both
-    cover_image      = db.Column(db.String(500), nullable=True)
-    img_updated_at   = db.Column(db.Integer,     nullable=True)   # 封面图更新时间戳（秒），用于缓存破坏
+    cover_image          = db.Column(db.String(500), nullable=True)
+    cover_image_original = db.Column(db.String(500), nullable=True)   # 原始高清图 OSS URL
+    img_updated_at       = db.Column(db.Integer,     nullable=True)   # 封面图更新时间戳（秒），用于缓存破坏
     created_at       = db.Column(db.DateTime,    nullable=False, default=now_cst)
     updated_at       = db.Column(db.DateTime,    nullable=False, default=now_cst, onupdate=now_cst)
 
@@ -130,8 +131,9 @@ class ProductFinished(db.Model):
             'listed_yymm':   self.listed_yymm,
             'delisted_yymm': self.delisted_yymm,
             'market':        self.market,
-            'cover_image':     self.cover_image,
-            'img_updated_at':  self.img_updated_at,
+            'cover_image':          self.cover_image,
+            'cover_image_original': self.cover_image_original,
+            'img_updated_at':       self.img_updated_at,
             'tags':          [t.to_dict() for t in self.tags],
             'created_at':    self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
             'updated_at':    self.updated_at.strftime('%Y-%m-%d %H:%M:%S') if self.updated_at else None,
@@ -169,4 +171,29 @@ class ProductPackaged(db.Model):
             'net_weight':   self.net_weight,
             'created_at':   self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
             'updated_at':   self.updated_at.strftime('%Y-%m-%d %H:%M:%S') if self.updated_at else None,
+        }
+
+
+class PackagedEquivalent(db.Model):
+    """产成品通用件：声明两个产成品在发货匹配时可互换"""
+    __tablename__ = 'packaged_equivalent'
+    __table_args__ = (
+        db.UniqueConstraint('code_a', 'code_b', name='uq_equiv_pair'),
+        db.Index('ix_equiv_code_a', 'code_a'),
+        db.Index('ix_equiv_code_b', 'code_b'),
+    )
+
+    id         = db.Column(db.Integer,     primary_key=True, autoincrement=True)
+    code_a     = db.Column(db.String(64),  nullable=False)   # 字典序较小的编码
+    code_b     = db.Column(db.String(64),  nullable=False)   # 字典序较大的编码
+    note       = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime,    nullable=False, default=now_cst)
+
+    def to_dict(self) -> dict:
+        return {
+            'id':         self.id,
+            'code_a':     self.code_a,
+            'code_b':     self.code_b,
+            'note':       self.note,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
         }

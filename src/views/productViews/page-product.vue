@@ -228,7 +228,7 @@ onMounted(async () => {
       <!-- 中：功能导航 -->
       <nav class="top-nav">
         <button
-          v-for="item in navItems"
+          v-for="item in navItems.filter(i => i.key !== 'resources' || canEditProduct)"
           :key="item.key"
           class="nav-item"
           :class="{ active: activePage === item.key }"
@@ -389,7 +389,7 @@ onMounted(async () => {
       <ProductChart v-if="mountedTabs.chart" v-show="activePage === 'chart'" />
 
       <!-- ⑤ 资料库 -->
-      <ProductResources v-if="mountedTabs.resources" v-show="activePage === 'resources'" />
+      <ProductResources v-if="canEditProduct && mountedTabs.resources" v-show="activePage === 'resources'" />
 
     </main>
 

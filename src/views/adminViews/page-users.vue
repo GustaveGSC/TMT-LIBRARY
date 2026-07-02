@@ -69,7 +69,7 @@ function isProtectedUser(row) { return row.username === 'admin' || row.username 
 async function loadUsers() {
   loading.value = true
   try {
-    const res = await http.get('/api/account/users')
+    const res = await http.get('/api/account/users', { params: { per_page: 500 } })
     if (res.success) users.value = res.data?.items || res.data || []
   } catch {
     ElMessage.error('加载用户列表失败')

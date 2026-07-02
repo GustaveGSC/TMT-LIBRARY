@@ -350,3 +350,80 @@ def get_chart_data():
         return Result.ok(data=shipping_service.get_chart_data(params)).to_response()
     except Exception as e:
         return Result.fail(str(e)).to_response()
+
+
+# ── 产成品通用件配置 ──────────────────────────────────────
+
+@shipping_bp.get('/equivalents')
+def list_equivalents():
+    """列出所有通用件对（含产成品名称）"""
+    from database.models.product.finished import PackagedEquivalent, ProductPackaged
+    from database.base import db
+    pairs = PackagedEquivalent.query.order_by(PackagedEquivalent.created_at.desc()).all()
+    # 批量取产成品名称
+    codes = set()
+    for p in pairs:
+        codes.update([p.code_a, p.code_b])
+    name_map = {}
+    if codes:
+        rows = ProductPackaged.query.filter(ProductPackaged.code.in_(codes)).all()
+        name_map = {r.code: r.name for r in rows}
+    result = []
+    for p in pairs:
+        d = p.to_dict()
+        d['name_a'] = name_map.get(p.code_a, '')
+        d['name_b'] = name_map.get(p.code_b, '')
+        result.append(d)
+    return Result.ok(result).to_response()
+
+
+@shipping_bp.post('/equivalents')
+def add_equivalent():
+    """新增通用件对。body: {code_a, code_b, note?}"""
+    from database.models.product.finished import PackagedEquivalent, ProductPackaged
+    from database.base import db
+    from utils import now_cst
+    body = request.get_json(silent=True) or {}
+    code_a = str(body.get('code_a', '')).strip()
+    code_b = str(body.get('code_b', '')).strip()
+    note   = str(body.get('note', '')).strip() or None
+    if not code_a or not code_b:
+        return Result.fail('code_a 和 code_b 不能为空').to_response()
+    if code_a == code_b:
+        return Result.fail('两个产成品编码不能相同').to_response()
+    # 统一存储：字典序较小的为 code_a
+    if code_a > code_b:
+        code_a, code_b = code_b, code_a
+    # 校验产成品存在
+    existing_codes = {r.code for r in ProductPackaged.query.filter(
+        ProductPackaged.code.in_([code_a, code_b])
+    ).all()}
+    missing = [c for c in [code_a, code_b] if c not in existing_codes]
+    if missing:
+        return Result.fail(f'产成品编码不存在：{", ".join(missing)}').to_response()
+    # 检查重复
+    dup = PackagedEquivalent.query.filter_by(code_a=code_a, code_b=code_b).first()
+    if dup:
+        return Result.fail('该通用件对已存在').to_response()
+    ep = PackagedEquivalent(code_a=code_a, code_b=code_b, note=note, created_at=now_cst())
+    db.session.add(ep)
+    db.session.commit()
+    d = ep.to_dict()
+    from database.models.product.finished import ProductPackaged as PP
+    name_map = {r.code: r.name for r in PP.query.filter(PP.code.in_([code_a, code_b])).all()}
+    d['name_a'] = name_map.get(code_a, '')
+    d['name_b'] = name_map.get(code_b, '')
+    return Result.ok(d).to_response()
+
+
+@shipping_bp.delete('/equivalents/<int:eq_id>')
+def delete_equivalent(eq_id):
+    """删除通用件对"""
+    from database.models.product.finished import PackagedEquivalent
+    from database.base import db
+    ep = PackagedEquivalent.query.get(eq_id)
+    if not ep:
+        return Result.fail('记录不存在').to_response()
+    db.session.delete(ep)
+    db.session.commit()
+    return Result.ok().to_response()

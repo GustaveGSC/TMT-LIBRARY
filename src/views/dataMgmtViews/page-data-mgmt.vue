@@ -6,10 +6,11 @@ import { ArrowLeft } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import http, { getBaseURL } from '@/api/http'
 import WindowControls  from '@/components/common/WindowControls.vue'
-import DataImport       from './DataImport.vue'
-import ReturnImport     from './ReturnImport.vue'
-import OperatorConfig   from './OperatorConfig.vue'
-import WarehouseConfig  from './WarehouseConfig.vue'
+import DataImport        from './DataImport.vue'
+import ReturnImport      from './ReturnImport.vue'
+import OperatorConfig    from './OperatorConfig.vue'
+import WarehouseConfig   from './WarehouseConfig.vue'
+import EquivalentConfig  from './EquivalentConfig.vue'
 
 // ── 路由 ──────────────────────────────────────────
 const router = useRouter()
@@ -100,6 +101,7 @@ async function handleResolveAll() {
       }
       es.onerror = () => { es.close(); reject() }
     })
+    ElMessage.success(`刷新完成，共处理 ${resolveCurrentOrder.value.toLocaleString()} 条订单`)
   } catch {
     // ElMessage 已在内部处理
   } finally {
@@ -242,6 +244,8 @@ async function handleResolveAll() {
           <OperatorConfig />
           <div class="import-divider"></div>
           <WarehouseConfig />
+          <div class="import-divider"></div>
+          <EquivalentConfig />
         </div>
       </div>
     </main>
@@ -367,10 +371,10 @@ async function handleResolveAll() {
   min-height: 200px;
 }
 
-/* 数据配置双列布局（操作人 + 仓库） */
+/* 数据配置多列布局（操作人 + 仓库 + 通用件） */
 .config-layout {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: 1fr auto 1fr auto 1fr;
   gap: 0;
   align-items: start;
 }

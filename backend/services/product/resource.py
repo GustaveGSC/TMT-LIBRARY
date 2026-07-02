@@ -136,11 +136,11 @@ class ResourceService:
         ResourceRepository.set_resource_models(resource_id, model_ids)
         return Result.ok()
 
-    def set_resource_tags(self, resource_id: int, tag_ids: list) -> Result:
+    def set_resource_tags(self, resource_id: int, tag_ids: list, tag_condition=None) -> Result:
         r = ResourceRepository.get_resource(resource_id)
         if not r:
             return Result.fail('资料不存在')
-        ResourceRepository.set_resource_tags(resource_id, tag_ids)
+        ResourceRepository.set_resource_tags(resource_id, tag_ids, tag_condition)
         return Result.ok()
 
     def update_order(self, code: str, ordered_ids: list) -> Result:

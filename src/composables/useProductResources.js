@@ -91,8 +91,8 @@ export function useProductResources(codeGetter = null) {
     return res.success
   }
 
-  async function setResourceTags(id, tagIds) {
-    const res = await http.put(`/api/resources/${id}/tags`, { tag_ids: tagIds })
+  async function setResourceTags(id, tagIds, tagCondition = null) {
+    const res = await http.put(`/api/resources/${id}/tags`, { tag_ids: tagIds, tag_condition: tagCondition })
     if (!res.success) ElMessage.error(res.message || '标签设置失败')
     return res.success
   }

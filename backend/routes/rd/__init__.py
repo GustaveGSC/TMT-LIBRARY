@@ -177,7 +177,11 @@ def _validate_bom(path, role='before'):
 
 
 def _parse_bom(path):
-    """读取并清洗 BOM 文件，返回 {(层次, 编码): item} 字典"""
+    """读取并清洗 BOM 文件，返回 {(父级编码, 编码): item} 字典。
+
+    key 使用 (parent_code, code) 而非 (level, code)，使得同一父级下零件
+    顺序调整时不会被误判为删除+新增。
+    """
     from openpyxl import load_workbook
     wb = load_workbook(path, data_only=True)
     ws = wb.active
@@ -193,25 +197,22 @@ def _parse_bom(path):
         c = col_map.get(name)
         return ws.cell(row, c).value if c else default
 
-    items = {}
+    # 第一遍：按行顺序收集所有有效行（保留 level 供第二遍查父级）
+    rows = []
     for r in range(2, ws.max_row + 1):
         level   = _level_str(_get(r, '层次'))
         drawing = str(_get(r, '图号') or '').strip()
 
-        # 清洗：跳过无层次或无图号的行
         if not level or not drawing:
             continue
 
-        # 以最后一个"-"分割编码和版本
         idx = drawing.rfind('-')
         code    = drawing[:idx]  if idx > 0 else drawing
         version = drawing[idx+1:] if idx > 0 else ''
 
-        # 清洗：跳过编码为空的行（图号格式异常）
         if not code:
             continue
 
-        # 清洗：过滤编码含"."的项、以"14ST10"开头的项
         if '.' in code or code.startswith('14ST10'):
             continue
 
@@ -222,7 +223,7 @@ def _parse_bom(path):
             qty = 1.0
 
         raw_spec = str(_get(r, '规格') or '').strip()
-        items[(level, code)] = {
+        rows.append({
             'level':   level,
             'code':    code,
             'version': version,
@@ -232,7 +233,20 @@ def _parse_bom(path):
             'qty':     qty,
             'unit':    str(_get(r, '单位') or 'PCS').strip(),
             'status':  str(_get(r, '状态') or '').strip(),
-        }
+        })
+
+    # 第二遍：建立 level → code 映射，用于查找父级编码
+    level_to_code = {row['level']: row['code'] for row in rows}
+
+    items = {}
+    for row in rows:
+        level = row['level']
+        dot_idx = level.rfind('.')
+        parent_level = level[:dot_idx] if dot_idx >= 0 else ''
+        parent_code  = level_to_code.get(parent_level, '')
+        key = (parent_code, row['code'])
+        items[key] = row
+
     return items
 
 
@@ -336,11 +350,12 @@ def _compare_bom(before_path, after_path):
         p = _parent_item(level, before_by_level)
         return p['drawing'] if p else ''
 
-    # 按层次排序（深度优先）
-    all_keys = sorted(
-        set(before) | set(after),
-        key=lambda k: _level_sort_key(k[0])
-    )
+    # 按层次排序（深度优先）；key 已改为 (parent_code, code)，用 item['level'] 排序
+    def _key_level(k):
+        item = before.get(k) or after.get(k)
+        return _level_sort_key(item['level']) if item else (0,)
+
+    all_keys = sorted(set(before) | set(after), key=_key_level)
 
     changes   = []
     n_version = 0   # 版本变更物料对数
@@ -377,25 +392,29 @@ def _compare_bom(before_path, after_path):
                 changes.append({
                     'row_type':      'cancel',
                     'change_kind':   kind,
-                    'level':         key[0],
+                    'level':         a['level'],
                     'main_drawing':  _old_main_drawing(a['level']),
                     'drawing':       old_drawing,
                     'name':          a['name'],
                     'spec':          a['spec'],
                     'qty':           b['qty'],
                     'change_method': '取消',
+                    '_code':         a['code'],
+                    '_parent_code':  key[0],
                 })
                 # 新增行：新增新版本，主件图号为 after 父级推算后的新图号
                 changes.append({
                     'row_type':      'add',
                     'change_kind':   kind,
-                    'level':         key[0],
+                    'level':         a['level'],
                     'main_drawing':  _new_main_drawing(a['level']),
                     'drawing':       new_drawing,
                     'name':          a['name'],
                     'spec':          new_spec,
                     'qty':           a['qty'],
                     'change_method': '新增',
+                    '_code':         a['code'],
+                    '_parent_code':  key[0],
                 })
             else:
                 # 纯数量变更：只生成单行，变更方式为"数量变更"，取替代关系显示数量变化
@@ -404,13 +423,15 @@ def _compare_bom(before_path, after_path):
                     'row_type':      'added',
                     'change_kind':   '数量变更',
                     'qty_desc':      qty_desc,
-                    'level':         key[0],
+                    'level':         a['level'],
                     'main_drawing':  _new_main_drawing(a['level']),
                     'drawing':       a['drawing'],
                     'name':          a['name'],
                     'spec':          a['spec'],
                     'qty':           a['qty'],
                     'change_method': '数量变更',
+                    '_code':         a['code'],
+                    '_parent_code':  key[0],
                 })
 
         elif in_b:
@@ -420,13 +441,15 @@ def _compare_bom(before_path, after_path):
             changes.append({
                 'row_type':      'deleted',
                 'change_kind':   '删除',
-                'level':         key[0],
+                'level':         b['level'],
                 'main_drawing':  _before_main_drawing(b['level']),
                 'drawing':       b['drawing'],
                 'name':          b['name'],
                 'spec':          b['spec'],
                 'qty':           b['qty'],
                 'change_method': '取消',
+                '_code':         b['code'],
+                '_parent_code':  key[0],
             })
 
         else:
@@ -442,17 +465,43 @@ def _compare_bom(before_path, after_path):
             changes.append({
                 'row_type':      'added',
                 'change_kind':   '新增',
-                'level':         key[0],
+                'level':         a['level'],
                 'main_drawing':  _new_main_drawing(a['level']),
                 'drawing':       new_drawing,
                 'name':          a['name'],
                 'spec':          new_spec,
                 'qty':           a['qty'],
                 'change_method': '新增',
+                '_code':         a['code'],
+                '_parent_code':  key[0],
             })
+
+    # ── 后处理：去除因子装配替换产生的子零件假增删 ──────────────
+    # 当一个子装配整体被替换（旧装配被删、新装配被新增），其共有的子零件
+    # 会因 parent_code 不同而产生一组 deleted+added 噪声。过滤规则：
+    #   deleted 行：父级编码本身也在 deleted 集合中，且该零件编码也出现在 added 集合里 → 噪声
+    #   added  行：父级编码本身也在 added  集合中，且该零件编码也出现在 deleted 集合里 → 噪声
+    deleted_codes = {ch['_code'] for ch in changes if ch['row_type'] == 'deleted'}
+    added_codes   = {ch['_code'] for ch in changes if ch['row_type'] == 'added'}
+
+    filtered = []
+    for ch in changes:
+        if ch['row_type'] == 'deleted':
+            if ch['_parent_code'] in deleted_codes and ch['_code'] in added_codes:
+                n_deleted -= 1
+                continue  # 噪声：父装配也被删除，且同编码已在新装配中新增
+        elif ch['row_type'] == 'added':
+            if ch['_parent_code'] in added_codes and ch['_code'] in deleted_codes:
+                n_added -= 1
+                continue  # 噪声：父装配也是新增，且同编码已从旧装配中删除
+        filtered.append(ch)
+    changes = filtered
 
     for i, ch in enumerate(changes):
         ch['seq'] = i + 1
+        # 清理内部字段，不返回给前端
+        ch.pop('_code', None)
+        ch.pop('_parent_code', None)
 
     stats = {
         'version': n_version,

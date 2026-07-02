@@ -13,6 +13,7 @@ import modelTipImg from '@/assets/images/image_model_tip.png'
 import { useFinishedImage } from '@/composables/useFinishedImage'
 import { useFinishedParams, GROUP_DEFS } from '@/composables/useFinishedParams'
 import { useProductResources } from '@/composables/useProductResources'
+import { copiedParams, copiedTagNames } from '@/composables/useParamsClipboard'
 
 // ── Props ─────────────────────────────────────────
 const props = defineProps({
@@ -27,6 +28,7 @@ const emit = defineEmits(['saved'])
 // ── 权限 ──────────────────────────────────────────
 const { canEditProduct, canViewShipping, canViewAftersale } = usePermission()
 
+
 // ── 响应式状态 ────────────────────────────────────
 const editing      = ref(false)
 const saving       = ref(false)
@@ -36,7 +38,7 @@ const moreMenuVisible = ref(false)  // ··· 更多菜单开关
 // ── 图片 / 裁剪（see useFinishedImage）────────────
 const {
   imgHover, imgPreview, addMenuVisible, existingPickerVisible,
-  localCoverImage, savedCoverImage,
+  localCoverImage, localOriginalImage, savedCoverImage,
   cropDialogVisible, cropImgSrc, cropImgRef, cropSquare,
   initCropper, applyCrop, closeCropDialog,
   previewImage, editImage, addImageFromUpload, addImageFromExisting, deleteImage,
@@ -257,6 +259,51 @@ function lc(row) {
 
 // ── 复制 / 粘贴 ───────────────────────────────
 
+// 复制标签
+function copyTags() {
+  copiedTagNames.value = (props.row.tags || []).map(t => t.name)
+  ElMessage.success('标签已复制，在目标产品编辑状态下点击「粘贴标签」即可')
+}
+
+// 粘贴标签（需先进入编辑模式）
+async function pasteTags() {
+  if (!copiedTagNames.value) return
+  if (!editing.value) {
+    await startEdit()
+    await nextTick()
+  }
+  await ensureTagOptionsLoaded()
+  // 合并而非覆盖，避免丢失目标产品已有标签
+  const existing = new Set(editForm.tag_names)
+  copiedTagNames.value.forEach(n => existing.add(n))
+  initializing.value = true
+  await nextTick()
+  initializing.value = false
+  editForm.tag_names = [...existing]
+  ElMessage.success('标签已粘贴，确认后点击保存')
+}
+
+// 仅复制参数（存入模块级单例，跨行共享）
+function copyParams() {
+  copiedParams.value = JSON.parse(JSON.stringify(paramsData.value))
+  ElMessage.success('参数已复制，在目标产品参数区点击「粘贴参数」即可')
+}
+
+// 仅粘贴参数（自动进入参数编辑模式，等 startParamsEdit 完成后再覆盖）
+async function pasteParams() {
+  if (!copiedParams.value) return
+  const src = copiedParams.value
+  await startParamsEdit()   // 等待加载键名库 + syncEditParamsFromData
+  GROUP_DEFS.forEach(g => {
+    const items = src[g.key] || []
+    const validKeys = new Set((paramKeys.value[g.key] || []).map(k => k.id))
+    editParams[g.key] = items
+      .filter(p => validKeys.has(p.key_id))
+      .map(p => ({ key_id: p.key_id, key_name: p.key_name, value: p.value, state: 'added' }))
+  })
+  ElMessage.success('参数已粘贴，确认无误后点击保存')
+}
+
 // 复制当前卡片参数到系统剪切板（仅查看模式可用）
 async function copyCard() {
   moreMenuVisible.value = false
@@ -435,20 +482,32 @@ function resolveMarket() {
   return ''
 }
 
+// ── 图片查看器：优先显示原始高清图 ────────────────────────────────────────
+const viewerUrl = computed(() => {
+  const ts = props.row.img_updated_at ? `?t=${props.row.img_updated_at}` : ''
+  return (
+    localOriginalImage.value ||
+    (props.row.cover_image_original ? props.row.cover_image_original + ts : null) ||
+    localCoverImage.value ||
+    (props.row.cover_image ? props.row.cover_image + ts : '')
+  )
+})
+
+
 async function saveEdit() {
   saving.value = true
   try {
     // ── 图片处理：上传新图 / 清除旧图 ──────────────
     let coverImageValue = undefined   // undefined = 不变，null = 清除，string = 新 OSS URL
     if (localCoverImage.value.startsWith('data:')) {
-      // 有新裁剪图（base64）→ 上传到 OSS
-      const uploadRes = await http.post('/api/product/finished/cover-image', {
-        code:     props.row.code,
-        data_url: localCoverImage.value,
-      })
+      // 有新裁剪图（base64）→ 上传到 OSS，同时上传原始高清图（若有）
+      const uploadBody = { code: props.row.code, data_url: localCoverImage.value }
+      if (localOriginalImage.value) uploadBody.orig_data_url = localOriginalImage.value
+      const uploadRes = await http.post('/api/product/finished/cover-image', uploadBody)
       if (uploadRes.success) {
         coverImageValue = uploadRes.data.url
-        localCoverImage.value = coverImageValue   // 本地替换为 OSS URL，避免重复上传
+        localCoverImage.value    = coverImageValue   // 本地替换为 OSS URL，避免重复上传
+        localOriginalImage.value = ''                // 已上传，清空本地 base64
       } else {
         ElMessage.error(uploadRes.message || '图片上传失败')
         return
@@ -1070,6 +1129,8 @@ function toggleSec(key) {
                 alt="封面图"
                 @click="!editing && previewImage()"
               />
+              <!-- 高清标记：有原始高清图时显示 -->
+              <span v-if="localOriginalImage || row.cover_image_original" class="ec-img-hd-badge">高清</span>
             </template>
             <!-- 无图片 -->
             <template v-else>
@@ -1105,9 +1166,10 @@ function toggleSec(key) {
           </div>
 
           <!-- 图片预览（teleported 到 body，支持滚轮缩放/旋转） -->
+          <!-- 优先用原始高清图：本地 base64（未保存时）> OSS 原图 > 缩略图 -->
           <el-image-viewer
             v-if="imgPreview && (localCoverImage || row.cover_image)"
-            :url-list="[localCoverImage || (row.cover_image + (row.img_updated_at ? '?t=' + row.img_updated_at : ''))]"
+            :url-list="[viewerUrl]"
             :teleported="true"
             @close="imgPreview = false"
           />
@@ -1307,6 +1369,16 @@ function toggleSec(key) {
           :style="{ background: tag.color + '22', borderColor: tag.color, color: tag.color }"
         >{{ tag.name }}</span>
         <span v-if="!(row.tags || []).length" class="eg-dim">—</span>
+        <div class="ec-tags-actions">
+          <button v-if="(row.tags || []).length" class="param-sec-edit-btn" @click.stop="copyTags">复制</button>
+          <button
+            v-if="canEditProduct"
+            class="param-sec-edit-btn"
+            :disabled="!copiedTagNames"
+            :class="{ 'param-sec-btn-disabled': !copiedTagNames }"
+            @click.stop="pasteTags"
+          >粘贴</button>
+        </div>
       </div>
       <div v-else-if="canEditProduct" class="ec-tags-edit-below">
         <el-select
@@ -1370,13 +1442,19 @@ function toggleSec(key) {
         <div class="eg-sec">
           <div class="eg-sec-hd" @click="toggleSec('params')">
             <span class="eg-arr">{{ isSec('params') ? '▾' : '›' }}</span>参数
-            <!-- 参数独立编辑按钮：仅在查看模式 + 有权限时显示 -->
-            <button
-              v-if="isSec('params') && canEditProduct && !editing && !paramsEditing"
-              class="param-sec-edit-btn"
-              title="编辑参数"
-              @click.stop="startParamsEdit"
-            >✎ 编辑</button>
+            <template v-if="isSec('params') && !editing && !paramsEditing">
+              <div class="param-sec-btns">
+                <button v-if="canEditProduct" class="param-sec-edit-btn" @click.stop="startParamsEdit">✎ 编辑</button>
+                <button v-if="paramsLoaded" class="param-sec-edit-btn" @click.stop="copyParams">复制</button>
+                <button
+                  v-if="canEditProduct"
+                  class="param-sec-edit-btn"
+                  :disabled="!copiedParams"
+                  :class="{ 'param-sec-btn-disabled': !copiedParams }"
+                  @click.stop="pasteParams"
+                >粘贴</button>
+              </div>
+            </template>
           </div>
           <div v-if="isSec('params')" class="eg-sec-bd eg-sec-bd-params">
 
@@ -1825,7 +1903,8 @@ function toggleSec(key) {
         @click="!pickerCopying && selectExistingImage(item.code)"
       >
         <div class="picker-img-wrap">
-          <img :src="item.cover_image" class="picker-img" :alt="item.code" />
+          <img :src="item.cover_image + (item.img_updated_at ? '?t=' + item.img_updated_at : '')" class="picker-img" :alt="item.code" />
+          <span v-if="item.cover_image_original" class="ec-img-hd-badge">高清</span>
         </div>
         <div class="picker-info">
           <div class="picker-code">{{ item.code }}</div>
@@ -1983,6 +2062,9 @@ function toggleSec(key) {
 }
 
 /* 查看模式标签行（全宽，自动换行） */
+.ec-tags-actions {
+  margin-left: auto; display: flex; gap: 5px; align-items: center; flex-shrink: 0;
+}
 .ec-tags-below {
   display: flex;
   flex-wrap: wrap;
@@ -2009,6 +2091,19 @@ function toggleSec(key) {
   display: block;
   border-radius: 8px;
   transition: transform 0.2s ease;
+}
+.ec-img-hd-badge {
+  position: absolute;
+  top: 6px; left: 6px;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  color: #fff;
+  background: rgba(80, 160, 80, 0.82);
+  border-radius: 4px;
+  pointer-events: none;
+  letter-spacing: 0.5px;
 }
 .ec-img-photo--viewable {
   cursor: pointer;
@@ -2336,6 +2431,7 @@ function toggleSec(key) {
   padding: 0 !important;
 }
 
+
 /* 裁剪容器：固定高度，cropperjs 在此布局 */
 .crop-wrap {
   height: 460px;
@@ -2422,12 +2518,16 @@ function toggleSec(key) {
 .params-loading { font-size: 12px; color: #bbb; }
 
 /* 参数区头部编辑按钮 */
+.param-sec-btns {
+  margin-left: auto; display: flex; gap: 5px; align-items: center;
+}
 .param-sec-edit-btn {
-  margin-left: auto; padding: 2px 9px; border-radius: 4px;
+  padding: 2px 9px; border-radius: 4px;
   border: 1px solid #c0d4f0; background: transparent; color: #3a7bc8;
   font-size: 11px; font-family: inherit; cursor: pointer; transition: all 0.15s;
 }
-.param-sec-edit-btn:hover { background: #edf4ff; }
+.param-sec-edit-btn:hover:not(:disabled) { background: #edf4ff; }
+.param-sec-btn-disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* 独立编辑时底部操作按钮 */
 .params-actions {
@@ -2657,7 +2757,7 @@ function toggleSec(key) {
 /* 单个文件项 */
 .res-file {
   position: relative;
-  width: 96px;
+  width: 120px;
   display: flex; flex-direction: column; align-items: center;
   padding: 6px 4px 6px;
   border-radius: 8px; cursor: default; user-select: none;
@@ -2672,7 +2772,7 @@ function toggleSec(key) {
 /* 缩略图（图片/视频） */
 .res-file-thumb {
   position: relative;
-  width: 84px; height: 56px;
+  width: 108px; height: 72px;
   border-radius: 6px; overflow: hidden;
   background: #1a1a1a;
   margin-bottom: 5px; flex-shrink: 0;
@@ -2690,13 +2790,13 @@ function toggleSec(key) {
   pointer-events: none;
 }
 .res-file-icon {
-  width: 44px; height: 44px;
+  width: 56px; height: 56px;
   display: flex; align-items: center; justify-content: center;
-  font-size: 34px; color: #c4883a; margin-bottom: 5px;
+  font-size: 42px; color: #c4883a; margin-bottom: 5px;
 }
 /* PDF 专属图标 */
 .res-file-icon--pdf {
-  width: 44px; height: 52px; margin-bottom: 5px;
+  width: 54px; height: 64px; margin-bottom: 5px;
 }
 .pdf-icon-inner {
   width: 100%; height: 100%;

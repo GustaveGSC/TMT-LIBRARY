@@ -290,6 +290,8 @@ def _resolve_orders(order_nos: List[str], progress_cb=None):
 
     # 加载所有成品及其产成品关联（selectinload 避免 N+1）
     from sqlalchemy.orm import selectinload
+    from database.models.product.finished import PackagedEquivalent
+    from collections import defaultdict
     finished_list = ProductFinished.query.options(
         selectinload(ProductFinished.packaged_list)
     ).all()
@@ -306,6 +308,34 @@ def _resolve_orders(order_nos: List[str], progress_cb=None):
         key=lambda x: len(x[2]),
         reverse=True,
     )
+
+    # 加载通用件等效映射：{code: set(含自身及所有等效码)}
+    equiv_map: Dict = defaultdict(set)
+    for ep in PackagedEquivalent.query.all():
+        equiv_map[ep.code_a].update([ep.code_a, ep.code_b])
+        equiv_map[ep.code_b].update([ep.code_a, ep.code_b])
+
+    def _avail(code, remaining):
+        """该槽位可用数量：有精确码则只算精确码，缺货才回退到等效码之和"""
+        exact = remaining.get(code, 0)
+        if exact > 0:
+            return exact
+        return sum(remaining.get(c, 0) for c in equiv_map.get(code, {code}))
+
+    def _consume(code, qty, remaining):
+        """消耗产成品：优先消耗 code 自身，再消耗等效码（字典序）"""
+        left = qty
+        for c in sorted(equiv_map.get(code, {code}), key=lambda x: (x != code, x)):
+            if left <= 0:
+                break
+            avail = remaining.get(c, 0)
+            if avail <= 0:
+                continue
+            take = min(avail, left)
+            remaining[c] -= take
+            left -= take
+            if remaining[c] <= 0:
+                del remaining[c]
 
     # 分批加载发货数据，每批推送一次进度
     CHUNK = 2000
@@ -332,15 +362,13 @@ def _resolve_orders(order_nos: List[str], progress_cb=None):
         remaining_ret = dict(return_products)  # {product_code: abs_qty}
         order_ret = {}
         for f_code, f_name, required_codes in sorted_finished:
-            if not required_codes.issubset(remaining_ret.keys()):
+            if not all(_avail(code, remaining_ret) > 0 for code in required_codes):
                 continue
-            min_qty = min(remaining_ret.get(code, 0) for code in required_codes)
+            min_qty = min(_avail(code, remaining_ret) for code in required_codes)
             if min_qty <= 0:
                 continue
             for code in required_codes:
-                remaining_ret[code] -= min_qty
-                if remaining_ret[code] <= 0:
-                    del remaining_ret[code]
+                _consume(code, min_qty, remaining_ret)
             order_ret[f_code] = order_ret.get(f_code, 0) + min_qty
         return_resolved[order_no] = order_ret
 
@@ -361,18 +389,16 @@ def _resolve_orders(order_nos: List[str], progress_cb=None):
         matched_any = False
 
         for f_code, f_name, required_codes in sorted_finished:
-            # 检查订单中是否有该成品所有所需的产成品
-            if not required_codes.issubset(remaining.keys()):
+            # 检查订单中是否有该成品所需的全部产成品（含等效码）
+            if not all(_avail(code, remaining) > 0 for code in required_codes):
                 continue
-            # 可组合的数量 = 所需产成品中数量最小的那个
-            min_qty = min(remaining.get(code, 0) for code in required_codes)
+            # 可组合的数量 = 各槽位可用数量（含等效码）中最小的那个
+            min_qty = min(_avail(code, remaining) for code in required_codes)
             if min_qty <= 0:
                 continue
-            # 扣减已使用的产成品数量
+            # 扣减已使用的产成品数量（优先消耗原码，再消耗等效码）
             for code in required_codes:
-                remaining[code] -= min_qty
-                if remaining[code] <= 0:
-                    del remaining[code]
+                _consume(code, min_qty, remaining)
             rq = Decimal(str(order_ret.get(f_code, 0)))
             sq = Decimal(str(min_qty))
             to_insert.append({

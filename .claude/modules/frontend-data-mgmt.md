@@ -2,8 +2,8 @@
 
 ## page-data-mgmt.vue 说明
 - 路由 `/data-mgmt`，`onMounted` 调用 `maximizeApp()`，返回按钮先 `unmaximizeApp()` 再 `router.back()`
-- 顶部导航两个 Tab：**导入数据**（DataImport + ReturnImport 左右并排）/ **数据配置**（OperatorConfig + WarehouseConfig 左右并排）
-- 右上角「刷新全局数据」按钮：点击先弹二次确认框，确认后调 `POST /api/shipping/resolve-all` → 订阅 SSE 进度（复用 `import/progress/:task_id`），实时显示"xxx / xxx 个订单"；刷新时同时计算发货数量、销退数量、实际数量
+- 顶部导航两个 Tab：**导入数据**（DataImport + ReturnImport 左右并排）/ **数据配置**（OperatorConfig + WarehouseConfig + EquivalentConfig 三列并排）
+- 右上角「刷新全局数据」按钮：点击先弹二次确认框，确认后调 `POST /api/shipping/resolve-all` → 订阅 SSE 进度（复用 `import/progress/:task_id`），实时显示"xxx / xxx 个订单"；刷新时同时计算发货数量、销退数量、实际数量；SSE 完成后弹 `ElMessage.success` 告知完成数量
 
 ## DataImport.vue 说明
 - 导入发货清单（xlsx/xls/csv），固定 100px 文件拖放区，选中后显示 Excel SVG 图标
@@ -42,6 +42,14 @@
 - 排除状态：橙红标签 + 橙红边框背景；正常状态：绿色标签
 - 调 `GET /api/shipping/warehouses` 加载，`POST /api/shipping/warehouses/filter` 保存
 
+## EquivalentConfig.vue 说明
+- 配置产成品通用件（等效互换对），用于发货匹配时允许 A01↔B01 混用
+- 列表：code_a / code_b / 备注 / 删除按钮（el-popconfirm 二次确认）
+- 新增区：两个产成品 code 选择框（el-select 可搜索已有产成品）+ 备注 + 新增按钮
+- 调 `GET /api/shipping/equivalents` 加载，`POST /api/shipping/equivalents` 新增，`DELETE /api/shipping/equivalents/<id>` 删除
+- 权限：`shipping:edit`（canEditShipping）
+- 新增/删除后提示用户前往全量刷新更新历史数据
+
 ## page-shipping.vue 说明
 - 路由 `/shipping`，`onMounted` 调用 `maximizeApp()`，返回按钮先 `unmaximizeApp()`
 - 内嵌 ShippingDashboard（左右两栏布局：筛选面板 + 图表区）
@@ -63,7 +71,7 @@
 - 切换到时间维度自动激活「同比」；可手动切换为「环比」
 - 时间粒度（月/季度/半年/年）绑定左侧 segmented，切换后重新请求数据
 - **同比（buildYoyOption）**：X 轴为完整一年期号（月 01-12 / Q1-Q4 / 上下半年），每年一个柱状系列；缺失期号显示 0
-- **环比（buildMomOption）**：顺序柱状图 + 环比增长率折线（双 Y 轴）
+- **环比（buildMomOption）**：上下双 grid 布局（与同比一致）——上图：环比增长率折线（rich text 标签：▲红/▼蓝/0%灰），下图：数量柱状图；X 轴通过 `axisPointer.link` 联动，dataZoom 同时绑定两轴；tooltip 合并显示数量+增长率
 - title 末尾追加「· 同比」或「· 环比」
 - 后端 `POST /api/shipping/chart-data` 时额外传 `period`（month/quarter/halfyear/year），后端对应使用不同 `DATE_FORMAT` / `QUARTER()` / CASE 表达式
 
@@ -81,6 +89,7 @@
 - 支持产品/渠道/地域三个维度的多层级自定义分组，保存在 localStorage（key: `shipping_product_groups`）
 - 激活分组后，图表中该分组成员合并为单条，tooltip 底部蓝色显示成员列表
 - 右击柱/饼扇区可下钻，自定义分组条目跳过下钻；面包屑显示在工具栏左侧
+- **下钻 series 时必须限定品类搜索范围**：`drillDown` 函数在品类已选定时只在当前品类内查找 series，避免不同品类下相同 code（如 LX11 同时属于学习椅灵犀 V1.1 和学习桌理想 V1.1）导致误匹配；若未选品类则下钻同时自动设置父品类
 
 ### Bar 图（buildBarOption）行为
 - items 按当前数据指标（发货量/销退量/净发货）**降序排列**后再绘制

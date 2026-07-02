@@ -57,6 +57,7 @@ class ProductResource(db.Model):
     file_type         = db.Column(db.String(20),   nullable=False, default='link')       # 'pdf'|'image'|'video'|'link'|'other'
     original_filename = db.Column(db.String(300),  nullable=True)
     description       = db.Column(db.Text,         nullable=True)
+    tag_condition     = db.Column(db.JSON,         nullable=True)      # OR-of-AND 条件组：[[tag_id,...],...]，null=旧OR逻辑
     created_at        = db.Column(db.DateTime,     nullable=False, default=now_cst)
     updated_at        = db.Column(db.DateTime,     nullable=False, default=now_cst, onupdate=now_cst)
 
@@ -78,6 +79,7 @@ class ProductResource(db.Model):
             'original_filename': self.original_filename,
             'description':       self.description,
             'tags':              [{'id': t.id, 'name': t.name} for t in self.tags],
+            'tag_condition':     self.tag_condition,
             'model_ids':         [m.id for m in self.models],
             'created_at':        self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
             'updated_at':        self.updated_at.strftime('%Y-%m-%d %H:%M:%S') if self.updated_at else None,

@@ -149,8 +149,9 @@ class FinishedRepository:
                 # 市场
                 'market':        fin.market        if fin else None,
                 # 封面图
-                'cover_image':      fin.cover_image      if fin else None,
-                'img_updated_at':   fin.img_updated_at   if fin else None,
+                'cover_image':          fin.cover_image          if fin else None,
+                'cover_image_original': fin.cover_image_original if fin else None,
+                'img_updated_at':       fin.img_updated_at       if fin else None,
                 # 状态
                 'status':        fin.status        if fin else 'unrecorded',
                 'model_id':      fin.model_id      if fin else None,

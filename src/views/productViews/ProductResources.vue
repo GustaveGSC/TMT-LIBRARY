@@ -1,6 +1,6 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useProductResources } from '@/composables/useProductResources'
 import { usePermission } from '@/composables/usePermission'
 import {
@@ -91,8 +91,20 @@ const tagOptionsFlat  = ref([])   // 未分类标签
 const tagSearchQuery  = ref('')
 const collapsedTagCats = ref(new Set())
 
+// 所有标签的扁平列表（含分类标签 + 未分类），用于条件构建器查 id→{id,name}
+const allTagsFlat = computed(() => {
+  const result = []
+  for (const cat of tagCategories.value) result.push(...(cat.tags || []))
+  result.push(...tagOptionsFlat.value)
+  return result
+})
+
+function findTagById(id) {
+  return allTagsFlat.value.find(t => t.id === id) || { id, name: `#${id}` }
+}
+
 async function loadAllTags() {
-  if (tagCategories.value.length || tagOptionsFlat.value.length) return
+  // 每次弹窗打开都重新加载，确保新增标签能立即出现
   const [catRes, tagRes] = await Promise.all([
     http.get('/api/product/tags/categories/'),
     http.get('/api/product/tags'),
@@ -100,6 +112,187 @@ async function loadAllTags() {
   if (catRes.success) tagCategories.value = catRes.data || []
   if (tagRes.success) tagOptionsFlat.value = (tagRes.data || []).filter(t => !t.category_id)
 }
+
+// ── 标签条件构建器 ──────────────────────────────
+// conditionTree: 根组 { op: 'AND'|'OR', items: [...] }
+// 根级 item: { type:'tag', id, name, not } | { type:'group', op, items:[TagItem] }
+// TagItem（组内）: { type:'tag', id, name, not }
+const conditionTree = ref({ op: 'AND', items: [] })
+const conditionMode = ref(false)
+
+function enterConditionMode() {
+  const currentTags = (resourceForm.value.tag_ids || []).map(id => {
+    const t = findTagById(id)
+    return { type: 'tag', id, name: t.name, not: false }
+  })
+  conditionTree.value = { op: 'AND', items: currentTags }
+  conditionMode.value = true
+}
+
+function exitConditionMode() {
+  const validItems = conditionTree.value.items.filter(i => i.type === 'tag' || (i.type === 'group' && i.items.length))
+  const tagCondition = validItems.length
+    ? { op: conditionTree.value.op, items: validItems.map(_serializeItem) }
+    : null
+  resourceForm.value.tag_ids = tagCondition ? [...new Set(_extractTagIds(tagCondition))] : []
+  conditionMode.value = false
+  conditionTree.value = { op: 'AND', items: [] }
+  closeTagPopover()
+}
+
+function addSubGroup() {
+  conditionTree.value.items.push({ type: 'group', op: 'OR', items: [] })
+}
+
+function removeRootItem(idx) {
+  conditionTree.value.items.splice(idx, 1)
+}
+
+function removeGroupItem(groupIdx, tagIdx) {
+  const group = conditionTree.value.items[groupIdx]
+  if (group && group.type === 'group') {
+    group.items.splice(tagIdx, 1)
+    if (group.items.length === 0) conditionTree.value.items.splice(groupIdx, 1)
+  }
+}
+
+// 标签 popover（单例，共享于根级和子组）
+const popoverTarget  = ref(null)   // null | 'root' | number（子组索引）
+const popoverVisible = ref(false)
+const popoverTagSearch = ref('')
+
+const popoverFilteredGroups = computed(() => {
+  const q = popoverTagSearch.value.trim().toLowerCase()
+  return tagCategories.value.map(cat => ({
+    ...cat,
+    filteredTags: (cat.tags || []).filter(t => !q || t.name.toLowerCase().includes(q)),
+  })).filter(cat => cat.filteredTags.length)
+})
+const popoverFilteredUncategorized = computed(() => {
+  const q = popoverTagSearch.value.trim().toLowerCase()
+  return tagOptionsFlat.value.filter(t => !q || t.name.toLowerCase().includes(q))
+})
+
+function openTagPopover(target) {
+  if (popoverVisible.value && popoverTarget.value === target) {
+    closeTagPopover()
+    return
+  }
+  popoverTarget.value = target
+  popoverTagSearch.value = ''
+  popoverVisible.value = true
+}
+
+function closeTagPopover(target = null) {
+  if (target !== null && popoverTarget.value !== target) return
+  popoverVisible.value = false
+  popoverTarget.value = null
+  popoverTagSearch.value = ''
+}
+
+function addTagToTarget(tag) {
+  const item = { type: 'tag', id: tag.id, name: tag.name, not: false }
+  if (popoverTarget.value === 'root') {
+    if (!conditionTree.value.items.find(i => i.type === 'tag' && i.id === tag.id))
+      conditionTree.value.items.push(item)
+  } else if (typeof popoverTarget.value === 'number') {
+    const group = conditionTree.value.items[popoverTarget.value]
+    if (group && group.type === 'group' && !group.items.find(t => t.id === tag.id))
+      group.items.push(item)
+  }
+  closeTagPopover()
+}
+
+function onDocumentClick(e) {
+  if (!popoverVisible.value) return
+  const target = e.target
+  if (!(target instanceof Element)) return
+  if (target.closest('.tag-popover') || target.closest('.cond-add-tag-btn')) return
+  closeTagPopover()
+}
+
+// 序列化 conditionTree → API 格式 { op, items } 或 null
+function _serializeItem(item) {
+  if (item.type === 'tag') return item.not ? { tag_id: item.id, not: true } : { tag_id: item.id }
+  return { op: item.op, items: item.items.map(t => t.not ? { tag_id: t.id, not: true } : { tag_id: t.id }) }
+}
+function _extractTagIds(node) {
+  if ('tag_id' in node) return [node.tag_id]
+  return (node.items || []).flatMap(_extractTagIds)
+}
+
+// 反序列化 API 格式 → conditionTree（兼容旧 OR-of-AND 列表格式）
+function _deserializeItem(node) {
+  if ('tag_id' in node) {
+    const t = findTagById(node.tag_id)
+    return { type: 'tag', id: node.tag_id, name: t.name, not: !!node.not }
+  }
+  return {
+    type: 'group', op: node.op || 'AND',
+    items: (node.items || []).map(i => {
+      const t = findTagById(i.tag_id || i)
+      return { type: 'tag', id: i.tag_id || i, name: t.name, not: !!i.not }
+    })
+  }
+}
+
+function initConditionTreeFromApi(tag_condition) {
+  if (!tag_condition) { conditionTree.value = { op: 'AND', items: [] }; conditionMode.value = false; return }
+  conditionMode.value = true
+  if (Array.isArray(tag_condition)) {
+    // 旧 OR-of-AND 格式 → 转为树
+    if (tag_condition.length === 1) {
+      conditionTree.value = {
+        op: 'AND',
+        items: tag_condition[0].map(id => { const t = findTagById(id); return { type: 'tag', id, name: t.name, not: false } })
+      }
+    } else {
+      conditionTree.value = {
+        op: 'OR',
+        items: tag_condition.map(group => ({
+          type: 'group', op: 'AND',
+          items: group.map(id => { const t = findTagById(id); return { type: 'tag', id, name: t.name, not: false } })
+        }))
+      }
+    }
+  } else if (typeof tag_condition === 'object' && tag_condition.op) {
+    conditionTree.value = { op: tag_condition.op || 'AND', items: (tag_condition.items || []).map(_deserializeItem) }
+  }
+}
+
+// 计算提交用的 tag_ids 和 tag_condition
+const computedTagPayload = computed(() => {
+  if (!conditionMode.value) {
+    return { tag_ids: resourceForm.value.tag_ids || [], tag_condition: null }
+  }
+  const validItems = conditionTree.value.items.filter(i => i.type === 'tag' || (i.type === 'group' && i.items.length))
+  if (!validItems.length) return { tag_ids: [], tag_condition: null }
+  const tag_condition = { op: conditionTree.value.op, items: validItems.map(_serializeItem) }
+  const tag_ids = [...new Set(_extractTagIds(tag_condition))]
+  return { tag_ids, tag_condition }
+})
+
+// 实时逻辑公式
+function _formulaItem(item) {
+  if (item.type === 'tag') {
+    const label = `"${item.name}"`
+    return item.not ? `NOT ${label}` : label
+  }
+  if (item.type === 'group') {
+    const parts = item.items.map(t => t.not ? `NOT "${t.name}"` : `"${t.name}"`)
+    if (!parts.length) return null
+    const inner = parts.join(` ${item.op} `)
+    return parts.length > 1 ? `(${inner})` : inner
+  }
+  return null
+}
+const conditionFormula = computed(() => {
+  if (!conditionMode.value) return ''
+  const validItems = conditionTree.value.items.filter(i => i.type === 'tag' || (i.type === 'group' && i.items.length))
+  if (!validItems.length) return ''
+  const parts = validItems.map(_formulaItem).filter(Boolean)
+  return parts.length > 1 ? parts.join(` ${conditionTree.value.op} `) : (parts[0] || '')
+})
 
 function isTagCatCollapsed(id) { return collapsedTagCats.value.has(id) }
 function toggleTagCat(id) {
@@ -198,6 +391,8 @@ function openResourceCreate() {
   resourceDialogTitle.value = '新建资料'
   resourceForm.value = { title: '', type_id: null, url: '', source: 'external', file_type: 'link', storage_key: null, cover_storage_key: null, original_filename: null, description: '', tag_ids: [], model_ids: [] }
   cascaderModelValue.value = []
+  conditionMode.value = false
+  conditionTree.value = { op: 'AND', items: [] }
   uploadMode.value = 'link'
   pendingFile.value = null
   pendingCoverFile.value = null
@@ -223,6 +418,8 @@ async function openResourceEdit(r) {
   if (r.cover_url) coverPreviewUrl.value = r.cover_url
   await Promise.all([loadAllTags(), loadCategoryTree()])
   cascaderModelValue.value = modelIdsToPaths(resourceForm.value.model_ids)
+  // 初始化条件构建器：若有 tag_condition 则进入构建器模式
+  initConditionTreeFromApi(r.tag_condition)
   resourceDialogVisible.value = true
 }
 
@@ -312,7 +509,7 @@ async function submitResource() {
       else payload.file_type = 'link'
     }
   }
-  const tagIds   = payload.tag_ids   || []
+  const { tag_ids: tagIds, tag_condition: tagCondition } = computedTagPayload.value
   const modelIds = payload.model_ids || []
   delete payload.tag_ids
   delete payload.model_ids
@@ -328,7 +525,7 @@ async function submitResource() {
   }
   if (success && newId) {
     await Promise.all([
-      setResourceTags(newId, tagIds),
+      setResourceTags(newId, tagIds, tagCondition),
       setResourceModels(newId, modelIds),
     ])
     resourceDialogVisible.value = false
@@ -453,8 +650,22 @@ async function downloadResource(r) {
   document.body.removeChild(a)
 }
 
+// ── 资料弹窗关闭清理 ──────────────────────────────
+function onResourceDialogClose() {
+  closeTagPopover()
+  resetUploadState()
+  videoSizeInfo.value = null
+  pendingFile.value = null
+  pendingCoverFile.value = null
+  if (coverPreviewUrl.value) {
+    URL.revokeObjectURL(coverPreviewUrl.value)
+    coverPreviewUrl.value = ''
+  }
+}
+
 // ── 生命周期 ──────────────────────────────────────
 onMounted(async () => {
+  document.addEventListener('click', onDocumentClick)
   await loadTypes()
   // 默认选中第一个类型
   const first = types.value[0]
@@ -464,6 +675,10 @@ onMounted(async () => {
   } else {
     loadResources()
   }
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('click', onDocumentClick)
 })
 </script>
 
@@ -658,7 +873,7 @@ onMounted(async () => {
     </el-dialog>
 
     <!-- ── 新建/编辑资料弹窗 ──────────────────────── -->
-    <el-dialog v-model="resourceDialogVisible" :title="resourceDialogTitle" width="560" align-center :close-on-click-modal="false" @close="() => { resetUploadState(); videoSizeInfo.value = null; pendingFile.value = null; pendingCoverFile.value = null; if (coverPreviewUrl.value) { URL.revokeObjectURL(coverPreviewUrl.value); coverPreviewUrl.value = '' } }">
+    <el-dialog v-model="resourceDialogVisible" :title="resourceDialogTitle" width="560" align-center :close-on-click-modal="false" @close="onResourceDialogClose">
       <el-form :model="resourceForm" label-width="80px">
         <el-form-item label="标题">
           <el-input v-model="resourceForm.title" placeholder="资料名称" />
@@ -734,42 +949,149 @@ onMounted(async () => {
             </div>
           </div>
         </el-form-item>
-        <el-form-item label="关联标签">
-          <el-select
-            v-model="resourceForm.tag_ids"
-            multiple
-            placeholder="带该标签的产品将自动包含此资料"
-            style="width:100%"
-            :filter-method="q => tagSearchQuery = q"
-            filterable
-          >
-            <!-- 分类标签 -->
-            <template v-for="cat in filteredTagGroups" :key="cat.id">
-              <el-option :value="`__cat__${cat.id}`" :label="cat.name" disabled class="tag-group-hd"
-                @mousedown.stop.prevent="toggleTagCat(cat.id)">
-                <span class="tag-group-dot" :style="{ background: cat.color }"></span>
-                <span class="tag-group-name">{{ cat.name }}</span>
-                <span class="tag-group-arrow" :class="{ collapsed: isTagCatCollapsed(cat.id) }">▾</span>
-              </el-option>
-              <template v-if="!isTagCatCollapsed(cat.id)">
-                <el-option v-for="tag in cat.filteredTags" :key="tag.id"
-                  :value="tag.id" :label="tag.name" class="tag-group-item" />
-              </template>
-            </template>
-            <!-- 未分类标签 -->
-            <template v-if="filteredUncategorizedTags.length">
-              <el-option value="__cat__none" label="未分类" disabled class="tag-group-hd"
-                @mousedown.stop.prevent="toggleTagCat('none')">
-                <span class="tag-group-dot" style="background:#bbb"></span>
-                <span class="tag-group-name">未分类</span>
-                <span class="tag-group-arrow" :class="{ collapsed: isTagCatCollapsed('none') }">▾</span>
-              </el-option>
-              <template v-if="!isTagCatCollapsed('none')">
-                <el-option v-for="tag in filteredUncategorizedTags" :key="tag.id"
-                  :value="tag.id" :label="tag.name" class="tag-group-item" />
-              </template>
-            </template>
-          </el-select>
+        <el-form-item label="关联标签" class="tag-form-item">
+          <!-- 简单 OR 模式 -->
+          <template v-if="!conditionMode">
+            <div class="tag-field-wrap">
+              <el-select
+                v-model="resourceForm.tag_ids"
+                multiple
+                placeholder="带该标签的产品将自动包含此资料"
+                style="flex:1;min-width:0"
+                :filter-method="q => tagSearchQuery = q"
+                filterable
+              >
+                <template v-for="cat in filteredTagGroups" :key="cat.id">
+                  <el-option :value="`__cat__${cat.id}`" :label="cat.name" disabled class="tag-group-hd"
+                    @mousedown.stop.prevent="toggleTagCat(cat.id)">
+                    <span class="tag-group-dot" :style="{ background: cat.color }"></span>
+                    <span class="tag-group-name">{{ cat.name }}</span>
+                    <span class="tag-group-arrow" :class="{ collapsed: isTagCatCollapsed(cat.id) }">▾</span>
+                  </el-option>
+                  <template v-if="!isTagCatCollapsed(cat.id)">
+                    <el-option v-for="tag in cat.filteredTags" :key="tag.id"
+                      :value="tag.id" :label="tag.name" class="tag-group-item" />
+                  </template>
+                </template>
+                <template v-if="filteredUncategorizedTags.length">
+                  <el-option value="__cat__none" label="未分类" disabled class="tag-group-hd"
+                    @mousedown.stop.prevent="toggleTagCat('none')">
+                    <span class="tag-group-dot" style="background:#bbb"></span>
+                    <span class="tag-group-name">未分类</span>
+                    <span class="tag-group-arrow" :class="{ collapsed: isTagCatCollapsed('none') }">▾</span>
+                  </el-option>
+                  <template v-if="!isTagCatCollapsed('none')">
+                    <el-option v-for="tag in filteredUncategorizedTags" :key="tag.id"
+                      :value="tag.id" :label="tag.name" class="tag-group-item" />
+                  </template>
+                </template>
+              </el-select>
+              <button class="cond-mode-btn" title="配置逻辑条件（AND/OR）" @click.prevent="enterConditionMode">
+                条件
+              </button>
+            </div>
+            <div class="tag-field-hint">多个标签之间为 OR（满足任意一个即匹配）</div>
+          </template>
+
+          <!-- 条件构建器模式 -->
+          <template v-else>
+            <div class="cond-builder">
+              <div class="cond-builder-hd">
+                <span class="cond-builder-title">逻辑条件</span>
+                <button class="cond-simple-btn" @click.prevent="exitConditionMode">恢复简单模式</button>
+              </div>
+              <div v-if="conditionFormula" class="cond-formula">{{ conditionFormula }}</div>
+
+              <!-- 根级 AND/OR 切换（多于1个条件时显示） -->
+              <div v-if="conditionTree.items.filter(i=>i.type==='tag'||(i.items&&i.items.length)).length > 1" class="cond-op-row">
+                <button :class="['cond-op-btn', { active: conditionTree.op === 'AND' }]" @click.prevent="conditionTree.op = 'AND'">全部满足 (AND)</button>
+                <button :class="['cond-op-btn', { active: conditionTree.op === 'OR' }]" @click.prevent="conditionTree.op = 'OR'">满足任一 (OR)</button>
+              </div>
+
+              <!-- 条件项列表 -->
+              <div v-for="(item, idx) in conditionTree.items" :key="idx" class="cond-item-wrap">
+                <!-- 根级标签 chip -->
+                <template v-if="item.type === 'tag'">
+                  <span class="cond-tag-chip" :class="{ 'is-not': item.not }">
+                    <span v-if="item.not" class="cond-not-badge" title="点击取消排除" @click.stop="item.not = false">NOT</span>
+                    <span class="cond-tag-text">{{ item.name }}</span>
+                    <span class="cond-chip-remove" @click.stop="removeRootItem(idx)">×</span>
+                  </span>
+                  <span class="cond-not-toggle" :class="{ active: item.not }" title="排除此标签 (NOT)" @click.stop="item.not = !item.not">⊘</span>
+                </template>
+
+                <!-- 子条件组 -->
+                <div v-else-if="item.type === 'group'" class="cond-subgroup">
+                  <div class="cond-subgroup-hd">
+                    <button :class="['cond-op-btn cond-op-btn--sm', { active: item.op === 'AND' }]" @click.prevent="item.op = 'AND'">AND</button>
+                    <button :class="['cond-op-btn cond-op-btn--sm', { active: item.op === 'OR' }]" @click.prevent="item.op = 'OR'">OR</button>
+                    <button class="cond-subgroup-del" @click.prevent="removeRootItem(idx)">删除组 ×</button>
+                  </div>
+                  <div class="cond-subgroup-body">
+                    <span v-for="(tag, ti) in item.items" :key="tag.id" class="cond-group-tag-wrap">
+                      <span class="cond-tag-chip" :class="{ 'is-not': tag.not }">
+                        <span v-if="tag.not" class="cond-not-badge" title="点击取消排除" @click.stop="tag.not = false">NOT</span>
+                        <span class="cond-tag-text">{{ tag.name }}</span>
+                        <span class="cond-chip-remove" @click.stop="removeGroupItem(idx, ti)">×</span>
+                      </span>
+                      <span class="cond-not-toggle" :class="{ active: tag.not }" title="排除此标签 (NOT)" @click.stop="tag.not = !tag.not">⊘</span>
+                    </span>
+                    <el-popover
+                      :visible="popoverVisible && popoverTarget === idx"
+                      placement="bottom-start"
+                      :width="220"
+                      trigger="manual"
+                      popper-class="tag-popover"
+                    >
+                      <template #reference>
+                        <span class="cond-add-tag-btn" @click.stop="openTagPopover(idx)">+ 添加标签</span>
+                      </template>
+                      <div class="tag-pop-search"><el-input v-model="popoverTagSearch" placeholder="搜索标签" size="small" clearable /></div>
+                      <div class="tag-pop-list">
+                        <template v-for="cat in popoverFilteredGroups" :key="cat.id">
+                          <div class="tag-pop-cat">{{ cat.name }}</div>
+                          <div v-for="tag in cat.filteredTags" :key="tag.id" class="tag-pop-item" @click="addTagToTarget(tag)">{{ tag.name }}</div>
+                        </template>
+                        <template v-if="popoverFilteredUncategorized.length">
+                          <div class="tag-pop-cat">未分类</div>
+                          <div v-for="tag in popoverFilteredUncategorized" :key="tag.id" class="tag-pop-item" @click="addTagToTarget(tag)">{{ tag.name }}</div>
+                        </template>
+                        <div v-if="!popoverFilteredGroups.length && !popoverFilteredUncategorized.length" class="tag-pop-empty">无匹配标签</div>
+                      </div>
+                    </el-popover>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 根级操作按钮 -->
+              <div class="cond-root-actions">
+                <el-popover
+                  :visible="popoverVisible && popoverTarget === 'root'"
+                  placement="bottom-start"
+                  :width="220"
+                  trigger="manual"
+                  popper-class="tag-popover"
+                >
+                  <template #reference>
+                    <span class="cond-add-tag-btn" @click.stop="openTagPopover('root')">+ 添加标签</span>
+                  </template>
+                  <div class="tag-pop-search"><el-input v-model="popoverTagSearch" placeholder="搜索标签" size="small" clearable /></div>
+                  <div class="tag-pop-list">
+                    <template v-for="cat in popoverFilteredGroups" :key="cat.id">
+                      <div class="tag-pop-cat">{{ cat.name }}</div>
+                      <div v-for="tag in cat.filteredTags" :key="tag.id" class="tag-pop-item" @click="addTagToTarget(tag)">{{ tag.name }}</div>
+                    </template>
+                    <template v-if="popoverFilteredUncategorized.length">
+                      <div class="tag-pop-cat">未分类</div>
+                      <div v-for="tag in popoverFilteredUncategorized" :key="tag.id" class="tag-pop-item" @click="addTagToTarget(tag)">{{ tag.name }}</div>
+                    </template>
+                    <div v-if="!popoverFilteredGroups.length && !popoverFilteredUncategorized.length" class="tag-pop-empty">无匹配标签</div>
+                  </div>
+                </el-popover>
+                <button class="cond-add-group-btn" @click.prevent="addSubGroup">+ 添加子条件组</button>
+              </div>
+            </div>
+          </template>
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="resourceForm.description" type="textarea" :rows="2" placeholder="可选" />
@@ -1002,4 +1324,160 @@ onMounted(async () => {
 .tag-group-arrow { font-size: 10px; transition: transform 0.2s; }
 .tag-group-arrow.collapsed { transform: rotate(-90deg); }
 .tag-group-item { padding-left: 28px !important; font-size: 12px !important; }
+
+/* ── 标签字段（简单模式包装）────────────────── */
+.tag-field-wrap {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+}
+.tag-field-hint {
+  font-size: 11px; color: var(--text-muted); margin-top: 4px;
+}
+.cond-mode-btn {
+  flex-shrink: 0; height: 32px; padding: 0 10px;
+  border: 1px solid var(--border); border-radius: 7px;
+  background: transparent; font-size: 12px; color: var(--text-muted);
+  cursor: pointer; white-space: nowrap; transition: all 0.15s;
+  font-family: inherit;
+}
+.cond-mode-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
+
+/* ── 关联标签 form-item 标签顶对齐 ─────────── */
+:deep(.el-form-item.tag-form-item .el-form-item__label) { align-self: flex-start; padding-top: 6px; }
+
+/* ── 条件构建器 ──────────────────────────────── */
+.cond-builder {
+  width: 100%;
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; background: #faf7f2;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.cond-builder-hd {
+  display: flex; align-items: center; justify-content: space-between;
+}
+.cond-builder-title { font-size: 12px; font-weight: 600; color: #5a4e42; }
+.cond-simple-btn {
+  font-size: 11px; color: var(--text-muted); background: transparent;
+  border: none; cursor: pointer; padding: 0; font-family: inherit;
+  text-decoration: underline;
+}
+.cond-simple-btn:hover { color: var(--accent); }
+.cond-formula {
+  margin: 4px 0 2px;
+  padding: 4px 8px;
+  background: rgba(196,136,58,0.07);
+  border-left: 2px solid rgba(196,136,58,0.4);
+  border-radius: 0 4px 4px 0;
+  font-size: 11px; color: #6b4c1e; font-family: monospace;
+  word-break: break-all; line-height: 1.6;
+}
+
+/* 根级 AND/OR 切换行 */
+.cond-op-row { display: flex; gap: 6px; }
+.cond-op-btn {
+  font-size: 11px; font-weight: 500; padding: 3px 10px; border-radius: 6px;
+  border: 1px solid var(--border); background: transparent; color: var(--text-muted);
+  cursor: pointer; font-family: inherit; transition: all 0.15s;
+}
+.cond-op-btn.active { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); font-weight: 600; }
+.cond-op-btn--sm { font-size: 10px; padding: 2px 7px; }
+
+/* 条件项 */
+.cond-item-wrap { display: flex; }
+
+/* tag chip */
+.cond-item-wrap,
+.cond-group-tag-wrap {
+  display: inline-flex; align-items: center; gap: 2px;
+}
+.cond-tag-chip {
+  display: inline-flex; align-items: center; gap: 2px;
+  padding: 1px 6px 1px 6px; border-radius: 4px;
+  background: rgba(196,136,58,0.12); border: 1px solid rgba(196,136,58,0.3);
+  font-size: 12px; color: #6b4c1e; line-height: 1.6;
+  cursor: default;
+}
+.cond-tag-chip.is-not {
+  background: rgba(220,60,50,0.07); border-color: rgba(220,60,50,0.3); color: #9a2a20;
+}
+.cond-tag-chip.is-not .cond-tag-text { text-decoration: line-through; }
+/* NOT badge（仅当 not=true 时显示在 chip 内） */
+.cond-not-badge {
+  font-size: 9px; font-weight: 700; padding: 0 3px; border-radius: 2px;
+  background: rgba(220,60,50,0.15); color: #c84030;
+  cursor: pointer; flex-shrink: 0; line-height: 1.4;
+}
+.cond-not-badge:hover { background: rgba(220,60,50,0.25); }
+/* ⊘ 排除切换图标：默认透明，悬停 chip 外容器时显示 */
+.cond-not-toggle {
+  opacity: 0; pointer-events: none;
+  font-size: 13px; color: #c0b0a0; cursor: pointer;
+  transition: opacity 0.15s, color 0.15s; flex-shrink: 0; line-height: 1; user-select: none;
+}
+.cond-item-wrap:hover .cond-not-toggle,
+.cond-group-tag-wrap:hover .cond-not-toggle { opacity: 1; pointer-events: auto; }
+.cond-not-toggle:hover { color: #c84030; }
+.cond-not-toggle.active { opacity: 1; pointer-events: auto; color: #c84030; }
+.cond-tag-text { flex: 1; }
+.cond-chip-remove {
+  cursor: pointer; font-size: 11px; line-height: 1; color: #b08050;
+  margin-left: 1px; transition: color 0.15s; flex-shrink: 0;
+}
+.cond-chip-remove:hover { color: #d05a3c; }
+
+/* 子条件组 */
+.cond-subgroup {
+  width: 100%; border: 1px solid #e0d4c0; border-radius: 8px;
+  background: #fff; overflow: hidden;
+}
+.cond-subgroup-hd {
+  display: flex; align-items: center; gap: 5px;
+  padding: 5px 8px; background: #f5f0e8; border-bottom: 1px solid #e8dfd0;
+}
+.cond-subgroup-del {
+  margin-left: auto; font-size: 10px; color: #c06050;
+  background: transparent; border: none; cursor: pointer; font-family: inherit;
+  padding: 0; transition: color 0.15s;
+}
+.cond-subgroup-del:hover { color: #e03020; }
+.cond-subgroup-body {
+  padding: 6px 8px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center;
+}
+
+/* 根级操作按钮行 */
+.cond-root-actions { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+
+.cond-add-tag-btn {
+  font-size: 12px; color: var(--accent); cursor: pointer;
+  padding: 1px 6px; border-radius: 4px;
+  border: 1px dashed rgba(196,136,58,0.5);
+  transition: all 0.15s; white-space: nowrap; display: inline-flex;
+  align-items: center; line-height: 1.6;
+}
+.cond-add-tag-btn:hover { background: var(--accent-bg); }
+
+.cond-add-group-btn {
+  font-size: 11px; color: var(--text-muted);
+  background: transparent; border: 1px dashed var(--border);
+  border-radius: 6px; padding: 3px 10px; cursor: pointer;
+  font-family: inherit; transition: all 0.15s;
+}
+.cond-add-group-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
+
+/* ── 标签 popover 内容 ───────────────────────── */
+:global(.tag-popover) { padding: 8px !important; }
+.tag-pop-search { margin-bottom: 6px; }
+.tag-pop-list { max-height: 200px; overflow-y: auto; }
+.tag-pop-list::-webkit-scrollbar { width: 4px; }
+.tag-pop-list::-webkit-scrollbar-track { background: transparent; }
+.tag-pop-list::-webkit-scrollbar-thumb { background: #e0d4c0; border-radius: 2px; }
+.tag-pop-cat {
+  font-size: 10px; font-weight: 600; color: var(--text-muted);
+  padding: 4px 6px 2px; text-transform: uppercase; letter-spacing: 0.5px;
+}
+.tag-pop-item {
+  padding: 5px 8px; font-size: 12px; color: var(--text-primary);
+  border-radius: 5px; cursor: pointer; transition: background 0.1s;
+}
+.tag-pop-item:hover { background: var(--accent-bg); color: var(--accent); }
+.tag-pop-empty { font-size: 12px; color: var(--text-muted); text-align: center; padding: 12px 0; }
 </style>

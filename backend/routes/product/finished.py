@@ -154,9 +154,10 @@ def remove_packaged_relation(finished_id: int, packaged_id: int):
 # ── 上传封面图到 OSS ──────────────────────────────────────────────────────
 @finished_bp.post('/finished/cover-image')
 def upload_cover_image():
-    body     = request.get_json() or {}
-    code     = (body.get('code')     or '').strip()
-    data_url = (body.get('data_url') or '').strip()
+    body          = request.get_json() or {}
+    code          = (body.get('code')          or '').strip()
+    data_url      = (body.get('data_url')      or '').strip()
+    orig_data_url = (body.get('orig_data_url') or '').strip()   # 可选：原始高清图
     if not code or not data_url:
         return Result.fail('参数缺失').to_response()
 
@@ -171,13 +172,28 @@ def upload_cover_image():
 
     try:
         bucket   = get_bucket()
-        bucket.put_object(key, img_bytes)
         base_url = os.getenv('OSS_BASE_URL', '').rstrip('/')   # 已含 /tmt-library
-        url      = f'{base_url}/{rel_path}'
+        bucket.put_object(key, img_bytes)
+        url = f'{base_url}/{rel_path}'
+
+        # 同步上传原始高清图（可选）
+        orig_url = None
+        if orig_data_url:
+            orig_match = re.match(r'data:image/(\w+);base64,(.+)', orig_data_url, re.DOTALL)
+            if orig_match:
+                orig_ext   = orig_match.group(1)
+                orig_bytes = base64.b64decode(orig_match.group(2))
+                orig_key   = f'tmt-library/products/{code}_orig.{orig_ext}'
+                bucket.put_object(orig_key, orig_bytes)
+                orig_url = f'{base_url}/products/{code}_orig.{orig_ext}'
+
         # 更新 img_updated_at，用于前端缓存破坏
         ts = int(time.time())
-        finished_service.save_finished(code, cover_image=url, img_updated_at=ts)
-        return Result.ok(data={'url': url, 'img_updated_at': ts}).to_response()
+        save_kwargs = dict(cover_image=url, img_updated_at=ts)
+        if orig_url is not None:
+            save_kwargs['cover_image_original'] = orig_url
+        finished_service.save_finished(code, **save_kwargs)
+        return Result.ok(data={'url': url, 'orig_url': orig_url, 'img_updated_at': ts}).to_response()
     except Exception as e:
         return Result.fail(f'上传失败：{str(e)}').to_response()
 
@@ -195,13 +211,28 @@ def copy_cover_image():
 
     try:
         bucket   = get_bucket()
+        base_url = os.getenv('OSS_BASE_URL', '').rstrip('/')
         src_key  = f'tmt-library/products/{from_code}.png'
         dst_key  = f'tmt-library/products/{to_code}.png'
         bucket.copy_object(bucket.bucket_name, src_key, dst_key)
-        base_url = os.getenv('OSS_BASE_URL', '').rstrip('/')
-        url      = f'{base_url}/products/{to_code}.png'
-        ts       = int(time.time())
-        finished_service.save_finished(to_code, cover_image=url, img_updated_at=ts)
-        return Result.ok(data={'url': url, 'img_updated_at': ts}).to_response()
+        url = f'{base_url}/products/{to_code}.png'
+
+        # 若来源有原始高清图，一并复制
+        orig_url = None
+        src_orig_key = f'tmt-library/products/{from_code}_orig.png'
+        try:
+            bucket.get_object_meta(src_orig_key)   # 检查是否存在（不存在会抛异常）
+            dst_orig_key = f'tmt-library/products/{to_code}_orig.png'
+            bucket.copy_object(bucket.bucket_name, src_orig_key, dst_orig_key)
+            orig_url = f'{base_url}/products/{to_code}_orig.png'
+        except Exception:
+            pass   # 来源无原始图，跳过
+
+        ts = int(time.time())
+        save_kwargs = dict(cover_image=url, img_updated_at=ts)
+        if orig_url:
+            save_kwargs['cover_image_original'] = orig_url
+        finished_service.save_finished(to_code, **save_kwargs)
+        return Result.ok(data={'url': url, 'orig_url': orig_url, 'img_updated_at': ts}).to_response()
     except Exception as e:
         return Result.fail(f'复制失败：{str(e)}').to_response()

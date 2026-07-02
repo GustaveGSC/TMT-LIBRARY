@@ -177,11 +177,14 @@ def set_resource_models(resource_id: int):
 
 @resource_bp.put('/<int:resource_id>/tags')
 def set_resource_tags(resource_id: int):
-    body    = request.get_json() or {}
-    tag_ids = body.get('tag_ids', [])
+    body          = request.get_json() or {}
+    tag_ids       = body.get('tag_ids', [])
+    tag_condition = body.get('tag_condition', None)
     if not isinstance(tag_ids, list):
         return Result.fail('tag_ids 必须为数组').to_response()
-    return resource_service.set_resource_tags(resource_id, tag_ids).to_response()
+    if tag_condition is not None and not isinstance(tag_condition, (list, dict)):
+        return Result.fail('tag_condition 必须为数组、对象或 null').to_response()
+    return resource_service.set_resource_tags(resource_id, tag_ids, tag_condition).to_response()
 
 
 # ── 查看/下载签名 URL ─────────────────────────────────────────────────────

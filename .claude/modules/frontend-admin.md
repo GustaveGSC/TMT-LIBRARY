@@ -1,6 +1,7 @@
 # 管理页前端注意事项
 
 ## page-users.vue / page-permissions.vue 注意事项
+- 用户列表请求传 `{ params: { per_page: 500 } }`，避免默认 per_page=20 只显示前 20 个用户
 - `roles` 是字符串数组，不是对象数组
 - isAdminUser: `row.roles?.includes('admin')`（不是 `.some(r => r.name === 'admin')`）
 - 角色tag渲染：`:key="role"` `{{ role }}`（不是 `role.id` / `role.name`）
