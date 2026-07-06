@@ -215,7 +215,8 @@ class AftersaleService:
                   reason_ids=None, reason_category_ids=None,
                   shipping_alias_ids=None, channel_names=None,
                   provinces=None, cities=None,
-                  max_days_since_purchase=None):
+                  max_days_since_purchase=None,
+                  exclude_no_sales_series=False):
         items, total = _repo.get_cases(
             page=page, page_size=page_size,
             status=status, date_start=date_start, date_end=date_end,
@@ -230,6 +231,7 @@ class AftersaleService:
             shipping_alias_ids=shipping_alias_ids, channel_names=channel_names,
             provinces=provinces, cities=cities,
             max_days_since_purchase=max_days_since_purchase,
+            exclude_no_sales_series=exclude_no_sales_series,
         )
         return Result.ok(data={
             'items':     [c.to_dict(include_reasons=False) for c in items],
@@ -471,6 +473,37 @@ class AftersaleService:
 
     def get_filter_options(self):
         return Result.ok(data=_repo.get_filter_options())
+
+    def get_filtered_table_options(self, data: dict):
+        # 支持列表、逗号分隔字符串、单个数字字符串三种格式
+        def _ints(key):
+            val = data.get(key)
+            if val is None: return []
+            if isinstance(val, (int, float)): return [int(val)]
+            if isinstance(val, str): val = [v.strip() for v in val.split(',')]
+            return [int(x) for x in val if str(x).strip().lstrip('-').isdigit()]
+        # 单值参数合并到对应的列表参数
+        channel_names = list(data.get('channel_names') or [])
+        if data.get('channel_name'): channel_names = list(set(channel_names) | {data['channel_name']})
+        provinces = list(data.get('provinces') or [])
+        if data.get('province'): provinces = list(set(provinces) | {data['province']})
+        filters = {
+            'date_start':              data.get('date_start'),
+            'date_end':                data.get('date_end'),
+            'max_days_since_purchase': int(data['max_days_since_purchase']) if data.get('max_days_since_purchase') is not None else None,
+            'model_ids':               _ints('model_ids'),
+            'series_ids':              _ints('series_ids'),
+            'category_ids':            _ints('category_ids'),
+            'reason_ids':              _ints('reason_ids'),
+            'reason_category_ids':     _ints('reason_category_ids'),
+            'shipping_alias_ids':      _ints('shipping_alias_ids'),
+            'channel_names':           channel_names,
+            'provinces':               provinces,
+            'cities':                  list(data.get('cities') or []),
+            'reason_category':         data.get('reason_category') or None,
+            'reason_name':             data.get('reason_name') or None,
+        }
+        return Result.ok(data=_repo.get_filtered_table_options(filters))
 
     def get_case(self, case_id):
         case = _repo.get_case_by_id(case_id)

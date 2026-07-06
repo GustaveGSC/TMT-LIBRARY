@@ -1,6 +1,6 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
-import { ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Edit, Check, Close, Remove } from '@element-plus/icons-vue'
 import Sortable from 'sortablejs'
@@ -115,6 +115,50 @@ function sortIcon(field) {
   return currentSortOrder.value
 }
 
+// ── 列状态：锁定列（来自图表固定筛选） & 活跃筛选列 ──────────────
+const lockedCols = computed(() => {
+  const f = props.filter || {}
+  const locked = new Set()
+  if (f.model_ids)                                locked.add('model')
+  if (f.series_ids)                               locked.add('series')
+  if (f.category_ids)                             locked.add('product_category')
+  if (f.reason_ids || f.reason_name)              locked.add('reason_name')
+  if (f.reason_category_ids || f.reason_category) locked.add('reason_category')
+  if (f.shipping_alias_ids || f.shipping_alias)   locked.add('shipping_alias')
+  if (f.channel_names || f.channel_name)          locked.add('channel')
+  if (f.provinces || f.province)                  locked.add('province')
+  return locked
+})
+
+const activeFilterCols = computed(() => {
+  const cf = filters.value
+  const active = new Set()
+  if (cf.product_category) active.add('product_category')
+  if (cf.series)           active.add('series')
+  if (cf.model)            active.add('model')
+  if (cf.reason_category)  active.add('reason_category')
+  if (cf.reason_name)      active.add('reason_name')
+  if (cf.shipping_alias)   active.add('shipping_alias')
+  if (cf.channel)          active.add('channel')
+  if (cf.province)         active.add('province')
+  return active
+})
+
+// 利用 el-table 的 header-cell-class-name / cell-class-name 函数动态染色（column.label 存列 key）
+function getHeaderCellClass({ column }) {
+  const key = column.label
+  if (lockedCols.value.has(key)) return 'col-locked'
+  if (activeFilterCols.value.has(key)) return 'col-active-filter'
+  return ''
+}
+
+function getCellClass({ column }) {
+  const key = column.label
+  if (lockedCols.value.has(key)) return 'cell-locked'
+  if (activeFilterCols.value.has(key)) return 'cell-active-filter'
+  return ''
+}
+
 // ── 列头筛选 ──────────────────────────────────────
 const filters = ref({
   product_category: null,
@@ -142,7 +186,8 @@ let _filterOptLoaded = false
 async function onFilterDropdownOpen() {
   if (_filterOptLoaded) return
   _filterOptLoaded = true
-  const res = await http.get('/api/aftersale/filter-options')
+  // 带完整筛选条件（含列级本地筛选）POST，返回当前范围内有效的选项（支持列间联动）
+  const res = await http.post('/api/aftersale/filter-options', buildParams())
   if (res.success) {
     filterOptions.value.reason_categories = res.data.reason_categories || []
     filterOptions.value.reason_names      = res.data.reason_names      || []
@@ -154,6 +199,9 @@ async function onFilterDropdownOpen() {
     filterOptions.value.model_ids         = new Set(res.data.model_ids    || [])
   }
 }
+
+// 列筛选变更时，使 filter options 失效（下次打开下拉时按新条件重新加载，实现列间联动）
+watch(filters, () => { _filterOptLoaded = false }, { deep: true })
 
 let _filterTimer = null
 function onColFilterChange() {
@@ -189,15 +237,20 @@ function getFilterModelOpts() {
 // ── 监听外部 filter 变更 ──────────────────────────
 watch(() => props.filter, () => {
   page.value = 1
+  // props.filter 变化时筛选选项失效，下次打开下拉时重新按新 filter 加载
+  _filterOptLoaded = false
+  filterOptions.value.reason_categories = []
+  filterOptions.value.reason_names      = []
+  filterOptions.value.channels          = []
+  filterOptions.value.provinces         = []
+  filterOptions.value.shipping_aliases  = []
+  filterOptions.value.category_ids      = new Set()
+  filterOptions.value.series_ids        = new Set()
+  filterOptions.value.model_ids         = new Set()
   if (props.resetFiltersOnChange) {
     currentSortBy.value    = 'shipped_date'
     currentSortOrder.value = 'desc'
     filters.value = { product_category: null, series: null, model: null, reason_category: null, reason_name: null, shipping_alias: null, channel: null, province: null }
-    _filterOptLoaded = false
-    filterOptions.value.shipping_aliases = []
-    filterOptions.value.category_ids     = new Set()
-    filterOptions.value.series_ids       = new Set()
-    filterOptions.value.model_ids        = new Set()
   }
   loadData()
 }, { deep: true })
@@ -228,7 +281,8 @@ function buildParams() {
     channel_name:        f.channel_name        || undefined,
     province:            f.province            || undefined,
     city:                f.city                || undefined,
-    search:              f.search              || undefined,
+    search:                   f.search              || undefined,
+    exclude_no_sales_series:  f.exclude_no_sales_series || undefined,
     sort_by:             currentSortBy.value,
     sort_order:          currentSortOrder.value,
     ...(cf.product_category ? { category_ids:       String(cf.product_category) } : {}),
@@ -552,6 +606,8 @@ defineExpose({ total, exportLoading, exportData, initSort, refresh: loadData })
       size="small"
       border
       :row-key="row => row._key"
+      :header-cell-class-name="getHeaderCellClass"
+      :cell-class-name="getCellClass"
       class="cases-table"
     >
       <!-- 固定列：展开行 -->
@@ -591,14 +647,15 @@ defineExpose({ total, exportLoading, exportData, initSort, refresh: loadData })
         </el-table-column>
 
         <!-- 产品品类 -->
-        <el-table-column v-else-if="colKey === 'product_category'" min-width="100" resizable>
+        <el-table-column v-else-if="colKey === 'product_category'" label="product_category" min-width="100" resizable>
           <template #header>
             <div class="th-top">
               <span class="th-lbl">产品品类</span>
               <button :class="['sort-btn', sortIcon('product_category_name') !== 'none' ? 'sort-' + sortIcon('product_category_name') : '']" @click.stop="sortBy('product_category_name')" />
             </div>
             <div class="th-filter-wrap" @click.stop>
-              <el-select v-model="filters.product_category" filterable clearable size="small" placeholder="筛选…" class="th-sel" :teleported="true" @visible-change="onFilterDropdownOpen" @change="onColFilterChange" @clear="onColFilterChange">
+              <div v-if="lockedCols.has('product_category')" class="th-fph" />
+              <el-select v-else v-model="filters.product_category" filterable clearable size="small" placeholder="筛选…" class="th-sel" :teleported="true" @visible-change="onFilterDropdownOpen" @change="onColFilterChange" @clear="onColFilterChange">
                 <el-option v-for="c in (editOptions?.product_categories ?? []).filter(c => !filterOptions.category_ids.size || filterOptions.category_ids.has(c.id))" :key="c.id" :value="c.id" :label="c.name" />
               </el-select>
             </div>
@@ -615,14 +672,15 @@ defineExpose({ total, exportLoading, exportData, initSort, refresh: loadData })
         </el-table-column>
 
         <!-- 系列 -->
-        <el-table-column v-else-if="colKey === 'series'" min-width="120" resizable>
+        <el-table-column v-else-if="colKey === 'series'" label="series" min-width="120" resizable>
           <template #header>
             <div class="th-top">
               <span class="th-lbl">系列</span>
               <button :class="['sort-btn', sortIcon('series_code') !== 'none' ? 'sort-' + sortIcon('series_code') : '']" @click.stop="sortBy('series_code')" />
             </div>
             <div class="th-filter-wrap" @click.stop>
-              <el-select v-model="filters.series" filterable clearable size="small" placeholder="筛选…" class="th-sel" :teleported="true" @visible-change="onFilterDropdownOpen" @change="onColFilterChange" @clear="onColFilterChange">
+              <div v-if="lockedCols.has('series')" class="th-fph" />
+              <el-select v-else v-model="filters.series" filterable clearable size="small" placeholder="筛选…" class="th-sel" :teleported="true" @visible-change="onFilterDropdownOpen" @change="onColFilterChange" @clear="onColFilterChange">
                 <el-option v-for="s in getFilterSeriesOpts()" :key="s.id" :value="s.id" :label="`${s.code} ${s.name}`" />
               </el-select>
             </div>
@@ -642,14 +700,15 @@ defineExpose({ total, exportLoading, exportData, initSort, refresh: loadData })
         </el-table-column>
 
         <!-- 产品 -->
-        <el-table-column v-else-if="colKey === 'model'" min-width="150" resizable>
+        <el-table-column v-else-if="colKey === 'model'" label="model" min-width="150" resizable>
           <template #header>
             <div class="th-top">
               <span class="th-lbl">产品</span>
               <button :class="['sort-btn', sortIcon('model_code') !== 'none' ? 'sort-' + sortIcon('model_code') : '']" @click.stop="sortBy('model_code')" />
             </div>
             <div class="th-filter-wrap" @click.stop>
-              <el-select v-model="filters.model" filterable clearable size="small" placeholder="筛选…" class="th-sel" :teleported="true" @visible-change="onFilterDropdownOpen" @change="onColFilterChange" @clear="onColFilterChange">
+              <div v-if="lockedCols.has('model')" class="th-fph" />
+              <el-select v-else v-model="filters.model" filterable clearable size="small" placeholder="筛选…" class="th-sel" :teleported="true" @visible-change="onFilterDropdownOpen" @change="onColFilterChange" @clear="onColFilterChange">
                 <el-option v-for="m in getFilterModelOpts()" :key="m.id" :value="m.id" :label="m.model_code" />
               </el-select>
             </div>
@@ -668,14 +727,15 @@ defineExpose({ total, exportLoading, exportData, initSort, refresh: loadData })
         </el-table-column>
 
         <!-- 原因分类 -->
-        <el-table-column v-else-if="colKey === 'reason_category'" min-width="100" resizable>
+        <el-table-column v-else-if="colKey === 'reason_category'" label="reason_category" min-width="100" resizable>
           <template #header>
             <div class="th-top">
               <span class="th-lbl">原因分类</span>
               <button :class="['sort-btn', sortIcon('reason_category') !== 'none' ? 'sort-' + sortIcon('reason_category') : '']" @click.stop="sortBy('reason_category')" />
             </div>
             <div class="th-filter-wrap" @click.stop>
-              <el-select v-model="filters.reason_category" filterable clearable size="small" placeholder="筛选…" class="th-sel" :teleported="true" @visible-change="onFilterDropdownOpen" @change="onColFilterChange" @clear="onColFilterChange">
+              <div v-if="lockedCols.has('reason_category')" class="th-fph" />
+              <el-select v-else v-model="filters.reason_category" filterable clearable size="small" placeholder="筛选…" class="th-sel" :teleported="true" @visible-change="onFilterDropdownOpen" @change="onColFilterChange" @clear="onColFilterChange">
                 <el-option v-for="v in filterOptions.reason_categories" :key="v" :value="v" :label="v" />
               </el-select>
             </div>
@@ -692,14 +752,15 @@ defineExpose({ total, exportLoading, exportData, initSort, refresh: loadData })
         </el-table-column>
 
         <!-- 具体原因 -->
-        <el-table-column v-else-if="colKey === 'reason_name'" min-width="120" resizable>
+        <el-table-column v-else-if="colKey === 'reason_name'" label="reason_name" min-width="120" resizable>
           <template #header>
             <div class="th-top">
               <span class="th-lbl">具体原因</span>
               <button :class="['sort-btn', sortIcon('reason_name') !== 'none' ? 'sort-' + sortIcon('reason_name') : '']" @click.stop="sortBy('reason_name')" />
             </div>
             <div class="th-filter-wrap" @click.stop>
-              <el-select v-model="filters.reason_name" filterable clearable size="small" placeholder="筛选…" class="th-sel" :teleported="true" @visible-change="onFilterDropdownOpen" @change="onColFilterChange" @clear="onColFilterChange">
+              <div v-if="lockedCols.has('reason_name')" class="th-fph" />
+              <el-select v-else v-model="filters.reason_name" filterable clearable size="small" placeholder="筛选…" class="th-sel" :teleported="true" @visible-change="onFilterDropdownOpen" @change="onColFilterChange" @clear="onColFilterChange">
                 <el-option v-for="v in filterOptions.reason_names" :key="v" :value="v" :label="v" />
               </el-select>
             </div>
@@ -716,14 +777,15 @@ defineExpose({ total, exportLoading, exportData, initSort, refresh: loadData })
         </el-table-column>
 
         <!-- 发货简称 -->
-        <el-table-column v-else-if="colKey === 'shipping_alias'" min-width="110" resizable>
+        <el-table-column v-else-if="colKey === 'shipping_alias'" label="shipping_alias" min-width="110" resizable>
           <template #header>
             <div class="th-top">
               <span class="th-lbl">发货简称</span>
               <button :class="['sort-btn', sortIcon('shipping_alias_name') !== 'none' ? 'sort-' + sortIcon('shipping_alias_name') : '']" @click.stop="sortBy('shipping_alias_name')" />
             </div>
             <div class="th-filter-wrap" @click.stop>
-              <el-select v-model="filters.shipping_alias" filterable clearable size="small" placeholder="筛选…" class="th-sel" :teleported="true" @visible-change="onFilterDropdownOpen" @change="onColFilterChange" @clear="onColFilterChange">
+              <div v-if="lockedCols.has('shipping_alias')" class="th-fph" />
+              <el-select v-else v-model="filters.shipping_alias" filterable clearable size="small" placeholder="筛选…" class="th-sel" :teleported="true" @visible-change="onFilterDropdownOpen" @change="onColFilterChange" @clear="onColFilterChange">
                 <el-option v-for="a in filterOptions.shipping_aliases" :key="a.id" :value="a.id" :label="a.name" />
               </el-select>
             </div>
@@ -782,14 +844,15 @@ defineExpose({ total, exportLoading, exportData, initSort, refresh: loadData })
         </el-table-column>
 
         <!-- 渠道 -->
-        <el-table-column v-else-if="colKey === 'channel'" min-width="90" resizable>
+        <el-table-column v-else-if="colKey === 'channel'" label="channel" min-width="90" resizable>
           <template #header>
             <div class="th-top">
               <span class="th-lbl">渠道</span>
               <button :class="['sort-btn', sortIcon('channel_name') !== 'none' ? 'sort-' + sortIcon('channel_name') : '']" @click.stop="sortBy('channel_name')" />
             </div>
             <div class="th-filter-wrap" @click.stop>
-              <el-select v-model="filters.channel" filterable clearable size="small" placeholder="筛选…" class="th-sel" :teleported="true" @visible-change="onFilterDropdownOpen" @change="onColFilterChange" @clear="onColFilterChange">
+              <div v-if="lockedCols.has('channel')" class="th-fph" />
+              <el-select v-else v-model="filters.channel" filterable clearable size="small" placeholder="筛选…" class="th-sel" :teleported="true" @visible-change="onFilterDropdownOpen" @change="onColFilterChange" @clear="onColFilterChange">
                 <el-option v-for="v in filterOptions.channels" :key="v" :value="v" :label="v" />
               </el-select>
             </div>
@@ -798,14 +861,15 @@ defineExpose({ total, exportLoading, exportData, initSort, refresh: loadData })
         </el-table-column>
 
         <!-- 省份 -->
-        <el-table-column v-else-if="colKey === 'province'" width="76" resizable>
+        <el-table-column v-else-if="colKey === 'province'" label="province" width="76" resizable>
           <template #header>
             <div class="th-top">
               <span class="th-lbl">省份</span>
               <button :class="['sort-btn', sortIcon('province') !== 'none' ? 'sort-' + sortIcon('province') : '']" @click.stop="sortBy('province')" />
             </div>
             <div class="th-filter-wrap" @click.stop>
-              <el-select v-model="filters.province" filterable clearable size="small" placeholder="筛选…" class="th-sel" :teleported="true" @visible-change="onFilterDropdownOpen" @change="onColFilterChange" @clear="onColFilterChange">
+              <div v-if="lockedCols.has('province')" class="th-fph" />
+              <el-select v-else v-model="filters.province" filterable clearable size="small" placeholder="筛选…" class="th-sel" :teleported="true" @visible-change="onFilterDropdownOpen" @change="onColFilterChange" @clear="onColFilterChange">
                 <el-option v-for="v in filterOptions.provinces" :key="v" :value="v" :label="v" />
               </el-select>
             </div>
@@ -944,6 +1008,12 @@ defineExpose({ total, exportLoading, exportData, initSort, refresh: loadData })
 .expand-products { padding: 6px 16px 6px 40px; background: #faf7f2; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .product-tag { background: var(--bg-card); border-color: var(--border); color: var(--text-secondary); font-family: var(--font-family); }
 .no-products { color: var(--text-muted); font-style: italic; font-size: 12px; }
+
+/* 列头 & 单元格状态染色（锁定列=橙色，用户主动筛选列=绿色） */
+:deep(.col-locked)        { background: rgba(196, 136, 58, 0.14) !important; }
+:deep(.col-active-filter) { background: rgba(74, 145, 74, 0.11) !important; }
+:deep(td.cell-locked)        { background: rgba(196, 136, 58, 0.07) !important; }
+:deep(td.cell-active-filter) { background: rgba(74, 145, 74, 0.06) !important; }
 
 /* 底部栏 */
 .table-footer { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 8px 4px 4px; border-top: 1px solid var(--border); }

@@ -444,7 +444,8 @@ class AftersaleRepository:
                   reason_ids=None, reason_category_ids=None,
                   shipping_alias_ids=None, channel_names=None,
                   provinces=None, cities=None,
-                  max_days_since_purchase=None):
+                  max_days_since_purchase=None,
+                  exclude_no_sales_series=False):
         """分页查询工单，支持多维筛选和服务端排序"""
         from sqlalchemy import func as sqlfunc
         from database.models.product.category import ProductSeries, ProductCategory
@@ -504,6 +505,44 @@ class AftersaleRepository:
                    .filter(ProductModel.model_code == model_code)
                    .subquery())
             q = q.filter(AftersaleCase.id.in_(sub))
+
+        # exclude_no_sales_series：剔除同期净发货量为 0 的系列所属工单（与图表口径一致）
+        if exclude_no_sales_series and not model_ids:
+            from sqlalchemy import func as _func
+            from database.models.product.finished import ProductFinished
+            from database.models.shipping import ShippingOrderFinished as _SOF
+            _series_q = (
+                db.session.query(ProductSeries.id)
+                .join(ProductModel, ProductModel.series_id == ProductSeries.id)
+                .join(ProductFinished, ProductFinished.model_id == ProductModel.id)
+                .join(_SOF, _SOF.finished_code == ProductFinished.code)
+            )
+            if date_start:
+                _series_q = _series_q.filter(_SOF.shipped_date >= date_start)
+            if date_end:
+                _series_q = _series_q.filter(_SOF.shipped_date <= date_end)
+            if channel_names:
+                _series_q = _series_q.filter(_SOF.channel_name.in_(channel_names))
+            elif channel_name:
+                _series_q = _series_q.filter(_SOF.channel_name == channel_name)
+            if cities:
+                _series_q = _series_q.filter(_SOF.city.in_(cities))
+            elif provinces:
+                _series_q = _series_q.filter(_SOF.province.in_(provinces))
+            elif province:
+                _series_q = _series_q.filter(_SOF.province == province)
+            _active_series_sub = (
+                _series_q.group_by(ProductSeries.id)
+                .having(_func.sum(_SOF.quantity) > 0)
+                .subquery()
+            )
+            _active_case_sub = (
+                db.session.query(AftersaleCaseReason.case_id)
+                .join(ProductModel, AftersaleCaseReason.model_id == ProductModel.id)
+                .filter(ProductModel.series_id.in_(_active_series_sub))
+                .subquery()
+            )
+            q = q.filter(AftersaleCase.id.in_(_active_case_sub))
 
         # 原因维度（多值优先）
         if reason_ids:
@@ -717,6 +756,141 @@ class AftersaleRepository:
         AftersaleRepository._filter_options_cache = result
         AftersaleRepository._filter_options_cache_ts = now
         return result
+
+    def get_filtered_table_options(self, filters: dict):
+        """
+        带筛选条件的表格列可选项：只返回当前筛选范围内实际出现的值。
+        供数据Tab筛选下拉使用，与 get_cross_filter_options 共享 make_conds 逻辑。
+        """
+        from sqlalchemy import and_
+        from database.models.product.category import ProductModel, ProductSeries, ProductCategory
+
+        def make_conds(exclude=None):
+            c = [AftersaleCase.status == 'confirmed']
+            if filters.get('date_start'):
+                c.append(AftersaleCase.shipped_date >= filters['date_start'])
+            if filters.get('date_end'):
+                c.append(AftersaleCase.shipped_date <= filters['date_end'])
+            if exclude != 'channel' and filters.get('channel_names'):
+                c.append(AftersaleCase.channel_name.in_(filters['channel_names']))
+            if exclude != 'province' and filters.get('provinces'):
+                c.append(AftersaleCase.province.in_(filters['provinces']))
+            if exclude != 'province' and filters.get('cities'):
+                c.append(AftersaleCase.city.in_(filters['cities']))
+            if exclude != 'product':
+                if filters.get('model_ids'):
+                    c.append(AftersaleCaseReason.model_id.in_(filters['model_ids']))
+                elif filters.get('series_ids'):
+                    sub = (db.session.query(ProductModel.id)
+                           .filter(ProductModel.series_id.in_(filters['series_ids']))
+                           .subquery())
+                    c.append(AftersaleCaseReason.model_id.in_(sub))
+                elif filters.get('category_ids'):
+                    sub = (db.session.query(ProductModel.id)
+                           .join(ProductSeries, ProductSeries.id == ProductModel.series_id)
+                           .filter(ProductSeries.category_id.in_(filters['category_ids']))
+                           .subquery())
+                    c.append(AftersaleCaseReason.model_id.in_(sub))
+            # reason 过滤：
+            # exclude='reason'       → 排除全部原因筛选（供原因分类下拉用）
+            # exclude='reason_name'  → 保留原因分类筛选，排除具体原因筛选（供具体原因下拉联动用）
+            if exclude not in ('reason', 'reason_name'):
+                if filters.get('reason_ids'):
+                    c.append(AftersaleCaseReason.reason_id.in_(filters['reason_ids']))
+                elif filters.get('reason_category_ids'):
+                    sub = (db.session.query(AftersaleReason.id)
+                           .filter(AftersaleReason.category_id.in_(filters['reason_category_ids']))
+                           .subquery())
+                    c.append(AftersaleCaseReason.reason_id.in_(sub))
+                elif filters.get('reason_category'):
+                    sub = (db.session.query(AftersaleReason.id)
+                           .join(AftersaleReasonCategory, AftersaleReason.category_id == AftersaleReasonCategory.id)
+                           .filter(AftersaleReasonCategory.name == filters['reason_category'])
+                           .subquery())
+                    c.append(AftersaleCaseReason.reason_id.in_(sub))
+                elif filters.get('reason_name'):
+                    sub = (db.session.query(AftersaleReason.id)
+                           .filter(AftersaleReason.name == filters['reason_name'])
+                           .subquery())
+                    c.append(AftersaleCaseReason.reason_id.in_(sub))
+            elif exclude == 'reason_name':
+                # 保留原因分类筛选，排除具体原因筛选
+                if filters.get('reason_ids'):
+                    c.append(AftersaleCaseReason.reason_id.in_(filters['reason_ids']))
+                elif filters.get('reason_category_ids'):
+                    sub = (db.session.query(AftersaleReason.id)
+                           .filter(AftersaleReason.category_id.in_(filters['reason_category_ids']))
+                           .subquery())
+                    c.append(AftersaleCaseReason.reason_id.in_(sub))
+                elif filters.get('reason_category'):
+                    sub = (db.session.query(AftersaleReason.id)
+                           .join(AftersaleReasonCategory, AftersaleReason.category_id == AftersaleReasonCategory.id)
+                           .filter(AftersaleReasonCategory.name == filters['reason_category'])
+                           .subquery())
+                    c.append(AftersaleCaseReason.reason_id.in_(sub))
+                # reason_name 不应用（即排除该筛选）
+            if exclude != 'shipping' and filters.get('shipping_alias_ids'):
+                c.append(AftersaleCaseReason.shipping_alias_id.in_(filters['shipping_alias_ids']))
+            if filters.get('max_days_since_purchase') is not None:
+                c.append(AftersaleCaseReason.days_since_purchase <= filters['max_days_since_purchase'])
+            return c
+
+        def base(exclude=None):
+            return (
+                db.session.query(AftersaleCase, AftersaleCaseReason)
+                .join(AftersaleCaseReason, AftersaleCaseReason.case_id == AftersaleCase.id)
+                .filter(and_(*make_conds(exclude)))
+            )
+
+        # 1. 渠道
+        channels = sorted({r[0] for r in base('channel').with_entities(AftersaleCase.channel_name).all() if r[0]})
+        # 2. 省份
+        provinces = sorted({r[0] for r in base('province').with_entities(AftersaleCase.province).all() if r[0]})
+        # 3. 产品（model_ids → 推导 series/category）
+        model_ids_raw = sorted({r[0] for r in base('product').with_entities(AftersaleCaseReason.model_id).all() if r[0]})
+        category_ids, series_ids = set(), set()
+        if model_ids_raw:
+            for m, s, c in (db.session.query(ProductModel, ProductSeries, ProductCategory)
+                            .join(ProductSeries, ProductSeries.id == ProductModel.series_id)
+                            .join(ProductCategory, ProductCategory.id == ProductSeries.category_id)
+                            .filter(ProductModel.id.in_(model_ids_raw)).all()):
+                series_ids.add(s.id); category_ids.add(c.id)
+        # 4a. 原因分类选项（排除全部原因筛选，做到跨列互不干扰）
+        cat_reason_ids = sorted({r[0] for r in base('reason').with_entities(AftersaleCaseReason.reason_id).all() if r[0]})
+        reason_cats = []
+        if cat_reason_ids:
+            rows = (db.session.query(AftersaleReasonCategory.name)
+                    .join(AftersaleReason, AftersaleReason.category_id == AftersaleReasonCategory.id)
+                    .filter(AftersaleReason.id.in_(cat_reason_ids))
+                    .distinct().order_by(AftersaleReasonCategory.name).all())
+            reason_cats = [r[0] for r in rows if r[0]]
+        # 4b. 具体原因选项（保留原因分类筛选，实现分类→原因联动）
+        name_reason_ids = sorted({r[0] for r in base('reason_name').with_entities(AftersaleCaseReason.reason_id).all() if r[0]})
+        reason_names = []
+        if name_reason_ids:
+            rows = (db.session.query(AftersaleReason.name)
+                    .filter(AftersaleReason.id.in_(name_reason_ids))
+                    .order_by(AftersaleReason.name).all())
+            reason_names = [r[0] for r in rows if r[0]]
+        # 5. 发货简称
+        alias_ids_raw = sorted({r[0] for r in base('shipping').with_entities(AftersaleCaseReason.shipping_alias_id).all() if r[0]})
+        shipping_aliases = []
+        if alias_ids_raw:
+            rows = (db.session.query(AftersaleShippingAlias.id, AftersaleShippingAlias.name)
+                    .filter(AftersaleShippingAlias.id.in_(alias_ids_raw))
+                    .order_by(AftersaleShippingAlias.name).all())
+            shipping_aliases = [{'id': r[0], 'name': r[1]} for r in rows]
+
+        return {
+            'channels':          channels,
+            'provinces':         provinces,
+            'reason_categories': reason_cats,
+            'reason_names':      reason_names,
+            'shipping_aliases':  shipping_aliases,
+            'category_ids':      list(category_ids),
+            'series_ids':        list(series_ids),
+            'model_ids':         model_ids_raw,
+        }
 
     def confirm_case(self, order_no, products, seller_remark, buyer_remark,
                      shipped_date, operator, channel_name, province, reasons_data,
@@ -1887,6 +2061,40 @@ class AftersaleRepository:
 
         from sqlalchemy import func
 
+        # ── exclude_no_sales_series：预计算活跃系列子查询（所有 group_by 维度共用）──
+        _excl_series_sub = None   # 供 _get_shipping_agg 的 overall_ratio 复用
+        _active_model_sub = None  # 限制只统计"当前有销售"系列的工单
+        if filters.get('exclude_no_sales_series'):
+            from database.models.product.finished import ProductFinished
+            from database.models.shipping import ShippingOrderFinished as _SOF
+            _series_q = (
+                db.session.query(ProductSeries.id)
+                .join(ProductModel, ProductModel.series_id == ProductSeries.id)
+                .join(ProductFinished, ProductFinished.model_id == ProductModel.id)
+                .join(_SOF, _SOF.finished_code == ProductFinished.code)
+            )
+            if filters.get('date_start'):
+                _series_q = _series_q.filter(_SOF.shipped_date >= filters['date_start'])
+            if filters.get('date_end'):
+                _series_q = _series_q.filter(_SOF.shipped_date <= filters['date_end'])
+            if filters.get('channel_names'):
+                _series_q = _series_q.filter(_SOF.channel_name.in_(filters['channel_names']))
+            if filters.get('provinces'):
+                _series_q = _series_q.filter(_SOF.province.in_(filters['provinces']))
+            if filters.get('cities'):
+                _series_q = _series_q.filter(_SOF.city.in_(filters['cities']))
+            # HAVING SUM(qty) > 0：净发货量为正的系列才算"当前有销售"
+            _excl_series_sub = (
+                _series_q.group_by(ProductSeries.id)
+                .having(func.sum(_SOF.quantity) > 0)
+                .subquery()
+            )
+            _active_model_sub = (
+                db.session.query(ProductModel.id)
+                .filter(ProductModel.series_id.in_(_excl_series_sub))
+                .subquery()
+            )
+
         # ── 公共筛选条件（复用于所有维度的 GROUP BY 查询）──────────────────────
         def _apply_filters(q):
             if filters.get('date_start'):
@@ -1914,6 +2122,10 @@ class AftersaleRepository:
                        .filter(ProductSeries.category_id.in_(filters['category_ids']))
                        .subquery())
                 q = q.filter(AftersaleCaseReason.model_id.in_(sub))
+            # exclude_no_sales_series：独立叠加，与产品筛选不互斥
+            # model_ids 已是精确型号无需再交，series/category 筛选下则需进一步限制活跃系列
+            if _active_model_sub is not None and not filters.get('model_ids'):
+                q = q.filter(AftersaleCaseReason.model_id.in_(_active_model_sub))
             if filters.get('reason_ids'):
                 q = q.filter(AftersaleCaseReason.reason_id.in_(filters['reason_ids']))
             elif filters.get('reason_category_ids'):
@@ -1929,7 +2141,6 @@ class AftersaleRepository:
         agg = {}
         model_info = {}
         level = None
-        _excl_series_sub = None   # exclude_no_sales_series 时保存活跃系列子查询，供 overall_ratio 复用
 
         if group_by == 'product':
             _prod_q = _apply_filters(
@@ -1937,40 +2148,7 @@ class AftersaleRepository:
                 .join(AftersaleCase, AftersaleCase.id == AftersaleCaseReason.case_id)
                 .filter(AftersaleCase.status == 'confirmed')
             )
-            # exclude_no_sales_series：剔除同期内净发货量为 0 的系列所属工单
-            # 判定标准：SUM(quantity) > 0（与 _get_shipping_agg 口径一致，扣除退货）
-            # 原则：只做到系列粒度，品类层级汇总因此会相应下降
-            if filters.get('exclude_no_sales_series'):
-                from database.models.product.finished import ProductFinished
-                from database.models.shipping import ShippingOrderFinished as _SOF
-                _series_q = (
-                    db.session.query(ProductSeries.id)
-                    .join(ProductModel, ProductModel.series_id == ProductSeries.id)
-                    .join(ProductFinished, ProductFinished.model_id == ProductModel.id)
-                    .join(_SOF, _SOF.finished_code == ProductFinished.code)
-                )
-                if filters.get('date_start'):
-                    _series_q = _series_q.filter(_SOF.shipped_date >= filters['date_start'])
-                if filters.get('date_end'):
-                    _series_q = _series_q.filter(_SOF.shipped_date <= filters['date_end'])
-                if filters.get('channel_names'):
-                    _series_q = _series_q.filter(_SOF.channel_name.in_(filters['channel_names']))
-                if filters.get('provinces'):
-                    _series_q = _series_q.filter(_SOF.province.in_(filters['provinces']))
-                if filters.get('cities'):
-                    _series_q = _series_q.filter(_SOF.city.in_(filters['cities']))
-                # HAVING SUM(qty) > 0：净发货量为正的系列才算"当前有销售"
-                _excl_series_sub = (
-                    _series_q.group_by(ProductSeries.id)
-                    .having(func.sum(_SOF.quantity) > 0)
-                    .subquery()
-                )
-                _active_model_sub = (
-                    db.session.query(ProductModel.id)
-                    .filter(ProductModel.series_id.in_(_excl_series_sub))
-                    .subquery()
-                )
-                _prod_q = _prod_q.filter(AftersaleCaseReason.model_id.in_(_active_model_sub))
+            # exclude_no_sales_series：_active_model_sub 已由 _apply_filters 注入
             agg_rows = _prod_q.group_by(AftersaleCaseReason.model_id).all()
 
             model_ids_used = {r.model_id for r in agg_rows if r.model_id}

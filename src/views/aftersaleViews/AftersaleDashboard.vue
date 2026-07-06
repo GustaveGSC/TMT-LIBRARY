@@ -4,6 +4,7 @@ import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } 
 import { ArrowDown, ArrowLeft, ArrowRight, Setting } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import http from '@/api/http.js'
+import iconProduct  from '@/assets/icons/btn_product.png'
 import iconReason   from '@/assets/icons/btn_reason.png'
 import iconMaterial from '@/assets/icons/btn_material.png'
 import iconShip     from '@/assets/icons/btn_ship.png'
@@ -21,13 +22,14 @@ const DATE_SHORTCUTS = [
   { text: '一个月内',  value: () => { const s = new Date(); s.setMonth(s.getMonth() - 1); return [s, new Date()] } },
 ]
 
-// 子维度 Tab（不含产品，产品是默认视图）
-// 原因 Tab 默认进入一级分类视图（reason_category），右击可下钻至具体原因（reason）
+// 维度 Tab；产品用特殊 key='product' 映射到 groupBy=null
+// 原因 Tab 默认进入一级分类视图（reason_category），skipReasonCategory 勾选时直接进 reason
 const DIMS = [
+  { key: 'product',         label: '产品', icon: iconProduct  },
   { key: 'reason_category', label: '原因', icon: iconReason   },
-  { key: 'shipping_alias', label: '物料', icon: iconMaterial },
-  { key: 'channel',        label: '渠道', icon: iconShip     },
-  { key: 'province',       label: '地域', icon: iconRegion   },
+  { key: 'shipping_alias',  label: '物料', icon: iconMaterial },
+  { key: 'channel',         label: '渠道', icon: iconShip     },
+  { key: 'province',        label: '地域', icon: iconRegion   },
 ]
 
 
@@ -267,6 +269,15 @@ watch(groupBy, () => {
 watch(noSalesMode, () => {
   _chartCache.clear()
   loadChartData()
+})
+
+// 跳过原因分类切换：若当前处于原因维度，实时同步 groupBy 并刷新图表
+watch(skipReasonCategory, (skip) => {
+  if (groupBy.value === 'reason_category' || groupBy.value === 'reason') {
+    _chartCache.delete('reason_category')
+    _chartCache.delete('reason')
+    groupBy.value = skip ? 'reason' : 'reason_category'
+  }
 })
 
 // 产品层级变化时：若处于"隐藏"模式但已不在系列层级，自动回到"所有数据"
@@ -950,18 +961,31 @@ function drillBack(idx) {
 
 function toggleSection(key) { sections[key] = !sections[key] }
 
-// Tab 可取消（再次点击 = 回到产品视图）
-// 原因 Tab：reason_category 和 reason 都属于原因维度，均视为激活态；再次点击回到产品视图
-// skipReasonCategory 勾选时：原因 Tab 直接进入具体原因（reason）视图，跳过分类层级
+// 维度必须始终有一个选中，不允许取消
+// 产品 Tab：key='product' → groupBy=null；其余 key 直接赋值
+// 原因 Tab：skipReasonCategory 决定进 reason_category 还是 reason
+// 切换维度时只清理维度下钻（type='dim'）产生的筛选和历史，产品下钻历史保持不变
 function selectDim(key) {
-  if (key === 'reason_category') {
-    if (groupBy.value === 'reason_category' || groupBy.value === 'reason') {
-      groupBy.value = null
-    } else {
-      groupBy.value = skipReasonCategory.value ? 'reason' : 'reason_category'
-    }
+  const firstDim = drillStack.value.find(s => s.type === 'dim')
+  if (firstDim) {
+    // 恢复进入维度下钻前保存的维度筛选条件
+    filters.value.reasonCategoryIds = firstDim.savedReasonCategoryIds
+    filters.value.reasonIds         = firstDim.savedReasonIds
+    filters.value.shippingAliasIds  = firstDim.savedShippingAliasIds
+    filters.value.channelNames      = firstDim.savedChannelNames
+    filters.value.provinces         = firstDim.savedProvinces
+    filters.value.cities            = firstDim.savedCities
+    // 只移除 dim 类型条目，产品下钻（type=undefined）保留
+    drillStack.value = drillStack.value.filter(s => s.type !== 'dim')
+    _chartCache.clear()
+    _drillBackData = null
+  }
+  if (key === 'product') {
+    groupBy.value = null
+  } else if (key === 'reason_category') {
+    groupBy.value = skipReasonCategory.value ? 'reason' : 'reason_category'
   } else {
-    groupBy.value = groupBy.value === key ? null : key
+    groupBy.value = key
   }
 }
 
@@ -969,6 +993,19 @@ function onCategoryChange() { filters.value.seriesIds = []; filters.value.modelI
 function onSeriesChange()   { filters.value.modelIds = [] }
 function onReasonCatChange() { filters.value.reasonIds = [] }
 function onProvinceChange()  { filters.value.cities = [] }
+
+/** 左侧面板选了产品筛选（品类/系列/型号），但不是通过下钻产生的 */
+const hasProductFilter = computed(() =>
+  !drillStack.value.length &&
+  (filters.value.categoryIds.length > 0 || filters.value.seriesIds.length > 0 || filters.value.modelIds.length > 0)
+)
+
+/** 面包屑"全部"点击：清空产品筛选（仅左侧面板筛选时使用） */
+function clearProductFilter() {
+  filters.value.categoryIds = []
+  filters.value.seriesIds   = []
+  filters.value.modelIds    = []
+}
 
 function resetFilters() {
   drillStack.value = []
@@ -1001,6 +1038,7 @@ function openCasesDrawer() {
     channel_names:            csv(filters.value.channelNames),
     provinces:                csv(filters.value.provinces),
     cities:                   csv(filters.value.cities),
+    exclude_no_sales_series:  noSalesMode.value === 'exclude' || undefined,
   }
   casesDrawerTitle.value = buildDrawerTitle()
   casesDrawer.value = true
@@ -1297,7 +1335,10 @@ defineExpose({ refresh })
             <el-icon><ArrowLeft v-if="!filterCollapsed" /><ArrowRight v-else /></el-icon>
           </button>
           <div class="drill-breadcrumb">
-            <span :class="drillStack.length ? 'bc-item bc-link' : 'bc-item bc-current'" @click="drillStack.length ? drillBack(0) : null">全部</span>
+            <span
+              :class="(drillStack.length || hasProductFilter) ? 'bc-item bc-link' : 'bc-item bc-current'"
+              @click="drillStack.length ? drillBack(0) : (hasProductFilter ? clearProductFilter() : null)"
+            >全部</span>
             <template v-for="(entry, i) in drillStack" :key="i">
               <span class="bc-sep">/</span>
               <span v-if="i < drillStack.length - 1" class="bc-item bc-link" @click="drillBack(i + 1)">{{ entry.label }}</span>
@@ -1311,7 +1352,7 @@ defineExpose({ refresh })
               v-for="dim in DIMS"
               :key="dim.key"
               class="gb-btn"
-              :class="{ active: groupBy === dim.key || (dim.key === 'reason_category' && groupBy === 'reason') }"
+              :class="{ active: (dim.key === 'product' && groupBy === null) || groupBy === dim.key || (dim.key === 'reason_category' && groupBy === 'reason') }"
               @click="selectDim(dim.key)"
             >
               <img :src="dim.icon" class="gb-icon" />

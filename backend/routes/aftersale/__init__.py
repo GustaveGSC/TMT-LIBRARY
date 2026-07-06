@@ -24,7 +24,7 @@ _svc = AftersaleService()
 
 aftersale_bp.before_request(make_blueprint_guard(
     'aftersale:view', 'aftersale:edit', 'aftersale:export',
-    view_post_paths=('/chart-data', '/chart-filter-options', '/suggest-product'),
+    view_post_paths=('/chart-data', '/chart-filter-options', '/suggest-product', '/filter-options'),
 ))
 
 
@@ -174,6 +174,7 @@ def get_cases():
     sort_by         = request.args.get('sort_by')
     sort_order      = request.args.get('sort_order', 'desc')
     max_days        = request.args.get('max_days_since_purchase', type=int)
+    exclude_no_sales = request.args.get('exclude_no_sales_series', '').lower() == 'true'
     return _svc.get_cases(
         page, page_size, status, date_start, date_end,
         reason_id, channel, province, city, district,
@@ -189,6 +190,7 @@ def get_cases():
         channel_names=_strs('channel_names'),
         provinces=_strs('provinces'),
         cities=_strs('cities'),
+        exclude_no_sales_series=exclude_no_sales,
     ).to_response()
 
 
@@ -302,6 +304,10 @@ def get_cases_reasons():
 @aftersale_bp.get('/filter-options')
 def get_filter_options():
     return _svc.get_filter_options().to_response()
+
+@aftersale_bp.post('/filter-options')
+def get_filtered_table_options():
+    return _svc.get_filtered_table_options(request.get_json() or {}).to_response()
 
 
 @aftersale_bp.get('/cases/<int:case_id>')
