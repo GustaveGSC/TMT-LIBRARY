@@ -269,6 +269,22 @@ class AftersaleRepository:
         if 'shipping_alias_id' in data:
             cr.shipping_alias_id = data['shipping_alias_id'] or None
 
+        if 'purchase_date' in data:
+            from datetime import date as _date
+            raw = data['purchase_date']
+            cr.purchase_date = _date.fromisoformat(raw) if raw else None
+
+        if 'shipped_date' in data:
+            from datetime import date as _date
+            raw = data['shipped_date']
+            cr.case.shipped_date = _date.fromisoformat(raw) if raw else None
+
+        # 重算售后间隔（任意一方日期变化时）
+        if 'purchase_date' in data or 'shipped_date' in data:
+            sd = cr.case.shipped_date
+            pd = cr.purchase_date
+            cr.days_since_purchase = (sd - pd).days if sd and pd else None
+
         db.session.commit()
         return Result.ok()
 
@@ -2086,7 +2102,7 @@ class AftersaleRepository:
             # HAVING SUM(qty) > 0：净发货量为正的系列才算"当前有销售"
             _excl_series_sub = (
                 _series_q.group_by(ProductSeries.id)
-                .having(func.sum(_SOF.quantity) > 0)
+                .having(func.sum(_SOF.actual_quantity) > 0)
                 .subquery()
             )
             _active_model_sub = (
@@ -2283,17 +2299,27 @@ class AftersaleRepository:
                  sorted(agg.items(), key=lambda x: x[1], reverse=True)]
 
         # ── 销售占比：售后件数 / 同期发货量 ───────────────
-        ship_agg = self._get_shipping_agg(filters, group_by,
-                                          model_info if group_by == 'product' else {},
-                                          level     if group_by == 'product' else None)
-        for item in items:
-            shipped = ship_agg.get(item['name'], 0)
-            item['shipped'] = shipped
-            if shipped > 0:
-                ratio = item['value'] / shipped * 100
-                item['sale_ratio'] = round(ratio, 4)
-            else:
-                item['sale_ratio'] = None
+        if group_by in ('reason', 'reason_category'):
+            # 原因维度：所有原因共享同一分母（同期产品组总发货量）
+            total_shipped = self._get_shipping_agg(filters, group_by, {}, None, total_only=True)
+            for item in items:
+                item['shipped'] = total_shipped
+                if total_shipped > 0:
+                    item['sale_ratio'] = round(item['value'] / total_shipped * 100, 4)
+                else:
+                    item['sale_ratio'] = None
+        else:
+            ship_agg = self._get_shipping_agg(filters, group_by,
+                                              model_info if group_by == 'product' else {},
+                                              level     if group_by == 'product' else None)
+            for item in items:
+                shipped = ship_agg.get(item['name'], 0)
+                item['shipped'] = shipped
+                if shipped > 0:
+                    ratio = item['value'] / shipped * 100
+                    item['sale_ratio'] = round(ratio, 4)
+                else:
+                    item['sale_ratio'] = None
 
         # ── 整体占比（上一级参考线）：不依赖 group_by，始终用全局发货量计算 ──
         # exclude_no_sales_series 模式：分子已限制为活跃系列工单数，分母也对应限制，保持口径一致
@@ -2339,7 +2365,7 @@ class AftersaleRepository:
                 filters.get('model_ids') or filters.get('series_ids') or filters.get('category_ids')
                 or restrict_series_sub is not None
             )
-            q = db.session.query(func.sum(sof.quantity)).filter(sof.finished_code.isnot(None))
+            q = db.session.query(func.sum(sof.actual_quantity)).filter(sof.finished_code.isnot(None))
             if need_product_join:
                 q = (q.join(ProductFinished,
                              sof.finished_code == ProductFinished.code)
@@ -2384,7 +2410,7 @@ class AftersaleRepository:
 
         q = db.session.query(
             label_expr.label('label'),
-            func.sum(sof.quantity).label('qty'),
+            func.sum(sof.actual_quantity).label('qty'),
         ).filter(sof.finished_code.isnot(None))
 
         # ── 产品 JOIN（只有 product 维度或有产品过滤时才 JOIN）───

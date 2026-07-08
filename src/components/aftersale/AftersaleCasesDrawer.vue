@@ -20,6 +20,14 @@ function handleClose() { emit('update:modelValue', false) }
 function onOpened() {
   tableRef.value?.initSort?.()
 }
+
+// 在新标签页打开当前表格
+function openInNewTab() {
+  const f = btoa(JSON.stringify(drawerFilter.value))
+  const title = encodeURIComponent(props.title)
+  const url = `${location.origin}${location.pathname}#/aftersale/cases?f=${f}&title=${title}`
+  window.open(url, '_blank')
+}
 </script>
 
 <template>
@@ -35,6 +43,7 @@ function onOpened() {
       <div class="drawer-header">
         <span class="drawer-title">{{ title }}</span>
         <span class="drawer-total">共 {{ tableRef?.total ?? 0 }} 条</span>
+        <el-button size="small" class="btn-newtab" title="在新标签页中打开" @click="openInNewTab">↗ 新标签页</el-button>
         <el-button
           size="small"
           :loading="exportLoading"
@@ -63,5 +72,6 @@ function onOpened() {
   background: var(--bg); border: 1px solid var(--border);
   border-radius: 10px; padding: 1px 8px;
 }
-.btn-export { margin-left: auto; margin-right: 8px; }
+.btn-newtab { margin-left: auto; }
+.btn-export { margin-right: 8px; }
 </style>

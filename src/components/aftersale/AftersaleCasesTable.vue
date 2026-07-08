@@ -40,8 +40,12 @@ const rowEdits      = ref({
   seriesId:          null,
   modelId:           null,
   categoryId:        null,
-  reasonId:          null,
-  aliasId:           null,
+  reasonId:          null,   // number id 或 null
+  reasonNewName:     null,   // 字符串：待新增的原因名（未提交）
+  aliasId:           null,   // number id 或 null
+  aliasNewName:      null,   // 字符串：待新增的简称名（未提交）
+  shippedDate:       null,   // YYYY-MM-DD 字符串
+  purchaseDate:      null,   // YYYY-MM-DD 字符串
 })
 
 // ── 列顺序（可拖拽，持久化到 localStorage） ──────
@@ -73,8 +77,9 @@ function initSort() {
   if (!headerRow) return
   _sortable = Sortable.create(headerRow, {
     animation: 150,
-    filter: '.col-fixed',
-    preventOnFilter: false,
+    handle: '.th-lbl',
+    filter: '.col-fixed, .el-resizable-handle',
+    preventOnFilter: true,
     onEnd({ oldIndex, newIndex }) {
       const offset = 2  // expand + 序号
       const from = oldIndex - offset
@@ -397,7 +402,11 @@ function startRowEdit(row) {
     modelId:           row._modelId,
     categoryId:        row._categoryId,
     reasonId:          row._reasonId,
+    reasonNewName:     null,
     aliasId:           row._aliasId,
+    aliasNewName:      null,
+    shippedDate:       row.shipped_date || null,
+    purchaseDate:      row.purchase_date || null,
   }
 }
 
@@ -432,12 +441,34 @@ function onEditModel(val) {
 function onEditCategory(val) { rowEdits.value.categoryId = val; rowEdits.value.reasonId = null }
 
 function onEditReason(val) {
-  rowEdits.value.reasonId = val
-  if (val && editOptions.value) {
-    for (const g of editOptions.value.reasons) {
-      if (g.reasons.some(r => r.id === val)) { rowEdits.value.categoryId = g.category_id; break }
+  if (!val) {
+    rowEdits.value.reasonId = null
+    rowEdits.value.reasonNewName = null
+    rowEdits.value.categoryId = null
+    return
+  }
+  // 数字 id → 已有原因
+  if (typeof val === 'number') {
+    rowEdits.value.reasonId = val
+    rowEdits.value.reasonNewName = null
+    if (editOptions.value) {
+      for (const g of editOptions.value.reasons) {
+        if (g.reasons.some(r => r.id === val)) { rowEdits.value.categoryId = g.category_id; break }
+      }
     }
-  } else if (!val) { rowEdits.value.categoryId = null }
+    return
+  }
+  // 字符串 → 暂存，提交时再创建
+  rowEdits.value.reasonId = null
+  rowEdits.value.reasonNewName = String(val).trim() || null
+}
+
+function onEditAlias(val) {
+  if (!val) { rowEdits.value.aliasId = null; rowEdits.value.aliasNewName = null; return }
+  if (typeof val === 'number') { rowEdits.value.aliasId = val; rowEdits.value.aliasNewName = null; return }
+  // 字符串 → 暂存，提交时再创建
+  rowEdits.value.aliasId = null
+  rowEdits.value.aliasNewName = String(val).trim() || null
 }
 
 function getEditSeries() {
@@ -467,10 +498,51 @@ async function confirmRowEdit(row) {
   if (seriesId && !modelId)           { ElMessage.error('已选系列，请继续选择产品型号'); return }
   if (!row._caseReasonId) { editingRowKey.value = null; return }
 
+  // 提交前：创建新原因（如有）
+  if (rowEdits.value.reasonNewName) {
+    const name = rowEdits.value.reasonNewName
+    const res = await http.post('/api/aftersale/reasons', {
+      name,
+      category_id: rowEdits.value.categoryId || null,
+    })
+    if (res.success) {
+      const nr = res.data
+      if (editOptions.value) {
+        const group = editOptions.value.reasons.find(g => g.category_id === nr.category_id)
+        if (group) group.reasons.push({ id: nr.id, name: nr.name })
+        else editOptions.value.reasons.push({ category_id: nr.category_id, category_name: nr.category_name || '未分类', reasons: [{ id: nr.id, name: nr.name }] })
+      }
+      rowEdits.value.reasonId = nr.id
+      rowEdits.value.reasonNewName = null
+    } else {
+      // 重名 → 查找已有
+      const existing = editOptions.value?.reasons.flatMap(g => g.reasons).find(r => r.name === name)
+      if (existing) { rowEdits.value.reasonId = existing.id; rowEdits.value.reasonNewName = null }
+      else { ElMessage.error(res.message || '新增原因失败'); return }
+    }
+  }
+
+  // 提交前：创建新发货简称（如有）
+  if (rowEdits.value.aliasNewName) {
+    const name = rowEdits.value.aliasNewName
+    const res = await http.post('/api/aftersale/shipping-aliases', { name })
+    if (res.success) {
+      if (editOptions.value) editOptions.value.aliases.push(res.data)
+      rowEdits.value.aliasId = res.data.id
+      rowEdits.value.aliasNewName = null
+    } else {
+      const existing = editOptions.value?.aliases.find(a => a.name === name)
+      if (existing) { rowEdits.value.aliasId = existing.id; rowEdits.value.aliasNewName = null }
+      else { ElMessage.error(res.message || '新增发货简称失败'); return }
+    }
+  }
+
   const patch = {}
-  if (rowEdits.value.modelId  !== row._modelId)  patch.model_id          = rowEdits.value.modelId
-  if (rowEdits.value.reasonId !== row._reasonId) patch.reason_id         = rowEdits.value.reasonId
-  if (rowEdits.value.aliasId  !== row._aliasId)  patch.shipping_alias_id = rowEdits.value.aliasId
+  if (rowEdits.value.modelId      !== row._modelId)       patch.model_id          = rowEdits.value.modelId
+  if (rowEdits.value.reasonId     !== row._reasonId)      patch.reason_id         = rowEdits.value.reasonId
+  if (rowEdits.value.aliasId      !== row._aliasId)       patch.shipping_alias_id = rowEdits.value.aliasId
+  if (rowEdits.value.shippedDate  !== (row.shipped_date  || null)) patch.shipped_date  = rowEdits.value.shippedDate
+  if (rowEdits.value.purchaseDate !== (row.purchase_date || null)) patch.purchase_date = rowEdits.value.purchaseDate
   if (!Object.keys(patch).length) { editingRowKey.value = null; return }
 
   saving.value = true
@@ -512,6 +584,21 @@ async function confirmRowEdit(row) {
       const alias = editOptions.value?.aliases.find(a => a.id === rowEdits.value.aliasId)
       row.shipping_alias_name = alias?.name ?? null
       row._aliasId = rowEdits.value.aliasId ?? null
+    }
+    if ('shipped_date' in patch) {
+      row.shipped_date = rowEdits.value.shippedDate || null
+    }
+    if ('purchase_date' in patch) {
+      row.purchase_date = rowEdits.value.purchaseDate || null
+    }
+    // 重算前端显示的售后间隔
+    if ('shipped_date' in patch || 'purchase_date' in patch) {
+      const sd = row.shipped_date, pd = row.purchase_date
+      if (sd && pd) {
+        row.days_since_purchase = Math.round((new Date(sd) - new Date(pd)) / 86400000)
+      } else {
+        row.days_since_purchase = null
+      }
     }
     editingRowKey.value = null
     ElMessage.success('已保存')
@@ -768,7 +855,7 @@ defineExpose({ total, exportLoading, exportData, initSort, refresh: loadData })
           <template #default="{ row }">
             <span v-if="!row._reasonsLoaded" class="loading-cell">…</span>
             <template v-else-if="editingRowKey === row._key">
-              <el-select :model-value="rowEdits.reasonId" size="small" filterable clearable placeholder="选择原因" style="width:100%" @change="onEditReason">
+              <el-select :model-value="rowEdits.reasonId ?? rowEdits.reasonNewName" size="small" filterable clearable allow-create default-first-option placeholder="选择或输入新原因" style="width:100%" @change="onEditReason">
                 <el-option v-for="r in getEditReasons()" :key="r.id" :value="r.id" :label="r.name" />
               </el-select>
             </template>
@@ -793,7 +880,7 @@ defineExpose({ total, exportLoading, exportData, initSort, refresh: loadData })
           <template #default="{ row }">
             <span v-if="!row._reasonsLoaded" class="loading-cell">…</span>
             <template v-else-if="editingRowKey === row._key">
-              <el-select :model-value="rowEdits.aliasId" size="small" filterable clearable placeholder="选择简称" style="width:100%" @change="val => rowEdits.aliasId = val">
+              <el-select :model-value="rowEdits.aliasId ?? rowEdits.aliasNewName" size="small" filterable clearable allow-create default-first-option placeholder="选择或输入新简称" style="width:100%" @change="onEditAlias">
                 <el-option v-for="a in editOptions?.aliases ?? []" :key="a.id" :value="a.id" :label="a.name" />
               </el-select>
             </template>
@@ -802,7 +889,7 @@ defineExpose({ total, exportLoading, exportData, initSort, refresh: loadData })
         </el-table-column>
 
         <!-- 售后日期 -->
-        <el-table-column v-else-if="colKey === 'shipped_date'" prop="shipped_date" width="100" resizable>
+        <el-table-column v-else-if="colKey === 'shipped_date'" width="120" resizable>
           <template #header>
             <div class="th-top">
               <span class="th-lbl">售后日期</span>
@@ -810,10 +897,23 @@ defineExpose({ total, exportLoading, exportData, initSort, refresh: loadData })
             </div>
             <div class="th-fph" />
           </template>
+          <template #default="{ row }">
+            <template v-if="editingRowKey === row._key">
+              <el-date-picker
+                v-model="rowEdits.shippedDate"
+                type="date"
+                size="small"
+                value-format="YYYY-MM-DD"
+                placeholder="选择日期"
+                style="width:100%"
+              />
+            </template>
+            <template v-else>{{ row.shipped_date || '—' }}</template>
+          </template>
         </el-table-column>
 
         <!-- 购买日期 -->
-        <el-table-column v-else-if="colKey === 'purchase_date'" width="100" resizable>
+        <el-table-column v-else-if="colKey === 'purchase_date'" width="120" resizable>
           <template #header>
             <div class="th-top">
               <span class="th-lbl">购买日期</span>
@@ -823,6 +923,16 @@ defineExpose({ total, exportLoading, exportData, initSort, refresh: loadData })
           </template>
           <template #default="{ row }">
             <span v-if="!row._reasonsLoaded" class="loading-cell">…</span>
+            <template v-else-if="editingRowKey === row._key">
+              <el-date-picker
+                v-model="rowEdits.purchaseDate"
+                type="date"
+                size="small"
+                value-format="YYYY-MM-DD"
+                placeholder="选择日期"
+                style="width:100%"
+              />
+            </template>
             <span v-else>{{ row.purchase_date || '—' }}</span>
           </template>
         </el-table-column>
@@ -959,8 +1069,9 @@ defineExpose({ total, exportLoading, exportData, initSort, refresh: loadData })
   font-size: 12px;
 }
 :deep(.el-table__header th) { background: #f5f0e8 !important; color: var(--text-secondary); font-weight: 600; font-size: 12px; }
-:deep(.el-table__header th:not(.col-fixed)) { cursor: grab; }
-:deep(.el-table__header th:not(.col-fixed):active) { cursor: grabbing; }
+:deep(.el-table__header th:not(.col-fixed) .th-lbl) { cursor: grab; }
+:deep(.el-table__header th:not(.col-fixed) .th-lbl:active) { cursor: grabbing; }
+:deep(.el-table__header th .el-resizable-handle) { cursor: col-resize; }
 :deep(.el-table__header th .cell) { white-space: nowrap; overflow: visible; text-overflow: clip; padding: 4px 8px; }
 :deep(.sortable-ghost th), :deep(.sortable-ghost td) { background: #fdf3e3 !important; opacity: 0.6; }
 :deep(.el-table__row:hover > td) { background: #faf7f2 !important; }

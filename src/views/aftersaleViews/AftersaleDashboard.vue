@@ -829,7 +829,9 @@ function buildDimOption(items) {
           show: true, fontSize: 11, color: '#7a5cbf', fontFamily: FONT,
           formatter: p => p.value === 101 ? '' : `${(+p.value).toFixed(2)}%`,
         },
+        // 原因维度各占比均基于总发货量，整体参考线无意义，不显示
         markLine: (() => {
+          if (groupBy.value === 'reason' || groupBy.value === 'reason_category') return undefined
           const overall = chartData.value.summary?.overall_ratio
           if (overall == null) return undefined
           return {

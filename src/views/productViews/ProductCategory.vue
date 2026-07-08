@@ -1,6 +1,6 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import { ElMessageBox } from 'element-plus'
 import { Plus, Delete, Edit, ArrowRight, Search, Refresh } from '@element-plus/icons-vue'
 import http from '@/api/http'
@@ -16,7 +16,7 @@ const selected = ref(null)  // { type, data, parent? }
 
 // ── 右侧表单 ──────────────────────────────────────
 const formMode   = ref('')   // 'create' | 'edit' | ''
-const formData   = ref({ code: '', name: '', model_code: '', name_en: '' })
+const formData   = ref({ code: '', name: '', model_code: '', name_en: '', category_id: null })
 const formError  = ref('')
 const submitting = ref(false)
 
@@ -59,8 +59,20 @@ const filteredTree = computed(() => {
   return result
 })
 
-// 搜索时强制展开所有匹配分支
 const isSearching = computed(() => !!searchQuery.value.trim())
+
+// 搜索激活时自动展开所有节点，方便查看匹配结果
+watch(isSearching, (val) => {
+  if (!val) return
+  const catExp = {}
+  const serExp = {}
+  tree.value.forEach(c => {
+    catExp[c.id] = true
+    ;(c.series || []).forEach(s => { serExp[s.id] = true })
+  })
+  expandedCategories.value = catExp
+  expandedSeries.value     = serExp
+})
 
 // ── 展开/折叠状态 ─────────────────────────────────
 // 用普通对象 { id: true } 代替 Set，Vue 能追踪属性变化
@@ -125,7 +137,7 @@ function selectNode(type, data, parent = null) {
 function openCreate(type, parentId = null) {
   createContext.value = { type, parentId }
   selected.value      = null
-  formData.value      = { code: '', name: '', model_code: '', name_en: '' }
+  formData.value      = { code: '', name: '', model_code: '', name_en: '', category_id: null }
   formError.value     = ''
   formMode.value      = 'create'
 }
@@ -135,10 +147,11 @@ function openEdit(type, data, parent = null) {
   selected.value      = { type, data, parent }
   createContext.value = null
   formData.value      = {
-    code:       data.code       || '',
-    name:       data.name       || '',
-    model_code: data.model_code || '',
-    name_en:    data.name_en    || '',
+    code:        data.code       || '',
+    name:        data.name       || '',
+    model_code:  data.model_code || '',
+    name_en:     data.name_en    || '',
+    category_id: type === 'series' ? (parent?.id ?? null) : null,
   }
   formError.value = ''
   formMode.value  = 'edit'
@@ -178,7 +191,11 @@ async function handleSubmit() {
       } else if (type === 'series') {
         const code = (formData.value.code || '').trim()
         if (!code) { formError.value = '编码不能为空'; submitting.value = false; return }
-        res = await http.put(`/api/category/series/${data.id}`, { code, name })
+        const payload = { code, name }
+        if (formData.value.category_id && formData.value.category_id !== selected.value.parent?.id) {
+          payload.category_id = formData.value.category_id
+        }
+        res = await http.put(`/api/category/series/${data.id}`, payload)
       } else {
         const code       = (formData.value.code       || '').trim()
         const model_code = (formData.value.model_code || '').trim()
@@ -339,7 +356,7 @@ onMounted(loadTree)
             </div>
 
             <!-- Series 层 -->
-            <template v-if="isSearching || expandedCategories[cat.id]">
+            <template v-if="expandedCategories[cat.id]">
               <div v-for="ser in cat.series" :key="ser.id" class="tree-series">
                 <div
                   class="tree-node node-series"
@@ -375,7 +392,7 @@ onMounted(loadTree)
                 </div>
 
                 <!-- Model 层 -->
-                <template v-if="isSearching || expandedSeries[ser.id]">
+                <template v-if="expandedSeries[ser.id]">
                   <div
                     v-for="mod in ser.models"
                     :key="mod.id"
@@ -485,6 +502,17 @@ onMounted(loadTree)
         <!-- 新增/编辑表单 -->
         <div v-else class="edit-form">
           <div class="form-title">{{ panelTitle }}</div>
+
+          <!-- 所属品类：仅编辑系列时显示 -->
+          <div
+            v-if="formMode === 'edit' && selected?.type === 'series'"
+            class="form-row"
+          >
+            <label class="form-label">所属品类 <span class="required">*</span></label>
+            <select v-model="formData.category_id" class="form-input form-select">
+              <option v-for="cat in tree" :key="cat.id" :value="cat.id">{{ cat.name }}</option>
+            </select>
+          </div>
 
           <!-- 编码：仅 series 和 model 显示 -->
           <div
@@ -740,6 +768,7 @@ onMounted(loadTree)
   outline: none; transition: border-color 0.2s;
 }
 .form-input:focus { border-color: var(--accent); }
+.form-select { cursor: pointer; }
 .form-error { font-size: 12px; color: #d05a3c; margin-bottom: 12px; padding-left: 72px; }
 .form-actions { display: flex; gap: 8px; justify-content: flex-end; }
 

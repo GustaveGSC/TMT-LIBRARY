@@ -52,6 +52,11 @@ const router = createRouter({
       component: () => import('@/views/aftersaleViews/page-aftersale.vue')
     },
     {
+      path: '/aftersale/cases',
+      component: () => import('@/views/aftersaleViews/AftersaleCasesPage.vue'),
+      meta: { permission: 'aftersale:view' }
+    },
+    {
       path: '/rd-tools',
       component: () => import('@/views/rdToolsViews/page-rd-tools.vue'),
       meta: { permission: 'rd:view' }

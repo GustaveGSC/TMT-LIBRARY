@@ -105,18 +105,25 @@ class CategoryService:
         obj = CategoryRepository.get_series(series_id)
         if not obj:
             return Result.fail('系列不存在')
+        # 品类变更校验
+        target_category_id = obj.category_id
+        if 'category_id' in kwargs:
+            new_cat_id = kwargs['category_id']
+            if not CategoryRepository.get_category(new_cat_id):
+                return Result.fail('目标品类不存在')
+            target_category_id = new_cat_id
         if 'code' in kwargs:
             kwargs['code'] = kwargs['code'].strip()
             if not kwargs['code']:
                 return Result.fail('编码不能为空')
-            exist = CategoryRepository.get_series_by_code(obj.category_id, kwargs['code'])
+            exist = CategoryRepository.get_series_by_code(target_category_id, kwargs['code'])
             if exist and exist.id != series_id:
                 return Result.fail(f'编码「{kwargs["code"]}」在该品类下已存在')
         if 'name' in kwargs:
             kwargs['name'] = kwargs['name'].strip()
             if not kwargs['name']:
                 return Result.fail('名称不能为空')
-            exist = CategoryRepository.get_series_by_name(obj.category_id, kwargs['name'])
+            exist = CategoryRepository.get_series_by_name(target_category_id, kwargs['name'])
             if exist and exist.id != series_id:
                 return Result.fail(f'系列「{kwargs["name"]}」已存在')
         obj = CategoryRepository.update_series(obj, **kwargs)
