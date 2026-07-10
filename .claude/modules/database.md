@@ -268,3 +268,61 @@ product_resource_model             # 资料-型号 关联（型号继承）
   PRIMARY KEY(resource_id, model_id)
   # 产品若属于该型号，则自动继承此资料（link_type='model'）
 ```
+
+## BOM 成本库（`backend/database/models/rd/cost.py`）
+
+建表脚本：`backend/create_cost_tables.py`
+
+```
+cost_snapshot
+  id, order_no(VARCHAR 100), snapshot_date(DATE nullable),
+  notes(TEXT), created_by(VARCHAR 50), created_at
+
+cost_snapshot_sku                          # 每个快照的产成品（可多个）
+  id, snapshot_id(FK→cost_snapshot CASCADE),
+  finished_code(VARCHAR 50), finished_name(VARCHAR 200),
+  total_cost(DECIMAL 12,4 nullable), created_at
+
+cost_bom_node                              # 物料/半成品/成品节点（跨快照去重，按 code 不含版本）
+  id, code(VARCHAR 50 UNIQUE), code_with_version(VARCHAR 50),
+  name(VARCHAR 200), spec(TEXT nullable), category(VARCHAR 100 nullable),
+  node_type(ENUM material/semi/finished DEFAULT material),
+  is_purchased_semi(BOOLEAN DEFAULT False),  # 外购半成品：整体采购，子件不计价
+  purchase_type(VARCHAR 50 nullable), material_type(VARCHAR 50 nullable),
+  weight_kg(DECIMAL 10,4 nullable), area_m2(DECIMAL 10,4 nullable),
+  notes(TEXT nullable), created_at, updated_at
+  # material_category 不存储，由 erp_code_rules 前缀匹配动态计算
+
+cost_bom_line                              # BOM 父子关系行（属于某个 sku）
+  id, sku_id(FK→cost_snapshot_sku CASCADE),
+  parent_node_id(FK→cost_bom_node), child_node_id(FK→cost_bom_node),
+  seq(INT nullable), quantity(DECIMAL 12,4), unit_price(DECIMAL 12,4 nullable),
+  total_price(DECIMAL 12,4 nullable)
+
+cost_material_price                        # 物料价格记录（手动 + BOM导入自动写入）
+  id, node_id(FK→cost_bom_node CASCADE),
+  snapshot_id(FK→cost_snapshot SET NULL nullable),  # BOM导入时关联快照
+  unit_price(DECIMAL 12,4), price_date(DATE nullable),
+  supplier_name(VARCHAR 100 nullable),
+  source(VARCHAR 20 DEFAULT 'manual'),  # 'manual' | 'bom_import'
+  notes(TEXT nullable), created_at
+
+cost_material_supplier                     # 物料供应商报价（可标记首选）
+  id, node_id(FK→cost_bom_node CASCADE),
+  supplier_name(VARCHAR 100), unit_price(DECIMAL 12,4 nullable),
+  price_date(DATE nullable), is_preferred(BOOLEAN DEFAULT False),
+  notes(TEXT nullable), created_at
+
+cost_material_rule                         # 物料匹配规则（保留，暂未使用）
+  id, pattern(VARCHAR 200), rule_type(VARCHAR 50), action(VARCHAR 200),
+  priority(INT DEFAULT 0), is_active(BOOLEAN DEFAULT True), created_at
+
+cost_column_alias                          # Excel 列名映射（key → aliases[]）
+  id, field_key(VARCHAR 50 UNIQUE), aliases(JSON)
+```
+
+### 关键设计
+- `cost_bom_node.code` 去版本后缀存储（`-A01` 等通过 `_strip_version` 剥离），跨快照复用同一节点
+- `code_with_version` 存原始品号用于显示
+- 外购半成品（`is_purchased_semi=True`）：BOM 导入时跳过其子件行，`total_price` 取自身价格
+- 自制半成品：API 返回时 `total_price = 子件合计`，不存储计算值

@@ -219,3 +219,37 @@ POST   /api/aftersale/chart-data                      # 图表聚合数据，bod
   ]
 }
 ```
+
+## /api/rd/cost（BOM 成本库）
+
+权限：`rd:view`（读）/ `rd:edit`（写）
+
+```
+GET    /api/rd/cost/snapshots              # 成本快照列表，按产成品分组；?page&per_page
+                                           #   → items:[{finished_code,finished_name,orders:[{sku_id,snapshot_id,order_no,snapshot_date,created_at,created_by,total_cost}]}]
+POST   /api/rd/cost/preview               # 预览 BOM Excel（multipart file）
+                                           #   → {order_no,sku_count,skus,warnings,suggested_date}
+POST   /api/rd/cost/import                # 导入（JSON模式）：{preview_data,snapshot_date,notes}
+                                           #   purchased_semi_codes 在 preview_data 内；外购半成品子件不写 bom_line
+DELETE /api/rd/cost/snapshots/:id         # 删除整个快照（含所有 SKU）
+DELETE /api/rd/cost/skus/:sku_id          # 删除单个 SKU 及其 BOM 行；若快照无剩余 SKU 则顺带删快照
+
+GET    /api/rd/cost/sku/:sku_id/bom       # BOM 树；含 child_spec/child_code_with_version/material_category/supplier_name
+                                           #   半成品 total_price = 子件合计（外购半成品保留自身价格）；按 child_code 排序
+
+GET    /api/rd/cost/nodes                 # 物料节点查询；?q&node_type&page&per_page
+                                           #   Python 侧按 erp_code_rules 前缀匹配 material_category，先按分类后按品号排序
+GET    /api/rd/cost/nodes/:id             # 节点详情（含 suppliers、material_category）
+PATCH  /api/rd/cost/nodes/:id             # 更新节点：is_purchased_semi / notes
+GET    /api/rd/cost/nodes/:id/prices      # 价格记录（含 order_no via snapshot join）；按 price_date desc
+POST   /api/rd/cost/nodes/:id/prices      # 手动添加价格记录 {unit_price,price_date?,supplier_name?,notes?}
+PATCH  /api/rd/cost/prices/:id            # 更新价格记录 {unit_price?,supplier_name?,price_date?,notes?}
+DELETE /api/rd/cost/prices/:id            # 删除价格记录
+GET    /api/rd/cost/nodes/:id/usages      # 物料使用记录（BOM 出现次数，含 order_no/finished_code）
+GET    /api/rd/cost/nodes/:id/price-history  # 物料历史价格（来自 BOM 行，按快照日期）
+GET    /api/rd/cost/col-aliases           # 读取 Excel 列名映射
+PUT    /api/rd/cost/col-aliases           # 更新 Excel 列名映射
+```
+
+### material_category 规则
+物料分类通过 `erp_code_rules` 表前缀匹配得出（最长前缀优先），与产品库编码规则完全一致。不存储在 `cost_bom_node`，每次查询时动态计算。

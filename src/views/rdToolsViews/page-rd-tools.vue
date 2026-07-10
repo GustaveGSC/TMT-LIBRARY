@@ -4,10 +4,11 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import WindowControls from '@/components/common/WindowControls.vue'
-import { PhHouseLine, PhArrowsLeftRight, PhClipboardText, PhBell } from '@phosphor-icons/vue'
+import { PhHouseLine, PhArrowsLeftRight, PhClipboardText, PhBell, PhCurrencyDollar } from '@phosphor-icons/vue'
 import EcrForm from '@/components/rdTools/EcrForm.vue'
 import EcnForm from '@/components/rdTools/EcnForm.vue'
 import PdmToBomForm from '@/components/rdTools/PdmToBomForm.vue'
+import BomCost from '@/components/rdTools/BomCost.vue'
 
 // ── 路由 ──────────────────────────────────────────
 const router = useRouter()
@@ -21,6 +22,7 @@ const tabs = [
   { key: 'pdm2bom', label: 'PDM转BOM',      icon: PhArrowsLeftRight },
   { key: 'ecr',     label: '变更申请单填写', icon: PhClipboardText },
   { key: 'ecn',     label: '变更通知单填写', icon: PhBell },
+  { key: 'cost',    label: 'BOM成本',        icon: PhCurrencyDollar },
 ]
 
 // ── 生命周期 ──────────────────────────────────────
@@ -94,6 +96,11 @@ function handleBack() {
       <!-- 变更通知单填写 -->
       <div v-show="activeTab === 'ecn'" class="tab-panel ecn-panel">
         <EcnForm />
+      </div>
+
+      <!-- BOM 成本 -->
+      <div v-show="activeTab === 'cost'" class="tab-panel cost-panel">
+        <BomCost />
       </div>
 
     </main>
@@ -212,7 +219,8 @@ function handleBack() {
 
 .ecr-panel,
 .ecn-panel,
-.pdm2bom-panel {
+.pdm2bom-panel,
+.cost-panel {
   display: flex;
   flex-direction: column;
   overflow: hidden;

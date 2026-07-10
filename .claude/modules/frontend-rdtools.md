@@ -271,3 +271,52 @@ ECR/ECN 导出新增了两个 preload 方法（CLAUDE.md 未列出）：
 window.electronAPI.showSaveDialog(options)  // → { canceled, filePath }
 window.electronAPI.saveFile(filePath, data) // 将 ArrayBuffer 写入本地文件
 ```
+
+---
+
+## BOM 成本库（BomCost.vue）
+
+`src/components/rdTools/BomCost.vue`，研发工具页新增 Tab（`key: 'bom-cost'`）。
+
+### 子 Tab 结构
+
+| key | 标题 | 说明 |
+|---|---|---|
+| `snapshots` | 成本快照 | 按产成品分组展示，每行含多个订单标签 |
+| `nodes` | 物料查询 | 全量物料列表，按物料分类+品号排序，含最新单价 |
+| `estimate` | 成本预估 | 基于已有 SKU 或自由组合估算 |
+
+### 成本快照 Tab
+
+- 表格按 `finished_code` 分组，每行显示产成品编码、产成品名称、订单号标签列表
+- 点击订单号标签 → 弹出 `el-dialog`（90vw）查看该订单的 BOM 详情
+- 删除：`el-dropdown` 下拉选择具体订单，调 `DELETE /api/rd/cost/skus/:sku_id`
+
+**BOM 详情对话框**：
+- 标题含产成品编码、名称、订单号
+- 列：序号（层级如 `1.1.2`）、品号（含版本，可点击打开物料抽屉）、品名规格、物料分类、供应商（首选）、用量、单价、合计
+- 半成品可展开/收拢（默认折叠），▶/▼ 箭头；自制半成品价格=子件合计
+- 第一级行（`_depth===0`）加粗
+- 底部合计行：顶层行 `total_price` 之和，橙黄色高亮
+- 按 `child_code` 排序
+
+**导入流程**（两步）：
+1. 选文件 → `POST /preview` → 预览树（含外购半成品标记）
+2. 用户标记外购半成品（已导入的自动识别）→ `POST /import`（含 `purchased_semi_codes`）
+
+### 物料查询 Tab
+
+- 默认筛选 `node_type=material`，可切换半成品/成品
+- 物料分类：`erp_code_rules` 前缀匹配（后端动态计算，不存储）
+- 点击「详情」打开物料详情抽屉（右侧，默认 780px，左边缘可拖拽调整）
+
+### 物料详情抽屉
+
+**基本信息**：品号、含版品号、品名、规格、物料分类（只读）、外购半成品开关（仅半成品显示）、备注
+**价格记录**：`cost_material_price` 表数据，含日期、订单号（关联快照）、单价、供应商（内联 `el-input` 可编辑，blur/Enter 触发 `PATCH /prices/:id`）、来源（BOM导入/手动）、删除操作
+**使用记录**：`cost_bom_line` 关联记录，含快照日期、订单号、成品品号、数量、单价
+
+### 关键注意事项
+- `.nullslast()` 在 MySQL 不支持，`cost.py` 中所有 `order_by` 均不得使用此方法
+- `_load_code_rules()` 在 `search_nodes` / `get_sku_bom` / `get_node` 中各自调用（无缓存，每次查 DB）
+- `get_sku_bom` 返回 BOM 树时：批量查 `child_spec`、`supplier_name`（首选）、`material_category`；自制半成品 `total_price` 在 Python 侧计算（子件合计）

@@ -66,6 +66,7 @@ def create_app() -> Flask:
     from routes.aftersale import aftersale_bp
     from routes.product.lifecycle import lifecycle_bp
     from routes.rd import rd_bp
+    from routes.rd.cost import cost_bp as rd_cost_bp
     from routes.product.resource import resource_bp
     from routes.config import config_bp
 
@@ -81,6 +82,7 @@ def create_app() -> Flask:
     app.register_blueprint(aftersale_bp,      url_prefix="/api/aftersale")
     app.register_blueprint(lifecycle_bp,      url_prefix="/api/product/lifecycle")
     app.register_blueprint(rd_bp,             url_prefix="/api/rd")
+    app.register_blueprint(rd_cost_bp,        url_prefix="/api/rd/cost")
     app.register_blueprint(resource_bp,       url_prefix="/api/resources")
     app.register_blueprint(config_bp,         url_prefix="/api/config")
 
@@ -115,6 +117,10 @@ def _run_migrations(db):
         from database.models.product.finished import ProductTagCategory
         from database.models.product.resource import ProductResourceType, ProductResource, finished_resource, resource_tag, resource_model
         from database.models.account import SiteConfig
+        from database.models.rd.cost import (
+            CostBomNode, CostSnapshot, CostSnapshotSku,
+            CostBomLine, CostMaterialSupplier, CostMaterialRule,
+        )
         EcrReminder.__table__.create(bind=db.engine, checkfirst=True)
         EcrNote.__table__.create(bind=db.engine, checkfirst=True)
         AftersaleSetting.__table__.create(bind=db.engine, checkfirst=True)
@@ -125,6 +131,13 @@ def _run_migrations(db):
         resource_tag.create(bind=db.engine, checkfirst=True)
         resource_model.create(bind=db.engine, checkfirst=True)
         SiteConfig.__table__.create(bind=db.engine, checkfirst=True)
+        # BOM 成本库表（节点表需先于其他表创建，因为其他表有外键指向它）
+        CostBomNode.__table__.create(bind=db.engine, checkfirst=True)
+        CostSnapshot.__table__.create(bind=db.engine, checkfirst=True)
+        CostSnapshotSku.__table__.create(bind=db.engine, checkfirst=True)
+        CostBomLine.__table__.create(bind=db.engine, checkfirst=True)
+        CostMaterialSupplier.__table__.create(bind=db.engine, checkfirst=True)
+        CostMaterialRule.__table__.create(bind=db.engine, checkfirst=True)
         # 种子数据：预置资料类型
         _seed_resource_types(db)
     except Exception as e:
