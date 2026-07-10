@@ -43,6 +43,9 @@ backend/result.py        # Result.ok/fail → { success, message, data }
 - **`get_cross_filter_options`**：每次调用 6 条 JOIN 查询，前端筛选变化时触发。不要在该函数里再加维度。
 - **`get_chart_data`**：每次切 Tab / 下钻都触发一次，必须保持 O(维度数) 条查询，不能出现循环内 lazy load。
 - **`auto_match`**：每次调用查全量 `AftersaleReason`，不要在循环或批量流程里频繁调用。
+- **`shipping_order_finished` 低选择性索引**：`source` 列仅 2 个值（shipping/finance），MySQL 优化器不自动选复合索引。所有对该表的查询必须加 `with_hint(sof, 'USE INDEX (...)', dialect_name='mysql')`：有日期范围用 `ix_sof_source_date`，否则用 `ix_sof_source_finished_code`。
+- **`get_chart_options` 缓存**：该函数结果已做模块级内存缓存（5 分钟 TTL，key=source+日期范围）。导入/resolve-all 完成后必须调 `_invalidate_chart_options_cache()` 清缓存，否则新数据不生效。
+- **trade_type 过滤禁止走 JOIN**：`needs_trade_filter` 不得触发 JOIN 产品表。FTP 系列判断通过 `_get_ftp_finished_codes()` 缓存集合 + `finished_code IN (...)` 实现，避免每次查询都 JOIN ProductModel/ProductSeries。
 
 ### 前端常见陷阱
 - **`watch(x, fn)` 无防抖**：watch 立即触发 API 请求时，快速交互会打爆请求队列。非用户主动操作（如 drillDim 内部联动）的 watch 必须加防抖或用 `_isDrilling` 等 flag 跳过。
