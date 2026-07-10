@@ -1,3 +1,4 @@
+import time
 from datetime import datetime
 from decimal import Decimal
 from typing import List, Dict, Set, Tuple
@@ -6,6 +7,38 @@ from database.models.shipping import (
     ShippingBatch, ShippingRecord, ReturnRecord, ReturnWarehouseFilter,
     ShippingOperatorType, ShippingOrderFinished,
 )
+
+# ── FTP finished_code 缓存（避免 trade_type 过滤时反复 JOIN 产品表）──
+_ftp_codes_cache: set = set()
+_ftp_codes_cache_at: float = 0.0
+_FTP_CACHE_TTL = 300  # 5 分钟
+
+
+def _get_ftp_finished_codes() -> set:
+    """返回所有属于 FTP 系列（code LIKE '%-FTP'）的 finished_code 集合，带缓存。"""
+    global _ftp_codes_cache, _ftp_codes_cache_at
+    if time.time() - _ftp_codes_cache_at < _FTP_CACHE_TTL:
+        return _ftp_codes_cache
+    from database.models.product.category import ProductSeries, ProductModel
+    from database.models.product.finished import ProductFinished
+    rows = db.session.query(ProductFinished.code).join(
+        ProductModel,  ProductFinished.model_id  == ProductModel.id
+    ).join(
+        ProductSeries, ProductModel.series_id == ProductSeries.id
+    ).filter(ProductSeries.code.like('%-FTP')).all()
+    _ftp_codes_cache    = {r[0] for r in rows}
+    _ftp_codes_cache_at = time.time()
+    return _ftp_codes_cache
+
+
+# ── chart_options 缓存（渠道/省份/活跃产品，仅导入新数据时才变）──
+_chart_options_cache: dict = {}
+_CHART_OPTIONS_TTL = 300  # 5 分钟
+
+
+def _invalidate_chart_options_cache():
+    """导入新数据后调用，清空 chart_options 缓存。"""
+    _chart_options_cache.clear()
 
 
 class ShippingRepository:
@@ -529,39 +562,45 @@ class ShippingRepository:
     @staticmethod
     def get_chart_options(date_start=None, date_end=None, source: str = 'shipping') -> Dict:
         """返回渠道层级、省份层级、active产品ID，均按日期范围和数据来源过滤"""
+        # ── 缓存：chart_options 仅在导入新数据时变化，可安全缓存 ──
+        cache_key = (source, date_start, date_end)
+        cached = _chart_options_cache.get(cache_key)
+        if cached and time.time() - cached['_at'] < _CHART_OPTIONS_TTL:
+            return {k: v for k, v in cached.items() if k != '_at'}
+
         from database.models.product.category import ProductCategory, ProductSeries, ProductModel
         from database.models.product.finished import ProductFinished
         from datetime import datetime as _dt
+        from sqlalchemy import func as sa_func, not_, or_ as sa_or_
 
         sof = ShippingOrderFinished
+        has_date = bool(date_start or date_end)
 
-        def _date_filter(q):
-            if date_start:
-                try:
-                    q = q.filter(sof.shipped_date >= _dt.strptime(date_start, '%Y-%m-%d').date())
-                except ValueError:
-                    pass
-            if date_end:
-                try:
-                    q = q.filter(sof.shipped_date <= _dt.strptime(date_end, '%Y-%m-%d').date())
-                except ValueError:
-                    pass
+        def _parse_date(s):
+            try: return _dt.strptime(s, '%Y-%m-%d').date()
+            except: return None
+
+        d_start = _parse_date(date_start) if date_start else None
+        d_end   = _parse_date(date_end)   if date_end   else None
+
+        def _add_date(q):
+            if d_start: q = q.filter(sof.shipped_date >= d_start)
+            if d_end:   q = q.filter(sof.shipped_date <= d_end)
             return q
 
-        # 售后操作人子查询（排除 type='aftersale' 的操作人对应记录，仅发货端需要）
-        aftersale_ops = db.session.query(ShippingOperatorType.operator).filter_by(type='aftersale').subquery()
-        base_filter = [
-            sof.finished_code.isnot(None),
-            sof.source == source,
-        ]
-        if source == 'shipping':
-            base_filter.append(db.or_(sof.operator.is_(None), ~sof.operator.in_(aftersale_ops)))
+        # 索引策略：有日期范围用 ix_sof_source_date（效果更好），否则用 ix_sof_source
+        idx_hint = 'ix_sof_source_date' if has_date else 'ix_sof_source'
 
-        # 渠道：channel_name → [{code, org_name}] 层级结构
+        # 渠道/省份不再要求 finished_code IS NOT NULL（避免回表，index 覆盖更多）
+        # aftersale 操作人排除仅 chart_data 里做，options 不必区分（全量渠道供筛选）
+        base = [sof.source == source]
+
+        # 渠道：channel_name → [{code, org_name}]
         ch_q = db.session.query(
             sof.channel_name, sof.channel_code, sof.channel_org_name
-        ).filter(*base_filter, sof.channel_name.isnot(None), sof.channel_name != '')
-        ch_rows = _date_filter(ch_q).distinct().order_by(sof.channel_name, sof.channel_code).all()
+        ).with_hint(sof, f'USE INDEX ({idx_hint})', dialect_name='mysql'
+        ).filter(*base, sof.channel_name.isnot(None), sof.channel_name != '')
+        ch_rows = _add_date(ch_q).distinct().order_by(sof.channel_name, sof.channel_code).all()
 
         channels_map: Dict = {}
         for r in ch_rows:
@@ -578,8 +617,9 @@ class ShippingRepository:
         # 省份层级：province → city → district
         prov_q = db.session.query(
             sof.province, sof.city, sof.district
-        ).filter(*base_filter, sof.province.isnot(None), sof.province != '')
-        prov_rows = _date_filter(prov_q).distinct().order_by(sof.province, sof.city, sof.district).all()
+        ).with_hint(sof, f'USE INDEX ({idx_hint})', dialect_name='mysql'
+        ).filter(*base, sof.province.isnot(None), sof.province != '')
+        prov_rows = _add_date(prov_q).distinct().order_by(sof.province, sof.city, sof.district).all()
 
         provinces_map: Dict = {}
         for r in prov_rows:
@@ -597,39 +637,38 @@ class ShippingRepository:
             for pname, cities in provinces_map.items()
         ]
 
-        # 活跃产品 ID（日期范围内有发货数据的品类/系列/型号，排除禁用编码规则对应的成品）
+        # 活跃产品 ID（需要 finished_code IS NOT NULL + JOIN 产品表）
         from database.models.product.erp_code_rules import ErpCodeRule
-        from sqlalchemy import not_, or_ as sa_or_
         disabled_pfs = [
             r.prefix for r in ErpCodeRule.query.filter_by(type='finished', is_disabled=True).all()
         ]
+        prod_base = [sof.finished_code.isnot(None), sof.source == source]
         prod_q = db.session.query(
             ProductCategory.id.label('cat_id'),
             ProductSeries.id.label('ser_id'),
             ProductModel.id.label('mod_id'),
-        ).select_from(sof).join(
-            ProductFinished,
-            sof.finished_code == ProductFinished.code
-        ).join(ProductModel,    ProductFinished.model_id    == ProductModel.id
-        ).join(ProductSeries,   ProductModel.series_id      == ProductSeries.id
-        ).join(ProductCategory, ProductSeries.category_id   == ProductCategory.id
-        ).filter(*base_filter)
+        ).select_from(sof).with_hint(sof, 'USE INDEX (ix_sof_source_finished_code)', dialect_name='mysql'
+        ).join(ProductFinished,  sof.finished_code    == ProductFinished.code
+        ).join(ProductModel,     ProductFinished.model_id  == ProductModel.id
+        ).join(ProductSeries,    ProductModel.series_id    == ProductSeries.id
+        ).join(ProductCategory,  ProductSeries.category_id == ProductCategory.id
+        ).filter(*prod_base)
         if disabled_pfs:
             prod_q = prod_q.filter(
                 not_(sa_or_(*[sof.finished_code.like(p + '%') for p in disabled_pfs]))
             )
-        prod_rows = _date_filter(prod_q).distinct().all()
+        prod_rows = _add_date(prod_q).distinct().all()
 
-        # 数据库中实际的发货日期范围（不受筛选日期限制，查全表）
-        from sqlalchemy import func as sa_func
+        # 日期范围（全表 MIN/MAX，只过滤 source，不加 finished_code 条件 → 索引覆盖扫描 ~1ms）
         date_range_row = db.session.query(
             sa_func.min(sof.shipped_date),
             sa_func.max(sof.shipped_date),
-        ).filter(*base_filter).one()
+        ).with_hint(sof, 'USE INDEX (ix_sof_source_date)', dialect_name='mysql'
+        ).filter(sof.source == source).one()
         min_date = date_range_row[0].strftime('%Y-%m-%d') if date_range_row[0] else None
         max_date = date_range_row[1].strftime('%Y-%m-%d') if date_range_row[1] else None
 
-        return {
+        result = {
             'channels':            channels,
             'provinces':           provinces,
             'active_category_ids': list({r.cat_id for r in prod_rows}),
@@ -638,6 +677,8 @@ class ShippingRepository:
             'data_date_min':       min_date,
             'data_date_max':       max_date,
         }
+        _chart_options_cache[cache_key] = {**result, '_at': time.time()}
+        return result
 
     @staticmethod
     def get_chart_data(params: Dict) -> Dict:
@@ -676,17 +717,26 @@ class ShippingRepository:
             return float(v) if v is not None else 0.0
 
         # 根据 group_by 判断需要 JOIN 到哪一层产品表
+        # 注意：trade_type 过滤已改为用缓存的 finished_code 集合，不再需要 JOIN 产品表
         needs_trade_filter = trade_type in ('domestic', 'foreign')
         product_group_by  = group_by in ('category', 'series', 'model')
-        needs_model_join  = product_group_by or bool(category_ids or series_ids or model_ids) or needs_trade_filter
-        needs_series_join = group_by in ('category', 'series') or bool(category_ids or series_ids) or needs_trade_filter
+        needs_model_join  = product_group_by or bool(category_ids or series_ids or model_ids)
+        needs_series_join = group_by in ('category', 'series') or bool(category_ids or series_ids)
         needs_cat_join    = group_by == 'category' or bool(category_ids)
+        # 预取 FTP finished_code（带缓存，仅 trade_type 过滤时需要）
+        ftp_codes = _get_ftp_finished_codes() if needs_trade_filter else set()
 
         # 售后操作人子查询（在整个 get_chart_data 调用中复用，仅发货端需要）
         aftersale_ops_sub = db.session.query(ShippingOperatorType.operator).filter_by(type='aftersale').subquery()
 
         def _apply_filters(q):
             """将所有过滤条件应用到查询对象，返回新查询"""
+            # 强制使用复合索引：(source, shipped_date) 或 (source, finished_code)
+            # MySQL 优化器对 source 选择性低（50%）时不会自动选复合索引
+            if date_start or date_end:
+                q = q.with_hint(sof, 'USE INDEX (ix_sof_source_date)', dialect_name='mysql')
+            else:
+                q = q.with_hint(sof, 'USE INDEX (ix_sof_source_finished_code)', dialect_name='mysql')
             base_conditions = [
                 sof.finished_code.isnot(None),
                 sof.source == source,
@@ -709,12 +759,12 @@ class ShippingRepository:
                 q = q.filter(ProductSeries.id.in_(series_ids))
             if category_ids:
                 q = q.filter(ProductCategory.id.in_(category_ids))
-            # 内外销过滤（仅财务端）：FTP 系列编码视为外贸
-            if needs_trade_filter:
+            # 内外销过滤：使用缓存的 ftp_codes 集合，避免 JOIN 产品表
+            if needs_trade_filter and ftp_codes:
                 if trade_type == 'domestic':
-                    q = q.filter(~ProductSeries.code.like('%-FTP'))
+                    q = q.filter(~sof.finished_code.in_(ftp_codes))
                 elif trade_type == 'foreign':
-                    q = q.filter(ProductSeries.code.like('%-FTP'))
+                    q = q.filter(sof.finished_code.in_(ftp_codes))
             # 日期过滤
             if date_start:
                 try:

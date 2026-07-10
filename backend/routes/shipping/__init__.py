@@ -7,6 +7,7 @@ from flask import Blueprint, request, Response, stream_with_context, current_app
 from services.shipping import shipping_service
 from auth import make_blueprint_guard
 from result import Result
+from database.repository.shipping import _invalidate_chart_options_cache
 
 shipping_bp = Blueprint('shipping', __name__)
 
@@ -82,6 +83,7 @@ def import_shipping():
                     progress_cb=progress_cb,
                     cancel_check=cancel_check,
                 )
+                _invalidate_chart_options_cache()
                 q.put({'step': 'done', 'data': result})
             except InterruptedError:
                 q.put({'step': 'cancelled', 'message': '导入已中止'})
@@ -164,6 +166,7 @@ def import_finance():
                     progress_cb=progress_cb,
                     cancel_check=cancel_check,
                 )
+                _invalidate_chart_options_cache()
                 q.put({'step': 'done', 'data': result})
             except InterruptedError:
                 q.put({'step': 'cancelled', 'message': '导入已中止'})
@@ -247,6 +250,7 @@ def resolve_all():
                 def progress_cb(step, **kwargs):
                     q.put({'step': step, **kwargs})
                 result = shipping_service.resolve_all(progress_cb=progress_cb)
+                _invalidate_chart_options_cache()
                 q.put({'step': 'done', 'data': result})
             except Exception as e:
                 q.put({'step': 'error', 'message': str(e)})
