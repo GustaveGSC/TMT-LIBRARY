@@ -187,6 +187,135 @@ def _parse_csv_return_rows(file_bytes: bytes) -> List[Dict]:
     return rows
 
 
+# ── 财务端专用解析（列名：平台订单/订单单号/交易日期/部门名称/品号/数量/省/市/区）────
+_REQUIRED_FINANCE_COL_NAMES = {'交易日期', '部门名称', '品号', '数量', '省'}
+_FINANCE_AFTERSALE_DEPT = '售后组'
+
+
+def _extract_finance_order_no(row, col_map: Dict[str, int]) -> str:
+    """
+    补全平台订单号：
+    1. 「平台订单」不为空 → 直接使用
+    2. 「平台订单」为空但「订单单号」不为空 → 取「订单单号」中第一个「-」后的部分
+    3. 两者都为空 → 返回空字符串（调用方跳过该行）
+    """
+    platform = _str(_get(row, col_map['平台订单']) if '平台订单' in col_map else None)
+    if platform:
+        return platform
+    order_no = _str(_get(row, col_map['订单单号']) if '订单单号' in col_map else None)
+    if order_no and '-' in order_no:
+        return order_no.split('-', 1)[1]
+    return ''
+
+
+def _extract_finance_row(row, col_map: Dict[str, int]) -> Dict:
+    """按财务清单列名提取字段"""
+    def gc(name):
+        return _get(row, col_map[name]) if name in col_map else None
+
+    province = _str(gc('省')) or None
+    return {
+        'ecommerce_order_no': _extract_finance_order_no(row, col_map) or None,
+        'channel_name':       _str(gc('部门名称'))  or None,
+        'shipped_date':       _parse_shipped_date(gc('交易日期')),
+        'product_code':       _str(gc('品号'))       or None,
+        'product_name':       _str(gc('品名'))       or None,
+        'spec':               _str(gc('规格'))       or None,
+        'quantity':           _parse_quantity(gc('数量')),
+        'province':           province,
+        'city':               _normalize_city(province or '', _str(gc('市')) or None),
+        'district':           _str(gc('区'))         or None,
+    }
+
+
+def _parse_xlsx_finance_rows(file_bytes: bytes):
+    """解析财务 xlsx，返回 (shipping_rows, return_rows, aftersale_count)"""
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+    ws = wb.active
+    shipping_rows, return_rows = [], []
+    aftersale_count = 0
+    col_map = None
+    for i, row in enumerate(ws.iter_rows(values_only=True)):
+        if i == 0:
+            col_map = _build_col_map(row, required=_REQUIRED_FINANCE_COL_NAMES)
+            continue
+        dept = _str(_get(row, col_map.get('部门名称', -1)))
+        if dept == _FINANCE_AFTERSALE_DEPT:
+            aftersale_count += 1
+            continue
+        r = _extract_finance_row(row, col_map)
+        if not r.get('ecommerce_order_no'):
+            continue
+        qty = r.get('quantity')
+        if qty is None:
+            continue
+        if qty > 0:
+            shipping_rows.append(r)
+        elif qty < 0:
+            r['quantity'] = abs(qty)
+            return_rows.append(r)
+    wb.close()
+    return shipping_rows, return_rows, aftersale_count
+
+
+def _parse_csv_finance_rows(file_bytes: bytes):
+    """解析财务 csv，返回 (shipping_rows, return_rows, aftersale_count)"""
+    text = file_bytes.decode('utf-8-sig', errors='replace')
+    reader = csv.reader(io.StringIO(text))
+    shipping_rows, return_rows = [], []
+    aftersale_count = 0
+    col_map = None
+    for i, row in enumerate(reader):
+        if i == 0:
+            col_map = _build_col_map(row, required=_REQUIRED_FINANCE_COL_NAMES)
+            continue
+        dept = _str(_get(row, col_map.get('部门名称', -1)))
+        if dept == _FINANCE_AFTERSALE_DEPT:
+            aftersale_count += 1
+            continue
+        r = _extract_finance_row(row, col_map)
+        if not r.get('ecommerce_order_no'):
+            continue
+        qty = r.get('quantity')
+        if qty is None:
+            continue
+        if qty > 0:
+            shipping_rows.append(r)
+        elif qty < 0:
+            r['quantity'] = abs(qty)
+            return_rows.append(r)
+    return shipping_rows, return_rows, aftersale_count
+
+
+def _merge_finance_shipping_rows(rows: List[Dict]):
+    """财务发货行文件内合并：按 (order_no, product_code) 合并，无 line_no"""
+    from collections import OrderedDict
+    merged: OrderedDict = OrderedDict()
+    merged_away: List[Dict] = []
+    for row in rows:
+        key = (row.get('ecommerce_order_no'), row.get('product_code'))
+        if key in merged:
+            existing_qty = merged[key].get('quantity') or Decimal('0')
+            new_qty      = row.get('quantity') or Decimal('0')
+            merged[key]['quantity'] = existing_qty + new_qty
+            merged_away.append(row)
+        else:
+            merged[key] = dict(row)
+    return list(merged.values()), merged_away
+
+
+def _serialize_finance_skipped_row(r: Dict) -> Dict:
+    """财务导入跳过行序列化"""
+    shipped = r.get('shipped_date')
+    qty = r.get('quantity')
+    return {
+        'ecommerce_order_no': r.get('ecommerce_order_no'),
+        'product_code':       r.get('product_code'),
+        'shipped_date':       shipped.strftime('%Y-%m-%d') if shipped else None,
+        'quantity':           float(qty) if qty is not None else None,
+    }
+
+
 def _serialize_row(r: Dict) -> Dict:
     """将内存中的原始行转为可 JSON 序列化的 dict（全列）"""
     qty     = r.get('quantity')
@@ -269,9 +398,10 @@ def _merge_return_rows(rows: List[Dict]):
     return list(merged.values()), merged_away
 
 
-def _resolve_orders(order_nos: List[str], progress_cb=None):
+def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=None):
     """
     对给定订单号列表，执行成品组合匹配，写入 shipping_order_finished。
+    source: 'shipping' 或 'finance'，决定从哪个来源的 shipping_record 读取产成品数据。
     匹配逻辑：
       1. 取订单内所有产成品编码及数量
       2. 遍历产品库中所有成品，找出成品的产成品集合是订单产成品集合的子集
@@ -342,7 +472,7 @@ def _resolve_orders(order_nos: List[str], progress_cb=None):
     order_data: Dict = {}
     for i in range(0, total_orders, CHUNK):
         chunk = order_nos[i:i + CHUNK]
-        order_data.update(shipping_repository.get_order_products(chunk))
+        order_data.update(shipping_repository.get_order_products(chunk, source=source))
         if progress_cb:
             progress_cb('preparing', message='正在加载发货数据…',
                         current=min(i + CHUNK, total_orders), total=total_orders)
@@ -372,8 +502,8 @@ def _resolve_orders(order_nos: List[str], progress_cb=None):
             order_ret[f_code] = order_ret.get(f_code, 0) + min_qty
         return_resolved[order_no] = order_ret
 
-    # 清除旧结果
-    shipping_repository.delete_order_finished(order_nos)
+    # 清除旧结果（只清除同一 source 的记录）
+    shipping_repository.delete_order_finished(order_nos, source=source)
 
     resolved_at = now_cst()
     to_insert = []
@@ -416,6 +546,7 @@ def _resolve_orders(order_nos: List[str], progress_cb=None):
                 'province':           meta['province'],
                 'city':               _normalize_city(meta['province'], meta.get('city')),
                 'district':           meta.get('district'),
+                'source':             source,
                 'resolved_at':        resolved_at,
             })
             matched_any = True
@@ -439,6 +570,7 @@ def _resolve_orders(order_nos: List[str], progress_cb=None):
                     'province':           meta['province'],
                     'city':               _normalize_city(meta['province'], meta.get('city')),
                     'district':           meta.get('district'),
+                    'source':             source,
                     'resolved_at':        resolved_at,
                 })
 
@@ -494,10 +626,10 @@ class ShippingService:
             notify('inserted', inserted=inserted, skipped=len(skipped_rows))
 
             # 对本批次新增的订单触发成品组合
-            new_order_nos = shipping_repository.get_new_order_nos(batch.id)
+            new_order_nos = shipping_repository.get_new_order_nos_by_source(batch.id, source='shipping')
             if new_order_nos:
                 notify('resolving', current=0, total=len(new_order_nos))
-                _resolve_orders(new_order_nos, progress_cb=progress_cb)
+                _resolve_orders(new_order_nos, source='shipping', progress_cb=progress_cb)
 
             return {
                 'total':             total,
@@ -595,6 +727,91 @@ class ShippingService:
                     pass
             raise
 
+    def import_finance(self, filename: str, file_bytes: bytes,
+                       progress_cb=None, cancel_check=None) -> Dict:
+        """导入财务清单：过滤售后组 → 拆分发货/销退 → 文件内合并 → 与库去重 → 插入 → 成品组合"""
+        def notify(step, **kwargs):
+            if progress_cb:
+                progress_cb(step, **kwargs)
+
+        batch = None
+        try:
+            notify('parsing')
+            name_lower = filename.lower()
+            if name_lower.endswith('.csv'):
+                shipping_rows, return_rows, aftersale_count = _parse_csv_finance_rows(file_bytes)
+            else:
+                shipping_rows, return_rows, aftersale_count = _parse_xlsx_finance_rows(file_bytes)
+
+            total = len(shipping_rows) + len(return_rows) + aftersale_count
+
+            # 文件内合并
+            shipping_rows, shipping_merged_away = _merge_finance_shipping_rows(shipping_rows)
+            return_rows,   return_merged_away   = _merge_return_rows(return_rows)
+
+            # DB 去重：发货行按 (order_no, product_code, date, source='finance')
+            s_keys          = [(r.get('ecommerce_order_no'), r.get('product_code'), r.get('shipped_date')) for r in shipping_rows]
+            existing_s_keys = shipping_repository.get_existing_finance_keys(s_keys)
+            new_shipping    = [r for r in shipping_rows if (r.get('ecommerce_order_no'), r.get('product_code'), r.get('shipped_date')) not in existing_s_keys]
+            skipped_shipping= [r for r in shipping_rows if (r.get('ecommerce_order_no'), r.get('product_code'), r.get('shipped_date')) in existing_s_keys]
+
+            # DB 去重：销退行（复用 return_record 去重）
+            r_keys          = [(r.get('ecommerce_order_no'), r.get('product_code'), r.get('shipped_date')) for r in return_rows]
+            existing_r_keys = shipping_repository.get_existing_return_keys(r_keys)
+            new_returns     = [r for r in return_rows if (r.get('ecommerce_order_no'), r.get('product_code'), r.get('shipped_date')) not in existing_r_keys]
+            skipped_returns = [r for r in return_rows if (r.get('ecommerce_order_no'), r.get('product_code'), r.get('shipped_date')) in existing_r_keys]
+
+            notify('parsed', total=total)
+
+            imported_at = now_cst()
+            notify('inserting', current=0, total=len(new_shipping) + len(new_returns))
+            batch = shipping_repository.create_batch('finance', filename, total, imported_at)
+
+            def on_insert_progress(current, total_rows):
+                if cancel_check and cancel_check():
+                    raise InterruptedError('用户已中止导入')
+                notify('inserting', current=current, total=total_rows)
+
+            inserted_shipping = shipping_repository.bulk_insert_shipping(
+                batch.id, new_shipping,
+                progress_cb=on_insert_progress,
+                record_type='shipping', source='finance',
+            )
+            inserted_returns = shipping_repository.bulk_insert_return(
+                batch.id, new_returns,
+                progress_cb=on_insert_progress,
+            )
+            notify('inserted',
+                   inserted=inserted_shipping,
+                   inserted_returns=inserted_returns,
+                   skipped=len(skipped_shipping),
+                   aftersale_filtered=aftersale_count)
+
+            # 对本批次财务来源新增订单触发成品组合
+            new_order_nos = shipping_repository.get_new_order_nos_by_source(batch.id, source='finance')
+            if new_order_nos:
+                notify('resolving', current=0, total=len(new_order_nos))
+                _resolve_orders(new_order_nos, source='finance', progress_cb=progress_cb)
+
+            return {
+                'total':              total,
+                'aftersale_filtered': aftersale_count,
+                'inserted':           inserted_shipping,
+                'inserted_returns':   inserted_returns,
+                'skipped':            len(skipped_shipping),
+                'skipped_returns':    len(skipped_returns),
+                'skipped_rows':       [_serialize_finance_skipped_row(r) for r in skipped_shipping],
+            }
+        except Exception:
+            if batch is not None:
+                try:
+                    from database.base import db
+                    db.session.rollback()
+                    shipping_repository.delete_batch(batch.id)
+                except Exception:
+                    pass
+            raise
+
     def get_operators(self) -> List[Dict]:
         return shipping_repository.get_all_operators()
 
@@ -603,21 +820,30 @@ class ShippingService:
         return {'updated': count}
 
     def resolve_stale(self) -> Dict:
-        """刷新所有 is_stale 的订单组合"""
-        stale_orders = shipping_repository.get_stale_order_nos()
-        if stale_orders:
-            _resolve_orders(stale_orders)
-        return {'resolved': len(stale_orders)}
+        """刷新所有 is_stale 的订单组合（按 source 分别处理）"""
+        stale_pairs = shipping_repository.get_stale_order_nos()  # [(order_no, source), ...]
+        # 按 source 分组
+        from collections import defaultdict
+        by_source = defaultdict(list)
+        for order_no, src in stale_pairs:
+            by_source[src].append(order_no)
+        for src, order_nos in by_source.items():
+            _resolve_orders(order_nos, source=src)
+        return {'resolved': len(stale_pairs)}
 
     def get_stats(self) -> Dict:
         return shipping_repository.get_stats()
 
     def resolve_all(self, progress_cb=None) -> Dict:
-        """全量重新计算所有订单的成品组合"""
-        all_order_nos = shipping_repository.get_all_order_nos()
-        if all_order_nos:
-            _resolve_orders(all_order_nos, progress_cb=progress_cb)
-        return {'resolved': len(all_order_nos)}
+        """全量重新计算所有订单的成品组合（发货端 + 财务端分别 resolve）"""
+        shipping_nos = shipping_repository.get_all_order_nos_by_source('shipping')
+        finance_nos  = shipping_repository.get_all_order_nos_by_source('finance')
+        total = len(shipping_nos) + len(finance_nos)
+        if shipping_nos:
+            _resolve_orders(shipping_nos, source='shipping', progress_cb=progress_cb)
+        if finance_nos:
+            _resolve_orders(finance_nos, source='finance', progress_cb=progress_cb)
+        return {'resolved': total}
 
     def get_shipped_dates(self) -> List[str]:
         return shipping_repository.get_distinct_shipped_dates()
@@ -629,8 +855,8 @@ class ShippingService:
         count = shipping_repository.save_warehouse_filters(items)
         return {'updated': count}
 
-    def get_chart_options(self, date_start=None, date_end=None) -> Dict:
-        return shipping_repository.get_chart_options(date_start=date_start, date_end=date_end)
+    def get_chart_options(self, date_start=None, date_end=None, source: str = 'shipping') -> Dict:
+        return shipping_repository.get_chart_options(date_start=date_start, date_end=date_end, source=source)
 
     def get_chart_data(self, params: Dict) -> Dict:
         return shipping_repository.get_chart_data(params)

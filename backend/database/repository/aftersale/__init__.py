@@ -2865,11 +2865,7 @@ class AftersaleRepository:
                     if active:
                         candidate_sids = active
                     elif not parsed.get('version'):
-                        # 精确/包含匹配：生命周期全部不符
-                        # 模糊匹配：日期不符但名称有匹配 → 保留候选，降置信度（用户确认）
-                        if fuzzy_sids and not exact_sids and not substring_sids and not prefix_sids:
-                            series_confidence = 'low'   # 提前锁定低置信，不终止
-                        elif len(candidate_sids) == 1:
+                        if len(candidate_sids) == 1:
                             # 单一候选：生命周期数据可能不准，保留并降低置信度
                             series_confidence = 'low'
                         else:

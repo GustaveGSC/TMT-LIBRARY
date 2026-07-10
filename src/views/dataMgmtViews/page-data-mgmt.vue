@@ -236,9 +236,15 @@ async function handleResolveAll() {
     <main class="main-content">
       <div class="content-body">
         <div v-show="activePage === 'import'" class="import-layout">
-          <DataImport />
+          <div class="import-section">
+            <div class="import-section-title">发货数据</div>
+            <DataImport />
+          </div>
           <div class="import-divider"></div>
-          <ReturnImport />
+          <div class="import-section">
+            <div class="import-section-title">财务数据</div>
+            <ReturnImport />
+          </div>
         </div>
         <div v-show="activePage === 'config'" class="config-layout">
           <OperatorConfig />
@@ -356,12 +362,17 @@ async function handleResolveAll() {
 .content-body::-webkit-scrollbar-track { background: transparent; }
 .content-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
-/* 导入数据双列布局 */
+/* 导入数据两列布局 */
 .import-layout {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   gap: 0;
   align-items: start;
+}
+.import-section { display: flex; flex-direction: column; gap: 12px; }
+.import-section-title {
+  font-size: 13px; font-weight: 600; color: var(--text-muted);
+  padding-bottom: 8px; border-bottom: 1px solid var(--border);
 }
 .import-divider {
   width: 1px;

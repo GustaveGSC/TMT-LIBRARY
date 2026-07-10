@@ -25,29 +25,32 @@ app_version       id, version, description, download_url, created_at
 ## 发货数据
 ```
 shipping_batch
-  id, type(shipping/return), filename, row_count, imported_at
+  id, type(shipping/return/finance), filename, row_count, imported_at
 
 shipping_record
   id, batch_id(FK), ecommerce_order_no, line_no, shipped_date,
   channel_name, channel_code, channel_org_name, operator(最近操作人),
   product_code, product_name, spec, quantity, country, province, city,
-  district, street, address, buyer_remark, seller_remark
-  # UNIQUE(ecommerce_order_no, line_no, product_code)
-  # 仅存发货数据；record_type 列存在但固定='shipping'（旧迁移残留，不再使用）
-  # 文件内同 key 行先合并（quantity 累加）再与 DB 去重
-  # 按列名匹配（_build_col_map），与列顺序无关，缺失必要列抛 ValueError
-  # 必要列：电商主订单号/单据日期/渠道名称/渠道商/渠道商名称/最近操作人
-  #         项次/商品型号/商品名称/数量/省份
-  # 可选列（有则读取）：国家/市区/县区/街道/详细地址/规格/买家留言/商家备注
+  district, street, address, buyer_remark, seller_remark,
+  source ENUM('shipping','finance') DEFAULT 'shipping'
+  # UNIQUE(ecommerce_order_no, line_no, product_code, record_type, source)
+  # source='shipping'：发货端 ERP 导出；source='finance'：财务端 ERP 导出（line_no=None）
+  # 财务端必要列：交易日期/部门名称/品号/品名/规格/数量/平台订单/省/市/区
 
 return_record
   id, batch_id(FK→shipping_batch), ecommerce_order_no, shipped_date,
   product_code, quantity(负值), warehouse_name
   # UNIQUE(ecommerce_order_no, product_code, shipped_date)
-  # 独立存储销退清单原始数据（全量保存，不在导入时过滤仓库）
-  # 必要列：平台订单/交易日期/品号/数量/仓库名称
-  # 导入时：仅保留数量<0 的行；仅保留 ecommerce_order_no 在 shipping_record 已存在的行
-  # 计算 shipping_order_finished 时动态过滤 is_excluded=True 的仓库，不影响原始数据
+  # 发货端/财务端负数量行均写入此表
+
+shipping_order_finished
+  id, ecommerce_order_no, finished_code(NULL=未匹配), finished_name,
+  quantity(发货数量), return_quantity(销退数量), actual_quantity(实际=发货-销退),
+  shipped_date, operator, channel_name, province,
+  is_stale, resolved_at,
+  source ENUM('shipping','finance') DEFAULT 'shipping'
+  # source 与 shipping_record 对应；两个来源独立 resolve，互不干扰
+  # INDEX(source)；图表查询必须带 source 过滤
 
 return_warehouse_filter
   id, warehouse_name(UNIQUE), is_excluded(默认False), created_at
@@ -57,11 +60,6 @@ shipping_operator_type
   id, operator(UNIQUE), type(shipping/aftersale/unknown), created_at, updated_at
   # 「最近操作人」→ 发货/售后/未分类
 
-shipping_order_finished
-  id, ecommerce_order_no, finished_code(NULL=未匹配), finished_name,
-  quantity(发货数量), return_quantity(销退数量), actual_quantity(实际=发货-销退),
-  shipped_date, operator, channel_name, province,
-  is_stale(产品库变更后标记), resolved_at
   # 按订单对发货/销退数据分别贪心匹配成品组合，写入三列数量
 
 packaged_equivalent

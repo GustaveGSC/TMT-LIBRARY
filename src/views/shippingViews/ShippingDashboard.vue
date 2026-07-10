@@ -192,6 +192,14 @@ async function resolveMapKey() {
 
 // ── 响应式状态 ────────────────────────────────────
 
+const dataSource     = ref('shipping') // 数据来源：'shipping' | 'finance'
+const tradeType      = ref('domestic') // 内外销：'all' | 'domestic' | 'foreign'（仅财务端有效）
+
+const TRADE_TYPE_OPTIONS = [
+  { label: '内外销数据', value: 'all'      },
+  { label: '内销数据',   value: 'domestic' },
+  { label: '外贸数据',   value: 'foreign'  },
+]
 const sections = reactive({ time: true, product: true, channel: true, region: true })
 const selectedPeriod = ref('month')
 const chartType      = ref('bar')    // 图表类型：bar/line/pie/map
@@ -983,6 +991,17 @@ function drillBack(idx) {
   drillStack.value = drillStack.value.slice(0, idx)
 }
 
+function onSourceChange() {
+  // 切换数据来源时清空渠道和省份筛选（两端维度含义不同）
+  filters.value.channelNames = []
+  filters.value.channelCodes = []
+  filters.value.provinces    = []
+  filters.value.cities       = []
+  filters.value.districts    = []
+  tradeType.value = 'domestic'
+  loadOptions()
+}
+
 async function loadOptions() {
   loadingOptions.value = true
   try {
@@ -990,6 +1009,7 @@ async function loadOptions() {
     const params = {}
     if (start) params.date_start = formatDate(start)
     if (end)   params.date_end   = formatDate(end)
+    params.source = dataSource.value
     const [optRes, treeRes] = await Promise.all([
       http.get('/api/shipping/chart-options', { params }),
       http.get('/api/category/tree'),
@@ -1022,12 +1042,14 @@ async function loadChartData() {
       // 使用有效筛选函数（含单候选自动下钻逻辑）
       category_ids:  effCategoryIds(),
       series_ids:    effSeriesIds(),
+      trade_type:    tradeType.value,
       model_ids:     effModelIds(),
       channel_names: effChannelNames(),
       channel_codes: effChannelCodes(),
       provinces:     effProvinces(),
       cities:        effCities(),
       districts:     effDistricts(),
+      source:        dataSource.value,
     }
     const res = await http.post('/api/shipping/chart-data', body)
     if (res.success) {
@@ -2155,6 +2177,12 @@ watch(groupBy, () => {
         </button>
       </div>
 
+      <!-- ▌数据来源 -->
+      <div class="source-toggle">
+        <el-segmented v-model="dataSource" :options="[{ label: '发货端', value: 'shipping' }, { label: '财务端', value: 'finance' }]"
+          size="default" block @change="onSourceChange" />
+      </div>
+
       <!-- ▌时间选择 -->
       <div class="section-group">
         <div class="section-hd" @click="toggleSection('time')">
@@ -2450,6 +2478,14 @@ watch(groupBy, () => {
 
         <!-- 右侧：数据指标选择 + 全屏按钮 -->
         <div class="ct-right">
+          <el-select
+            v-model="tradeType"
+            :size="isMobile ? 'small' : 'default'"
+            class="trade-type-select"
+            @change="loadChartData()"
+          >
+            <el-option v-for="t in TRADE_TYPE_OPTIONS" :key="t.value" :label="t.label" :value="t.value" />
+          </el-select>
           <el-select v-model="dataMetric" :size="isMobile ? 'small' : 'default'" class="metric-select">
             <el-option v-for="m in METRIC_OPTIONS" :key="m.value" :label="m.label" :value="m.value" />
           </el-select>
@@ -2711,6 +2747,8 @@ watch(groupBy, () => {
   display: flex; flex-direction: column; gap: 5px;
 }
 
+.source-toggle { flex-shrink: 0; }
+
 .panel-top-btns { display: flex; gap: 6px; flex-shrink: 0; }
 .btn-query {
   flex: 1; height: 36px;
@@ -2777,7 +2815,7 @@ watch(groupBy, () => {
 }
 .ct-left   { flex: 1; display: flex; align-items: center; }
 .ct-center { display: flex; align-items: center; gap: 3px; }
-.ct-right  { flex: 1; display: flex; align-items: center; justify-content: flex-end; }
+.ct-right  { flex: 1; display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
 
 /* 下钻面包屑 */
 .drill-breadcrumb { display: flex; align-items: center; gap: 4px; font-size: 14px; }
@@ -2786,6 +2824,9 @@ watch(groupBy, () => {
 .bc-link { color: #3a7bc8; cursor: pointer; }
 .bc-link:hover { text-decoration: underline; background: rgba(58,123,200,0.08); }
 .bc-current { color: #3a3028; font-weight: 600; }
+.trade-type-select { width: 120px; margin-right: 5px; }
+:deep(.trade-type-select .el-input__wrapper) { height: 32px; }
+:deep(.trade-type-select .el-input__inner) { height: 32px; line-height: 32px; }
 .metric-select { width: 150px; }
 :deep(.metric-select .el-input__wrapper) { height: 32px; }
 :deep(.metric-select .el-input__inner) { height: 32px; line-height: 32px; }

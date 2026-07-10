@@ -1,16 +1,14 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
-import { ref, onMounted } from 'vue'
+import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import http, { getBaseURL } from '@/api/http'
 
 // ── 响应式状态 ────────────────────────────────────
-const lastReturnDate = ref('')   // 数据库中最新的销退日期
-
 const file      = ref(null)
 const fileName  = ref('')
 const loading   = ref(false)
-const result    = ref(null)   // { total, negative_count, unmatched, inserted, skipped, merged_away, ... }
+const result    = ref(null)
 const fileInput = ref(null)
 
 // 进度状态
@@ -22,37 +20,16 @@ const phaseDetail   = ref('')
 const currentTaskId = ref('')
 const isCancelling  = ref(false)
 
-// 跳过记录弹窗
-const showSkippedDialog  = ref(false)
-const skippedRows        = ref([])
-
-// 文件内合并弹窗
-const showMergedDialog = ref(false)
-const mergedRows       = ref([])
-
-// 无匹配订单弹窗
-const showUnmatchedDialog = ref(false)
-const unmatchedRows       = ref([])
+// 跳过记录弹窗（发货行去重）
+const showSkippedDialog = ref(false)
+const skippedRows       = ref([])
 
 // 错误弹窗
 const showErrorDialog = ref(false)
 const errorMessage    = ref('')
 
-// ── 生命周期 ──────────────────────────────────────
-onMounted(async () => {
-  await refreshStats()
-})
-
 // ── 方法 ──────────────────────────────────────────
 
-async function refreshStats() {
-  try {
-    const res = await http.get('/api/shipping/stats')
-    if (res.success) lastReturnDate.value = res.data.last_return_date || ''
-  } catch {}
-}
-
-// 错误用 dialog 展示，不自动消失
 function showError(msg) {
   errorMessage.value    = msg || '未知错误'
   showErrorDialog.value = true
@@ -84,7 +61,6 @@ function onFileChange(e) {
   e.target.value    = ''
 }
 
-// 根据进度事件更新进度条与阶段文字
 function handleEvent(data) {
   switch (data.step) {
     case 'parsing':
@@ -100,18 +76,16 @@ function handleEvent(data) {
     case 'inserting':
       phaseLabel.value  = '正在写入数据库...'
       phaseDetail.value = data.total ? `${data.current} / ${data.total} 条` : ''
-      progress.value    = data.total
-        ? 35 + Math.round((data.current / data.total) * 20)
-        : 35
+      progress.value    = data.total ? 35 + Math.round((data.current / data.total) * 20) : 35
       break
     case 'inserted':
       phaseLabel.value  = '数据写入完成'
-      phaseDetail.value = `新增 ${data.inserted} 条，跳过 ${data.skipped} 条`
+      phaseDetail.value = `新增发货 ${data.inserted} 条，新增销退 ${data.inserted_returns} 条`
       progress.value    = 55
       break
     case 'resolving': {
       const pct = data.total > 0 ? Math.round((data.current / data.total) * 100) : 0
-      phaseLabel.value  = '正在重算成品组合...'
+      phaseLabel.value  = '正在匹配成品组合...'
       phaseDetail.value = `${data.current} / ${data.total} 个订单`
       progress.value    = 55 + Math.round(pct * 0.42)
       break
@@ -136,10 +110,9 @@ async function doImport() {
 
   let wasCancelled = false
   try {
-    // Step 1：上传文件，获取 task_id
     const form = new FormData()
     form.append('file', file.value)
-    const res = await http.post('/api/shipping/import/return', form, {
+    const res = await http.post('/api/shipping/import/finance', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
     if (!res.success) { showError(res.message || '上传失败'); return }
@@ -147,7 +120,6 @@ async function doImport() {
     currentTaskId.value = res.data.task_id
     progress.value = 5
 
-    // Step 2：订阅 SSE 进度流
     await new Promise((resolve, reject) => {
       const es = new EventSource(`${getBaseURL()}/api/shipping/import/progress/${currentTaskId.value}`)
 
@@ -172,20 +144,13 @@ async function doImport() {
     })
 
     if (wasCancelled) {
-      ElMessage.info('导入已中止，已回滚')
-    } else if (result.value) {
-      ElMessage.success('导入成功')
-      // 有跳过或无匹配记录则弹出明细
-      if (result.value.skipped_rows?.length) {
-        skippedRows.value       = result.value.skipped_rows
-        showSkippedDialog.value = true
-      }
-      mergedRows.value    = result.value.merged_away_rows || []
-      unmatchedRows.value = result.value.unmatched_rows   || []
-      await refreshStats()
+      ElMessage.info('导入已中止')
+      progress.value    = 0
+      phaseLabel.value  = ''
+      phaseDetail.value = ''
     }
   } catch (e) {
-    showError(e.message || '导入失败')
+    showError(e.message)
   } finally {
     loading.value       = false
     isCancelling.value  = false
@@ -199,13 +164,8 @@ async function doImport() {
 
     <div class="import-header">
       <div class="import-header-left">
-        <div class="import-title">导入销退清单</div>
-        <div class="import-sub">支持 .xlsx / .xls / .csv 格式，仅处理数量为负数的行，按订单号与发货记录匹配</div>
-      </div>
-      <div v-if="lastReturnDate && !loading" class="last-date-badge">
-        <span class="last-date-label">当前销退截至</span>
-        <span class="last-date-sep">·</span>
-        <span class="last-date-value">{{ lastReturnDate }}</span>
+        <div class="import-title">导入财务清单</div>
+        <div class="import-sub">支持 .xlsx / .xls / .csv 格式，正数量行写入发货记录，负数量行写入销退记录，售后组行自动过滤</div>
       </div>
     </div>
 
@@ -228,7 +188,6 @@ async function doImport() {
         <div class="file-zone-ext">.xlsx / .xls / .csv</div>
       </div>
       <div v-else class="file-zone-name">
-        <!-- Excel SVG 图标 -->
         <svg class="file-icon-excel" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
           <rect width="24" height="24" rx="4" fill="#1D6F42"/>
           <path d="M13 3H7a1 1 0 00-1 1v16a1 1 0 001 1h10a1 1 0 001-1V9l-5-6z" fill="#fff" fill-opacity=".15"/>
@@ -270,118 +229,46 @@ async function doImport() {
           <div class="rc-val">{{ result.total }}</div>
           <div class="rc-lbl">文件总行数</div>
         </div>
-        <div class="result-card">
-          <div class="rc-val">{{ result.negative_count }}</div>
-          <div class="rc-lbl">销退行数</div>
-        </div>
-        <div
-          :class="['result-card', result.unmatched > 0 && 'clickable']"
-          @click="result.unmatched > 0 && (showUnmatchedDialog = true)"
-        >
-          <div class="rc-val">{{ result.unmatched }}</div>
-          <div class="rc-lbl">{{ result.unmatched > 0 ? '无匹配订单 ›' : '无匹配订单' }}</div>
-        </div>
         <div class="result-card accent">
           <div class="rc-val">{{ result.inserted }}</div>
-          <div class="rc-lbl">新增记录</div>
+          <div class="rc-lbl">新增发货记录</div>
+        </div>
+        <div class="result-card accent">
+          <div class="rc-val">{{ result.inserted_returns }}</div>
+          <div class="rc-lbl">新增销退记录</div>
         </div>
         <div
           :class="['result-card', result.skipped > 0 && 'clickable']"
-          @click="result.skipped > 0 && (showSkippedDialog = true)"
+          @click="result.skipped > 0 && (skippedRows = result.skipped_rows, showSkippedDialog = true)"
         >
           <div class="rc-val">{{ result.skipped }}</div>
           <div class="rc-lbl">{{ result.skipped > 0 ? '跳过重复 ›' : '跳过重复' }}</div>
         </div>
-        <div
-          v-if="result.merged_away > 0"
-          class="result-card clickable"
-          @click="showMergedDialog = true"
-        >
-          <div class="rc-val">{{ result.merged_away }}</div>
-          <div class="rc-lbl">文件内合并 ›</div>
+        <div class="result-card">
+          <div class="rc-val">{{ result.aftersale_filtered }}</div>
+          <div class="rc-lbl">售后组过滤</div>
         </div>
-      </div>
-      <div v-if="result.inserted > 0" class="result-hint">
-        已自动重新计算受影响订单的成品组合净数量
       </div>
     </div>
 
+    <!-- 跳过重复弹窗 -->
+    <el-dialog v-model="showSkippedDialog" title="已跳过的重复发货记录" width="600px" :close-on-click-modal="false">
+      <el-table :data="skippedRows" size="small" border max-height="420">
+        <el-table-column prop="ecommerce_order_no" label="平台订单号" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="product_code"       label="品号"       width="130" />
+        <el-table-column prop="shipped_date"       label="日期"       width="100" align="center" />
+        <el-table-column prop="quantity"           label="数量"       width="80"  align="right" />
+      </el-table>
+      <template #footer>
+        <el-button @click="showSkippedDialog = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 错误弹窗 -->
-    <el-dialog
-      v-model="showErrorDialog"
-      title="导入失败"
-      width="480px"
-      :close-on-click-modal="false"
-    >
+    <el-dialog v-model="showErrorDialog" title="导入失败" width="480px" :close-on-click-modal="false">
       <div class="error-dialog-body">{{ errorMessage }}</div>
       <template #footer>
         <el-button type="primary" @click="showErrorDialog = false">确定</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 无匹配订单弹窗 -->
-    <el-dialog
-      v-model="showUnmatchedDialog"
-      title="以下销退行在发货记录中找不到对应订单，已忽略"
-      width="700px"
-      :close-on-click-modal="false"
-    >
-      <el-table :data="unmatchedRows" size="small" border max-height="420">
-        <el-table-column prop="ecommerce_order_no" label="平台订单"    min-width="160" show-overflow-tooltip />
-        <el-table-column prop="shipped_date"       label="交易日期"    width="100" align="center" />
-        <el-table-column prop="product_code"       label="品号"        min-width="130" show-overflow-tooltip />
-        <el-table-column prop="quantity"           label="数量"        width="80"  align="right" />
-        <el-table-column prop="warehouse_name"     label="仓库"        min-width="120" show-overflow-tooltip />
-      </el-table>
-      <template #footer>
-        <span style="font-size:12px; color:var(--text-muted); margin-right:auto;">
-          共 {{ unmatchedRows.length }} 条
-        </span>
-        <el-button @click="showUnmatchedDialog = false">关闭</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 文件内合并弹窗 -->
-    <el-dialog
-      v-model="showMergedDialog"
-      title="文件内合并消除的行（数量已累加到对应行）"
-      width="700px"
-      :close-on-click-modal="false"
-    >
-      <el-table :data="mergedRows" size="small" border max-height="460">
-        <el-table-column prop="ecommerce_order_no" label="平台订单"    min-width="160" show-overflow-tooltip />
-        <el-table-column prop="shipped_date"       label="交易日期"    width="100" align="center" />
-        <el-table-column prop="product_code"       label="品号"        min-width="130" show-overflow-tooltip />
-        <el-table-column prop="quantity"           label="数量"        width="80"  align="right" />
-        <el-table-column prop="warehouse_name"     label="仓库"        min-width="120" show-overflow-tooltip />
-      </el-table>
-      <template #footer>
-        <span style="font-size:12px; color:var(--text-muted); margin-right:auto;">
-          共 {{ mergedRows.length }} 条
-        </span>
-        <el-button @click="showMergedDialog = false">关闭</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 跳过记录弹窗 -->
-    <el-dialog
-      v-model="showSkippedDialog"
-      title="以下记录已存在于数据库，已跳过"
-      width="700px"
-      :close-on-click-modal="false"
-    >
-      <el-table :data="skippedRows" size="small" border max-height="420">
-        <el-table-column prop="ecommerce_order_no" label="平台订单"    min-width="160" show-overflow-tooltip />
-        <el-table-column prop="shipped_date"       label="交易日期"    width="100" align="center" />
-        <el-table-column prop="product_code"       label="品号"        min-width="130" show-overflow-tooltip />
-        <el-table-column prop="quantity"           label="数量"        width="80"  align="right" />
-        <el-table-column prop="warehouse_name"     label="仓库"        min-width="120" show-overflow-tooltip />
-      </el-table>
-      <template #footer>
-        <span style="font-size:12px; color:var(--text-muted); margin-right:auto;">
-          共 {{ skippedRows.length }} 条
-        </span>
-        <el-button @click="showSkippedDialog = false">关闭</el-button>
       </template>
     </el-dialog>
 
@@ -432,33 +319,6 @@ async function doImport() {
 .file-icon-excel { width: 32px; height: 32px; flex-shrink: 0; }
 .file-name-text  { flex: 1; font-size: 13px; color: var(--text-primary); word-break: break-all; }
 .file-change     { font-size: 11px; color: var(--text-muted); flex-shrink: 0; white-space: nowrap; }
-
-.last-date-badge {
-  display: inline-flex;
-  align-items: center;
-  flex-shrink: 0;
-  gap: 8px;
-  padding: 7px 16px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 20px;
-}
-.last-date-label {
-  font-size: 12px;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-.last-date-sep {
-  font-size: 12px;
-  color: var(--border);
-}
-.last-date-value {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--accent);
-  font-family: monospace;
-  letter-spacing: 0.04em;
-}
 
 /* 按钮行 */
 .btn-row {
@@ -521,7 +381,6 @@ async function doImport() {
 .result-title { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 14px; }
 .result-cards {
   display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
-  margin-bottom: 12px;
 }
 .result-card {
   background: var(--bg); border: 1px solid var(--border);
@@ -533,8 +392,6 @@ async function doImport() {
 .rc-val { font-size: 28px; font-weight: 700; color: var(--text-primary); }
 .result-card.accent .rc-val { color: var(--accent); }
 .rc-lbl { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
-
-.result-hint { font-size: 12px; color: var(--text-muted); }
 
 .error-dialog-body {
   font-size: 13px; color: var(--text-primary);

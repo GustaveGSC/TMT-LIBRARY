@@ -7,7 +7,7 @@ class ShippingBatch(db.Model):
     __tablename__ = 'shipping_batch'
 
     id          = db.Column(db.Integer,                    primary_key=True, autoincrement=True)
-    type        = db.Column(db.Enum('shipping', 'return'), nullable=False)
+    type        = db.Column(db.Enum('shipping', 'return', 'finance'), nullable=False)
     filename    = db.Column(db.String(255),                nullable=False)
     row_count   = db.Column(db.Integer,                    nullable=False, default=0)
     imported_at = db.Column(db.DateTime,                   nullable=False)
@@ -29,7 +29,7 @@ class ShippingRecord(db.Model):
     """原始发货记录，单表存所有年份"""
     __tablename__ = 'shipping_record'
     __table_args__ = (
-        db.UniqueConstraint('ecommerce_order_no', 'line_no', 'product_code', 'record_type',
+        db.UniqueConstraint('ecommerce_order_no', 'line_no', 'product_code', 'record_type', 'source',
                             name='uq_shipping_order_line'),
         db.Index('ix_shipping_record_shipped_date', 'shipped_date'),
         db.Index('ix_shipping_record_operator',     'operator'),
@@ -40,6 +40,7 @@ class ShippingRecord(db.Model):
     id                 = db.Column(db.Integer,        primary_key=True, autoincrement=True)
     batch_id           = db.Column(db.Integer,        db.ForeignKey('shipping_batch.id'), nullable=False)
     record_type        = db.Column(db.Enum('shipping', 'return'), nullable=False, default='shipping')
+    source             = db.Column(db.Enum('shipping', 'finance'), nullable=False, default='shipping')
     ecommerce_order_no = db.Column(db.String(100),    nullable=True)
     line_no            = db.Column(db.String(50),     nullable=True)
     shipped_date       = db.Column(db.Date,           nullable=True)
@@ -140,6 +141,7 @@ class ShippingOrderFinished(db.Model):
     province           = db.Column(db.String(50),     nullable=True)
     city               = db.Column(db.String(100),    nullable=True)
     district           = db.Column(db.String(100),    nullable=True)
+    source             = db.Column(db.Enum('shipping', 'finance'), nullable=False, default='shipping')
     is_stale           = db.Column(db.Boolean,        nullable=False, default=False)
     resolved_at        = db.Column(db.DateTime,       nullable=True)
 
@@ -161,5 +163,6 @@ class ShippingOrderFinished(db.Model):
             'province':           self.province,
             'city':               self.city,
             'district':           self.district,
+            'source':             self.source,
             'is_stale':           self.is_stale,
         }

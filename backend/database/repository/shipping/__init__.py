@@ -81,8 +81,37 @@ class ShippingRepository:
         return existing
 
     @staticmethod
+    def get_existing_finance_keys(keys: List[Tuple]) -> Set[Tuple]:
+        """
+        给定 (ecommerce_order_no, product_code, shipped_date) 三元组列表，
+        返回 shipping_record 中已存在的财务端记录子集（用于财务导入去重）。
+        """
+        if not keys:
+            return set()
+        existing = set()
+        CHUNK = 500
+        for i in range(0, len(keys), CHUNK):
+            chunk = keys[i:i + CHUNK]
+            rows = db.session.query(
+                ShippingRecord.ecommerce_order_no,
+                ShippingRecord.product_code,
+                ShippingRecord.shipped_date,
+            ).filter(
+                db.tuple_(
+                    ShippingRecord.ecommerce_order_no,
+                    ShippingRecord.product_code,
+                    ShippingRecord.shipped_date,
+                ).in_(chunk),
+                ShippingRecord.source == 'finance',
+            ).all()
+            for r in rows:
+                existing.add((r.ecommerce_order_no, r.product_code, r.shipped_date))
+        return existing
+
+    @staticmethod
     def bulk_insert_shipping(batch_id: int, rows: List[Dict],
-                              progress_cb=None, record_type: str = 'shipping') -> int:
+                              progress_cb=None, record_type: str = 'shipping',
+                              source: str = 'shipping') -> int:
         """分块 INSERT IGNORE，已存在行静默跳过，返回实际新增行数"""
         if not rows:
             return 0
@@ -95,6 +124,7 @@ class ShippingRepository:
             return {
                 'batch_id':           batch_id,
                 'record_type':        record_type,
+                'source':             source,
                 'ecommerce_order_no': row.get('ecommerce_order_no'),
                 'line_no':            row.get('line_no'),
                 'shipped_date':       row.get('shipped_date'),
@@ -332,8 +362,8 @@ class ShippingRepository:
     # ── 成品组合 ─────────────────────────────────────
 
     @staticmethod
-    def get_new_order_nos(batch_id: int) -> List[str]:
-        """返回本批次新增的、且尚未写入 shipping_order_finished 的订单号"""
+    def get_new_order_nos_by_source(batch_id: int, source: str) -> List[str]:
+        """返回本批次新增的、且该 source 下尚未写入 shipping_order_finished 的订单号"""
         batch_orders = db.session.query(
             ShippingRecord.ecommerce_order_no
         ).filter(
@@ -345,22 +375,24 @@ class ShippingRepository:
         existing = db.session.query(
             ShippingOrderFinished.ecommerce_order_no
         ).filter(
-            ShippingOrderFinished.ecommerce_order_no.in_(batch_order_set)
+            ShippingOrderFinished.ecommerce_order_no.in_(batch_order_set),
+            ShippingOrderFinished.source == source,
         ).distinct().all()
         existing_set = {r.ecommerce_order_no for r in existing}
 
         return [o for o in batch_order_set if o not in existing_set]
 
     @staticmethod
-    def get_stale_order_nos() -> List[str]:
-        """返回所有标记为 is_stale=True 的订单号"""
+    def get_stale_order_nos() -> List[Tuple[str, str]]:
+        """返回所有标记为 is_stale=True 的 (order_no, source) 对"""
         rows = db.session.query(
-            ShippingOrderFinished.ecommerce_order_no
+            ShippingOrderFinished.ecommerce_order_no,
+            ShippingOrderFinished.source,
         ).filter_by(is_stale=True).distinct().all()
-        return [r.ecommerce_order_no for r in rows]
+        return [(r.ecommerce_order_no, r.source) for r in rows]
 
     @staticmethod
-    def get_order_products(order_nos: List[str]) -> Dict[str, Dict]:
+    def get_order_products(order_nos: List[str], source: str = 'shipping') -> Dict[str, Dict]:
         """
         返回 {order_no: {'product_codes': {code: qty}, 'meta': {...}}}
         meta 取该订单第一行的 shipped_date/operator/channel_name/province
@@ -368,6 +400,7 @@ class ShippingRepository:
         records = ShippingRecord.query.filter(
             ShippingRecord.ecommerce_order_no.in_(order_nos),
             ShippingRecord.record_type == 'shipping',
+            ShippingRecord.source == source,
         ).all()
         result: Dict[str, Dict] = {}
         for r in records:
@@ -394,15 +427,15 @@ class ShippingRepository:
         return result
 
     @staticmethod
-    def delete_order_finished(order_nos: List[str]):
-        """删除这些订单的旧结果（刷新前清除），立即 commit 释放锁"""
+    def delete_order_finished(order_nos: List[str], source: str = 'shipping'):
+        """删除这些订单指定来源的旧结果（刷新前清除），立即 commit 释放锁"""
         if order_nos:
-            # 分批删除，避免 IN 子句过大
             chunk_size = 500
             for i in range(0, len(order_nos), chunk_size):
                 chunk = order_nos[i:i + chunk_size]
                 ShippingOrderFinished.query.filter(
-                    ShippingOrderFinished.ecommerce_order_no.in_(chunk)
+                    ShippingOrderFinished.ecommerce_order_no.in_(chunk),
+                    ShippingOrderFinished.source == source,
                 ).delete(synchronize_session=False)
                 db.session.commit()
 
@@ -429,6 +462,7 @@ class ShippingRepository:
                     province           = r.get('province'),
                     city               = r.get('city'),
                     district           = r.get('district'),
+                    source             = r.get('source', 'shipping'),
                     is_stale           = False,
                     resolved_at        = r.get('resolved_at'),
                 )
@@ -462,10 +496,21 @@ class ShippingRepository:
 
     @staticmethod
     def get_all_order_nos() -> List[str]:
-        """返回 shipping_record 中所有不重复的订单号（仅发货记录）"""
+        """返回 shipping_record 中所有不重复的订单号（仅发货端发货记录，向后兼容）"""
         rows = db.session.query(ShippingRecord.ecommerce_order_no).filter(
             ShippingRecord.ecommerce_order_no.isnot(None),
             ShippingRecord.record_type == 'shipping',
+            ShippingRecord.source == 'shipping',
+        ).distinct().all()
+        return [r.ecommerce_order_no for r in rows]
+
+    @staticmethod
+    def get_all_order_nos_by_source(source: str) -> List[str]:
+        """返回指定 source 下所有不重复的订单号（仅发货记录）"""
+        rows = db.session.query(ShippingRecord.ecommerce_order_no).filter(
+            ShippingRecord.ecommerce_order_no.isnot(None),
+            ShippingRecord.record_type == 'shipping',
+            ShippingRecord.source == source,
         ).distinct().all()
         return [r.ecommerce_order_no for r in rows]
 
@@ -482,8 +527,8 @@ class ShippingRepository:
     # ── 图表数据 ─────────────────────────────────────
 
     @staticmethod
-    def get_chart_options(date_start=None, date_end=None) -> Dict:
-        """返回渠道层级、省份层级、active产品ID，均按日期范围过滤"""
+    def get_chart_options(date_start=None, date_end=None, source: str = 'shipping') -> Dict:
+        """返回渠道层级、省份层级、active产品ID，均按日期范围和数据来源过滤"""
         from database.models.product.category import ProductCategory, ProductSeries, ProductModel
         from database.models.product.finished import ProductFinished
         from datetime import datetime as _dt
@@ -503,12 +548,14 @@ class ShippingRepository:
                     pass
             return q
 
-        # 售后操作人子查询（排除 type='aftersale' 的操作人对应记录）
+        # 售后操作人子查询（排除 type='aftersale' 的操作人对应记录，仅发货端需要）
         aftersale_ops = db.session.query(ShippingOperatorType.operator).filter_by(type='aftersale').subquery()
         base_filter = [
             sof.finished_code.isnot(None),
-            db.or_(sof.operator.is_(None), ~sof.operator.in_(aftersale_ops)),
+            sof.source == source,
         ]
+        if source == 'shipping':
+            base_filter.append(db.or_(sof.operator.is_(None), ~sof.operator.in_(aftersale_ops)))
 
         # 渠道：channel_name → [{code, org_name}] 层级结构
         ch_q = db.session.query(
@@ -607,6 +654,7 @@ class ShippingRepository:
 
         sof = ShippingOrderFinished
         group_by      = params.get('group_by', 'date')
+        source        = params.get('source', 'shipping')
         date_start    = params.get('date_start')
         date_end      = params.get('date_end')
         channel_names = params.get('channel_names') or []
@@ -617,6 +665,7 @@ class ShippingRepository:
         category_ids  = params.get('category_ids') or []
         series_ids    = params.get('series_ids') or []
         model_ids     = params.get('model_ids') or []
+        trade_type    = params.get('trade_type', 'all')  # 'all'|'domestic'|'foreign'
 
         # 禁用的 finished 类型编码前缀，查询时排除对应发货记录
         disabled_prefixes = [
@@ -627,20 +676,24 @@ class ShippingRepository:
             return float(v) if v is not None else 0.0
 
         # 根据 group_by 判断需要 JOIN 到哪一层产品表
+        needs_trade_filter = trade_type in ('domestic', 'foreign')
         product_group_by  = group_by in ('category', 'series', 'model')
-        needs_model_join  = product_group_by or bool(category_ids or series_ids or model_ids)
-        needs_series_join = group_by in ('category', 'series') or bool(category_ids or series_ids)
+        needs_model_join  = product_group_by or bool(category_ids or series_ids or model_ids) or needs_trade_filter
+        needs_series_join = group_by in ('category', 'series') or bool(category_ids or series_ids) or needs_trade_filter
         needs_cat_join    = group_by == 'category' or bool(category_ids)
 
-        # 售后操作人子查询（在整个 get_chart_data 调用中复用）
+        # 售后操作人子查询（在整个 get_chart_data 调用中复用，仅发货端需要）
         aftersale_ops_sub = db.session.query(ShippingOperatorType.operator).filter_by(type='aftersale').subquery()
 
         def _apply_filters(q):
             """将所有过滤条件应用到查询对象，返回新查询"""
-            q = q.filter(
+            base_conditions = [
                 sof.finished_code.isnot(None),
-                db.or_(sof.operator.is_(None), ~sof.operator.in_(aftersale_ops_sub)),
-            )
+                sof.source == source,
+            ]
+            if source == 'shipping':
+                base_conditions.append(db.or_(sof.operator.is_(None), ~sof.operator.in_(aftersale_ops_sub)))
+            q = q.filter(*base_conditions)
             if needs_model_join:
                 q = q.join(ProductFinished,
                            sof.finished_code == ProductFinished.code)
@@ -656,6 +709,12 @@ class ShippingRepository:
                 q = q.filter(ProductSeries.id.in_(series_ids))
             if category_ids:
                 q = q.filter(ProductCategory.id.in_(category_ids))
+            # 内外销过滤（仅财务端）：FTP 系列编码视为外贸
+            if needs_trade_filter:
+                if trade_type == 'domestic':
+                    q = q.filter(~ProductSeries.code.like('%-FTP'))
+                elif trade_type == 'foreign':
+                    q = q.filter(ProductSeries.code.like('%-FTP'))
             # 日期过滤
             if date_start:
                 try:

@@ -111,8 +111,8 @@ DELETE /api/product/params/keys/:key_id               # 删除键名（返回 us
 GET    /api/product/params/finished/:finished_id      # 获取成品参数，按分组聚合
 POST   /api/product/params/finished/:finished_id      # 全量 Upsert 保存成品参数
 
-POST   /api/shipping/import/shipping                  # 上传发货清单，返回 task_id
-POST   /api/shipping/import/return                    # 上传销退清单，返回 task_id（仅处理负数量行，按订单号匹配）
+POST   /api/shipping/import/shipping                  # 上传发货清单（发货端），返回 task_id；source='shipping'
+POST   /api/shipping/import/finance                   # 上传财务清单（财务端），返回 task_id；正数量→发货(source='finance')，负数量→销退，售后组过滤
 GET    /api/shipping/import/progress/:task_id         # SSE 进度流：parsing→parsed→inserting→inserted→resolving→done/error/cancelled
 POST   /api/shipping/import/cancel/:task_id           # 发送中止信号，后台完成当前 chunk 后 rollback
 GET    /api/shipping/operators                        # 获取所有最近操作人及其分类
@@ -120,14 +120,15 @@ POST   /api/shipping/operators/classify               # 批量保存操作人分
 GET    /api/shipping/stats                            # 统计摘要
 GET    /api/shipping/shipped-dates                    # 所有发货记录的 shipped_date（去重升序，不含销退日期）
 POST   /api/shipping/resolve                          # 刷新 is_stale 订单的成品组合
-POST   /api/shipping/resolve-all                      # 全量重新计算所有订单成品组合（SSE 进度，task_id 复用 import/progress 流）
+POST   /api/shipping/resolve-all                      # 全量重新计算所有订单成品组合（SSE 进度，task_id 复用 import/progress 流）；两个 source 分开 resolve
 GET    /api/shipping/warehouses                       # 所有出现过的仓库名及 is_excluded 状态
 POST   /api/shipping/warehouses/filter                # 批量保存仓库过滤配置 [{warehouse_name, is_excluded}]
 GET    /api/shipping/equivalents                      # 列出所有通用件对（含 name_a/name_b 产成品名称）
 POST   /api/shipping/equivalents                      # 新增 {code_a, code_b, note?}；服务端保证 code_a<code_b；校验产成品存在
 DELETE /api/shipping/equivalents/<id>                 # 删除通用件对
-GET    /api/shipping/chart-options                    # 渠道名和省份去重列表 {channels, provinces}
-POST   /api/shipping/chart-data                       # 图表聚合数据，body: {group_by, date_start?, date_end?, channel_names?, provinces?, category_id?, series_id?, model_id?} → {summary, items}
+GET    /api/shipping/chart-options                    # 渠道名和省份去重列表；?source=shipping|finance 过滤来源
+POST   /api/shipping/chart-data                       # 图表聚合数据，body 含 source('shipping'|'finance')、trade_type('all'|'domestic'|'foreign')
+                                                      #   trade_type: domestic 排除 %-FTP 系列，foreign 仅保留 %-FTP 系列（后端 SQL LIKE）
 
 GET    /api/aftersale/pending                         # 待处理订单列表（动态查询，尚未建工单的售后操作人订单）
 GET    /api/aftersale/pending/count                   # 待处理订单数量

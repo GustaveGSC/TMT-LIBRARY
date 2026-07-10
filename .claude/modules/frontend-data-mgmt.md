@@ -20,17 +20,15 @@
   - 缺失日期显示红色 32×32 圆圈（`.cal-inner--missing`）
   - 导航：年份 el-select + 月份 el-select + 上/下月按钮
 
-## ReturnImport.vue 说明
-- 导入销退清单（xlsx/xls/csv），同 DataImport.vue 文件选择区风格
-- 导入流程与 DataImport.vue 相同（上传→ task_id → SSE → 进度条）
-- **仅处理数量 < 0 的行**，其余行忽略
-- **不在导入时过滤仓库**，全量保存至 return_record；仓库过滤在计算 shipping_order_finished 时动态应用
-- **订单匹配**：仅保留 ecommerce_order_no 存在于 shipping_record 的行，其余入 `unmatched_rows`
-- **DB 去重**：检查 return_record 表 UNIQUE(ecommerce_order_no, product_code, shipped_date)
-- **导入后触发重算**：对受影响的订单删除旧成品组合结果并重算（含 return_quantity / actual_quantity）
-- **结果卡片**（3列网格）：文件总行数 / 销退行数 / 无匹配订单（可点击）/ 新增记录（accent）/ 跳过重复（可点击）/ 文件内合并（>0时可点击）
-- **弹窗列**：5列（平台订单/交易日期/品号/数量/仓库）
-- 无日历模块
+## ReturnImport.vue 说明（财务数据导入）
+- 已重构为**财务清单导入**，调用 `POST /api/shipping/import/finance`
+- 标题「导入财务清单」，支持 xlsx/xls/csv，同 DataImport.vue 文件选择区风格
+- 导入流程：上传→ task_id → SSE 进度（parsing→parsed→inserting→inserted→resolving→done）
+- **正数量行 → 发货记录（source='finance'）**；**负数量行 → 销退记录**；**部门名称='售后组' → 跳过**
+- `ecommerce_order_no` 补全：优先「平台订单」列，其次取「订单单号」中 `-` 后的部分，均空则跳过
+- 文件内合并：shipping 按 (order_no, product_code) 合并，return 按 (order_no, product_code, date) 合并
+- **结果卡片**（3列网格）：文件总行数 / 新增发货记录（accent）/ 新增销退记录（accent）/ 跳过重复（可点击）/ 售后组过滤
+- **跳过重复弹窗**：4列（平台订单号/品号/日期/数量）
 
 ## OperatorConfig.vue 说明
 - 展示所有「最近操作人」列出现过的人员，可设置类型：发货 / 售后 / 未分类
@@ -55,8 +53,11 @@
 - 内嵌 ShippingDashboard（左右两栏布局：筛选面板 + 图表区）
 
 ## ShippingDashboard.vue 说明
-- 左侧筛选面板（230px）：日期范围 + 时间粒度 segmented（月/季度/半年/年）、品类/系列/型号级联选择、渠道多选、省份多选、重置按钮
-- 右侧顶部工具栏：图表类型图标（柱/折/饼/地图）+ 分隔线 + 同比/环比按钮；最左显示下钻面包屑，最右显示数据指标选择
+- 左侧筛选面板（230px）：**数据来源 segmented（发货端/财务端）**、日期范围 + 时间粒度 segmented（月/季度/半年/年）、品类/系列/型号级联选择、渠道多选、省份多选、重置按钮
+  - 切换数据来源时清空渠道/省份/城市/区筛选（两端渠道名称完全不同），tradeType 重置为 'domestic'
+- 右侧顶部工具栏：图表类型图标（柱/折/饼/地图）+ 分隔线 + 同比/环比按钮；最左显示下钻面包屑，最右依次为**内外销选择（all/domestic/foreign）**、数据指标选择
+  - 内外销选择两端均显示，`domestic` 为默认值；`foreign` 过滤 `ProductSeries.code LIKE '%-FTP'`（后端 SQL）
+  - 切换来源或内外销时重新调 `GET /api/shipping/chart-options`（更新渠道列表）和 `POST /api/shipping/chart-data`
 - 右侧内容区：ECharts 图表（占满）+ 底部聚合维度切换 chip（产品/渠道/地域/时间）
 
 ### 聚合维度与图表类型
