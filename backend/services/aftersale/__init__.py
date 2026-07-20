@@ -240,42 +240,46 @@ class AftersaleService:
             'page_size': page_size,
         })
 
-    def export_cases(self, status, date_start, date_end,
+    def export_cases_to_file(self, output_path, status, date_start, date_end,
                      reason_id, channel_name, province, city, district,
                      reason_category, reason_name, shipping_alias,
                      model_code=None, search=None, sort_by=None, sort_order='desc',
                      category_ids=None, series_ids=None, model_ids=None,
                      reason_ids=None, reason_category_ids=None,
                      shipping_alias_ids=None, channel_names=None, provinces=None):
-        """导出符合筛选条件的全量工单为 xlsx，列顺序与页面表格一致"""
-        import io
+        """分页读取并以 write-only 模式导出到磁盘，避免大结果常驻 worker 内存。"""
         import openpyxl
+        from openpyxl.cell import WriteOnlyCell
         from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
         from openpyxl.utils import get_column_letter
         from sqlalchemy.orm import selectinload
         from database.models.product.category import ProductModel, ProductSeries
 
         # 限制导出行数，防止超大数据集打满 DB/内存
-        EXPORT_MAX_ROWS = int(os.getenv('EXPORT_MAX_ROWS', 50000))
-        items, total = _repo.get_cases(
-            page=1, page_size=EXPORT_MAX_ROWS,
-            status=status, date_start=date_start, date_end=date_end,
-            reason_id=reason_id, channel_name=channel_name,
-            province=province, city=city, district=district,
-            reason_category=reason_category, reason_name=reason_name,
-            shipping_alias=shipping_alias,
-            model_code=model_code, search=search,
-            sort_by=sort_by, sort_order=sort_order,
-            category_ids=category_ids, series_ids=series_ids, model_ids=model_ids,
-            reason_ids=reason_ids, reason_category_ids=reason_category_ids,
-            shipping_alias_ids=shipping_alias_ids, channel_names=channel_names,
-            provinces=provinces,
-        )
+        EXPORT_MAX_ROWS = max(1, int(os.getenv('EXPORT_MAX_ROWS', 50000)))
+        EXPORT_PAGE_SIZE = max(1, min(int(os.getenv('EXPORT_PAGE_SIZE', 1000)), EXPORT_MAX_ROWS))
 
-        # 一次性加载所有 reasons（避免 N+1）
-        case_ids = [c.id for c in items]
-        reasons_map = {}
-        if case_ids:
+        def _get_page(page, count_total):
+            return _repo.get_cases(
+                page=page, page_size=EXPORT_PAGE_SIZE,
+                status=status, date_start=date_start, date_end=date_end,
+                reason_id=reason_id, channel_name=channel_name,
+                province=province, city=city, district=district,
+                reason_category=reason_category, reason_name=reason_name,
+                shipping_alias=shipping_alias,
+                model_code=model_code, search=search,
+                sort_by=sort_by, sort_order=sort_order,
+                category_ids=category_ids, series_ids=series_ids, model_ids=model_ids,
+                reason_ids=reason_ids, reason_category_ids=reason_category_ids,
+                shipping_alias_ids=shipping_alias_ids, channel_names=channel_names,
+                provinces=provinces,
+                count_total=count_total,
+            )
+
+        def _load_reasons(items):
+            case_ids = [case.id for case in items]
+            if not case_ids:
+                return {}
             cases_with_reasons = (
                 AftersaleCase.query
                 .filter(AftersaleCase.id.in_(case_ids))
@@ -292,11 +296,11 @@ class AftersaleService:
                 )
                 .all()
             )
-            reasons_map = {c.id: c.case_reasons for c in cases_with_reasons}
+            return {case.id: case.case_reasons for case in cases_with_reasons}
 
         # ── 构建 xlsx ─────────────────────────────────────────────
-        wb = openpyxl.Workbook()
-        ws = wb.active
+        wb = openpyxl.Workbook(write_only=True)
+        ws = wb.create_sheet()
         ws.title = '售后数据'
 
         # 表头样式
@@ -330,16 +334,18 @@ class AftersaleService:
         # 左对齐列（1-based）
         LEFT_COLS = {1, 4, 6, 7, 8, 14, 15}
 
+        header_row = []
         for col_idx, (label, width) in enumerate(headers, 1):
-            cell = ws.cell(row=1, column=col_idx, value=label)
+            cell = WriteOnlyCell(ws, value=label)
             cell.font      = header_font
             cell.fill      = header_fill
             cell.alignment = left_align if col_idx in LEFT_COLS else center_align
             cell.border    = thin_border
+            header_row.append(cell)
             ws.column_dimensions[get_column_letter(col_idx)].width = width
 
-        ws.row_dimensions[1].height = 20
         ws.freeze_panes = 'A2'
+        ws.append(header_row)
 
         # 预构建产品型号→系列/品类 id 映射（用于 reason 过滤）
         def _reason_matches_filter(cr):
@@ -377,72 +383,87 @@ class AftersaleService:
                     return False
             return True
 
-        # 写数据行：每条 reason 一行，无 reason 时也写一行
-        row_idx = 2
-        for case in items:
-            all_reasons = reasons_map.get(case.id, [])
-            # 按当前筛选条件过滤 reasons，避免多 reason 工单导出不相关行
-            reasons = [cr for cr in all_reasons if _reason_matches_filter(cr)]
-            if not reasons:
-                reasons = [None]   # 确保空原因工单也输出一行
+        def _cell(col_idx, value, wrap=False):
+            cell = WriteOnlyCell(ws, value=value)
+            cell.font = normal_font
+            cell.border = thin_border
+            cell.alignment = (
+                Alignment(horizontal='left', vertical='center', wrap_text=True)
+                if wrap else (left_align if col_idx in LEFT_COLS else center_align)
+            )
+            return cell
 
-            # 发货物料：多个物料合并到同一单元格
-            products_text = None
-            if case.products:
-                parts = [f"{p.get('name', '')}×{p.get('quantity', '')}" for p in case.products if p.get('name')]
-                products_text = '\n'.join(parts) if parts else None
+        # 每页只保留有限 ORM 对象；write-only worksheet 不缓存历史单元格。
+        from database.base import db
+        page = 1
+        exported_cases = 0
+        total = 0
+        while page == 1 or exported_cases < min(total, EXPORT_MAX_ROWS):
+            items, page_total = _get_page(page, count_total=(page == 1))
+            if page == 1:
+                total = page_total
+            remaining = EXPORT_MAX_ROWS - exported_cases
+            items = items[:remaining]
+            if not items:
+                break
+            reasons_map = _load_reasons(items)
 
-            for cr in reasons:
-                def v(col_idx, value, _ri=row_idx):
-                    cell = ws.cell(row=_ri, column=col_idx, value=value)
-                    cell.font      = normal_font
-                    cell.border    = thin_border
-                    cell.alignment = left_align if col_idx in LEFT_COLS else center_align
+            for case in items:
+                all_reasons = reasons_map.get(case.id, [])
+                reasons = [cr for cr in all_reasons if _reason_matches_filter(cr)] or [None]
 
-                # 产品品类
-                cat_name = None
-                if cr and cr.product_model and cr.product_model.series and cr.product_model.series.category:
-                    cat_name = cr.product_model.series.category.name
-                # 系列
-                series_str = None
-                if cr and cr.product_model and cr.product_model.series:
-                    s = cr.product_model.series
-                    series_str = f"{s.code} {s.name}" if s.name else s.code
-                # 原因分类
-                reason_cat = None
-                if cr and cr.reason and cr.reason.category_obj:
-                    reason_cat = cr.reason.category_obj.name
+                products_text = None
+                if case.products:
+                    parts = [
+                        f"{product.get('name', '')}×{product.get('quantity', '')}"
+                        for product in case.products if product.get('name')
+                    ]
+                    products_text = '\n'.join(parts) if parts else None
 
-                v(1,  case.ecommerce_order_no)
-                v(2,  cat_name)
-                v(3,  series_str)
-                v(4,  cr.product_model.model_code if cr and cr.product_model else None)
-                v(5,  reason_cat)
-                v(6,  cr.reason.name if cr and cr.reason else None)
-                v(7,  products_text)
-                v(8,  cr.shipping_alias.name if cr and cr.shipping_alias else None)
-                v(9,  case.shipped_date.strftime('%Y-%m-%d') if case.shipped_date else None)
-                v(10, cr.purchase_date.strftime('%Y-%m-%d') if cr and cr.purchase_date else None)
-                v(11, cr.days_since_purchase if cr else None)
-                v(12, case.channel_name)
-                v(13, case.province)
-                v(14, case.buyer_remark)
-                v(15, case.seller_remark)
+                for cr in reasons:
+                    cat_name = None
+                    if cr and cr.product_model and cr.product_model.series and cr.product_model.series.category:
+                        cat_name = cr.product_model.series.category.name
+                    series_str = None
+                    if cr and cr.product_model and cr.product_model.series:
+                        series = cr.product_model.series
+                        series_str = f"{series.code} {series.name}" if series.name else series.code
+                    reason_cat = None
+                    if cr and cr.reason and cr.reason.category_obj:
+                        reason_cat = cr.reason.category_obj.name
 
-                # 发货物料多行时自动换行
-                if products_text and '\n' in products_text:
-                    ws.cell(row=row_idx, column=7).alignment = Alignment(
-                        horizontal='left', vertical='center', wrap_text=True)
+                    values = [
+                        case.ecommerce_order_no,
+                        cat_name,
+                        series_str,
+                        cr.product_model.model_code if cr and cr.product_model else None,
+                        reason_cat,
+                        cr.reason.name if cr and cr.reason else None,
+                        products_text,
+                        cr.shipping_alias.name if cr and cr.shipping_alias else None,
+                        case.shipped_date.strftime('%Y-%m-%d') if case.shipped_date else None,
+                        cr.purchase_date.strftime('%Y-%m-%d') if cr and cr.purchase_date else None,
+                        cr.days_since_purchase if cr else None,
+                        case.channel_name,
+                        case.province,
+                        case.buyer_remark,
+                        case.seller_remark,
+                    ]
+                    ws.append([
+                        _cell(index, value, wrap=(index == 7 and bool(products_text and '\n' in products_text)))
+                        for index, value in enumerate(values, 1)
+                    ])
 
-                row_idx += 1
+            exported_cases += len(items)
+            page += 1
+            db.session.expunge_all()
 
         # 命中上限时在末行追加提示，让用户知晓数据被截断
         if total > EXPORT_MAX_ROWS:
             ws.append([f'⚠ 数据已超过 {EXPORT_MAX_ROWS} 条上限，仅导出前 {EXPORT_MAX_ROWS} 条。请缩小筛选范围后重新导出。'])
 
-        buf = io.BytesIO()
-        wb.save(buf)
-        return buf.getvalue()
+        wb.save(output_path)
+        return {'exported_cases': exported_cases, 'total': total}
 
     def get_cases_reasons(self, case_ids):
         """批量返回指定工单的 reasons，用于前端两阶段加载"""

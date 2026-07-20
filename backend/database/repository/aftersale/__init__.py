@@ -460,7 +460,7 @@ class AftersaleRepository:
                   reason_ids=None, reason_category_ids=None,
                   shipping_alias_ids=None, channel_names=None,
                   provinces=None, cities=None,
-                  max_days_since_purchase=None,
+                  max_days_since_purchase=None, count_total=True,
                   exclude_no_sales_series=False):
         """分页查询工单，支持多维筛选和服务端排序"""
         from sqlalchemy import func as sqlfunc
@@ -601,7 +601,7 @@ class AftersaleRepository:
                    .subquery())
             q = q.filter(AftersaleCase.id.in_(sub))
 
-        total = q.count()
+        total = q.count() if count_total else None
 
         # 排序：支持直接列和子查询列，未匹配字段默认 shipped_date
         def _sub_asc_desc(sub):
