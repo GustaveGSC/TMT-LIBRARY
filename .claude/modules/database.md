@@ -4,8 +4,9 @@
 
 - Alembic 配置：`alembic.ini`，迁移目录：`backend/migrations/`
 - `20260720_01` 是生产现状的空 baseline，不包含业务 DDL
-- 当前处于两阶段切换的第一阶段：生产尚需执行结构差异检查和 `stamp 20260720_01`
-- 生产确认 `current=head` 且 `upgrade head` 为空操作以前，`app.py` 的旧启动迁移暂不移除
+- `20260720_02` 新增 `shipping_task`，是当前代码 head
+- 生产已完成 `stamp 20260720_01`，模型差异检查为 0
+- `app.py` 启动时只校验数据库 revision，不执行隐式 DDL 或自动 upgrade
 - 后续结构变更必须使用经人工审查的 Alembic revision，部署前单独 `upgrade head`
 
 ## 账号
@@ -344,3 +345,15 @@ cost_column_alias                          # Excel 列名映射（key → aliase
 - `code_with_version` 存原始品号用于显示
 - 外购半成品（`is_purchased_semi=True`）：BOM 导入时跳过其子件行，`total_price` 取自身价格
 - 自制半成品：API 返回时 `total_price = 子件合计`，不存储计算值
+
+# 后台任务状态
+
+`shipping_task` 保存发货导入、财务导入和全量重算任务状态：
+
+- 主键 `id` 为接口返回的 UUID task_id。
+- `task_type`: `import_shipping | import_finance | resolve_all | resolve_stale`。
+- `status`: `pending | running | done | error | cancelled | interrupted`。
+- `progress`、`result` 为 JSON；不保存上传文件内容。
+- 终态保留 7 天，由创建新任务时顺带清理。
+- 新 worker 启动时把上一进程遗留的 pending/running 标记为 interrupted。
+- 导入业务数据使用单一事务；任务状态通过独立连接提交，不能提交业务 session。

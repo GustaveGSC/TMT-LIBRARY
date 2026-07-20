@@ -4,6 +4,7 @@ import openpyxl
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import List, Dict
+from database.base import db
 from database.repository.shipping import shipping_repository
 from result import Result
 
@@ -336,7 +337,8 @@ def _merge_return_rows(rows: List[Dict]):
     return list(merged.values()), merged_away
 
 
-def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=None):
+def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=None,
+                    commit_chunks: bool = True):
     """
     对给定订单号列表，执行成品组合匹配，写入 shipping_order_finished。
     source: 'shipping' 或 'finance'，决定从哪个来源的 shipping_record 读取产成品数据。
@@ -441,7 +443,9 @@ def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=
         return_resolved[order_no] = order_ret
 
     # 清除旧结果（只清除同一 source 的记录）
-    shipping_repository.delete_order_finished(order_nos, source=source)
+    shipping_repository.delete_order_finished(
+        order_nos, source=source, commit_chunks=commit_chunks,
+    )
 
     resolved_at = now_cst()
     to_insert = []
@@ -515,7 +519,9 @@ def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=
     if progress_cb:
         progress_cb('resolving', current=total_orders, total=total_orders)
 
-    shipping_repository.bulk_insert_order_finished(to_insert, progress_cb=progress_cb)
+    shipping_repository.bulk_insert_order_finished(
+        to_insert, progress_cb=progress_cb, commit_chunks=commit_chunks,
+    )
 
 
 def _get_finished_name(finished) -> str:
@@ -560,14 +566,19 @@ class ShippingService:
                 notify('inserting', current=current, total=total_rows)
 
             inserted = shipping_repository.bulk_insert_shipping(batch.id, new_rows, progress_cb=on_insert_progress,
-                                                                    record_type='shipping')
+                                                                    record_type='shipping', commit_chunks=False)
             notify('inserted', inserted=inserted, skipped=len(skipped_rows))
 
             # 对本批次新增的订单触发成品组合
             new_order_nos = shipping_repository.get_new_order_nos_by_source(batch.id, source='shipping')
             if new_order_nos:
                 notify('resolving', current=0, total=len(new_order_nos))
-                _resolve_orders(new_order_nos, source='shipping', progress_cb=progress_cb)
+                _resolve_orders(
+                    new_order_nos, source='shipping', progress_cb=progress_cb,
+                    commit_chunks=False,
+                )
+
+            db.session.commit()
 
             return {
                 'total':             total,
@@ -578,14 +589,7 @@ class ShippingService:
                 'merged_away_rows':  [_serialize_row(r) for r in merged_away_rows],
             }
         except Exception:
-            # 先清理可能存在的脏事务，再删除批次数据
-            if batch is not None:
-                try:
-                    from database.base import db
-                    db.session.rollback()
-                    shipping_repository.delete_batch(batch.id)
-                except Exception:
-                    pass
+            db.session.rollback()
             raise
 
     def import_finance(self, filename: str, file_bytes: bytes,
@@ -636,11 +640,12 @@ class ShippingService:
             inserted_shipping = shipping_repository.bulk_insert_shipping(
                 batch.id, new_shipping,
                 progress_cb=on_insert_progress,
-                record_type='shipping', source='finance',
+                record_type='shipping', source='finance', commit_chunks=False,
             )
             inserted_returns = shipping_repository.bulk_insert_return(
                 batch.id, new_returns,
                 progress_cb=on_insert_progress,
+                commit_chunks=False,
             )
             notify('inserted',
                    inserted=inserted_shipping,
@@ -652,7 +657,12 @@ class ShippingService:
             new_order_nos = shipping_repository.get_new_order_nos_by_source(batch.id, source='finance')
             if new_order_nos:
                 notify('resolving', current=0, total=len(new_order_nos))
-                _resolve_orders(new_order_nos, source='finance', progress_cb=progress_cb)
+                _resolve_orders(
+                    new_order_nos, source='finance', progress_cb=progress_cb,
+                    commit_chunks=False,
+                )
+
+            db.session.commit()
 
             return {
                 'total':              total,
@@ -664,13 +674,7 @@ class ShippingService:
                 'skipped_rows':       [_serialize_finance_skipped_row(r) for r in skipped_shipping],
             }
         except Exception:
-            if batch is not None:
-                try:
-                    from database.base import db
-                    db.session.rollback()
-                    shipping_repository.delete_batch(batch.id)
-                except Exception:
-                    pass
+            db.session.rollback()
             raise
 
     def get_operators(self) -> List[Dict]:

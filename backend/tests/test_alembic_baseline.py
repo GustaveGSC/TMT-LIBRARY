@@ -10,6 +10,7 @@ from alembic.script import ScriptDirectory
 
 ROOT = Path(__file__).resolve().parents[2]
 BASELINE_REVISION = '20260720_01'
+HEAD_REVISION = '20260720_02'
 CRITICAL_INDEXES = {
     'shipping_order_finished': {
         'ix_sof_source',
@@ -30,11 +31,12 @@ def _config(database_url: str) -> Config:
     return config
 
 
-def test_baseline_is_the_only_head_and_has_no_parent():
+def test_baseline_has_no_parent_and_task_migration_is_the_only_head():
     scripts = ScriptDirectory.from_config(_config('sqlite://'))
 
-    assert scripts.get_heads() == [BASELINE_REVISION]
+    assert scripts.get_heads() == [HEAD_REVISION]
     assert scripts.get_revision(BASELINE_REVISION).down_revision is None
+    assert scripts.get_revision(HEAD_REVISION).down_revision == BASELINE_REVISION
 
 
 def test_performance_critical_production_indexes_are_declared_in_metadata():
@@ -124,7 +126,7 @@ def test_alembic_comment_plugin_is_disabled_but_structure_plugins_remain_enabled
     assert {'types', 'indexes', 'foreignkeys', 'nullable'} <= comparator_labels
 
 
-def test_stamp_then_upgrade_head_does_not_change_existing_schema(tmp_path, monkeypatch):
+def test_baseline_upgrade_adds_only_shipping_task_schema(tmp_path, monkeypatch):
     database_path = tmp_path / 'existing.db'
     database_url = f'sqlite:///{database_path.as_posix()}'
     engine = sa.create_engine(database_url)
@@ -140,7 +142,7 @@ def test_stamp_then_upgrade_head_does_not_change_existing_schema(tmp_path, monke
     after_upgrade = set(sa.inspect(engine).get_table_names())
 
     assert before_upgrade == {'alembic_version', 'existing_business_data'}
-    assert after_upgrade == before_upgrade
+    assert after_upgrade == before_upgrade | {'shipping_task'}
     with engine.connect() as connection:
         current = MigrationContext.configure(connection).get_current_revision()
-    assert current == BASELINE_REVISION
+    assert current == HEAD_REVISION

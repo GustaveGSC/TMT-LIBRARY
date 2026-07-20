@@ -25,6 +25,39 @@ class ShippingBatch(db.Model):
         }
 
 
+class ShippingTask(db.Model):
+    """可跨 worker 查询的发货后台任务状态；不存上传文件内容。"""
+    __tablename__ = 'shipping_task'
+    __table_args__ = (
+        db.Index('ix_shipping_task_status_updated', 'status', 'updated_at'),
+    )
+
+    id          = db.Column(db.String(36),  primary_key=True)
+    task_type   = db.Column(db.String(32),  nullable=False)
+    status      = db.Column(db.String(20),  nullable=False)
+    filename    = db.Column(db.String(255), nullable=True)
+    progress    = db.Column(db.JSON,        nullable=True)
+    result      = db.Column(db.JSON,        nullable=True)
+    message     = db.Column(db.Text,        nullable=True)
+    created_at  = db.Column(db.DateTime,    nullable=False, default=now_cst)
+    updated_at  = db.Column(db.DateTime,    nullable=False, default=now_cst, onupdate=now_cst)
+    finished_at = db.Column(db.DateTime,    nullable=True)
+
+    def to_dict(self):
+        return {
+            'task_id': self.id,
+            'task_type': self.task_type,
+            'status': self.status,
+            'filename': self.filename,
+            'progress': self.progress or {},
+            'result': self.result,
+            'message': self.message or '',
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
+            'updated_at': self.updated_at.strftime('%Y-%m-%d %H:%M:%S') if self.updated_at else None,
+            'finished_at': self.finished_at.strftime('%Y-%m-%d %H:%M:%S') if self.finished_at else None,
+        }
+
+
 class ShippingRecord(db.Model):
     """原始发货记录，单表存所有年份"""
     __tablename__ = 'shipping_record'

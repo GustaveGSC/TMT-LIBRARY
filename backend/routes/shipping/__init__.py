@@ -7,7 +7,7 @@ from flask import Blueprint, request, Response, stream_with_context, current_app
 from services.shipping import shipping_service
 from auth import make_blueprint_guard
 from result import Result
-from database.repository.shipping import _invalidate_chart_options_cache
+from database.repository.shipping import shipping_repository, _invalidate_chart_options_cache
 
 shipping_bp = Blueprint('shipping', __name__)
 
@@ -33,25 +33,39 @@ _ALLOWED_EXT = ('.xlsx', '.xls', '.csv')
 _task_queues:  dict = {}
 # 取消标志：task_id → bool
 _cancel_flags: dict = {}
-# 简单任务结果：task_id → {'status': 'pending'|'done'|'error', 'data': ..., 'message': str, '_at': float}
-_task_results: dict = {}
-_TASK_RESULTS_TTL = 1800  # 30 分钟后自动清理
-
-
-def _cleanup_task_results():
-    """清理超过 TTL 的任务（在每次新建任务时调用）"""
-    cutoff = time.time() - _TASK_RESULTS_TTL
-    stale = [k for k, v in _task_results.items() if v.get('_at', 0) < cutoff]
-    for k in stale:
-        _task_results.pop(k, None)
-
-
 def _check_file(file, label: str):
     if not file:
         return None, Result.fail(f'未收到{label}文件').to_response()
     if not any(file.filename.lower().endswith(ext) for ext in _ALLOWED_EXT):
         return None, Result.fail(f'{label}文件格式不支持，请上传 .xlsx / .xls / .csv').to_response()
     return file.read(), None
+
+
+def _publish_task_event(task_id: str, q, step: str, **kwargs):
+    event = {'step': step, **kwargs}
+    q.put(event)
+    shipping_repository.update_task(
+        task_id,
+        status='running',
+        progress=event,
+    )
+
+
+def _finish_task(task_id: str, q, status: str, *, data=None, message=''):
+    step = status if status != 'interrupted' else 'error'
+    event = {'step': step}
+    if data is not None:
+        event['data'] = data
+    if message:
+        event['message'] = message
+    q.put(event)
+    shipping_repository.update_task(
+        task_id,
+        status=status,
+        progress=event,
+        result=data,
+        message=message,
+    )
 
 
 @shipping_bp.post('/import/shipping')
@@ -68,12 +82,13 @@ def import_shipping():
     _cancel_flags[task_id] = False
     filename = file.filename
     app      = current_app._get_current_object()
+    shipping_repository.create_task(task_id, 'import_shipping', filename)
 
     def run():
         with app.app_context():
             try:
                 def progress_cb(step, **kwargs):
-                    q.put({'step': step, **kwargs})
+                    _publish_task_event(task_id, q, step, **kwargs)
 
                 def cancel_check():
                     return _cancel_flags.get(task_id, False)
@@ -84,11 +99,11 @@ def import_shipping():
                     cancel_check=cancel_check,
                 )
                 _invalidate_chart_options_cache()
-                q.put({'step': 'done', 'data': result})
+                _finish_task(task_id, q, 'done', data=result)
             except InterruptedError:
-                q.put({'step': 'cancelled', 'message': '导入已中止'})
+                _finish_task(task_id, q, 'cancelled', message='导入已中止，业务数据已回滚')
             except Exception as e:
-                q.put({'step': 'error', 'message': str(e)})
+                _finish_task(task_id, q, 'error', message=str(e))
             finally:
                 _cancel_flags.pop(task_id, None)
 
@@ -110,12 +125,13 @@ def import_finance():
     _cancel_flags[task_id] = False
     filename = file.filename
     app      = current_app._get_current_object()
+    shipping_repository.create_task(task_id, 'import_finance', filename)
 
     def run():
         with app.app_context():
             try:
                 def progress_cb(step, **kwargs):
-                    q.put({'step': step, **kwargs})
+                    _publish_task_event(task_id, q, step, **kwargs)
 
                 def cancel_check():
                     return _cancel_flags.get(task_id, False)
@@ -126,11 +142,11 @@ def import_finance():
                     cancel_check=cancel_check,
                 )
                 _invalidate_chart_options_cache()
-                q.put({'step': 'done', 'data': result})
+                _finish_task(task_id, q, 'done', data=result)
             except InterruptedError:
-                q.put({'step': 'cancelled', 'message': '导入已中止'})
+                _finish_task(task_id, q, 'cancelled', message='导入已中止，业务数据已回滚')
             except Exception as e:
-                q.put({'step': 'error', 'message': str(e)})
+                _finish_task(task_id, q, 'error', message=str(e))
             finally:
                 _cancel_flags.pop(task_id, None)
 
@@ -141,6 +157,11 @@ def import_finance():
 @shipping_bp.post('/import/cancel/<task_id>')
 def cancel_import(task_id):
     """设置取消标志，后台线程将在下一个 progress_cb 时中止"""
+    task = shipping_repository.get_task(task_id)
+    if not task:
+        return Result.fail('任务不存在').to_response(404)
+    if task.status not in ('pending', 'running'):
+        return Result.fail('任务已经结束，无法取消').to_response()
     _cancel_flags[task_id] = True
     return Result.ok(message='已发送中止信号').to_response()
 
@@ -150,7 +171,37 @@ def import_progress(task_id):
     """SSE：流式推送导入进度事件直到 done / error"""
     q = _task_queues.get(task_id)
     if not q:
-        return Result.fail('任务不存在').to_response()
+        task = shipping_repository.get_task(task_id)
+        if not task:
+            return Result.fail('任务不存在').to_response(404)
+
+        def persisted_generate():
+            last_updated_at = None
+            while True:
+                current = shipping_repository.get_task(task_id)
+                if not current:
+                    break
+                updated_at = current.updated_at.isoformat() if current.updated_at else None
+                if updated_at != last_updated_at:
+                    event = dict(current.progress or {})
+                    event.setdefault('step', current.status)
+                    if current.status == 'done':
+                        event['step'] = 'done'
+                        event['data'] = current.result
+                    elif current.status in ('error', 'cancelled', 'interrupted'):
+                        event['step'] = 'cancelled' if current.status == 'cancelled' else 'error'
+                        event['message'] = current.message or '任务因服务重载中断'
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    last_updated_at = updated_at
+                if current.status in ('done', 'error', 'cancelled', 'interrupted'):
+                    break
+                time.sleep(1)
+
+        return Response(
+            stream_with_context(persisted_generate()),
+            mimetype='text/event-stream',
+            headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+        )
 
     def generate():
         while True:
@@ -202,37 +253,53 @@ def resolve_all():
     q       = queue.Queue()
     _task_queues[task_id] = q
     app = current_app._get_current_object()
+    shipping_repository.create_task(task_id, 'resolve_all')
 
     def run():
         with app.app_context():
             try:
                 def progress_cb(step, **kwargs):
-                    q.put({'step': step, **kwargs})
+                    _publish_task_event(task_id, q, step, **kwargs)
                 result = shipping_service.resolve_all(progress_cb=progress_cb)
                 _invalidate_chart_options_cache()
-                q.put({'step': 'done', 'data': result})
+                _finish_task(task_id, q, 'done', data=result)
             except Exception as e:
-                q.put({'step': 'error', 'message': str(e)})
+                _finish_task(task_id, q, 'error', message=str(e))
 
     threading.Thread(target=run, daemon=True).start()
     return Result.ok(data={'task_id': task_id}).to_response()
 
 
+@shipping_bp.get('/import/status/<task_id>')
+def get_import_task_status(task_id):
+    """不依赖 SSE 的持久化任务状态查询，终态读取后不删除。"""
+    task = shipping_repository.get_task(task_id)
+    if not task:
+        return Result.fail('任务不存在').to_response(404)
+    return Result.ok(data=task.to_dict()).to_response()
+
+
 @shipping_bp.post('/resolve')
 def resolve_stale():
     """手动刷新所有 is_stale 的成品组合（后台线程，立即返回 task_id）"""
-    _cleanup_task_results()
     task_id = str(uuid.uuid4())
-    _task_results[task_id] = {'status': 'pending', '_at': time.time()}
+    shipping_repository.create_task(task_id, 'resolve_stale')
     app = current_app._get_current_object()
 
     def run():
         with app.app_context():
             try:
+                shipping_repository.update_task(
+                    task_id, status='running', progress={'step': 'resolving'},
+                )
                 result = shipping_service.resolve_stale()
-                _task_results[task_id] = {'status': 'done', 'data': result, '_at': time.time()}
+                shipping_repository.update_task(
+                    task_id, status='done', progress={'step': 'done'}, result=result,
+                )
             except Exception as e:
-                _task_results[task_id] = {'status': 'error', 'message': str(e), '_at': time.time()}
+                shipping_repository.update_task(
+                    task_id, status='error', progress={'step': 'error'}, message=str(e),
+                )
 
     threading.Thread(target=run, daemon=True).start()
     return Result.ok(data={'task_id': task_id}).to_response()
@@ -240,13 +307,14 @@ def resolve_stale():
 
 @shipping_bp.get('/task-status/<task_id>')
 def get_task_status(task_id):
-    """轮询任务结果；done 后自动清理"""
-    task = _task_results.get(task_id)
+    """兼容旧前端的轮询入口，底层读取持久化任务状态。"""
+    task = shipping_repository.get_task(task_id)
     if not task:
-        return Result.fail('任务不存在').to_response()
-    if task['status'] in ('done', 'error'):
-        _task_results.pop(task_id, None)
-    return Result.ok(data=task).to_response()
+        return Result.fail('任务不存在').to_response(404)
+    data = task.to_dict()
+    # 兼容旧接口用 data 字段承载任务结果。
+    data['data'] = data.pop('result')
+    return Result.ok(data=data).to_response()
 
 
 @shipping_bp.get('/stats')

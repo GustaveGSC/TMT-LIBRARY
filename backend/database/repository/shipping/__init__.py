@@ -1,12 +1,13 @@
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import List, Dict, Set, Tuple
 from database.base import db
 from database.models.shipping import (
     ShippingBatch, ShippingRecord, ReturnRecord, ReturnWarehouseFilter,
-    ShippingOperatorType, ShippingOrderFinished,
+    ShippingOperatorType, ShippingOrderFinished, ShippingTask,
 )
+from utils import now_cst
 
 # ── FTP finished_code 缓存（避免 trade_type 过滤时反复 JOIN 产品表）──
 _ftp_codes_cache: set = set()
@@ -42,6 +43,74 @@ def _invalidate_chart_options_cache():
 
 
 class ShippingRepository:
+
+    # ── 持久化后台任务（独立事务，不得提交导入业务 session）──
+
+    @staticmethod
+    def create_task(task_id: str, task_type: str, filename: str = None):
+        now = now_cst()
+        with db.engine.begin() as connection:
+            connection.execute(
+                db.delete(ShippingTask).where(
+                    ShippingTask.finished_at < now - timedelta(days=7)
+                )
+            )
+            connection.execute(db.insert(ShippingTask).values(
+                id=task_id,
+                task_type=task_type,
+                status='pending',
+                filename=filename,
+                progress={},
+                created_at=now,
+                updated_at=now,
+            ))
+
+    @staticmethod
+    def update_task(task_id: str, *, status=None, progress=None, result=None, message=None):
+        values = {'updated_at': now_cst()}
+        if status is not None:
+            values['status'] = status
+        if progress is not None:
+            values['progress'] = progress
+        if result is not None:
+            values['result'] = result
+        if message is not None:
+            values['message'] = message
+        if status in ('done', 'error', 'cancelled', 'interrupted'):
+            values['finished_at'] = values['updated_at']
+        with db.engine.begin() as connection:
+            connection.execute(
+                db.update(ShippingTask)
+                .where(ShippingTask.id == task_id)
+                .values(**values)
+            )
+
+    @staticmethod
+    def get_task(task_id: str):
+        # SSE 轮询必须每次开启新事务，否则 MySQL REPEATABLE READ 会看不到终态。
+        db.session.remove()
+        task = db.session.get(ShippingTask, task_id)
+        if task is not None:
+            db.session.expunge(task)
+        db.session.remove()
+        return task
+
+    @staticmethod
+    def interrupt_running_tasks():
+        """新 worker 启动时，将上一进程未完成的任务标记为已中断。"""
+        now = now_cst()
+        with db.engine.begin() as connection:
+            result = connection.execute(
+                db.update(ShippingTask)
+                .where(ShippingTask.status.in_(('pending', 'running')))
+                .values(
+                    status='interrupted',
+                    message='任务因服务重启或重载中断；导入业务数据已由事务回滚',
+                    updated_at=now,
+                    finished_at=now,
+                )
+            )
+        return result.rowcount
 
     # ── 批次 ────────────────────────────────────────
 
@@ -144,7 +213,7 @@ class ShippingRepository:
     @staticmethod
     def bulk_insert_shipping(batch_id: int, rows: List[Dict],
                               progress_cb=None, record_type: str = 'shipping',
-                              source: str = 'shipping') -> int:
+                              source: str = 'shipping', commit_chunks: bool = True) -> int:
         """分块 INSERT IGNORE，已存在行静默跳过，返回实际新增行数"""
         if not rows:
             return 0
@@ -183,7 +252,8 @@ class ShippingRepository:
         for i in range(0, total, CHUNK):
             chunk = rows[i:i + CHUNK]
             db.session.execute(stmt, [_make_param(r) for r in chunk])
-            db.session.commit()
+            if commit_chunks:
+                db.session.commit()
             if progress_cb:
                 progress_cb(min(i + len(chunk), total), total)
 
@@ -219,7 +289,8 @@ class ShippingRepository:
         return existing
 
     @staticmethod
-    def bulk_insert_return(batch_id: int, rows: List[Dict], progress_cb=None) -> int:
+    def bulk_insert_return(batch_id: int, rows: List[Dict], progress_cb=None,
+                           commit_chunks: bool = True) -> int:
         """分块 INSERT IGNORE 写入 return_record，返回实际新增行数"""
         if not rows:
             return 0
@@ -242,7 +313,8 @@ class ShippingRepository:
         for i in range(0, total, CHUNK):
             chunk = rows[i:i + CHUNK]
             db.session.execute(stmt, [_make_param(r) for r in chunk])
-            db.session.commit()
+            if commit_chunks:
+                db.session.commit()
             if progress_cb:
                 progress_cb(min(i + len(chunk), total), total)
 
@@ -460,8 +532,9 @@ class ShippingRepository:
         return result
 
     @staticmethod
-    def delete_order_finished(order_nos: List[str], source: str = 'shipping'):
-        """删除这些订单指定来源的旧结果（刷新前清除），立即 commit 释放锁"""
+    def delete_order_finished(order_nos: List[str], source: str = 'shipping',
+                              commit_chunks: bool = True):
+        """删除这些订单指定来源的旧结果；导入事务中禁止分块提交。"""
         if order_nos:
             chunk_size = 500
             for i in range(0, len(order_nos), chunk_size):
@@ -470,10 +543,12 @@ class ShippingRepository:
                     ShippingOrderFinished.ecommerce_order_no.in_(chunk),
                     ShippingOrderFinished.source == source,
                 ).delete(synchronize_session=False)
-                db.session.commit()
+                if commit_chunks:
+                    db.session.commit()
 
     @staticmethod
-    def bulk_insert_order_finished(rows: List[Dict], progress_cb=None):
+    def bulk_insert_order_finished(rows: List[Dict], progress_cb=None,
+                                   commit_chunks: bool = True):
         """批量写入组合结果，分块 commit 避免大事务持锁超时"""
         chunk_size = 200
         total = len(rows)
@@ -502,7 +577,8 @@ class ShippingRepository:
                 for r in chunk
             ]
             db.session.bulk_save_objects(objects)
-            db.session.commit()
+            if commit_chunks:
+                db.session.commit()
             if progress_cb:
                 progress_cb('saving', current=min(i + chunk_size, total), total=total)
 

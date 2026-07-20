@@ -128,13 +128,15 @@ POST   /api/shipping/import/shipping                  # 上传发货清单（发
 POST   /api/shipping/import/finance                   # 上传财务清单（财务端），返回 task_id；正数量→发货(source='finance')，负数量→销退，售后组过滤
                                                       #   独立销退清单接口已废弃，销退数据统一通过财务清单负数量行导入
 GET    /api/shipping/import/progress/:task_id         # SSE 进度流：parsing→parsed→inserting→inserted→resolving→done/error/cancelled
+GET    /api/shipping/import/status/:task_id           # 持久化状态查询（需 shipping 权限），SSE 断开/reload 后用 task_id 回查，不会读取后删除
 POST   /api/shipping/import/cancel/:task_id           # 发送中止信号，后台完成当前 chunk 后 rollback
 GET    /api/shipping/operators                        # 获取所有最近操作人及其分类
 POST   /api/shipping/operators/classify               # 批量保存操作人分类 [{operator, type}]
 GET    /api/shipping/stats                            # 统计摘要
 GET    /api/shipping/shipped-dates                    # 所有发货记录的 shipped_date（去重升序，不含销退日期）
-POST   /api/shipping/resolve                          # 刷新 is_stale 订单的成品组合
+POST   /api/shipping/resolve                          # 刷新 is_stale 订单的成品组合；旧 /task-status 轮询入口保留，状态已持久化
 POST   /api/shipping/resolve-all                      # 全量重新计算所有订单成品组合（SSE 进度，task_id 复用 import/progress 流）；两个 source 分开 resolve
+                                                      #   import/shipping、import/finance、resolve-all 均可通过 import/status 回查终态
 GET    /api/shipping/warehouses                       # 所有出现过的仓库名及 is_excluded 状态
 POST   /api/shipping/warehouses/filter                # 批量保存仓库过滤配置 [{warehouse_name, is_excluded}]
 GET    /api/shipping/equivalents                      # 列出所有通用件对（含 name_a/name_b 产成品名称）
@@ -239,6 +241,34 @@ POST   /api/aftersale/chart-data                      # 图表聚合数据，bod
   ]
 }
 ```
+
+## 发货后台任务状态
+
+`GET /api/shipping/import/status/:task_id` 需要任一 shipping 权限，无请求参数。成功响应：
+
+```json
+{
+  "success": true,
+  "message": "success",
+  "data": {
+    "task_id": "UUID",
+    "task_type": "import_shipping | import_finance | resolve_all | resolve_stale",
+    "status": "pending | running | done | error | cancelled | interrupted",
+    "filename": "原上传文件名或 null",
+    "progress": { "step": "inserting", "current": 100, "total": 500 },
+    "result": null,
+    "message": "",
+    "created_at": "YYYY-MM-DD HH:mm:ss",
+    "updated_at": "YYYY-MM-DD HH:mm:ss",
+    "finished_at": null
+  }
+}
+```
+
+- `done` 时 `result` 与 SSE `done.data` 相同。
+- `error/cancelled/interrupted` 时查看 `message`；`interrupted` 表示 worker 被重启或 reload，导入事务不会留下部分业务数据。
+- 不存在的 task_id 返回 HTTP 404；终态查询不会删除记录。
+- 前端 SSE `onerror` 后应调用本接口回查；若仍为 `pending/running` 可短暂轮询，进入终态后停止。
 
 ## /api/rd/cost（BOM 成本库）
 
