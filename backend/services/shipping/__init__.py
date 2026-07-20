@@ -9,6 +9,7 @@ from database.repository.shipping import shipping_repository
 from result import Result
 
 from utils import now_cst
+from upload_validation import ensure_spreadsheet_row_limit
 
 # 直辖市省名集合：这些省的 city 字段统一填写为省名本身
 _MUNICIPALITY_PROVINCES = {'北京市', '天津市', '上海市', '重庆市'}
@@ -117,6 +118,7 @@ def _parse_xlsx_rows(file_bytes: bytes) -> List[Dict]:
     rows = []
     col_map = None
     for i, row in enumerate(ws.iter_rows(values_only=True)):
+        ensure_spreadsheet_row_limit(i)
         if i == 0:
             col_map = _build_col_map(row)  # 校验必要列是否存在，返回列名→索引映射
             continue
@@ -132,6 +134,7 @@ def _parse_csv_rows(file_bytes: bytes) -> List[Dict]:
     rows = []
     col_map = None
     for i, row in enumerate(reader):
+        ensure_spreadsheet_row_limit(i)
         if i == 0:
             col_map = _build_col_map(row)  # 校验必要列是否存在，返回列名→索引映射
             continue
@@ -188,6 +191,7 @@ def _parse_xlsx_finance_rows(file_bytes: bytes):
     aftersale_count = 0
     col_map = None
     for i, row in enumerate(ws.iter_rows(values_only=True)):
+        ensure_spreadsheet_row_limit(i)
         if i == 0:
             col_map = _build_col_map(row, required=_REQUIRED_FINANCE_COL_NAMES)
             continue
@@ -218,6 +222,7 @@ def _parse_csv_finance_rows(file_bytes: bytes):
     aftersale_count = 0
     col_map = None
     for i, row in enumerate(reader):
+        ensure_spreadsheet_row_limit(i)
         if i == 0:
             col_map = _build_col_map(row, required=_REQUIRED_FINANCE_COL_NAMES)
             continue

@@ -4,6 +4,9 @@ from auth import make_blueprint_guard
 from result import Result
 import openpyxl
 import io
+from upload_validation import (
+    read_spreadsheet_upload, ensure_spreadsheet_row_limit, UploadValidationError,
+)
 
 product_bp = Blueprint('product', __name__)
 product_bp.before_request(make_blueprint_guard('product:view', 'product:edit'))
@@ -22,6 +25,7 @@ def _parse_excel(file_bytes: bytes) -> list:
     ws = wb.active
     rows = []
     for i, row in enumerate(ws.iter_rows(values_only=True)):
+        ensure_spreadsheet_row_limit(i)
         if i == 0:
             continue  # 跳过表头
         rows.append({
@@ -41,10 +45,10 @@ def preview():
     file = request.files.get('file')
     if not file:
         return Result.fail('未收到文件').to_response()
-    if not file.filename.endswith(('.xlsx', '.xls')):
-        return Result.fail('请上传 Excel 文件（.xlsx / .xls）').to_response()
     try:
-        raw_rows = _parse_excel(file.read())
+        raw_rows = _parse_excel(read_spreadsheet_upload(file, label='产品 Excel'))
+    except UploadValidationError as e:
+        return Result.fail(str(e)).to_response(413 if '不能超过' in str(e) else 400)
     except Exception as e:
         return Result.fail(f'文件解析失败：{str(e)}').to_response()
     return Result.ok(data={
@@ -59,11 +63,11 @@ def import_data():
     file = request.files.get('file')
     if not file:
         return Result.fail('未收到文件').to_response()
-    if not file.filename.endswith(('.xlsx', '.xls')):
-        return Result.fail('请上传 Excel 文件（.xlsx / .xls）').to_response()
     try:
-        raw_rows = _parse_excel(file.read())
+        raw_rows = _parse_excel(read_spreadsheet_upload(file, label='产品 Excel'))
         result   = import_product_service.import_rows(raw_rows)
+    except UploadValidationError as e:
+        return Result.fail(str(e)).to_response(413 if '不能超过' in str(e) else 400)
     except Exception as e:
         return Result.fail(f'导入失败：{str(e)}').to_response()
     return Result.ok(data=result).to_response()

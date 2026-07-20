@@ -8,10 +8,13 @@ from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from flask import Flask
 from flask_cors import CORS
+from werkzeug.exceptions import RequestEntityTooLarge
 from database.base import db
 from dotenv import load_dotenv
 from sqlalchemy.pool import QueuePool
 from security_config import validate_security_config
+from result import Result
+from upload_validation import GLOBAL_REQUEST_LIMIT
 
 # ── 环境变量加载（兼容打包后路径）────────────────────
 if getattr(sys, 'frozen', False):
@@ -34,6 +37,9 @@ def create_app() -> Flask:
         f"/{os.getenv('DB_NAME')}"
     )
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+    app.config["MAX_CONTENT_LENGTH"] = int(os.getenv(
+        "MAX_CONTENT_LENGTH", GLOBAL_REQUEST_LIMIT,
+    ))
     # pool_pre_ping：使用前探活，连接被 NAT/防火墙静默关闭时自动重连
     # pool_recycle：1800s 主动回收，早于云端 NAT 超时（通常 ~3600s）
     # POOL_SIZE / MAX_OVERFLOW 可通过环境变量调整（网页端多用户场景需调大）
@@ -60,6 +66,12 @@ def create_app() -> Flask:
     if not _cors_origins:
         _cors_origins = ["http://localhost:5173", "file://"]
     CORS(app, origins=_cors_origins)
+
+    @app.errorhandler(RequestEntityTooLarge)
+    def request_too_large(_error):
+        return Result.fail(
+            f'请求体不能超过 {app.config["MAX_CONTENT_LENGTH"] // (1024 * 1024)}MB'
+        ).to_response(413)
 
     # ── 注册蓝图 ──────────────────────────────────────
     from routes.account import account_bp

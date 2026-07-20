@@ -4,6 +4,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
 import io, urllib.parse, os, re, sys
+from upload_validation import read_spreadsheet_upload, UploadValidationError
 
 rd_bp = Blueprint('rd', __name__)
 rd_bp.before_request(make_blueprint_guard('rd:view', 'rd:edit'))
@@ -1168,6 +1169,10 @@ def parse_ecr():
         f = request.files.get('ecr_file')
         if not f:
             return Result.fail('请上传 ECR 文件').to_response()
+        try:
+            read_spreadsheet_upload(f, label='ECR 文件')
+        except UploadValidationError as exc:
+            return Result.fail(str(exc)).to_response(413 if '不能超过' in str(exc) else 400)
         ext = os.path.splitext(f.filename)[1].lower() or '.xlsx'
         tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
         tmp_path = tmp.name
@@ -1250,6 +1255,11 @@ def compare_bom():
             after_f  = request.files.get('bom_after')
             if not before_f or not after_f:
                 return Result.fail('请上传两个BOM文件').to_response()
+            try:
+                read_spreadsheet_upload(before_f, label='变更前 BOM')
+                read_spreadsheet_upload(after_f, label='变更后 BOM')
+            except UploadValidationError as exc:
+                return Result.fail(str(exc)).to_response(413 if '不能超过' in str(exc) else 400)
             t1 = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False)
             before_tmp = t1.name; t1.close(); before_f.save(before_tmp)
             t2 = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False)
@@ -1588,6 +1598,10 @@ def pdm2bom_process():
             return Result.fail('请上传 PDM 导出文件').to_response()
         if not f.filename.lower().endswith('.xlsx'):
             return Result.fail('仅支持 .xlsx 格式').to_response()
+        try:
+            read_spreadsheet_upload(f, label='PDM 文件')
+        except UploadValidationError as exc:
+            return Result.fail(str(exc)).to_response(413 if '不能超过' in str(exc) else 400)
         tmp = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False)
         tmp_path = tmp.name; tmp.close(); f.save(tmp_path)
         file_path = tmp_path

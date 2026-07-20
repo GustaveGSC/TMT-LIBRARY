@@ -23,6 +23,7 @@ from database.base import db
 from database.models.rd.cost import (
     CostSnapshot, CostSnapshotSku, CostBomNode, CostBomLine,
 )
+from upload_validation import ensure_spreadsheet_row_limit
 from database.models.product.finished import ProductFinished
 
 
@@ -148,7 +149,8 @@ def _parse_summary_sheet(ws):
     order_no = None
     sku_qtys = {}  # finished_code -> qty_in_order
 
-    for row in ws.iter_rows(values_only=True):
+    for row_number, row in enumerate(ws.iter_rows(values_only=True), start=1):
+        ensure_spreadsheet_row_limit(row_number)
         for i, cell in enumerate(row):
             s = _str(cell)
             if order_no is None:
@@ -200,6 +202,7 @@ def _parse_sku_sheet(ws, aliases: dict = None):
       lines: list of dict,
       col_map: dict（调试用）
     """
+    ensure_spreadsheet_row_limit(ws.max_row or 0)
     rows = list(ws.iter_rows(values_only=True))
     if not rows:
         return None

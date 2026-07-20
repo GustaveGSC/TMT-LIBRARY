@@ -4,6 +4,7 @@ from services.version import version_service
 from storage.client import get_bucket
 from auth import verify_token
 from result import Result
+from upload_validation import parse_declared_size, GLOBAL_REQUEST_LIMIT, UploadValidationError
 import os
 
 version_bp = Blueprint('version', __name__)
@@ -118,13 +119,30 @@ def presign_upload():
     filename = body.get("filename", "").strip()
     if not filename:
         return Result.fail("文件名不能为空").to_response()
+    try:
+        file_size = parse_declared_size(
+            body.get('file_size'), maximum=GLOBAL_REQUEST_LIMIT, label='安装包',
+        )
+    except UploadValidationError as exc:
+        return Result.fail(str(exc)).to_response(413 if '不能超过' in str(exc) else 400)
     key = f"{OSS_PREFIX}{filename}"
     try:
         bucket      = get_bucket()
         presign_url = bucket.sign_url('PUT', key, 3600,
-                                      headers={'Content-Type': 'application/octet-stream'})
+                                      headers={
+                                          'Content-Type': 'application/octet-stream',
+                                          'Content-Length': str(file_size),
+                                      })
         oss_url     = _key_to_url(filename)
-        return Result.ok(data={"presign_url": presign_url, "oss_url": oss_url}).to_response()
+        return Result.ok(data={
+            "presign_url": presign_url,
+            "oss_url": oss_url,
+            "file_size": file_size,
+            "required_headers": {
+                'Content-Type': 'application/octet-stream',
+                'Content-Length': str(file_size),
+            },
+        }).to_response()
     except Exception as e:
         return Result.fail(f"生成签名失败：{str(e)}").to_response()
 

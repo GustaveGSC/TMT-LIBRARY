@@ -8,6 +8,7 @@ from services.shipping import shipping_service
 from auth import make_blueprint_guard
 from result import Result
 from database.repository.shipping import shipping_repository, _invalidate_chart_options_cache
+from upload_validation import read_spreadsheet_upload, UploadValidationError
 
 shipping_bp = Blueprint('shipping', __name__)
 
@@ -27,8 +28,6 @@ def _shipping_guard():
 
 shipping_bp.before_request(_shipping_guard)
 
-_ALLOWED_EXT = ('.xlsx', '.xls', '.csv')
-
 # 进度队列：task_id → queue.Queue（用于 SSE 流式推送）
 _task_queues:  dict = {}
 # 取消标志：task_id → bool
@@ -36,9 +35,12 @@ _cancel_flags: dict = {}
 def _check_file(file, label: str):
     if not file:
         return None, Result.fail(f'未收到{label}文件').to_response()
-    if not any(file.filename.lower().endswith(ext) for ext in _ALLOWED_EXT):
-        return None, Result.fail(f'{label}文件格式不支持，请上传 .xlsx / .xls / .csv').to_response()
-    return file.read(), None
+    try:
+        return read_spreadsheet_upload(
+            file, label=label, allow_csv=True,
+        ), None
+    except UploadValidationError as exc:
+        return None, Result.fail(str(exc)).to_response(413 if '不能超过' in str(exc) else 400)
 
 
 def _publish_task_event(task_id: str, q, step: str, **kwargs):

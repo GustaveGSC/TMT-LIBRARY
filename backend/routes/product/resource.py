@@ -10,6 +10,7 @@ from services.product.resource import resource_service
 from storage.client import get_bucket
 from auth import make_blueprint_guard
 from result import Result
+from upload_validation import parse_declared_size, RESOURCE_UPLOAD_LIMIT, UploadValidationError
 
 SHARE_SECRET = os.getenv('SHARE_SECRET', 'tmt-share-key-2024')
 SHARE_TTL    = 7 * 24 * 3600   # 7 天
@@ -236,6 +237,12 @@ def presign_upload():
         return Result.fail(f'不支持的文件类型: {ext}，支持: {", ".join(UPLOAD_EXT_MAP)}').to_response()
 
     content_type, file_type = UPLOAD_EXT_MAP[ext]
+    try:
+        file_size = parse_declared_size(
+            body.get('file_size'), maximum=RESOURCE_UPLOAD_LIMIT, label='资料文件',
+        )
+    except UploadValidationError as exc:
+        return Result.fail(str(exc)).to_response(413 if '不能超过' in str(exc) else 400)
     yyyymm      = datetime.now().strftime('%Y%m')
     unique_name = f'{int(time.time())}_{uuid.uuid4().hex[:8]}.{ext}'
     rel_path    = f'resources/{yyyymm}/{unique_name}'
@@ -243,7 +250,7 @@ def presign_upload():
 
     try:
         bucket  = get_bucket()
-        headers = {'Content-Type': content_type}
+        headers = {'Content-Type': content_type, 'Content-Length': str(file_size)}
         if ext in VIDEO_EXTS:
             headers['Cache-Control'] = 'max-age=2592000'
         presign_url = bucket.sign_url('PUT', key, 3600, headers=headers)
@@ -253,6 +260,8 @@ def presign_upload():
             'oss_url':     oss_url,
             'storage_key': key,
             'file_type':   file_type,
+            'file_size':   file_size,
+            'required_headers': headers,
         }).to_response()
     except Exception as e:
         return Result.fail(f'生成签名失败：{str(e)}').to_response()

@@ -13,6 +13,7 @@ from database.models.rd.cost import (
     CostSnapshot, CostSnapshotSku, CostBomNode,
     CostBomLine, CostMaterialSupplier, CostMaterialRule, CostMaterialPrice,
 )
+from upload_validation import read_spreadsheet_upload, UploadValidationError
 
 cost_bp = Blueprint('rd_cost', __name__)
 
@@ -79,6 +80,10 @@ def preview_snapshot():
     file = request.files.get('file')
     if not file or not file.filename:
         return Result.fail('请上传 Excel 文件').to_response()
+    try:
+        read_spreadsheet_upload(file, label='BOM 成本文件')
+    except UploadValidationError as exc:
+        return Result.fail(str(exc)).to_response(413 if '不能超过' in str(exc) else 400)
 
     suffix = os.path.splitext(file.filename)[1] or '.xlsx'
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -148,6 +153,10 @@ def import_snapshot():
     file = request.files.get('file')
     if not file or not file.filename:
         return Result.fail('请上传 Excel 文件').to_response()
+    try:
+        read_spreadsheet_upload(file, label='BOM 成本文件')
+    except UploadValidationError as exc:
+        return Result.fail(str(exc)).to_response(413 if '不能超过' in str(exc) else 400)
 
     snapshot_date_str = request.form.get('snapshot_date', '')
     notes      = request.form.get('notes', '')

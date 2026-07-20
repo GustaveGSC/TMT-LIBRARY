@@ -49,7 +49,7 @@ PUT    /api/account/permissions/:id
 GET    /api/version/latest
 GET    /api/version/list
 POST   /api/version/
-POST   /api/version/presign   # 生成 OSS 预签名 PUT URL，body: {filename} → {presign_url, oss_url}；前端直传 OSS 用
+POST   /api/version/presign   # body: {filename,file_size}；响应 required_headers，PUT 必须原样携带；上限 500MB
 POST   /api/version/upload    # 服务器中转上传 OSS（已不推荐，保留兼容）
 
 POST   /api/product/import/preview
@@ -109,8 +109,9 @@ PUT    /api/resources/:id/tags                        # 设置关联标签 {tag_
                                                       # tag_condition=null → 旧 OR 逻辑；对象 → AND/OR/NOT 树形条件
 PUT    /api/resources/:id/models                      # 设置关联型号 {model_ids:[...]}（全量替换）
 GET    /api/resources/:id/signed-url                  # 生成 OSS 签名 GET URL（?disposition=inline|attachment）
-POST   /api/resources/presign                         # 预签名直传 {ext} → {presign_url, oss_url, storage_key, file_type}
+POST   /api/resources/presign                         # 预签名直传 {ext,file_size} → {presign_url,oss_url,storage_key,file_type,file_size,required_headers}
                                                       #   OSS key 格式：tmt-library/resources/{YYYYMM}/{ts}_{uuid8}.{ext}
+                                                      #   PUT 必须携带响应中的 Content-Type/Content-Length；上限 500MB
 
 GET    /api/resources/finished/:code                  # 获取产品关联资料（直接+标签继承+型号继承，去重，含 link_type）
 POST   /api/resources/finished/:code                  # 直接关联资料 {resource_id, sort_order}
@@ -127,6 +128,7 @@ POST   /api/product/params/finished/:finished_id      # 全量 Upsert 保存成�
 POST   /api/shipping/import/shipping                  # 上传发货清单（发货端），返回 task_id；source='shipping'
 POST   /api/shipping/import/finance                   # 上传财务清单（财务端），返回 task_id；正数量→发货(source='finance')，负数量→销退，售后组过滤
                                                       #   独立销退清单接口已废弃，销退数据统一通过财务清单负数量行导入
+                                                      #   Excel/CSV 单文件 20MB、解压后 100MB、最多 50 sheet/100000 行
 GET    /api/shipping/import/progress/:task_id         # SSE 进度流：parsing→parsed→inserting→inserted→resolving→done/error/cancelled
 GET    /api/shipping/import/status/:task_id           # 持久化状态查询（需 shipping 权限），SSE 断开/reload 后用 task_id 回查，不会读取后删除
 POST   /api/shipping/import/cancel/:task_id           # 发送中止信号，后台完成当前 chunk 后 rollback
@@ -269,6 +271,13 @@ POST   /api/aftersale/chart-data                      # 图表聚合数据，bod
 - `error/cancelled/interrupted` 时查看 `message`；`interrupted` 表示 worker 被重启或 reload，导入事务不会留下部分业务数据。
 - 不存在的 task_id 返回 HTTP 404；终态查询不会删除记录。
 - 前端 SSE `onerror` 后应调用本接口回查；若仍为 `pending/running` 可短暂轮询，进入终态后停止。
+
+## 上传安全限制
+
+- Flask `MAX_CONTENT_LENGTH` 默认 500MB，可通过同名环境变量（字节数）覆盖；全局超限统一返回 HTTP 413 和 `{success:false,message}`。
+- 产品、发货/财务、ECR/BOM/PDM、成本库 Excel/CSV：单文件 20MB；校验扩展名、MIME 和真实文件头；xlsx 解压后 100MB、最多 2000 个内部文件、50 个工作表、100000 行。
+- 产品封面及原始封面：每张 Base64 解码后 10MB，仅 PNG/JPEG/WebP，声明 MIME 必须与真实图片格式一致。
+- OSS 预签名接口必须接收 `file_size`，签名绑定 `Content-Length`；前端 PUT 时必须使用响应中的 `required_headers`。
 
 ## /api/rd/cost（BOM 成本库）
 

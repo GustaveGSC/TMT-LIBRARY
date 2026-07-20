@@ -1,4 +1,5 @@
 import base64
+import binascii
 import os
 import re
 import time
@@ -9,9 +10,26 @@ from database.repository.product.category import CategoryRepository
 from storage.client import get_bucket
 from auth import make_blueprint_guard
 from result import Result
+from upload_validation import validate_image_bytes, UploadValidationError
 
 finished_bp = Blueprint('finished', __name__)
 finished_bp.before_request(make_blueprint_guard('product:view', 'product:edit'))
+
+
+def _decode_image_data_url(data_url: str, label: str):
+    match = re.fullmatch(r'data:image/([^;]+);base64,([A-Za-z0-9+/=\r\n]+)', data_url, re.DOTALL)
+    if not match:
+        raise UploadValidationError(f'{label}数据格式无效')
+    try:
+        encoded = ''.join(match.group(2).split())
+        image_bytes = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError):
+        raise UploadValidationError(f'{label}Base64 编码无效') from None
+    actual_ext = validate_image_bytes(image_bytes, label=label)
+    claimed_ext = match.group(1).lower().replace('jpeg', 'jpg')
+    if claimed_ext != actual_ext:
+        raise UploadValidationError(f'{label}的 MIME 类型与真实图片格式不一致')
+    return image_bytes, actual_ext
 
 
 # ── 成品列表 ──────────────────────────────────────────────────────────────
@@ -161,12 +179,11 @@ def upload_cover_image():
     if not code or not data_url:
         return Result.fail('参数缺失').to_response()
 
-    match = re.match(r'data:image/(\w+);base64,(.+)', data_url, re.DOTALL)
-    if not match:
-        return Result.fail('无效的图片数据').to_response()
-
-    ext       = match.group(1)          # png
-    img_bytes = base64.b64decode(match.group(2))
+    try:
+        img_bytes, ext = _decode_image_data_url(data_url, '封面图')
+        orig_image = _decode_image_data_url(orig_data_url, '原始封面图') if orig_data_url else None
+    except UploadValidationError as exc:
+        return Result.fail(str(exc)).to_response(413 if '不能超过' in str(exc) else 400)
     rel_path  = f'products/{code}.{ext}'          # 相对于 tmt-library/ 的路径
     key       = f'tmt-library/{rel_path}'         # bucket 内完整 key
 
@@ -178,14 +195,11 @@ def upload_cover_image():
 
         # 同步上传原始高清图（可选）
         orig_url = None
-        if orig_data_url:
-            orig_match = re.match(r'data:image/(\w+);base64,(.+)', orig_data_url, re.DOTALL)
-            if orig_match:
-                orig_ext   = orig_match.group(1)
-                orig_bytes = base64.b64decode(orig_match.group(2))
-                orig_key   = f'tmt-library/products/{code}_orig.{orig_ext}'
-                bucket.put_object(orig_key, orig_bytes)
-                orig_url = f'{base_url}/products/{code}_orig.{orig_ext}'
+        if orig_image:
+            orig_bytes, orig_ext = orig_image
+            orig_key = f'tmt-library/products/{code}_orig.{orig_ext}'
+            bucket.put_object(orig_key, orig_bytes)
+            orig_url = f'{base_url}/products/{code}_orig.{orig_ext}'
 
         # 更新 img_updated_at，用于前端缓存破坏
         ts = int(time.time())
