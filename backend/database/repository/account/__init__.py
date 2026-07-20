@@ -1,6 +1,20 @@
 from typing import Optional
 from database.base import db
-from database.models.account import User, Role, Permission, UserLoginLog, _now_cst
+from database.models.account import (
+    User, Role, Permission, UserLoginLog, _now_cst,
+    user_roles, role_permissions,
+)
+
+
+def _bump_token_versions(user_ids) -> None:
+    """在当前事务中批量撤销指定用户的既有 JWT。"""
+    ids = {int(user_id) for user_id in user_ids if user_id is not None}
+    if not ids:
+        return
+    db.session.query(User).filter(User.id.in_(ids)).update(
+        {User.token_version: User.token_version + 1},
+        synchronize_session='fetch',
+    )
 
 
 class UserRepository:
@@ -12,6 +26,14 @@ class UserRepository:
     @staticmethod
     def get_by_username(username: str) -> Optional[User]:
         return User.query.filter_by(username=username).first()
+
+    @staticmethod
+    def get_auth_state(user_id: int):
+        """鉴权热路径只读取账号状态与 token 版本，不加载角色权限关系。"""
+        row = db.session.query(User.is_active, User.token_version).filter(User.id == user_id).first()
+        if not row:
+            return None
+        return bool(row.is_active), int(row.token_version or 0)
 
     @staticmethod
     def get_all(page: int = 1, per_page: int = 20) -> dict:
@@ -33,10 +55,12 @@ class UserRepository:
         return user
 
     @staticmethod
-    def update(user: User, **kwargs) -> User:
+    def update(user: User, invalidate_tokens: bool = False, **kwargs) -> User:
         for key, value in kwargs.items():
             if hasattr(user, key) and value is not None:
                 setattr(user, key, value)
+        if invalidate_tokens:
+            user.token_version = int(user.token_version or 0) + 1
         db.session.commit()
         return user
 
@@ -49,12 +73,14 @@ class UserRepository:
     def assign_role(user: User, role: Role) -> None:
         if role not in user.roles:
             user.roles.append(role)
+            user.token_version = int(user.token_version or 0) + 1
             db.session.commit()
 
     @staticmethod
     def remove_role(user: User, role: Role) -> None:
         if role in user.roles:
             user.roles.remove(role)
+            user.token_version = int(user.token_version or 0) + 1
             db.session.commit()
 
 
@@ -89,6 +115,10 @@ class RoleRepository:
 
     @staticmethod
     def delete(role: Role) -> None:
+        user_ids = db.session.query(user_roles.c.user_id).filter(
+            user_roles.c.role_id == role.id
+        ).all()
+        _bump_token_versions(user_id for (user_id,) in user_ids)
         db.session.delete(role)
         db.session.commit()
 
@@ -96,6 +126,10 @@ class RoleRepository:
     def assign_permission(role: Role, permission: Permission) -> None:
         if permission not in role.permissions:
             role.permissions.append(permission)
+            user_ids = db.session.query(user_roles.c.user_id).filter(
+                user_roles.c.role_id == role.id
+            ).all()
+            _bump_token_versions(user_id for (user_id,) in user_ids)
             db.session.commit()
 
 
@@ -226,8 +260,16 @@ class PermissionRepository:
 
     @staticmethod
     def update(perm: Permission, **kwargs) -> Permission:
+        user_ids = (
+            db.session.query(user_roles.c.user_id)
+            .join(role_permissions, user_roles.c.role_id == role_permissions.c.role_id)
+            .filter(role_permissions.c.permission_id == perm.id)
+            .distinct()
+            .all()
+        )
         for key, value in kwargs.items():
             if hasattr(perm, key):
                 setattr(perm, key, value)
+        _bump_token_versions(user_id for (user_id,) in user_ids)
         db.session.commit()
         return perm

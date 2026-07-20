@@ -26,11 +26,20 @@ class AccountService:
         user = UserRepository.get_by_id(user_id)
         if not user:
             return Result.fail(f"用户 {user_id} 不存在")
-        if "password" in kwargs and kwargs["password"]:
+        password_changed = bool(kwargs.get("password"))
+        status_changed = "is_active" in kwargs and kwargs["is_active"] is not None
+        if password_changed:
             kwargs["password"] = bcrypt.hashpw(
                 kwargs["password"].encode(), bcrypt.gensalt()
             ).decode()
-        return Result.ok(UserRepository.update(user, **kwargs).to_dict(), message="更新成功")
+        return Result.ok(
+            UserRepository.update(
+                user,
+                invalidate_tokens=password_changed or status_changed,
+                **kwargs,
+            ).to_dict(),
+            message="更新成功",
+        )
 
     def delete_user(self, user_id: int) -> Result:
         user = UserRepository.get_by_id(user_id)
@@ -67,7 +76,7 @@ class AccountService:
         if len(new_password) < 6:
             return Result.fail("新密码至少 6 位")
         new_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
-        UserRepository.update(user, password=new_hash)
+        UserRepository.update(user, invalidate_tokens=True, password=new_hash)
         return Result.ok(message="密码修改成功")
 
     def set_user_status(self, user_id: int, is_active: bool) -> Result:
@@ -76,7 +85,7 @@ class AccountService:
             return Result.fail("用户不存在")
         if user.username in ('admin', 'author'):
             return Result.fail(f"用户 '{user.username}' 不可禁用")
-        UserRepository.update(user, is_active=is_active)
+        UserRepository.update(user, invalidate_tokens=True, is_active=is_active)
         return Result.ok(message="状态更新成功")
 
     def reset_password(self, user_id: int, new_password: str) -> Result:
@@ -84,7 +93,7 @@ class AccountService:
         if not user:
             return Result.fail("用户不存在")
         new_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
-        UserRepository.update(user, password=new_hash)
+        UserRepository.update(user, invalidate_tokens=True, password=new_hash)
         return Result.ok(message="密码重置成功")
 
     # ── 角色分配 ──────────────────────────────────────

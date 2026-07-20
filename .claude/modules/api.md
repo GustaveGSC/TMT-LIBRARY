@@ -19,6 +19,9 @@ token 由登录/游客/注册接口返回，前端存于 `localStorage.tmt_token
 - `APP_ENV`：默认为 `production`；仅 `development` / `dev` / `local` / `test` / `testing` 跳过生产密钥校验
 - `JWT_SECRET`、`SHARE_SECRET`：生产环境必须设置为非默认强密钥，否则应用拒绝启动
 - `ALLOW_REGISTER`：公开注册默认关闭；仅 `true` / `1` / `yes` 明确开启
+- 注册用户 JWT 包含 `ver`；账号被禁用、删除、改密、重置密码或权限变化后，旧 token 立即失效
+- 游客 JWT 每次请求使用数据库中的当前 guest 角色权限，不长期信任 token 内嵌权限
+- 过期、伪造、旧版本、已禁用或已删除账号的 token 均返回标准 HTTP 401，前端沿用现有统一登出处理
 
 ```
 GET    /health

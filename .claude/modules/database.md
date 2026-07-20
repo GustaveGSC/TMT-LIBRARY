@@ -2,11 +2,15 @@
 
 ## 账号
 ```
-users             id, username, password(bcrypt), display_name, is_active, created_at, updated_at
+users             id, username, password(bcrypt), display_name, is_active, token_version(default 0), created_at, updated_at
 roles             id, name, description
 permissions       id, code, name, description
 user_roles        user_id, role_id
 role_permissions  role_id, permission_id
+
+token_version
+  # JWT 主动失效版本；禁用/启用账号、改密、重置密码、用户角色或角色权限变化时递增
+  # JWT 中的 ver 必须与当前值一致，否则鉴权按 401 处理
 
 user_login_log
   id, user_id(FK→users SET NULL nullable), username(输入的用户名),

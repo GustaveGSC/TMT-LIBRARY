@@ -1,6 +1,6 @@
 import os
 import jwt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from flask import request, g
 from result import Result
@@ -17,17 +17,40 @@ def generate_token(user: dict) -> str:
         'username':    user['username'],
         'roles':       user.get('roles', []),
         'permissions': user.get('permissions', []),
-        'exp':         datetime.utcnow() + timedelta(days=EXPIRE_DAYS),
+        'ver':         int(user.get('token_version', 0) or 0),
+        'exp':         datetime.now(timezone.utc) + timedelta(days=EXPIRE_DAYS),
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
 def verify_token(token: str) -> dict | None:
-    """解码并校验 token，失败（过期/伪造/格式错误）返回 None。"""
+    """校验签名、账号状态和 token 版本；失效统一返回 None。"""
     try:
-        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except jwt.PyJWTError:
         return None
+    token_version = payload.get('ver')
+    user_id = payload.get('id')
+    if user_id is None:
+        if payload.get('username') != 'guest' or token_version != 0:
+            return None
+        from database.repository.account import RoleRepository
+        guest_role = RoleRepository.get_by_name('guest')
+        if not guest_role:
+            return None
+        payload['roles'] = ['guest']
+        payload['permissions'] = [p.code for p in guest_role.permissions]
+        return payload
+    if token_version is None:
+        return None
+    from database.repository.account import UserRepository
+    state = UserRepository.get_auth_state(user_id)
+    if not state:
+        return None
+    is_active, current_version = state
+    if not is_active or token_version != current_version:
+        return None
+    return payload
 
 
 def has_permission(user: dict, perm: str) -> bool:

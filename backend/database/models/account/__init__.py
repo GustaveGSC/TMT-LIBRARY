@@ -28,6 +28,7 @@ class User(db.Model):
     password   = db.Column(db.String(255), nullable=False)          # bcrypt hash
     display_name = db.Column(db.String(64), nullable=True)
     is_active  = db.Column(db.Boolean,     default=True)
+    token_version = db.Column(db.Integer,  nullable=False, default=0)
     created_at = db.Column(db.DateTime,    default=datetime.utcnow)
     updated_at = db.Column(db.DateTime,    default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -45,6 +46,7 @@ class User(db.Model):
             "username":     self.username,
             "display_name": self.display_name,
             "is_active":    self.is_active,
+            "token_version": self.token_version,
             "roles":        [r.name for r in self.roles],
             "permissions":  perm_codes,
             "created_at":   self.created_at.isoformat(),

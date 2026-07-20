@@ -116,7 +116,7 @@ def _run_migrations(db):
         from database.models.aftersale import AftersaleSetting
         from database.models.product.finished import ProductTagCategory
         from database.models.product.resource import ProductResourceType, ProductResource, finished_resource, resource_tag, resource_model
-        from database.models.account import SiteConfig
+        from database.models.account import SiteConfig, User
         from database.models.rd.cost import (
             CostBomNode, CostSnapshot, CostSnapshotSku,
             CostBomLine, CostMaterialSupplier, CostMaterialRule,
@@ -142,6 +142,39 @@ def _run_migrations(db):
         _seed_resource_types(db)
     except Exception as e:
         print(f'[migration] 建表失败（可忽略）: {e}', flush=True)
+
+    # JWT 主动失效版本：禁用、改密或调权时递增
+    try:
+        with db.engine.connect() as conn:
+            lock_name = 'tmt_migrate_users_token_version'
+            locked = conn.execute(
+                db.text("SELECT GET_LOCK(:lock_name, 30)"),
+                {'lock_name': lock_name},
+            ).scalar()
+            if locked != 1:
+                raise RuntimeError('获取 users.token_version 迁移锁超时')
+            try:
+                row = conn.execute(db.text(
+                    "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+                    "WHERE TABLE_SCHEMA = DATABASE() "
+                    "AND TABLE_NAME = 'users' "
+                    "AND COLUMN_NAME = 'token_version'"
+                )).fetchone()
+                if not row:
+                    conn.execute(db.text(
+                        "ALTER TABLE users "
+                        "ADD COLUMN token_version INT NOT NULL DEFAULT 0"
+                    ))
+                    conn.commit()
+                    print('[migration] users.token_version 列已添加', flush=True)
+            finally:
+                conn.execute(
+                    db.text("SELECT RELEASE_LOCK(:lock_name)"),
+                    {'lock_name': lock_name},
+                )
+    except Exception as e:
+        print(f'[migration] users.token_version 迁移失败（不可忽略）: {e}', flush=True)
+        raise
 
     # 为 product_tag 表补充 category_id 列
     try:
