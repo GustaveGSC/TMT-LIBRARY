@@ -19,37 +19,45 @@ const router = createRouter({
       path: '/index',
       component: () => import('@/views/indexViews/page-index.vue')
     },
-    { 
-      path: '/admin/version-release', 
-      component: () => import('@/views/adminViews/page-version-release.vue') 
+    {
+      path: '/admin/version-release',
+      component: () => import('@/views/adminViews/page-version-release.vue'),
+      meta: { adminOnly: true }
     },
-    { 
-      path: '/admin/users',       
-      component: () => import('@/views/adminViews/page-users.vue') 
+    {
+      path: '/admin/users',
+      component: () => import('@/views/adminViews/page-users.vue'),
+      meta: { adminOnly: true }
     },
     {
       path: '/admin/permissions',
-      component: () => import('@/views/adminViews/page-permissions.vue')
+      component: () => import('@/views/adminViews/page-permissions.vue'),
+      meta: { adminOnly: true }
     },
     {
       path: '/admin/login-logs',
-      component: () => import('@/views/adminViews/page-login-logs.vue')
+      component: () => import('@/views/adminViews/page-login-logs.vue'),
+      meta: { authorOnly: true }
     },
     {
       path: '/product',
-      component: () => import('@/views/productViews/page-product.vue')
+      component: () => import('@/views/productViews/page-product.vue'),
+      meta: { permission: 'product:view' }
     },
     {
       path: '/shipping',
-      component: () => import('@/views/shippingViews/page-shipping.vue')
+      component: () => import('@/views/shippingViews/page-shipping.vue'),
+      meta: { permission: 'shipping:view' }
     },
     {
       path: '/data-mgmt',
-      component: () => import('@/views/dataMgmtViews/page-data-mgmt.vue')
+      component: () => import('@/views/dataMgmtViews/page-data-mgmt.vue'),
+      meta: { permission: 'shipping:view' }
     },
     {
       path: '/aftersale',
-      component: () => import('@/views/aftersaleViews/page-aftersale.vue')
+      component: () => import('@/views/aftersaleViews/page-aftersale.vue'),
+      meta: { permission: 'aftersale:view' }
     },
     {
       path: '/aftersale/cases',
@@ -92,12 +100,21 @@ router.beforeEach((to) => {
     }
   }
 
-  const required = to.meta?.permission
-  if (!required) return true
   const user = JSON.parse(localStorage.getItem('user') || '{}')
   const roles = user.roles || []
   const perms = user.permissions || []
-  if (roles.includes('admin') || perms.includes(required)) return true
+  const isAdmin = roles.includes('admin')
+
+  if (to.meta?.authorOnly) {
+    return user.username === 'author' ? true : '/index'
+  }
+  if (to.meta?.adminOnly) {
+    return isAdmin ? true : '/index'
+  }
+
+  const required = to.meta?.permission
+  if (!required) return true
+  if (isAdmin || perms.includes(required)) return true
   return '/index'
 })
 

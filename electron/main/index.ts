@@ -12,7 +12,7 @@ import {
 let loginWin: BrowserWindow | null = null
 let mainWin: BrowserWindow | null = null
 
-ipcMain.handle('get-api-base', () => 'http://47.99.100.138')
+ipcMain.handle('get-api-base', () => 'https://tmt-library.cn')
 
 // 监听登录成功事件，关闭登录窗口，打开主窗口
 ipcMain.on('login-success', () => {

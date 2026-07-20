@@ -16,11 +16,11 @@ const progress      = ref(0)
 const phaseLabel    = ref('')
 const phaseDetail   = ref('')
 
-// 取消
+// 取消导入
 const currentTaskId = ref('')
 const isCancelling  = ref(false)
 
-// 跳过记录弹窗
+// 跳过记录弹窗（发货行去重）
 const showSkippedDialog = ref(false)
 const skippedRows       = ref([])
 
@@ -29,6 +29,7 @@ const showErrorDialog = ref(false)
 const errorMessage    = ref('')
 
 // ── 方法 ──────────────────────────────────────────
+
 function showError(msg) {
   errorMessage.value    = msg || '未知错误'
   showErrorDialog.value = true
@@ -151,150 +152,250 @@ async function doImport() {
   } catch (e) {
     showError(e.message)
   } finally {
-    loading.value = false
+    loading.value       = false
+    isCancelling.value  = false
     currentTaskId.value = ''
   }
 }
 </script>
 
 <template>
-  <div class="finance-import">
-    <!-- 文件拖放区 -->
-    <div
-      class="drop-zone"
-      @click="fileInput.click()"
-      @dragover.prevent
-      @drop.prevent="e => { const f = e.dataTransfer.files?.[0]; if (f) { file = f; fileName = f.name; result = null; progress = 0 } }"
-    >
-      <template v-if="!fileName">
-        <el-icon style="font-size:32px;color:#c4883a"><Upload /></el-icon>
-        <div class="drop-hint">点击或拖拽上传财务清单</div>
-        <div class="drop-sub">支持 .xlsx / .xls / .csv</div>
-      </template>
-      <template v-else>
-        <div class="file-name">{{ fileName }}</div>
-      </template>
-    </div>
-    <input ref="fileInput" type="file" accept=".xlsx,.xls,.csv" style="display:none" @change="onFileChange" />
+  <div class="return-import">
 
-    <!-- 操作按钮 -->
+    <div class="import-header">
+      <div class="import-header-left">
+        <div class="import-title">导入财务清单</div>
+        <div class="import-sub">支持 .xlsx / .xls / .csv 格式，正数量行写入发货记录，负数量行写入销退记录，售后组行自动过滤</div>
+      </div>
+    </div>
+
+    <!-- 文件选择区 -->
+    <div
+      class="file-zone"
+      :class="{ selected: fileName, disabled: loading }"
+      @click="!loading && fileInput.click()"
+    >
+      <input
+        ref="fileInput"
+        type="file"
+        accept=".xlsx,.xls,.csv"
+        style="display:none"
+        @change="onFileChange"
+      />
+      <div v-if="!fileName" class="file-zone-hint">
+        <div class="file-zone-icon">📂</div>
+        <div>点击选择文件</div>
+        <div class="file-zone-ext">.xlsx / .xls / .csv</div>
+      </div>
+      <div v-else class="file-zone-name">
+        <svg class="file-icon-excel" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect width="24" height="24" rx="4" fill="#1D6F42"/>
+          <path d="M13 3H7a1 1 0 00-1 1v16a1 1 0 001 1h10a1 1 0 001-1V9l-5-6z" fill="#fff" fill-opacity=".15"/>
+          <path d="M13 3v6h5" stroke="#fff" stroke-opacity=".5" stroke-width="1" fill="none"/>
+          <text x="4" y="19" font-size="7.5" font-weight="700" fill="#fff" font-family="Arial,sans-serif">XLS</text>
+        </svg>
+        <span class="file-name-text">{{ fileName }}</span>
+        <span class="file-change">点击更换</span>
+      </div>
+    </div>
+
+    <!-- 导入 / 取消 按钮 -->
     <div class="btn-row">
-      <el-button type="primary" :loading="loading" :disabled="!file" @click="doImport">
-        开始导入
-      </el-button>
-      <el-button v-if="loading" :disabled="isCancelling" @click="cancelImport">
-        {{ isCancelling ? '正在中止...' : '中止导入' }}
-      </el-button>
+      <button class="import-btn" :disabled="!file || loading" @click="doImport">
+        {{ loading ? '导入中…' : '开始导入' }}
+      </button>
+      <button v-if="loading" class="cancel-btn" :disabled="isCancelling" @click="cancelImport">
+        {{ isCancelling ? '中止中…' : '中止导入' }}
+      </button>
     </div>
 
     <!-- 进度条 -->
-    <div v-if="progress > 0 && progress < 100" class="progress-wrap">
-      <el-progress :percentage="progress" :show-text="false" />
-      <div class="phase-label">{{ phaseLabel }}</div>
-      <div v-if="phaseDetail" class="phase-detail">{{ phaseDetail }}</div>
+    <div v-if="loading || (progress > 0 && progress < 100 && !result)" class="progress-wrap">
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" :style="{ width: progress + '%' }"></div>
+      </div>
+      <div class="progress-info">
+        <span class="progress-phase">{{ phaseLabel }}</span>
+        <span v-if="phaseDetail" class="progress-detail">{{ phaseDetail }}</span>
+        <span class="progress-pct">{{ progress }}%</span>
+      </div>
     </div>
 
     <!-- 结果卡片 -->
-    <div v-if="result" class="result-cards">
-      <div class="card">
-        <div class="card-val">{{ result.total }}</div>
-        <div class="card-label">文件总行数</div>
-      </div>
-      <div class="card accent">
-        <div class="card-val">{{ result.inserted }}</div>
-        <div class="card-label">新增发货记录</div>
-      </div>
-      <div class="card accent">
-        <div class="card-val">{{ result.inserted_returns }}</div>
-        <div class="card-label">新增销退记录</div>
-      </div>
-      <div
-        class="card"
-        :class="{ clickable: result.skipped > 0 }"
-        @click="result.skipped > 0 && (skippedRows = result.skipped_rows, showSkippedDialog = true)"
-      >
-        <div class="card-val">{{ result.skipped }}</div>
-        <div class="card-label">跳过重复</div>
-      </div>
-      <div class="card">
-        <div class="card-val">{{ result.aftersale_filtered }}</div>
-        <div class="card-label">售后组过滤</div>
+    <div v-if="result" class="result-wrap">
+      <div class="result-title">导入完成</div>
+      <div class="result-cards">
+        <div class="result-card">
+          <div class="rc-val">{{ result.total }}</div>
+          <div class="rc-lbl">文件总行数</div>
+        </div>
+        <div class="result-card accent">
+          <div class="rc-val">{{ result.inserted }}</div>
+          <div class="rc-lbl">新增发货记录</div>
+        </div>
+        <div class="result-card accent">
+          <div class="rc-val">{{ result.inserted_returns }}</div>
+          <div class="rc-lbl">新增销退记录</div>
+        </div>
+        <div
+          :class="['result-card', result.skipped > 0 && 'clickable']"
+          @click="result.skipped > 0 && (skippedRows = result.skipped_rows, showSkippedDialog = true)"
+        >
+          <div class="rc-val">{{ result.skipped }}</div>
+          <div class="rc-lbl">{{ result.skipped > 0 ? '跳过重复 ›' : '跳过重复' }}</div>
+        </div>
+        <div class="result-card">
+          <div class="rc-val">{{ result.aftersale_filtered }}</div>
+          <div class="rc-lbl">售后组过滤</div>
+        </div>
       </div>
     </div>
 
     <!-- 跳过重复弹窗 -->
-    <el-dialog v-model="showSkippedDialog" title="跳过的重复发货记录" width="600px" append-to-body>
-      <el-table :data="skippedRows" size="small" max-height="400">
-        <el-table-column prop="ecommerce_order_no" label="平台订单号" min-width="180" />
-        <el-table-column prop="product_code" label="品号" width="130" />
-        <el-table-column prop="shipped_date" label="日期" width="100" />
-        <el-table-column prop="quantity" label="数量" width="80" align="right" />
+    <el-dialog v-model="showSkippedDialog" title="已跳过的重复发货记录" width="600px" :close-on-click-modal="false">
+      <el-table :data="skippedRows" size="small" border max-height="420">
+        <el-table-column prop="ecommerce_order_no" label="平台订单号" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="product_code"       label="品号"       width="130" />
+        <el-table-column prop="shipped_date"       label="日期"       width="100" align="center" />
+        <el-table-column prop="quantity"           label="数量"       width="80"  align="right" />
       </el-table>
+      <template #footer>
+        <el-button @click="showSkippedDialog = false">关闭</el-button>
+      </template>
     </el-dialog>
 
     <!-- 错误弹窗 -->
-    <el-dialog v-model="showErrorDialog" title="导入失败" width="480px" append-to-body>
-      <pre class="error-pre">{{ errorMessage }}</pre>
+    <el-dialog v-model="showErrorDialog" title="导入失败" width="480px" :close-on-click-modal="false">
+      <div class="error-dialog-body">{{ errorMessage }}</div>
       <template #footer>
-        <el-button type="primary" @click="showErrorDialog = false">关闭</el-button>
+        <el-button type="primary" @click="showErrorDialog = false">确定</el-button>
       </template>
     </el-dialog>
+
   </div>
 </template>
 
 <style scoped>
-.finance-import {
+.return-import {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 18px;
 }
-.drop-zone {
-  border: 2px dashed #e0d4c0;
-  border-radius: 10px;
-  padding: 28px 16px;
-  text-align: center;
+
+.import-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.import-header-left { flex: 1; min-width: 0; }
+.import-title { font-size: 16px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
+.import-sub   { font-size: 12px; color: var(--text-muted); }
+
+/* 文件选择区 */
+.file-zone {
+  border: 1.5px dashed var(--border);
+  border-radius: 12px;
+  padding: 0 24px;
+  display: flex; align-items: center; justify-content: center;
   cursor: pointer;
-  background: #faf7f2;
-  transition: border-color .2s;
-  min-height: 100px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
+  transition: all 0.18s;
+  background: var(--bg);
+  height: 100px;
+  flex-shrink: 0;
 }
-.drop-zone:hover { border-color: #c4883a; }
-.drop-hint { color: #3a3028; font-size: 14px; font-weight: 500; }
-.drop-sub  { color: #8a7a6a; font-size: 12px; }
-.file-name { color: #c4883a; font-size: 13px; word-break: break-all; }
-.btn-row { display: flex; gap: 8px; }
-.progress-wrap { display: flex; flex-direction: column; gap: 4px; }
-.phase-label  { font-size: 13px; color: #3a3028; }
-.phase-detail { font-size: 12px; color: #8a7a6a; }
-.result-cards {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 8px;
+.file-zone:hover:not(.disabled) { border-color: var(--accent); background: rgba(196,136,58,0.03); }
+.file-zone.selected { border-style: solid; border-color: var(--accent); }
+.file-zone.disabled { opacity: 0.5; cursor: not-allowed; }
+
+.file-zone-hint {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  color: var(--text-muted); font-size: 13px;
 }
-.card {
-  background: #fff;
-  border: 1px solid #e0d4c0;
-  border-radius: 10px;
-  padding: 12px 8px;
-  text-align: center;
+.file-zone-icon { font-size: 32px; }
+.file-zone-ext  { font-size: 11px; opacity: 0.6; }
+
+.file-zone-name {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%;
 }
-.card.accent .card-val { color: #c4883a; }
-.card.clickable { cursor: pointer; }
-.card.clickable:hover { border-color: #c4883a; }
-.card-val   { font-size: 22px; font-weight: 600; color: #2c2420; }
-.card-label { font-size: 12px; color: #6b5e4e; margin-top: 4px; }
-.error-pre {
-  white-space: pre-wrap;
-  word-break: break-all;
-  font-size: 13px;
-  color: #c0392b;
-  background: #fdf3f3;
-  padding: 12px;
+.file-icon-excel { width: 32px; height: 32px; flex-shrink: 0; }
+.file-name-text  { flex: 1; font-size: 13px; color: var(--text-primary); word-break: break-all; }
+.file-change     { font-size: 11px; color: var(--text-muted); flex-shrink: 0; white-space: nowrap; }
+
+/* 按钮行 */
+.btn-row {
+  display: flex; gap: 10px;
+}
+
+.import-btn {
+  flex: 1;
+  padding: 11px 0;
+  background: var(--accent); color: #fff;
+  border: none; border-radius: 8px;
+  font-size: 13px; font-weight: 500; font-family: inherit;
+  cursor: pointer; transition: background 0.18s;
+}
+.import-btn:hover:not(:disabled) { background: var(--accent-hover); }
+.import-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.cancel-btn {
+  padding: 11px 18px;
+  background: transparent;
+  color: #c06030; border: 1px solid #c06030;
   border-radius: 8px;
+  font-size: 13px; font-weight: 500; font-family: inherit;
+  cursor: pointer; transition: all 0.18s; white-space: nowrap;
+}
+.cancel-btn:hover:not(:disabled) { background: rgba(192,96,48,0.06); }
+.cancel-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* 进度条 */
+.progress-wrap {
+  display: flex; flex-direction: column; gap: 8px;
+}
+.progress-bar-bg {
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.progress-info {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px;
+}
+.progress-phase  { color: var(--text-primary); font-weight: 500; }
+.progress-detail { color: var(--text-muted); flex: 1; }
+.progress-pct    { color: var(--text-muted); margin-left: auto; font-family: monospace; }
+
+/* 结果 */
+.result-wrap {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+}
+.result-title { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 14px; }
+.result-cards {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
+}
+.result-card {
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 10px; padding: 14px 10px; text-align: center;
+}
+.result-card.accent   { border-color: rgba(196,136,58,0.3); }
+.result-card.clickable { cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; }
+.result-card.clickable:hover { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(196,136,58,0.12); }
+.rc-val { font-size: 28px; font-weight: 700; color: var(--text-primary); }
+.result-card.accent .rc-val { color: var(--accent); }
+.rc-lbl { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+
+.error-dialog-body {
+  font-size: 13px; color: var(--text-primary);
+  line-height: 1.7; word-break: break-all;
+  max-height: 300px; overflow-y: auto;
 }
 </style>

@@ -8,7 +8,9 @@ let baseURL = null
 export const getBaseURL = () => {
   if (window.electronAPI) {
     // 桌面端直接使用云端后端，不再本地启动 Flask
-    return 'http://47.99.100.138'
+    // 必须走 HTTPS 域名：nginx 只在 tmt-library.cn:443 这个 vhost 下代理 /api/，
+    // 明文 HTTP 直连 IP:80 会 404（gunicorn 只绑 127.0.0.1:8765，不对外）
+    return 'https://tmt-library.cn'
   }
   return import.meta.env.VITE_API_BASE ?? 'http://127.0.0.1:8765'
 }

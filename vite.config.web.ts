@@ -23,7 +23,9 @@ export default defineConfig({
     port: 5174,
     proxy: {
       '/api': {
-        target: 'http://47.99.100.138',
+        // 本地开发默认打本机 Flask，避免误连生产库；需要联调生产时临时设置
+        // VITE_API_PROXY_TARGET=https://tmt-library.cn
+        target: process.env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:8765',
         changeOrigin: true,
         bypass: (req) => req.url?.match(/\.(?:js|ts|vue)(\?|$)/) ? req.url : undefined
       }

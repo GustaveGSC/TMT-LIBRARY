@@ -4,7 +4,9 @@ import { is } from '@electron-toolkit/utils'
 
 let mainWindow: BrowserWindow | null = null
 
-const WEB_BASE = 'http://47.99.100.138'
+// 必须走 HTTPS 域名：nginx 只在 tmt-library.cn:443 代理静态资源和 /api/，
+// 明文 HTTP 直连 IP:80 会 404
+const WEB_BASE = 'https://tmt-library.cn'
 
 // 离线降级页（网络不通时显示，替代 Chromium 白屏）
 const offlineHTML = `<!DOCTYPE html>
