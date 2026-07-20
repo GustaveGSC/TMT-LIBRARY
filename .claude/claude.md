@@ -97,14 +97,23 @@ npm run build:web          # 构建 web 端 → dist-web/
 # Host tmt → HostName 47.99.100.138，User root，密钥 ~/.ssh/id_ed25519
 # 服务器后端路径：/opt/tmt-library/backend/
 
-# 前端部署（rsync，只传有变化的文件，比 scp -r 快）
-rsync -az --checksum e:/Project/tmt-library/dist-web/. tmt:/var/www/tmt-library/
+# 前端部署（本机 Git Bash 没有 rsync，用 tar+scp+服务器端解压覆盖）
+cd e:/Project/tmt-library
+tar -czf /tmp/dist-web-deploy.tar.gz -C dist-web .
+scp /tmp/dist-web-deploy.tar.gz tmt:/tmp/dist-web-deploy.tar.gz
+ssh tmt "mkdir -p /tmp/dist-web-new && tar xzf /tmp/dist-web-deploy.tar.gz -C /tmp/dist-web-new \
+  && cp -r /var/www/tmt-library /var/www/tmt-library.old \
+  && rm -rf /var/www/tmt-library/* && cp -r /tmp/dist-web-new/. /var/www/tmt-library/ \
+  && rm -rf /tmp/dist-web-new /tmp/dist-web-deploy.tar.gz"
+# 验证线上首页 index.html 里的 assets/index-*.js hash 和本地构建一致后，再删 /var/www/tmt-library.old
 # ⚠️ 必须传完整 dist 目录，不能只传部分文件（Vite 每次构建所有 hash 都会变，只传部分会导致页面白屏）
 
 # 后端部署（按需上传修改的文件，然后 reload）
 scp e:/Project/tmt-library/backend/路径/__init__.py tmt:/opt/tmt-library/backend/路径/__init__.py
 ssh tmt "systemctl reload gunicorn"
 # ⚠️ 用 reload（SIGHUP 优雅替换 worker），不要用 fuser -k + restart（SIGKILL 冷启动会导致内存压力，SSH/VNC 卡死数小时）
+# ⚠️ reload 后不要只看一次 `systemctl is-active`——worker 可能先报 active 后台再崩溃重启循环。
+#    要等几秒后再查一遍 `systemctl status` + `journalctl -u gunicorn -n 20`，确认 master 进程没有变化、无崩溃退出记录
 # 注：服务器内存紧张（1.7GB，MySQL 占 ~400MB，gunicorn 占 ~190MB），冷启动需申请 190MB 但仅剩 ~120MB 空余
 ```
 
