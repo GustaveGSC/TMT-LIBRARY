@@ -79,9 +79,10 @@ def create_app() -> Flask:
     from routes.config import config_bp
     from database.repository.shipping import shipping_repository
 
-    interrupted_tasks = shipping_repository.interrupt_running_tasks()
-    if interrupted_tasks:
-        print(f'[task] 已标记 {interrupted_tasks} 个上次进程遗留任务为 interrupted', flush=True)
+    with app.app_context():
+        interrupted_tasks = shipping_repository.interrupt_running_tasks()
+        if interrupted_tasks:
+            print(f'[task] 已标记 {interrupted_tasks} 个上次进程遗留任务为 interrupted', flush=True)
 
     app.register_blueprint(account_bp,        url_prefix="/api/account")
     app.register_blueprint(version_bp,        url_prefix="/api/version")
