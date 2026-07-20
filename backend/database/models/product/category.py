@@ -65,7 +65,8 @@ class ProductModel(db.Model):
     code       = db.Column(db.String(64),  nullable=False)
     name       = db.Column(db.String(64),  nullable=False)
     name_en    = db.Column(db.String(128), nullable=True)
-    model_code = db.Column(db.String(64),  nullable=False, unique=True)
+    # 生产库尚无唯一约束；业务层会拒绝重复值。加库约束前需先审计历史重复数据。
+    model_code = db.Column(db.String(64),  nullable=False)
     sort_order = db.Column(db.Integer,     nullable=False, default=0)
     created_at = db.Column(db.DateTime,    nullable=False, default=now_cst)
 

@@ -78,14 +78,24 @@ class Permission(db.Model):
 
     id          = db.Column(db.Integer,    primary_key=True, autoincrement=True)
     code        = db.Column(db.String(64), unique=True, nullable=False)  # e.g. "product:edit"
+    name        = db.Column(db.String(255), nullable=True)
     description = db.Column(db.String(255), nullable=True)
 
     def to_dict(self) -> dict:
-        return {"id": self.id, "code": self.code, "description": self.description}
+        return {
+            "id": self.id,
+            "code": self.code,
+            "name": self.name,
+            "description": self.description,
+        }
 
 
 class UserLoginLog(db.Model):
     __tablename__ = "user_login_log"
+    __table_args__ = (
+        db.Index("ix_login_log_user_id", "user_id"),
+        db.Index("ix_login_log_login_at", "login_at"),
+    )
 
     id           = db.Column(db.Integer,    primary_key=True, autoincrement=True)
     user_id      = db.Column(db.Integer,    db.ForeignKey("users.id", ondelete="SET NULL"), nullable=True)

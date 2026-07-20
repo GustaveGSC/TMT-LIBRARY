@@ -1,5 +1,13 @@
 # 数据库表结构
 
+## 迁移管理
+
+- Alembic 配置：`alembic.ini`，迁移目录：`backend/migrations/`
+- `20260720_01` 是生产现状的空 baseline，不包含业务 DDL
+- 当前处于两阶段切换的第一阶段：生产尚需执行结构差异检查和 `stamp 20260720_01`
+- 生产确认 `current=head` 且 `upgrade head` 为空操作以前，`app.py` 的旧启动迁移暂不移除
+- 后续结构变更必须使用经人工审查的 Alembic revision，部署前单独 `upgrade head`
+
 ## 账号
 ```
 users             id, username, password(bcrypt), display_name, is_active, token_version(default 0), created_at, updated_at
