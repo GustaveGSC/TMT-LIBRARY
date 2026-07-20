@@ -96,47 +96,6 @@ def import_shipping():
     return Result.ok(data={'task_id': task_id}).to_response()
 
 
-@shipping_bp.post('/import/return')
-def import_return():
-    """接收销退清单，启动后台导入线程，返回 task_id 供前端订阅进度"""
-    file = request.files.get('file')
-    file_bytes, err = _check_file(file, '销退清单')
-    if err:
-        return err
-
-    task_id  = str(uuid.uuid4())
-    q        = queue.Queue()
-    _task_queues[task_id]  = q
-    _cancel_flags[task_id] = False
-    filename = file.filename
-    app      = current_app._get_current_object()
-
-    def run():
-        with app.app_context():
-            try:
-                def progress_cb(step, **kwargs):
-                    q.put({'step': step, **kwargs})
-
-                def cancel_check():
-                    return _cancel_flags.get(task_id, False)
-
-                result = shipping_service.import_return(
-                    filename, file_bytes,
-                    progress_cb=progress_cb,
-                    cancel_check=cancel_check,
-                )
-                q.put({'step': 'done', 'data': result})
-            except InterruptedError:
-                q.put({'step': 'cancelled', 'message': '导入已中止'})
-            except Exception as e:
-                q.put({'step': 'error', 'message': str(e)})
-            finally:
-                _cancel_flags.pop(task_id, None)
-
-    threading.Thread(target=run, daemon=True).start()
-    return Result.ok(data={'task_id': task_id}).to_response()
-
-
 @shipping_bp.post('/import/finance')
 def import_finance():
     """接收财务清单，启动后台导入线程，返回 task_id 供前端订阅进度"""

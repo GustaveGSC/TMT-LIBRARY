@@ -24,10 +24,6 @@ _REQUIRED_COL_NAMES = {
     '最近操作人', '项次', '商品型号', '商品名称', '数量', '省份',
 }
 
-# 销退清单必要列名（与发货清单列名不同）
-_REQUIRED_RETURN_COL_NAMES = {'平台订单', '交易日期', '品号', '数量', '仓库名称'}
-
-
 def _build_col_map(header_row, required: set = None) -> Dict[str, int]:
     """
     扫描表头行，返回 {列名: 列索引} 的映射（去除首尾空格后匹配）。
@@ -139,51 +135,6 @@ def _parse_csv_rows(file_bytes: bytes) -> List[Dict]:
             col_map = _build_col_map(row)  # 校验必要列是否存在，返回列名→索引映射
             continue
         rows.append(_extract_row(row, col_map))
-    return rows
-
-
-# ── 销退清单专用解析（列名：平台订单/交易日期/品号/数量）────────────
-
-def _extract_return_row(row, col_map: Dict[str, int]) -> Dict:
-    """按销退清单列名提取字段，仅提取 return_record 所需列"""
-    def gc(name):
-        return _get(row, col_map[name]) if name in col_map else None
-
-    return {
-        'ecommerce_order_no': _str(gc('平台订单'))  or None,
-        'shipped_date':       _parse_shipped_date(gc('交易日期')),
-        'product_code':       _str(gc('品号'))       or None,
-        'quantity':           _parse_quantity(gc('数量')),
-        'warehouse_name':     _str(gc('仓库名称'))   or None,
-    }
-
-
-def _parse_xlsx_return_rows(file_bytes: bytes) -> List[Dict]:
-    """解析销退 xlsx：按销退列名匹配提取字段"""
-    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
-    ws = wb.active
-    rows = []
-    col_map = None
-    for i, row in enumerate(ws.iter_rows(values_only=True)):
-        if i == 0:
-            col_map = _build_col_map(row, required=_REQUIRED_RETURN_COL_NAMES)
-            continue
-        rows.append(_extract_return_row(row, col_map))
-    wb.close()
-    return rows
-
-
-def _parse_csv_return_rows(file_bytes: bytes) -> List[Dict]:
-    """解析销退 csv：按销退列名匹配提取字段"""
-    text = file_bytes.decode('utf-8-sig', errors='replace')
-    reader = csv.reader(io.StringIO(text))
-    rows = []
-    col_map = None
-    for i, row in enumerate(reader):
-        if i == 0:
-            col_map = _build_col_map(row, required=_REQUIRED_RETURN_COL_NAMES)
-            continue
-        rows.append(_extract_return_row(row, col_map))
     return rows
 
 
@@ -340,19 +291,6 @@ def _serialize_row(r: Dict) -> Dict:
         'address':            r.get('address'),
         'buyer_remark':       r.get('buyer_remark'),
         'seller_remark':      r.get('seller_remark'),
-    }
-
-
-def _serialize_return_row(r: Dict) -> Dict:
-    """将销退行转为可 JSON 序列化的 dict"""
-    qty     = r.get('quantity')
-    shipped = r.get('shipped_date')
-    return {
-        'ecommerce_order_no': r.get('ecommerce_order_no'),
-        'shipped_date':       shipped.strftime('%Y-%m-%d') if shipped else None,
-        'product_code':       r.get('product_code'),
-        'quantity':           float(qty) if qty is not None else None,
-        'warehouse_name':     r.get('warehouse_name'),
     }
 
 
@@ -641,83 +579,6 @@ class ShippingService:
             }
         except Exception:
             # 先清理可能存在的脏事务，再删除批次数据
-            if batch is not None:
-                try:
-                    from database.base import db
-                    db.session.rollback()
-                    shipping_repository.delete_batch(batch.id)
-                except Exception:
-                    pass
-            raise
-
-    def import_return(self, filename: str, file_bytes: bytes,
-                      progress_cb=None, cancel_check=None) -> Dict:
-        """导入销退清单：过滤排除仓库 → 提取负数量行 → 匹配订单 → 文件内合并 → 与库去重 → 插入 return_record → 重算成品组合"""
-        def notify(step, **kwargs):
-            if progress_cb:
-                progress_cb(step, **kwargs)
-
-        batch = None
-        try:
-            notify('parsing')
-            name_lower = filename.lower()
-            all_rows = _parse_csv_return_rows(file_bytes) if name_lower.endswith('.csv') else _parse_xlsx_return_rows(file_bytes)
-
-            total = len(all_rows)
-
-            # 仅处理数量为负数的行（不在导入时过滤仓库，保存全量数据）
-            negative_rows = [r for r in all_rows if r.get('quantity') is not None and r.get('quantity') < 0]
-
-            # 按订单号匹配：仅保留发货库中存在对应订单的行
-            candidate_order_nos = list({r.get('ecommerce_order_no') for r in negative_rows
-                                        if r.get('ecommerce_order_no')})
-            existing_order_set = shipping_repository.get_existing_order_nos(candidate_order_nos)
-
-            matched_rows   = [r for r in negative_rows if r.get('ecommerce_order_no') in existing_order_set]
-            unmatched_rows = [r for r in negative_rows if r.get('ecommerce_order_no') not in existing_order_set]
-
-            notify('parsed', total=total)
-
-            # 文件内相同 key (order_no, product_code, shipped_date) 合并
-            matched_rows, merged_away_rows = _merge_return_rows(matched_rows)
-
-            # 与数据库比对去重（检查 return_record 已有记录）
-            keys          = [(r.get('ecommerce_order_no'), r.get('product_code'), r.get('shipped_date')) for r in matched_rows]
-            existing_keys = shipping_repository.get_existing_return_keys(keys)
-            new_rows      = [r for r in matched_rows if (r.get('ecommerce_order_no'), r.get('product_code'), r.get('shipped_date')) not in existing_keys]
-            skipped_rows  = [r for r in matched_rows if (r.get('ecommerce_order_no'), r.get('product_code'), r.get('shipped_date')) in existing_keys]
-
-            imported_at = now_cst()
-            notify('inserting', current=0, total=len(new_rows))
-            batch = shipping_repository.create_batch('return', filename, total, imported_at)
-
-            def on_insert_progress(current, total_rows):
-                if cancel_check and cancel_check():
-                    raise InterruptedError('用户已中止导入')
-                notify('inserting', current=current, total=total_rows)
-
-            inserted = shipping_repository.bulk_insert_return(batch.id, new_rows,
-                                                              progress_cb=on_insert_progress)
-            notify('inserted', inserted=inserted, skipped=len(skipped_rows))
-
-            # 对受影响的订单重新计算成品组合（含销退数量）
-            affected_order_nos = shipping_repository.get_return_affected_order_nos(batch.id)
-            if affected_order_nos:
-                notify('resolving', current=0, total=len(affected_order_nos))
-                _resolve_orders(affected_order_nos, progress_cb=progress_cb)
-
-            return {
-                'total':             total,
-                'negative_count':    len(negative_rows),
-                'unmatched':         len(unmatched_rows),
-                'inserted':          inserted,
-                'skipped':           len(skipped_rows),
-                'merged_away':       len(merged_away_rows),
-                'skipped_rows':      [_serialize_return_row(r) for r in skipped_rows],
-                'merged_away_rows':  [_serialize_return_row(r) for r in merged_away_rows],
-                'unmatched_rows':    [_serialize_return_row(r) for r in unmatched_rows],
-            }
-        except Exception:
             if batch is not None:
                 try:
                     from database.base import db

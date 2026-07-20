@@ -121,6 +121,7 @@ POST   /api/product/params/finished/:finished_id      # 全量 Upsert 保存成�
 
 POST   /api/shipping/import/shipping                  # 上传发货清单（发货端），返回 task_id；source='shipping'
 POST   /api/shipping/import/finance                   # 上传财务清单（财务端），返回 task_id；正数量→发货(source='finance')，负数量→销退，售后组过滤
+                                                      #   独立销退清单接口已废弃，销退数据统一通过财务清单负数量行导入
 GET    /api/shipping/import/progress/:task_id         # SSE 进度流：parsing→parsed→inserting→inserted→resolving→done/error/cancelled
 POST   /api/shipping/import/cancel/:task_id           # 发送中止信号，后台完成当前 chunk 后 rollback
 GET    /api/shipping/operators                        # 获取所有最近操作人及其分类
