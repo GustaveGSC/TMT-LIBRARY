@@ -49,6 +49,34 @@ import database.models.product.resource  # noqa: E402,F401
 
 target_metadata = db.metadata
 
+# 这些表对应的功能已在 7736296 中从业务代码移除，但生产数据仍待归档。
+# Alembic 暂不管理它们，避免 autogenerate 静默生成 DROP TABLE。
+LEGACY_UNMANAGED_TABLES = frozenset({
+    'aftersale_reason_component_term',
+    'aftersale_reason_fault_term',
+    'aftersale_reason_synonym_rule',
+})
+LEGACY_UNMANAGED_COLUMNS = frozenset({
+    ('cost_bom_node', 'is_virtual_semi'),
+})
+MODEL_ONLY_FOREIGN_KEYS = frozenset({
+    ('aftersale_case_reason', 'model_id'),
+    ('aftersale_case_reason', 'reason_category_id'),
+})
+
+
+def include_object(obj, name, type_, reflected, compare_to):
+    table_name = name if type_ == 'table' else getattr(getattr(obj, 'table', None), 'name', None)
+    if table_name in LEGACY_UNMANAGED_TABLES:
+        return False
+    if type_ == 'column' and reflected and (table_name, name) in LEGACY_UNMANAGED_COLUMNS:
+        return False
+    if type_ == 'foreign_key_constraint' and not reflected:
+        local_columns = tuple(column.name for column in obj.columns)
+        if len(local_columns) == 1 and (table_name, local_columns[0]) in MODEL_ONLY_FOREIGN_KEYS:
+            return False
+    return True
+
 
 def run_migrations_offline() -> None:
     context.configure(
@@ -57,6 +85,8 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={'paramstyle': 'named'},
         compare_type=True,
+        compare_comments=False,
+        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -73,6 +103,8 @@ def run_migrations_online() -> None:
             connection=connection,
             target_metadata=target_metadata,
             compare_type=True,
+            compare_comments=False,
+            include_object=include_object,
         )
         with context.begin_transaction():
             context.run_migrations()

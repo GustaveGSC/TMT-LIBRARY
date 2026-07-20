@@ -124,6 +124,11 @@ class ShippingOrderFinished(db.Model):
         db.Index('ix_sof_shipped_date', 'shipped_date'),
         db.Index('ix_sof_operator',     'operator'),
         db.Index('ix_sof_province',     'province'),
+        # 生产查询使用 USE INDEX/FORCE INDEX hint，索引名属于运行时契约。
+        db.Index('ix_sof_source',                'source'),
+        db.Index('ix_sof_source_date',           'source', 'shipped_date'),
+        db.Index('ix_sof_source_finished_code',  'source', 'finished_code'),
+        db.Index('ix_sof_finished_code_date',    'finished_code', 'shipped_date'),
     )
 
     id                 = db.Column(db.Integer,        primary_key=True, autoincrement=True)

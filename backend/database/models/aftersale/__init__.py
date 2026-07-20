@@ -59,12 +59,13 @@ class AftersaleKeywordCandidate(db.Model):
 
     id        = db.Column(db.Integer,     primary_key=True, autoincrement=True)
     reason_id = db.Column(db.Integer,     db.ForeignKey('aftersale_reason.id',
-                                           ondelete='CASCADE'), nullable=False, index=True)
+                          ondelete='CASCADE'), nullable=False)
     keyword   = db.Column(db.String(20),  nullable=False)
     count     = db.Column(db.Integer,     nullable=False, default=1)
 
     __table_args__ = (
         db.UniqueConstraint('reason_id', 'keyword', name='uq_keyword_candidate'),
+        db.Index('idx_reason_id', 'reason_id'),
     )
 
 
@@ -291,8 +292,8 @@ class AftersaleProductRemarkDict(db.Model):
     id         = db.Column(db.Integer,  primary_key=True, autoincrement=True)
     type       = db.Column(db.Enum('material', 'color', 'drive_type', 'size', 'series_alias'),
                            nullable=False, index=True)
-    value      = db.Column(db.String(100), nullable=False)  # 在留言中匹配的词；series_alias 时为买家非正式名称
-    display    = db.Column(db.String(100), nullable=True)   # 对应表达；series_alias 时为官方系列基础名
+    value      = db.Column(db.String(50), nullable=False)  # 在留言中匹配的词；series_alias 时为买家非正式名称
+    display    = db.Column(db.String(50), nullable=True)   # 对应表达；series_alias 时为官方系列基础名
     enabled    = db.Column(db.Boolean,   nullable=False, default=True)
     sort_order = db.Column(db.Integer,   nullable=False, default=0)
     created_at = db.Column(db.DateTime,  nullable=False, default=now_cst)

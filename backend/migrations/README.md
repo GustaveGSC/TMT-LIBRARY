@@ -18,6 +18,9 @@ python -m alembic -c alembic.ini upgrade head
 要求：
 
 - `check` 若报告模型与生产结构存在差异，停止，不要 stamp，先审查差异。
+- `env.py` 中的遗留对象清单只用于已确认的生产债务；增加条目前必须写明来源，禁止用宽泛过滤掩盖新差异。
+- 当前 3 张退役售后词典表和 `cost_bom_node.is_virtual_semi` 暂不受 Alembic 管理，数据归档后再用独立迁移清理。
+- `aftersale_case_reason` 的两个 ORM 外键只用于关系映射，生产约束需在历史脏数据审计后单独补建。
 - `stamp` 只写入 `alembic_version`，baseline 本身不得执行业务 DDL。
 - `current` 必须显示 `20260720_01 (head)`。
 - stamp 后再次执行 `upgrade head` 必须为空操作。

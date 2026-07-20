@@ -1,5 +1,6 @@
 from database.base import db
 from utils import now_cst
+from sqlalchemy.dialects.mysql import DOUBLE
 
 # 标签分类
 class ProductTagCategory(db.Model):
@@ -38,8 +39,8 @@ class ProductTag(db.Model):
 
     id                   = db.Column(db.Integer,     primary_key=True, autoincrement=True)
     name                 = db.Column(db.String(32),  nullable=False, unique=True)
-    color                = db.Column(db.String(16),  nullable=True)   # 保留旧字段（兼容），分类颜色优先
-    category_id          = db.Column(db.Integer,     db.ForeignKey('product_tag_category.id'), nullable=True)
+    color                = db.Column(db.String(16),  nullable=False, default='#c4883a')   # 保留旧字段（兼容），分类颜色优先
+    category_id          = db.Column(db.Integer,     db.ForeignKey('product_tag_category.id', name='fk_tag_category', ondelete='SET NULL'), nullable=True)
     shipping_dim_enabled = db.Column(db.Boolean,      nullable=False, default=True)  # 分类作为发货维度时，该标签是否纳入统计
     created_at           = db.Column(db.DateTime,    nullable=False, default=now_cst)
 
@@ -62,8 +63,8 @@ class ProductTag(db.Model):
 
 finished_packaged = db.Table(
     'product_finished_packaged',
-    db.Column('finished_id', db.Integer, db.ForeignKey('product_finished.id'), primary_key=True),
-    db.Column('packaged_id', db.Integer, db.ForeignKey('product_packaged.id'), primary_key=True),
+    db.Column('finished_id', db.Integer, db.ForeignKey('product_finished.id', name='fk_fp_finished'), primary_key=True),
+    db.Column('packaged_id', db.Integer, db.ForeignKey('product_packaged.id', name='fk_fp_packaged'), primary_key=True),
 )
 
 # status 常量
@@ -86,7 +87,7 @@ class ProductFinished(db.Model):
     id            = db.Column(db.Integer,     primary_key=True, autoincrement=True)
     code          = db.Column(db.String(64),  nullable=False, unique=True)
     status        = db.Column(db.String(20),  nullable=False, default=STATUS_UNRECORDED)
-    model_id      = db.Column(db.Integer,     db.ForeignKey('product_model.id'), nullable=True)
+    model_id      = db.Column(db.Integer,     db.ForeignKey('product_model.id', name='fk_finished_model'), nullable=True)
     listed_yymm   = db.Column(db.String(7),   nullable=True)
     delisted_yymm = db.Column(db.String(7),   nullable=True)
     market        = db.Column(db.String(16),  nullable=True)   # domestic/foreign/both
@@ -160,9 +161,9 @@ class ProductPackaged(db.Model):
     length       = db.Column(db.Float,       nullable=True)
     width        = db.Column(db.Float,       nullable=True)
     height       = db.Column(db.Float,       nullable=True)
-    volume       = db.Column(db.Float,       nullable=True)
-    gross_weight = db.Column(db.Float,       nullable=True)
-    net_weight   = db.Column(db.Float,       nullable=True)
+    volume       = db.Column(DOUBLE,         nullable=True)
+    gross_weight = db.Column(DOUBLE,         nullable=True)
+    net_weight   = db.Column(DOUBLE,         nullable=True)
     created_at   = db.Column(db.DateTime,    nullable=False, default=now_cst)
     updated_at   = db.Column(db.DateTime,    nullable=False, default=now_cst, onupdate=now_cst)
 
