@@ -40,6 +40,13 @@
 - 排除状态：橙红标签 + 橙红边框背景；正常状态：绿色标签
 - 调 `GET /api/shipping/warehouses` 加载，`POST /api/shipping/warehouses/filter` 保存
 
+## TagDimensionConfig.vue 说明
+- 配置哪些标签分类可作为发货图表聚合维度（`product_tag_category.is_shipping_dim`），及分类下具体哪些标签参与统计（`product_tag.shipping_dim_enabled`）
+- `onMounted` 拉取 `GET /api/product/tags/categories/`（已含每个分类的 tags[]），本地打快照用于保存时 diff
+- 每个分类一行：`el-switch` 控制是否作为发货维度；分类下标签用 `el-checkbox` 勾选是否纳入统计（分类开关关闭时标签行置灰禁用，但状态仍保留）
+- 「保存」仅对比初始快照后变化的行调用 `PUT /api/product/tags/categories/:id` / `PUT /api/product/tags/:id`（`Promise.all` 并发），无变化时提示"没有变更"
+- 权限同其余数据配置面板，随「数据管理」页面权限走（不单独设权限码）
+
 ## EquivalentConfig.vue 说明
 - 配置产成品通用件（等效互换对），用于发货匹配时允许 A01↔B01 混用
 - 列表：code_a / code_b / 备注 / 删除按钮（el-popconfirm 二次确认）
@@ -67,6 +74,27 @@
 | 渠道（渠道→渠道商自动下钻） | bar、pie | bar |
 | 地域（省份→城市→县区自动下钻） | map、bar | map |
 | 时间 | 同比（yoy）、环比（mom） | 同比 |
+| 标签维度（动态，见下） | bar、pie | bar |
+
+### 标签维度 chip（动态）
+- 桌面端底部维度栏固定四个 chip（产品/渠道/地域/时间，`BASE_GROUP_BY_OPTIONS`）+ 一个「标签」下拉按钮（`el-dropdown`，仅 `tagDimensions.length > 0` 时显示）：点击弹出菜单列出 `GET /api/shipping/chart-options` 返回的 `tag_dimensions`（数据管理→数据配置→「标签分析维度」面板配置的已启用标签分类），选中后 `groupBy` 设为对应 `tag:<category_id>`；按钮激活态与图标颜色跟随当前选中的标签分类（`activeTagDim` computed，用 `findTagDim(groupBy)` 判定）
+- 移动端/全屏工具栏的 `el-select` 维度选择器仍用扁平列表 `GROUP_BY_OPTIONS`（`BASE_GROUP_BY_OPTIONS` + 各标签分类展开，`isTag` 标记 + `PriceTag` 图标），因为下拉列表本身已是菜单形式，无需再套一层
+- `groupBy` 值为 `tag:<category_id>`；单层不可下钻（不在 `DRILLABLE_LEVELS` 集合内，`drillDown` 对其自动 no-op，与时间维度一致）
+- 聚合仅统计该分类下 `shipping_dim_enabled=1` 的标签；未启用的标签、以及未打该分类任何标签的产品，不出现在该维度下（筛选性维度，非"未知"兜底分组）
+- 不支持自定义分组（`customGroups`/`DIM_LABELS` 等仅覆盖产品/渠道/地域三个固定维度）
+- 若某产品在同一标签分类下被打了多个标签，聚合时会在多个标签分组中重复计入该产品的发货记录（标签多对多设计的已知边界情况）
+
+### 标签筛选（左侧筛选面板）
+- 左侧筛选面板新增「标签筛选」分组（`sections.tag`），与聚合维度无关，独立生效——不管当前按什么维度聚合，选中的标签都会过滤底层数据
+- 每个已启用的标签分类渲染一个多选下拉（选项为该分类下 `shipping_dim_enabled=1` 的标签），绑定 `filters.tagFilters[category_id]`
+- 请求体新增 `tag_filters: [{category_id, tag_ids}]`（`buildTagFilters()` 生成，跳过未选择的分类）；同一分类内多个标签为 OR，不同分类之间为 AND
+- 后端用"先查出符合条件的 finished_code 集合再 IN 过滤"而非 JOIN，避免同一产品命中同分类下多个标签时 JOIN fan-out 导致数量重复计入
+
+### 自定义分组支持标签维度
+- 自定义分组（`customGroups`）的 `dimension` 除 `product`/`channel`/`region` 外，还支持动态的 `tag:<category_id>`；标签维度单层（无层级/无 parent_context），`level` 恒等于 `dimension` 本身
+- 分组项 `items` 结构为 `{value: tag_id, code: tag_name, name: tag_name, label: tag_name}`：`value` 供 `tagFilters`/`tag_filters` 用 id 过滤，`code` 供 `mergeGroupedItems` 按后端返回的标签名 label 匹配合并
+- 「标签筛选」区每个分类上方显示该分类的分组芯片（`tagGroupsFor(categoryId)`），激活后隐藏被合并的原始标签、下拉里出现合并后的分组选项（`tagOptsFor`）
+- `dimLabel()`/`dimColor()`/`defaultLevelFor()` 是兼容固定维度与动态标签维度的通用 helper，管理弹窗（分组列表标签色块、新建分组表单）均已改用这三个函数而非旧的 `DIM_LABELS`/`DIM_COLORS`/`DIM_DEFAULT_LEVEL` 直接取值
 
 ### 时间维度
 - 切换到时间维度自动激活「同比」；可手动切换为「环比」

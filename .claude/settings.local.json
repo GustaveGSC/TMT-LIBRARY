@@ -90,14 +90,16 @@
       "Bash(scp -o ServerAliveInterval=10 -r e:/Project/tmt-library/dist-web/. tmt:/var/www/tmt-library/)",
       "Bash(scp -r e:/Project/tmt-library/dist-web/. tmt:/var/www/tmt-library/)",
       "Bash(powershell -ExecutionPolicy Bypass -Command \"Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser; Invoke-RestMethod -Uri https://get.scoop.sh | Invoke-Expression\")",
-      "Bash(powershell -Command \"[System.Environment]::GetEnvironmentVariable\\('PATH','User'\\) -split ';' | Select-String 'scoop'\")"
+      "Bash(powershell -Command \"[System.Environment]::GetEnvironmentVariable\\('PATH','User'\\) -split ';' | Select-String 'scoop'\")",
+      "Bash(scp /tmp/q.py tmt:/tmp/q.py)"
     ],
     "additionalDirectories": [
       "\\tmp",
       "e:\\Project\\tmt-library\\.claude",
       "e:\\Project\\tmt-library\\release\\win-unpacked",
       "e:\\Project\\tmt-library\\backend",
-      "e:\\Project\\tmt-library\\src\\views"
+      "e:\\Project\\tmt-library\\src\\views",
+      "E:\\Project\\TMS Data Site\\src\\stores"
     ]
   }
 }

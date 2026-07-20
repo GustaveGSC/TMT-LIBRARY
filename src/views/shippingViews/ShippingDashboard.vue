@@ -2,7 +2,7 @@
 // ── 导入 ──────────────────────────────────────────
 import { ref, reactive, computed, watch, onMounted, onUnmounted, onBeforeUnmount, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
-import { ArrowDown, Delete, Setting, Close } from '@element-plus/icons-vue'
+import { ArrowDown, Delete, Setting, Close, PriceTag } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import http from '@/api/http'
 import iconBar from '@/assets/icons/btn_bar.png'
@@ -53,18 +53,52 @@ const DIM_DEFAULT_LEVEL = { product: 'category', channel: 'channel', region: 'pr
 const DIM_LABELS = { product: '产品', channel: '渠道', region: '地域' }
 const DIM_COLORS = { product: '#c4883a', channel: '#4a8fc0', region: '#6ab47a' }
 
+/** 标签维度（tag:<category_id>）本身即层级，无需二级层级选择；下面三个 helper 兼容固定维度与动态标签维度 */
+function findTagDim(dim) {
+  const catId = typeof dim === 'string' && dim.startsWith('tag:') ? Number(dim.split(':')[1]) : null
+  return catId != null ? tagDimensions.value.find(t => t.category_id === catId) : null
+}
+function defaultLevelFor(dim) {
+  return dim?.startsWith('tag:') ? dim : DIM_DEFAULT_LEVEL[dim]
+}
+function dimLabel(dim) {
+  return DIM_LABELS[dim] ?? findTagDim(dim)?.name ?? dim
+}
+function dimColor(dim) {
+  return DIM_COLORS[dim] ?? findTagDim(dim)?.color ?? '#8a7a6a'
+}
+
 const METRIC_OPTIONS = [
   { label: '发货数据',   value: 'quantity'        },
   { label: '销退数据',   value: 'return_quantity' },
   { label: '净发货数据', value: 'actual'          },
 ]
 
-const GROUP_BY_OPTIONS = [
+const BASE_GROUP_BY_OPTIONS = [
   { label: '产品', value: 'product',  icon: iconProduct },
   { label: '渠道', value: 'channel',  icon: iconChannel },
   { label: '地域', value: 'province', icon: iconRegion  },
   { label: '时间', value: 'date',     icon: iconDate    },
 ]
+
+// 后端配置的标签分析维度（GET /api/shipping/chart-options 返回）
+const tagDimensions = ref([])
+
+// 维度 chip 列表（移动端/全屏 el-select 用扁平列表）：固定四项 + 已启用的标签分析维度
+const GROUP_BY_OPTIONS = computed(() => [
+  ...BASE_GROUP_BY_OPTIONS,
+  ...tagDimensions.value.map(td => ({
+    label: td.name, value: `tag:${td.category_id}`, color: td.color, isTag: true,
+  })),
+])
+
+// 桌面端底部 chip 栏：多个标签维度收进一个"标签"按钮的下拉菜单，而非各占一个 chip
+const activeTagDim = computed(() => findTagDim(groupBy.value))
+function onSelectTagDim(val) {
+  cityMode.value = false
+  groupBy.value  = val
+  loadChartData()
+}
 
 // 各聚合维度下允许使用的图表类型和对比模式
 const GROUPBY_ALLOWED = {
@@ -72,6 +106,12 @@ const GROUPBY_ALLOWED = {
   channel:  { chartTypes: ['bar', 'pie'],  comparisons: [],             default: 'bar' },
   province: { chartTypes: ['map', 'bar'],  comparisons: [],             default: 'map' },
   date:     { chartTypes: [],              comparisons: ['yoy', 'mom'], default: null  },
+}
+const TAG_DIM_ALLOWED = { chartTypes: ['bar', 'pie'], comparisons: [], default: 'bar' }
+
+/** 标签维度（tag:N）不在 GROUPBY_ALLOWED 静态表中，统一走这个 helper 取配置 */
+function groupByConfig(gb) {
+  return GROUPBY_ALLOWED[gb] ?? (typeof gb === 'string' && gb.startsWith('tag:') ? TAG_DIM_ALLOWED : { chartTypes: [], comparisons: [], default: null })
 }
 
 // 省份简称 → ECharts GeoJSON 标准全称
@@ -200,7 +240,7 @@ const TRADE_TYPE_OPTIONS = [
   { label: '内销数据',   value: 'domestic' },
   { label: '外贸数据',   value: 'foreign'  },
 ]
-const sections = reactive({ time: true, product: true, channel: true, region: true })
+const sections = reactive({ time: true, product: true, channel: true, region: true, tag: true })
 const selectedPeriod = ref('month')
 const chartType      = ref('bar')    // 图表类型：bar/line/pie/map
 const comparisonMode = ref(null)     // 对比模式：null | 'yoy'（同比）| 'mom'（环比）
@@ -209,8 +249,8 @@ const cityMode       = ref(false)    // 城市模式：地域维度下直接按�
 const dataMetric     = ref('actual') // 显示指标：quantity/return_quantity/actual
 
 // 当前维度下允许的图表类型 / 对比模式
-const allowedChartTypes  = computed(() => GROUPBY_ALLOWED[groupBy.value]?.chartTypes  ?? [])
-const allowedComparisons = computed(() => GROUPBY_ALLOWED[groupBy.value]?.comparisons ?? [])
+const allowedChartTypes  = computed(() => groupByConfig(groupBy.value).chartTypes  ?? [])
+const allowedComparisons = computed(() => groupByConfig(groupBy.value).comparisons ?? [])
 
 // 根据筛选层级自动推导实际发给后端的 group_by 值
 // 产品：品类数≠1 → category；品类=1且系列数≠1 → series；品类=1且系列=1 → model
@@ -324,6 +364,7 @@ const filters = ref({
   channelNames: [], channelCodes: [],
   provinces: [], cities: [], districts: [],
   categoryIds: [], seriesIds: [], modelIds: [],
+  tagFilters: {},   // { [category_id]: tag_id[] }，与聚合维度无关的标签筛选
 })
 
 // ── 自定义分组（localStorage 持久化） ─────────────
@@ -369,6 +410,19 @@ function savePresetsToStorage() {
 const productGroups = computed(() => customGroups.value.filter(g => g.dimension === 'product'))
 const channelGroups = computed(() => customGroups.value.filter(g => g.dimension === 'channel'))
 const regionGroups  = computed(() => customGroups.value.filter(g => g.dimension === 'region'))
+/** 指定标签分类下的自定义分组（标签维度单层，无需 level/parent_context） */
+function tagGroupsFor(categoryId) {
+  return customGroups.value.filter(g => g.dimension === `tag:${categoryId}`)
+}
+/** 标签筛选下拉选项：已激活分组的成员隐藏，改为显示合并后的分组条目 */
+function tagOptsFor(td) {
+  const active = tagGroupsFor(td.category_id).filter(g => activeGroupIds.value.includes(g.id))
+  const hidden = new Set(active.flatMap(g => g.items.map(i => i.value)))
+  return [
+    ...td.tags.filter(t => !hidden.has(t.id)).map(t => ({ value: t.id, label: t.name })),
+    ...active.map(g => ({ value: g.id, label: g.name, sub: g.items.map(i => i.label).join(' + ') })),
+  ]
+}
 
 // 数据库实际发货日期范围文本
 const dateRangeText = computed(() => {
@@ -517,7 +571,7 @@ const districtOpts = computed(() => {
 // ── 新建分组表单联动 ──────────────────────────────
 
 function onNewGroupDimensionChange() {
-  newGroup.value.level = DIM_DEFAULT_LEVEL[newGroup.value.dimension]
+  newGroup.value.level = defaultLevelFor(newGroup.value.dimension)
   resetNewGroupChildren()
 }
 function onNewGroupLevelChange()     { resetNewGroupChildren() }
@@ -538,7 +592,8 @@ function resetNewGroupChildren() {
 const newGroupLevelOptions = computed(() => {
   if (newGroup.value.dimension === 'product') return PRODUCT_LEVELS
   if (newGroup.value.dimension === 'channel') return CHANNEL_LEVELS
-  return REGION_LEVELS
+  if (newGroup.value.dimension === 'region')  return REGION_LEVELS
+  return []   // 标签维度单层，无需层级选择（表单里对应字段整体隐藏）
 })
 
 const newGroupSeriesOptions = computed(() => {
@@ -565,6 +620,10 @@ const newGroupItemOptions = computed(() => {
     if (level === 'channel') return channelOptions.value.map(c => ({ value: c.name, label: c.name }))
     const ch = channelOptions.value.find(c => c.name === parentChannelName)
     return (ch?.orgs || []).map(o => ({ value: o.code, label: `${o.code}  ${o.org_name}` }))
+  }
+  if (dimension.startsWith('tag:')) {
+    const td = findTagDim(dimension)
+    return (td?.tags || []).map(t => ({ value: t.id, label: t.name }))
   }
   if (level === 'province') return provinceOptions.value.map(p => ({ value: p.name, label: p.name }))
   // 城市模式下跨省选城市：展平所有省份的城市列表
@@ -631,6 +690,13 @@ function saveNewGroup() {
       })
       parent_context = { channel_name: parentChannelName }
     }
+  } else if (dimension.startsWith('tag:')) {
+    // 标签维度单层，无 parent_context；code 字段存标签名，供 mergeGroupedItems 按标签维度聚合结果的 label（标签名）匹配
+    const td = findTagDim(dimension)
+    items = selectedValues.map(v => {
+      const name = td?.tags?.find(t => t.id === v)?.name || String(v)
+      return { value: v, code: name, name, label: name }
+    })
   } else {
     items = selectedValues.map(v => ({ value: v, label: v }))
     if (level === 'city' && !cityMode.value) parent_context = { province: parentProvince }
@@ -641,7 +707,7 @@ function saveNewGroup() {
   saveGroupsToStorage()
 
   const dim = newGroup.value.dimension
-  newGroup.value = { name: '', dimension: dim, level: DIM_DEFAULT_LEVEL[dim],
+  newGroup.value = { name: '', dimension: dim, level: defaultLevelFor(dim),
     parentCategoryId: null, parentSeriesId: null, parentChannelName: null, parentProvince: null, parentCity: null,
     selectedIds: [], selectedValues: [] }
   ElMessage.success('分组已保存')
@@ -710,6 +776,9 @@ function _removeGroupFromFilters(id) {
   filters.value.provinces    = rm(filters.value.provinces)
   filters.value.cities       = rm(filters.value.cities)
   filters.value.districts    = rm(filters.value.districts)
+  const newTagFilters = {}
+  for (const [cid, ids] of Object.entries(filters.value.tagFilters || {})) newTagFilters[cid] = rm(ids || [])
+  filters.value.tagFilters = newTagFilters
 }
 
 /** 分组描述文字 */
@@ -721,6 +790,7 @@ function groupLevelLabel(group) {
     return `型号 · ${pc?.series_code || ''}`
   }
   if (dim === 'channel') return level === 'channel' ? '渠道' : `渠道商 · ${pc?.channel_name || ''}`
+  if (dim?.startsWith('tag:')) return `标签 · ${dimLabel(dim)}`
   if (level === 'province') return '省份'
   if (level === 'city')     return `城市 · ${pc?.province || ''}`
   return `县区 · ${pc?.city || ''}`
@@ -854,7 +924,20 @@ function resetFilters() {
     channelNames: [], channelCodes: [],
     provinces: [], cities: [], districts: [],
     categoryIds: [], seriesIds: [], modelIds: [],
+    tagFilters: {},
   }
+}
+
+/** 标签筛选：设置某标签分类下已选中的标签 id 列表 */
+function setTagFilter(categoryId, tagIds) {
+  filters.value.tagFilters = { ...filters.value.tagFilters, [categoryId]: tagIds }
+}
+
+/** 标签筛选：body 传参格式，展开分组 UUID 为标签 id，过滤掉空选择的分类 */
+function buildTagFilters() {
+  return Object.entries(filters.value.tagFilters || {})
+    .map(([categoryId, ids]) => ({ category_id: Number(categoryId), tag_ids: expandStrSel(ids || []) }))
+    .filter(tf => tf.tag_ids.length)
 }
 
 /** 分组下钻：右击激活分组条目，展开分组成员的明细数据 */
@@ -868,6 +951,7 @@ function drillDownGroup(group) {
     provinces:     [...filters.value.provinces],
     cities:        [...filters.value.cities],
     districts:     [...filters.value.districts],
+    tagFilters:    { ...filters.value.tagFilters },
   }
   const savedActiveGroupIds = [...activeGroupIds.value]
   drillStack.value.push({ label: group.name, savedFilters, savedActiveGroupIds })
@@ -910,6 +994,9 @@ function drillDownGroup(group) {
     if (pc.province) filters.value.provinces = [pc.province]
     if (pc.city)     filters.value.cities    = [pc.city]
     filters.value.districts = group.items.map(i => i.value)
+  } else if (level?.startsWith('tag:')) {
+    const catId = Number(level.split(':')[1])
+    filters.value.tagFilters = { ...filters.value.tagFilters, [catId]: group.items.map(i => i.value) }
   }
   loadChartData()
 }
@@ -929,6 +1016,7 @@ function drillDown(label) {
     provinces:    [...filters.value.provinces],
     cities:       [...filters.value.cities],
     districts:    [...filters.value.districts],
+    tagFilters:   { ...filters.value.tagFilters },
   }
   drillStack.value.push({ label, savedFilters })
 
@@ -986,6 +1074,7 @@ function drillBack(idx) {
     provinces:    savedFilters.provinces,
     cities:       savedFilters.cities,
     districts:    savedFilters.districts,
+    tagFilters:   savedFilters.tagFilters || {},
   })
   if (savedActiveGroupIds) activeGroupIds.value = savedActiveGroupIds
   drillStack.value = drillStack.value.slice(0, idx)
@@ -1024,6 +1113,7 @@ async function loadOptions() {
       }
       if (optRes.data.data_date_min) dataDateMin.value = optRes.data.data_date_min
       if (optRes.data.data_date_max) dataDateMax.value = optRes.data.data_date_max
+      tagDimensions.value = optRes.data.tag_dimensions || []
     }
     if (treeRes.success) { categoryTree.value = treeRes.data }
   } catch { ElMessage.error('加载筛选数据失败') }
@@ -1050,6 +1140,7 @@ async function loadChartData() {
       cities:        effCities(),
       districts:     effDistricts(),
       source:        dataSource.value,
+      tag_filters:   buildTagFilters(),
     }
     const res = await http.post('/api/shipping/chart-data', body)
     if (res.success) {
@@ -2123,6 +2214,7 @@ watch(
     filters.value.categoryIds, filters.value.seriesIds,  filters.value.modelIds,
     filters.value.channelNames, filters.value.channelCodes,
     filters.value.provinces,   filters.value.cities,     filters.value.districts,
+    filters.value.tagFilters,
   ],
   () => {
     clearTimeout(_chartTimer)
@@ -2135,7 +2227,7 @@ watch(() => filters.value.dateRange, () => loadOptions(), { deep: true })
 // groupBy 切换时，自动重置不合法的图表类型 / 对比模式；地域维度默认使用地图
 watch(groupBy, () => {
   const allowed  = allowedChartTypes.value
-  const defType  = GROUPBY_ALLOWED[groupBy.value]?.default ?? null
+  const defType  = groupByConfig(groupBy.value).default ?? null
   if (!allowed.includes(chartType.value)) {
     chartType.value = defType
   } else if (defType && defType !== chartType.value) {
@@ -2364,6 +2456,40 @@ watch(groupBy, () => {
         </div>
       </div>
 
+      <!-- ▌标签筛选（动态，来自数据管理→数据配置→标签分析维度） -->
+      <div v-if="tagDimensions.length > 0" class="section-group">
+        <div class="section-hd" @click="toggleSection('tag')">
+          <span class="section-title">标签筛选</span>
+          <el-icon class="section-chevron" :class="{ 'is-closed': !sections.tag }"><ArrowDown /></el-icon>
+        </div>
+        <div class="section-bd" :class="{ 'is-closed': !sections.tag }">
+          <div class="section-bd-inner">
+            <div v-for="td in tagDimensions" :key="td.category_id" class="field-row">
+              <div class="field-label">{{ td.name }}</div>
+              <!-- 该分类下的自定义分组芯片 -->
+              <div v-if="tagGroupsFor(td.category_id).length > 0" class="group-chips-row">
+                <span v-for="g in tagGroupsFor(td.category_id)" :key="g.id"
+                  class="group-chip" :class="{ 'is-active': isGroupActive(g) }"
+                  :title="groupLevelLabel(g) + '：' + g.items.map(i => i.label || i.value).join('、')"
+                  @click="toggleGroup(g)">
+                  {{ g.name }}
+                </span>
+              </div>
+              <el-select :model-value="filters.tagFilters[td.category_id] || []"
+                @update:model-value="val => setTagFilter(td.category_id, val)"
+                :placeholder="`全部${td.name}`"
+                multiple filterable collapse-tags collapse-tags-tooltip
+                clearable size="default" style="width:100%">
+                <el-option v-for="opt in tagOptsFor(td)" :key="String(opt.value)" :label="opt.label" :value="opt.value">
+                  <span class="opt-main">{{ opt.label }}</span>
+                  <span v-if="opt.sub" class="opt-sub">{{ opt.sub }}</span>
+                </el-option>
+              </el-select>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <button class="btn-reset" @click="resetFilters">重置筛选</button>
 
       <!-- ▌配置方案面板 -->
@@ -2528,12 +2654,26 @@ watch(groupBy, () => {
           </div>
         </div>
         <div class="footer-dims">
-          <button v-for="opt in GROUP_BY_OPTIONS" :key="opt.value"
+          <button v-for="opt in BASE_GROUP_BY_OPTIONS" :key="opt.value"
             class="gb-btn" :class="{ active: groupBy === opt.value }"
             @click="if (opt.value !== 'province') cityMode = false; groupBy = opt.value; loadChartData()">
             <img :src="opt.icon" width="28" height="28" :alt="opt.label" />
             <span class="gb-label">{{ opt.label }}</span>
           </button>
+          <!-- 标签维度：多个分类收进一个下拉菜单，而非各占一个 chip -->
+          <el-dropdown v-if="tagDimensions.length > 0" trigger="click" @command="onSelectTagDim">
+            <button class="gb-btn" :class="{ active: !!activeTagDim }">
+              <el-icon :size="20" :color="activeTagDim ? activeTagDim.color : undefined"><PriceTag /></el-icon>
+              <span class="gb-label">{{ activeTagDim ? activeTagDim.name : '标签' }}</span>
+            </button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item v-for="td in tagDimensions" :key="td.category_id" :command="`tag:${td.category_id}`">
+                  {{ td.name }}
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
         <div v-if="!isMobile" class="footer-date-range">{{ dateRangeText }}</div>
       </div>
@@ -2570,8 +2710,8 @@ watch(groupBy, () => {
         <div v-for="g in customGroups" :key="g.id" class="mgr-group-item">
           <div class="mgr-group-info">
             <div class="mgr-group-name-row">
-              <span class="mgr-dim-tag" :style="{ background: DIM_COLORS[g.dimension]+'22', color: DIM_COLORS[g.dimension] }">
-                {{ DIM_LABELS[g.dimension] }}
+              <span class="mgr-dim-tag" :style="{ background: dimColor(g.dimension)+'22', color: dimColor(g.dimension) }">
+                {{ dimLabel(g.dimension) }}
               </span>
               <span class="mgr-group-name">{{ g.name }}</span>
             </div>
@@ -2600,10 +2740,13 @@ watch(groupBy, () => {
             <el-radio-button value="product">产品</el-radio-button>
             <el-radio-button value="channel">渠道</el-radio-button>
             <el-radio-button value="region">地域</el-radio-button>
+            <el-radio-button v-for="td in tagDimensions" :key="td.category_id" :value="`tag:${td.category_id}`">
+              {{ td.name }}
+            </el-radio-button>
           </el-radio-group>
         </div>
 
-        <div class="mgr-field">
+        <div v-if="!newGroup.dimension.startsWith('tag:')" class="mgr-field">
           <div class="mgr-label">分组层级</div>
           <el-radio-group v-model="newGroup.level" @change="onNewGroupLevelChange">
             <el-radio-button v-for="opt in newGroupLevelOptions" :key="opt.value" :value="opt.value">
@@ -2660,7 +2803,8 @@ watch(groupBy, () => {
           <div class="mgr-label">
             {{ { category:'选择品类', series:'选择系列', model:'选择型号',
                  channel:'选择渠道', channel_code:'选择渠道商',
-                 province:'选择省份', city:'选择城市', district:'选择县区' }[newGroup.level] }}
+                 province:'选择省份', city:'选择城市', district:'选择县区' }[newGroup.level]
+               ?? `选择${dimLabel(newGroup.level)}` }}
             <span class="mgr-label-hint">（至少选 2 项）</span>
           </div>
           <el-select v-if="newGroup.dimension === 'product'"

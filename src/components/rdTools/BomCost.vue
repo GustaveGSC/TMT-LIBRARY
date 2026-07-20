@@ -146,7 +146,13 @@ const nodeList        = ref([])
 const nodeTotal       = ref(0)
 const nodePage        = ref(1)
 const nodesLoading    = ref(false)
-const nodeTypeFilter  = ref('material')
+// 列头筛选（分列）
+const nodeColFilters  = reactive({ category: '', code: '', name: '', spec: '' })
+let _nodeFilterTimer  = null
+function onNodeColFilter() {
+  clearTimeout(_nodeFilterTimer)
+  _nodeFilterTimer = setTimeout(() => { nodePage.value = 1; loadNodes() }, 300)
+}
 
 // 节点详情抽屉
 const nodeDrawerVisible = ref(false)
@@ -379,8 +385,7 @@ async function doImport() {
   const selectedSkus = previewData.value.skus.filter(s => selectedSkuCodes.value.has(s.finished_code))
   const res = await http.post('/api/rd/cost/import', {
     preview_data:  { ...previewData.value, skus: selectedSkus, purchased_semi_codes: purchasedSemiCodes },
-    snapshot_date: importForm.value.snapshot_date || '',
-    notes:         importForm.value.notes || '',
+    notes: importForm.value.notes || '',
   })
   importing.value = false
 
@@ -426,7 +431,13 @@ async function openBomDrawer(sku) {
 async function loadNodes() {
   nodesLoading.value = true
   const res = await http.get('/api/rd/cost/nodes', {
-    params: { q: nodeSearchQ.value, page: nodePage.value, per_page: 30, node_type: nodeTypeFilter.value },
+    params: {
+      q: nodeSearchQ.value, page: nodePage.value, per_page: 30,
+      f_category: nodeColFilters.category,
+      f_code:     nodeColFilters.code,
+      f_name:     nodeColFilters.name,
+      f_spec:     nodeColFilters.spec,
+    },
   })
   nodesLoading.value = false
   if (res.success) {
@@ -844,52 +855,64 @@ function copyEstimate() {
     <!-- Tab 2：物料查询                             -->
     <!-- ═══════════════════════════════════════════ -->
     <div v-show="subTab === 'nodes'" class="panel">
-      <div class="toolbar">
-        <el-input
-          v-model="nodeSearchQ"
-          placeholder="搜索品号 / 品名"
-          clearable
-          style="width: 240px"
-          @keyup.enter="doNodeSearch"
-        >
-          <template #append>
-            <el-button :icon="Search" @click="doNodeSearch" />
-          </template>
-        </el-input>
-        <el-select
-          v-model="nodeTypeFilter"
-          placeholder="全部类型"
-          clearable
-          style="width: 110px"
-          @change="doNodeSearch"
-        >
-          <el-option label="原材料" value="material" />
-          <el-option label="半成品" value="semi" />
-          <el-option label="成品"   value="finished" />
-        </el-select>
-      </div>
+      <div class="toolbar"></div>
 
       <el-table
         :data="nodeList"
         v-loading="nodesLoading"
         size="small"
-        class="cost-table"
-        row-class-name="table-row"
+        class="cost-table node-filter-table"
+        :row-class-name="({ row }) => 'table-row node-row-' + row.node_type"
       >
-        <el-table-column prop="material_category" label="物料分类" min-width="160" show-overflow-tooltip>
+        <el-table-column width="160" fixed="left">
+          <template #header>
+            <div class="col-filter-header">
+              <span>品号</span>
+              <el-input v-model="nodeColFilters.code" size="small" placeholder="支持正则" clearable class="col-filter-input" @input="onNodeColFilter" @clear="onNodeColFilter" />
+            </div>
+          </template>
+          <template #default="{ row }">{{ row.code_with_version || row.code }}</template>
+        </el-table-column>
+        <el-table-column prop="material_category" width="180" show-overflow-tooltip>
+          <template #header>
+            <div class="col-filter-header">
+              <span>物料分类</span>
+              <el-input v-model="nodeColFilters.category" size="small" placeholder="支持正则" clearable class="col-filter-input" @input="onNodeColFilter" @clear="onNodeColFilter" />
+            </div>
+          </template>
           <template #default="{ row }">
             <span :class="{ 'text-muted': !row.material_category }">{{ row.material_category || '—' }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="code" label="品号" min-width="130" />
-        <el-table-column prop="name" label="品名" min-width="160" show-overflow-tooltip />
-        <el-table-column label="最新单价" width="110" align="right">
+        <el-table-column prop="name" min-width="180" show-overflow-tooltip>
+          <template #header>
+            <div class="col-filter-header">
+              <span>品名</span>
+              <el-input v-model="nodeColFilters.name" size="small" placeholder="支持正则" clearable class="col-filter-input" @input="onNodeColFilter" @clear="onNodeColFilter" />
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="spec" min-width="140" show-overflow-tooltip>
+          <template #header>
+            <div class="col-filter-header">
+              <span>规格</span>
+              <el-input v-model="nodeColFilters.spec" size="small" placeholder="支持正则" clearable class="col-filter-input" @input="onNodeColFilter" @clear="onNodeColFilter" />
+            </div>
+          </template>
           <template #default="{ row }">
-            <span v-if="row.latest_price != null" class="price-val">¥{{ row.latest_price.toFixed(4) }}</span>
+            <span :class="{ 'text-muted': !row.spec }">{{ row.spec || '—' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="最新单价" width="130" align="right" fixed="right">
+          <template #default="{ row }">
+            <span v-if="row.latest_price != null"
+              :class="row.latest_price_source === 'bom_calc' ? 'price-val-calc' : 'price-val'">
+              ¥{{ row.latest_price.toFixed(4) }}
+            </span>
             <span v-else class="text-muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="70" fixed="right">
+        <el-table-column label="操作" width="60" fixed="right">
           <template #default="{ row }">
             <el-button link size="small" @click="openNodeDrawer(row)">详情</el-button>
           </template>
@@ -1090,15 +1113,6 @@ function copyEstimate() {
           </span>
         </div>
         <el-form :model="importForm" label-width="80px" size="small" style="margin-top: 16px">
-          <el-form-item label="核算日期">
-            <el-date-picker
-              v-model="importForm.snapshot_date"
-              type="date"
-              value-format="YYYY-MM-DD"
-              placeholder="选择核算日期"
-              style="width: 200px"
-            />
-          </el-form-item>
           <el-form-item label="备注">
             <el-input v-model="importForm.notes" placeholder="可选备注" style="width: 100%" />
           </el-form-item>
@@ -1119,12 +1133,6 @@ function copyEstimate() {
             <button class="btn-sel-all" @click="selectedSkuCodes = new Set()">取消</button>
           </div>
           <div class="preview-form-inline">
-            <span class="pf-label">核算日期</span>
-            <el-date-picker
-              v-model="importForm.snapshot_date"
-              type="date" value-format="YYYY-MM-DD"
-              size="small" placeholder="核算日期" style="width:150px"
-            />
             <span class="pf-label">备注</span>
             <el-input v-model="importForm.notes" size="small" placeholder="备注" style="width:220px" />
           </div>
@@ -1563,6 +1571,15 @@ export default { components: { BomTreeNode } }
 
 /* ── 价格 ── */
 .price-val { color: #c4883a; font-weight: 500; }
+.price-val-calc { color: #e67e22; font-weight: 500; font-style: italic; }
+/* 物料查询：字体加大、按节点类型区分行底色 */
+.node-filter-table :deep(.el-table__body td) { font-size: 14px; }
+:deep(.node-row-finished td) { background-color: #fff3cd !important; }
+:deep(.node-row-finished:hover td) { background-color: #ffe9a0 !important; }
+:deep(.node-row-semi td) { background-color: #f5f8ff !important; }
+:deep(.node-row-semi:hover td) { background-color: #eaf0ff !important; }
+:deep(.node-row-material td) { background-color: #fff !important; }
+:deep(.node-row-material:hover td) { background-color: #faf7f2 !important; }
 .text-muted { color: var(--text-muted); }
 
 /* ── 导入对话框 ── */
@@ -1734,6 +1751,12 @@ export default { components: { BomTreeNode } }
 .drawer-code-line { font-size: 16px; font-weight: 700; color: var(--text-primary); }
 .drawer-name-line { font-size: 14px; color: var(--text-primary); margin-top: 2px; }
 .supplier-edit-cell { display: flex; align-items: center; }
+
+/* ── 物料查询列头筛选 ── */
+.col-filter-header { display: flex; flex-direction: column; gap: 4px; padding: 2px 0; }
+.col-filter-input { width: 100%; }
+.col-filter-input :deep(.el-input__wrapper) { padding: 0 6px; }
+.node-filter-table :deep(.el-table__header th) { vertical-align: top; padding: 6px 0; }
 
 /* ── 节点表单 ── */
 .node-form { padding: 4px 0; font-size: 14px; }

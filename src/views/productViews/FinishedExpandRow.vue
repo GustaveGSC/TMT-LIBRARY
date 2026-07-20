@@ -83,13 +83,14 @@ const shippingChartEl      = ref(null)   // DOM 节点
 const shippingChartLoading = ref(false)
 const shippingLoaded       = ref(false)
 const shippingMonthly      = ref([])     // [{ month, shipped, returned, actual }]
+const shippingSource       = ref(localStorage.getItem('prd_shipping_source') || 'shipping')
 let   shippingChartInst    = null
 
 async function loadShippingMonthly() {
-  if (!canViewShipping || shippingLoaded.value) return
+  if (!canViewShipping) return
   shippingChartLoading.value = true
   try {
-    const res = await http.get(`/api/shipping/product/${props.row.code}/monthly`)
+    const res = await http.get(`/api/shipping/product/${props.row.code}/monthly`, { params: { source: shippingSource.value } })
     if (res.success) {
       shippingMonthly.value      = res.data || []
       shippingLoaded.value       = true
@@ -101,6 +102,17 @@ async function loadShippingMonthly() {
     shippingChartLoading.value = false
   }
 }
+
+watch(shippingSource, (val) => {
+  localStorage.setItem('prd_shipping_source', val)
+  if (!isSec('data')) return
+  // 销毁旧实例，确保切换后 DOM 重建时能重新 init
+  shippingChartInst?.dispose()
+  shippingChartInst = null
+  shippingLoaded.value = false
+  shippingMonthly.value = []
+  loadShippingMonthly()
+})
 
 function initShippingChart() {
   if (!shippingChartEl.value) return
@@ -1680,7 +1692,21 @@ function toggleSec(key) {
           <div v-if="isSec('data')" class="eg-sec-bd eg-sec-bd-data">
             <!-- 发货数据 bar 图 -->
             <div class="data-shipping-card">
-              <div class="data-ph-hd">发货数据</div>
+              <div class="data-ph-hd">
+                发货数据
+                <div class="data-source-toggle" @click.stop>
+                  <span
+                    class="data-source-btn"
+                    :class="{ active: shippingSource === 'shipping' }"
+                    @click="shippingSource = 'shipping'"
+                  >发货端</span>
+                  <span
+                    class="data-source-btn"
+                    :class="{ active: shippingSource === 'finance' }"
+                    @click="shippingSource = 'finance'"
+                  >财务端</span>
+                </div>
+              </div>
               <div class="data-shipping-body">
                 <div v-if="shippingChartLoading" class="data-shipping-loading">
                   <div class="data-shipping-spinner"></div>
@@ -2479,7 +2505,17 @@ function toggleSec(key) {
   padding: 7px 12px; font-size: 12px; font-weight: 600;
   background: #f5f0e8; color: #8a7a6a;
   border-bottom: 1px solid #e8ddd0;
+  display: flex; align-items: center; justify-content: space-between;
 }
+.data-source-toggle {
+  display: flex; gap: 2px;
+}
+.data-source-btn {
+  padding: 2px 7px; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 400;
+  color: #8a7a6a; transition: background 0.15s, color 0.15s;
+}
+.data-source-btn:hover { background: #e8ddd0; }
+.data-source-btn.active { background: #c4883a; color: #fff; }
 .data-ph-body {
   padding: 20px 12px; display: flex; align-items: center; justify-content: center;
 }

@@ -8,9 +8,10 @@ import http, { getBaseURL } from '@/api/http'
 import WindowControls  from '@/components/common/WindowControls.vue'
 import DataImport        from './DataImport.vue'
 import ReturnImport      from './ReturnImport.vue'
-import OperatorConfig    from './OperatorConfig.vue'
-import WarehouseConfig   from './WarehouseConfig.vue'
-import EquivalentConfig  from './EquivalentConfig.vue'
+import OperatorConfig      from './OperatorConfig.vue'
+import WarehouseConfig     from './WarehouseConfig.vue'
+import EquivalentConfig    from './EquivalentConfig.vue'
+import TagDimensionConfig  from './TagDimensionConfig.vue'
 
 // ── 路由 ──────────────────────────────────────────
 const router = useRouter()
@@ -252,6 +253,8 @@ async function handleResolveAll() {
           <WarehouseConfig />
           <div class="import-divider"></div>
           <EquivalentConfig />
+          <div class="import-divider"></div>
+          <TagDimensionConfig />
         </div>
       </div>
     </main>
@@ -382,10 +385,10 @@ async function handleResolveAll() {
   min-height: 200px;
 }
 
-/* 数据配置多列布局（操作人 + 仓库 + 通用件） */
+/* 数据配置多列布局（操作人 + 仓库 + 通用件 + 标签维度） */
 .config-layout {
   display: grid;
-  grid-template-columns: 1fr auto 1fr auto 1fr;
+  grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr;
   gap: 0;
   align-items: start;
 }
