@@ -7,7 +7,7 @@ import { ElMessage } from 'element-plus'
 import http, { getBaseURL } from '@/api/http'
 import WindowControls  from '@/components/common/WindowControls.vue'
 import DataImport        from './DataImport.vue'
-import ReturnImport      from './ReturnImport.vue'
+import FinanceImport     from './FinanceImport.vue'
 import OperatorConfig      from './OperatorConfig.vue'
 import WarehouseConfig     from './WarehouseConfig.vue'
 import EquivalentConfig    from './EquivalentConfig.vue'
@@ -244,7 +244,7 @@ async function handleResolveAll() {
           <div class="import-divider"></div>
           <div class="import-section">
             <div class="import-section-title">财务数据</div>
-            <ReturnImport />
+            <FinanceImport />
           </div>
         </div>
         <div v-show="activePage === 'config'" class="config-layout">

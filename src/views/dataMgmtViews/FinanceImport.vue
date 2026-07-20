@@ -160,7 +160,7 @@ async function doImport() {
 </script>
 
 <template>
-  <div class="return-import">
+  <div class="finance-import">
 
     <div class="import-header">
       <div class="import-header-left">
@@ -276,7 +276,7 @@ async function doImport() {
 </template>
 
 <style scoped>
-.return-import {
+.finance-import {
   display: flex;
   flex-direction: column;
   gap: 18px;

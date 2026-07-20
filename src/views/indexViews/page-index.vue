@@ -65,9 +65,9 @@
           <span v-if="updateType !== 'none'" class="version-dot"></span>
         </button>
 
-        <!-- 下载桌面版按钮（Web 端） -->
+        <!-- 下载桌面版按钮（Web 端）：桌面端当前生产环境不可用，暂时隐藏，见 handoff/2026-07-20-claude-progress.md -->
         <button
-          v-if="!isElectron"
+          v-if="false"
           class="download-badge"
           @click="router.push('/download')"
         >↓ 下载桌面版</button>
