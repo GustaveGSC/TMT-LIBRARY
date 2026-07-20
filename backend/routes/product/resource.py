@@ -263,6 +263,13 @@ def presign_upload():
 @resource_bp.get('/<int:resource_id>/og-image')
 def og_image(resource_id: int):
     """代理资料封面图或图片本身，供 og:image 爬取（inline 返回，无强制下载）。"""
+    key = request.args.get('key', '')
+    try:
+        exp = int(request.args.get('exp', 0))
+    except (ValueError, TypeError):
+        exp = 0
+    if not _verify_share_token(resource_id, exp, key):
+        return Response('链接已过期或无效', status=403, mimetype='text/plain')
     r = resource_service.get_resource(resource_id)
     if not r.success:
         return Response('not found', status=404)
@@ -387,9 +394,9 @@ def share_page(resource_id: int):
     share_url = f"{base_url}{request.full_path}"
     og_image  = ''
     if file_type == 'image':
-        og_image = f'{base_url}/api/resources/{resource_id}/og-image'
+        og_image = f'{base_url}/api/resources/{resource_id}/og-image?key={key}&exp={exp}'
     elif file_type == 'video' and resource.get('cover_storage_key'):
-        og_image = f'{base_url}/api/resources/{resource_id}/og-image'
+        og_image = f'{base_url}/api/resources/{resource_id}/og-image?key={key}&exp={exp}'
 
     if file_type == 'video':
         body = f'''

@@ -5,8 +5,9 @@ from services.account import account_service
 from auth import generate_token, verify_token
 from result import Result
 
-# 设置 ALLOW_REGISTER=false 可关闭公开注册（默认开启）
-_ALLOW_REGISTER = os.environ.get('ALLOW_REGISTER', 'true').lower() not in ('false', '0', 'no')
+def _registration_enabled() -> bool:
+    """公开注册默认关闭，仅在环境变量明确允许时开启。"""
+    return os.environ.get('ALLOW_REGISTER', 'false').strip().lower() in ('true', '1', 'yes')
 
 def _machine_name():
     """返回当前机器主机名，作为游客/登录的身份标识"""
@@ -203,10 +204,10 @@ def update_permission(perm_id):
     return account_service.update_permission(perm_id, **body).to_response()
 
 
-# ── 自助注册（公开，可通过 ALLOW_REGISTER=false 关闭）────
+# ── 自助注册（公开，默认关闭）─────────────────────────
 @account_bp.post("/register")
 def register():
-    if not _ALLOW_REGISTER:
+    if not _registration_enabled():
         return Result.fail("注册功能已关闭，请联系管理员").to_response(403)
     body         = request.get_json() or {}
     username     = body.get("username",     "").strip()

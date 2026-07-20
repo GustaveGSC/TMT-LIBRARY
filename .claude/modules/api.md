@@ -16,14 +16,16 @@ token 由登录/游客/注册接口返回，前端存于 `localStorage.tmt_token
 
 环境变量：
 - `JWT_SECRET`：JWT 签名密钥，生产必须设置强随机值
-- `ALLOW_REGISTER`：`false` / `0` / `no` 可关闭公开注册（默认 `true`）
+- `APP_ENV`：默认为 `production`；仅 `development` / `dev` / `local` / `test` / `testing` 跳过生产密钥校验
+- `JWT_SECRET`、`SHARE_SECRET`：生产环境必须设置为非默认强密钥，否则应用拒绝启动
+- `ALLOW_REGISTER`：公开注册默认关闭；仅 `true` / `1` / `yes` 明确开启
 
 ```
 GET    /health
 
 POST   /api/account/login                             # 公开；登录时自动写入 user_login_log（成功/失败均记录）
 GET    /api/account/guest                             # 公开；游客登录，返回 token（仅 product:view 权限）
-POST   /api/account/register                          # 公开（可通过 ALLOW_REGISTER=false 关闭）；注册后默认 guest 角色
+POST   /api/account/register                          # 公开但默认关闭（通过 ALLOW_REGISTER=true 开启）；注册后默认 guest 角色
 GET    /api/account/login-logs                        # 登录记录原始列表（author 专用）?page&per_page&username
 GET    /api/account/login-stats/dau                   # 日活统计（author 专用）?days=30 → [{date,count}]
 GET    /api/account/login-stats/users                 # 账号登录统计（author 专用）→ [{username,display_name,total,success_count,failed_count,last_login_at,identity_type}]

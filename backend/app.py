@@ -6,6 +6,7 @@ from flask_cors import CORS
 from database.base import db
 from dotenv import load_dotenv
 from sqlalchemy.pool import QueuePool
+from security_config import validate_security_config
 
 # ── 环境变量加载（兼容打包后路径）────────────────────
 if getattr(sys, 'frozen', False):
@@ -18,9 +19,8 @@ load_dotenv(os.path.join(BASE_DIR, '.env'), override=True)
 def create_app() -> Flask:
     app = Flask(__name__)
 
-    # ── JWT 密钥安全检查 ──────────────────────────────
-    if os.environ.get('JWT_SECRET', '') in ('', 'tmt-dev-secret-change-in-production'):
-        print('[WARNING] JWT_SECRET 使用默认开发值，生产环境请通过环境变量设置强密钥！', flush=True)
+    # ── 生产安全配置检查 ──────────────────────────────
+    validate_security_config()
 
     # ── 数据库配置 ────────────────────────────────────
     app.config["SQLALCHEMY_DATABASE_URI"] = (
