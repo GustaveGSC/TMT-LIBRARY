@@ -27,7 +27,8 @@ electron/main/python.ts  # 已不使用（桌面端改为直连云端）
 src/api/http.js          # axios；getBaseURL() 已 export：Electron→http://47.99.100.138，Web→VITE_API_BASE 或代理
 src/routers/index.js     # Hash路由：/login /index /product /shipping /data-mgmt /aftersale /rd-tools /admin/*
 src/styles/themes.css    # 全局CSS变量（勿硬编码颜色）
-backend/app.py           # Flask 工厂；SQLAlchemy QueuePool(size=2, pre_ping, recycle=1800) + connect/read/write 超时（见源码）
+backend/app.py           # Flask 工厂；SQLAlchemy QueuePool + connect/read/write 超时（见源码）
+                          # 生产：1 个 Gunicorn worker，POOL_SIZE=5 + MAX_OVERFLOW=5（.env 显式配置），单进程理论峰值 10 个数据库连接
 backend/create_reason_keyword_rules.py  # 售后「原因词典」相关表初始化与种子数据（表结构见 database.md）
 backend/create_ecr_reminders.py        # 研发工具「ECR提醒」相关表初始化与种子数据
 backend/model_manager.py               # 模型/系列管理工具（研发工具辅助脚本）
@@ -36,7 +37,7 @@ backend/result.py        # Result.ok/fail → { success, message, data }
 
 ## 性能与负载规范
 
-服务器资源有限（双核云主机 1.675GB RAM + QueuePool size=2），**每次后端开发必须评估 DB 查询数量**。
+服务器资源有限（双核云主机 1.675GB RAM，单 Gunicorn worker，QueuePool 5+5 共 10 连接上限），**每次后端开发必须评估 DB 查询数量**。
 
 ### 后端常见陷阱
 - **N+1 查询**：访问 SQLAlchemy `lazy=True` 关系属性（如 `r.category_obj.name`）会对每个对象触发一次 SELECT。修法：用 `joinedload` / `selectinload`，或先 `with_entities` 批量拿 id 再一次性查关联表。
