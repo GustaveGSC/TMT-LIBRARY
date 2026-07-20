@@ -211,8 +211,16 @@ product_packaged
 product_finished_packaged
   finished_id(FK), packaged_id(FK), PRIMARY KEY(finished_id, packaged_id)
 
+product_tag_category
+  id, name(UNIQUE VARCHAR 32), color(default:#c4883a), sort_order,
+  is_shipping_dim(BOOLEAN DEFAULT False), created_at
+  # is_shipping_dim=True 时该分类作为发货图表可选聚合维度（数据管理→数据配置→标签分析维度 配置）
+
 product_tag
-  id, name(UNIQUE), color(default:#c4883a), created_at
+  id, name(UNIQUE), color(default:#c4883a), category_id(FK→product_tag_category nullable),
+  shipping_dim_enabled(BOOLEAN DEFAULT True), created_at
+  # shipping_dim_enabled=False 的标签在其分类作为发货维度时不参与聚合（也不落入任何兜底分组，直接不出现）
+  # 同一产品在同一分类下若被打了多个标签，按标签维度聚合时该产品的发货记录会在多个标签分组中重复计入（多对多设计的已知边界情况，不做去重）
 
 product_finished_tag
   finished_id(FK), tag_id(FK), PRIMARY KEY(finished_id, tag_id)

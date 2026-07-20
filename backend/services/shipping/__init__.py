@@ -861,8 +861,8 @@ class ShippingService:
     def get_chart_data(self, params: Dict) -> Dict:
         return shipping_repository.get_chart_data(params)
 
-    def get_product_monthly(self, code: str) -> Result:
-        data = shipping_repository.get_product_monthly(code)
+    def get_product_monthly(self, code: str, source: str = 'shipping') -> Result:
+        data = shipping_repository.get_product_monthly(code, source=source)
         return Result.ok(data)
 
     def get_orders(self, page: int, size: int, filters: Dict, sort_field: str, sort_order: str) -> Dict:

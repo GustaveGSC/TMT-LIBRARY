@@ -255,14 +255,20 @@ def get_sku_bom(sku_id):
         ).all()
         node_spec_map = {n.id: n.spec or '' for n in nodes}
 
-        suppliers = CostMaterialSupplier.query.filter(
-            CostMaterialSupplier.node_id.in_(child_node_ids),
-            CostMaterialSupplier.is_preferred == True,
-        ).with_entities(CostMaterialSupplier.node_id, CostMaterialSupplier.supplier_name).all()
-        # 每个 node 取第一条首选
-        for s in suppliers:
-            if s.node_id not in node_supplier_map:
-                node_supplier_map[s.node_id] = s.supplier_name
+        # 取最新有供应商名称的价格记录（cost_material_price.supplier_name）
+        from sqlalchemy import text as sql_text
+        price_rows = db.session.execute(
+            sql_text("""
+                SELECT node_id, supplier_name
+                FROM cost_material_price
+                WHERE node_id IN :ids AND supplier_name IS NOT NULL AND supplier_name != ''
+                ORDER BY node_id, created_at DESC
+            """),
+            {'ids': tuple(child_node_ids)}
+        ).all()
+        for r in price_rows:
+            if r.node_id not in node_supplier_map:
+                node_supplier_map[r.node_id] = r.supplier_name
 
     # 构建 {parent_node_id -> [line_dict, ...]} 映射
     children_map = {}
@@ -334,7 +340,11 @@ def search_nodes():
     q         = request.args.get('q', '').strip()
     page      = int(request.args.get('page', 1))
     per_page  = int(request.args.get('per_page', 30))
-    node_type = request.args.get('node_type', '')  # material/semi/finished
+    node_type = request.args.get('node_type', '')
+    f_code    = request.args.get('f_code', '').strip()
+    f_name    = request.args.get('f_name', '').strip()
+    f_spec    = request.args.get('f_spec', '').strip()
+    f_category = request.args.get('f_category', '').strip()
 
     query = CostBomNode.query
     if q:
@@ -344,6 +354,27 @@ def search_nodes():
         )
     if node_type:
         query = query.filter(CostBomNode.node_type == node_type)
+    import re as _re
+    def _safe_regexp(pattern, *cols):
+        """用 MySQL REGEXP 筛选，pattern 无效时降级为空结果保护。"""
+        try:
+            _re.compile(pattern)  # 验证正则合法性
+        except _re.error:
+            return None  # 非法正则，跳过筛选
+        return db.or_(*[col.op('REGEXP')(pattern) for col in cols])
+
+    if f_code:
+        cond = _safe_regexp(f_code, CostBomNode.code, CostBomNode.code_with_version)
+        if cond is not None:
+            query = query.filter(cond)
+    if f_name:
+        cond = _safe_regexp(f_name, CostBomNode.name)
+        if cond is not None:
+            query = query.filter(cond)
+    if f_spec:
+        cond = _safe_regexp(f_spec, CostBomNode.spec)
+        if cond is not None:
+            query = query.filter(cond)
 
     # 加载编码规则，在 Python 端完成分类匹配与排序
     rules = _load_code_rules()
@@ -356,32 +387,40 @@ def search_nodes():
         return d
 
     enriched = [enrich(n) for n in all_nodes]
+    # 物料分类列筛选（Python 端正则）
+    if f_category:
+        try:
+            cat_re = _re.compile(f_category, _re.IGNORECASE)
+            enriched = [n for n in enriched if n['material_category'] and cat_re.search(n['material_category'])]
+        except _re.error:
+            pass  # 非法正则，跳过筛选
     enriched.sort(key=lambda x: (x['material_category'] or '\uffff', x['code']))
 
     total = len(enriched)
     page_items = enriched[(page-1)*per_page : page*per_page]
 
-    # 附加最新单价
+    # 附加最新单价（从 cost_material_price，覆盖所有节点类型）
     node_ids = [n['id'] for n in page_items]
     if node_ids:
-        latest_rows = (
-            db.session.query(
-                CostBomLine.child_node_id,
-                CostBomLine.unit_price,
-            )
-            .join(CostSnapshotSku, CostBomLine.sku_id == CostSnapshotSku.id)
-            .join(CostSnapshot, CostSnapshotSku.snapshot_id == CostSnapshot.id)
-            .filter(CostBomLine.child_node_id.in_(node_ids))
-            .order_by(CostSnapshot.snapshot_date.desc(), CostSnapshot.created_at.desc())
-            .all()
-        )
-        # 取每个 node_id 第一条（已按日期降序）
-        price_map = {}
-        for nid, price in latest_rows:
-            if nid not in price_map and price is not None:
-                price_map[nid] = float(price)
+        from sqlalchemy import text as sql_text
+        price_rows = db.session.execute(
+            sql_text("""
+                SELECT node_id, unit_price, source
+                FROM cost_material_price
+                WHERE node_id IN :ids AND unit_price IS NOT NULL
+                ORDER BY node_id, price_date DESC, created_at DESC
+            """),
+            {'ids': tuple(node_ids)}
+        ).all()
+        price_map  = {}
+        source_map = {}
+        for r in price_rows:
+            if r.node_id not in price_map:
+                price_map[r.node_id]  = float(r.unit_price)
+                source_map[r.node_id] = r.source
         for item in page_items:
-            item['latest_price'] = price_map.get(item['id'])
+            item['latest_price']        = price_map.get(item['id'])
+            item['latest_price_source'] = source_map.get(item['id'])
 
     return Result.ok(data={
         'total': total,

@@ -668,6 +668,24 @@ class ShippingRepository:
         min_date = date_range_row[0].strftime('%Y-%m-%d') if date_range_row[0] else None
         max_date = date_range_row[1].strftime('%Y-%m-%d') if date_range_row[1] else None
 
+        # 已配置为发货分析维度的标签分类（及其纳入统计的标签）
+        from database.models.product.finished import ProductTagCategory, ProductTag
+        tag_cats = ProductTagCategory.query.filter_by(is_shipping_dim=True).order_by(
+            ProductTagCategory.sort_order, ProductTagCategory.name
+        ).all()
+        tag_dimensions = [
+            {
+                'category_id': cat.id,
+                'name':        cat.name,
+                'color':       cat.color,
+                'tags':        [
+                    {'id': t.id, 'name': t.name}
+                    for t in cat.tags.filter_by(shipping_dim_enabled=True).order_by(ProductTag.name).all()
+                ],
+            }
+            for cat in tag_cats
+        ]
+
         result = {
             'channels':            channels,
             'provinces':           provinces,
@@ -676,6 +694,7 @@ class ShippingRepository:
             'active_model_ids':    list({r.mod_id for r in prod_rows}),
             'data_date_min':       min_date,
             'data_date_max':       max_date,
+            'tag_dimensions':      tag_dimensions,
         }
         _chart_options_cache[cache_key] = {**result, '_at': time.time()}
         return result
@@ -707,6 +726,7 @@ class ShippingRepository:
         series_ids    = params.get('series_ids') or []
         model_ids     = params.get('model_ids') or []
         trade_type    = params.get('trade_type', 'all')  # 'all'|'domestic'|'foreign'
+        tag_filters   = params.get('tag_filters') or []  # [{category_id, tag_ids}]，与 group_by 的标签维度相互独立
 
         # 禁用的 finished 类型编码前缀，查询时排除对应发货记录
         disabled_prefixes = [
@@ -716,11 +736,15 @@ class ShippingRepository:
         def _f(v):
             return float(v) if v is not None else 0.0
 
+        # 标签维度：group_by 形如 'tag:<category_id>'
+        is_tag_group_by = isinstance(group_by, str) and group_by.startswith('tag:')
+        tag_category_id = int(group_by.split(':', 1)[1]) if is_tag_group_by else None
+
         # 根据 group_by 判断需要 JOIN 到哪一层产品表
         # 注意：trade_type 过滤已改为用缓存的 finished_code 集合，不再需要 JOIN 产品表
         needs_trade_filter = trade_type in ('domestic', 'foreign')
         product_group_by  = group_by in ('category', 'series', 'model')
-        needs_model_join  = product_group_by or bool(category_ids or series_ids or model_ids)
+        needs_model_join  = product_group_by or is_tag_group_by or bool(category_ids or series_ids or model_ids)
         needs_series_join = group_by in ('category', 'series') or bool(category_ids or series_ids)
         needs_cat_join    = group_by == 'category' or bool(category_ids)
         # 预取 FTP finished_code（带缓存，仅 trade_type 过滤时需要）
@@ -752,6 +776,14 @@ class ShippingRepository:
                 q = q.join(ProductSeries, ProductModel.series_id == ProductSeries.id)
             if needs_cat_join:
                 q = q.join(ProductCategory, ProductSeries.category_id == ProductCategory.id)
+            if is_tag_group_by:
+                from database.models.product.finished import ProductTag, finished_tag
+                q = q.join(finished_tag, ProductFinished.id == finished_tag.c.finished_id
+                ).join(ProductTag, db.and_(
+                    finished_tag.c.tag_id == ProductTag.id,
+                    ProductTag.category_id == tag_category_id,
+                    ProductTag.shipping_dim_enabled == True,
+                ))
             # 应用产品过滤
             if model_ids:
                 q = q.filter(ProductModel.id.in_(model_ids))
@@ -759,6 +791,23 @@ class ShippingRepository:
                 q = q.filter(ProductSeries.id.in_(series_ids))
             if category_ids:
                 q = q.filter(ProductCategory.id.in_(category_ids))
+            # 标签筛选（与 group_by 的标签维度相互独立，可同时叠加多个分类）
+            # 先取出符合条件的 finished_code 集合再用 IN 过滤，而非 JOIN：
+            # 避免一个产品在同一分类下命中多个已选标签时导致 sof 行重复计入（JOIN 会 fan-out）
+            if tag_filters:
+                from database.models.product.finished import ProductTag, finished_tag as ft_tbl
+                for tf in tag_filters:
+                    f_cat_id = tf.get('category_id')
+                    f_tag_ids = tf.get('tag_ids') or []
+                    if not f_cat_id or not f_tag_ids:
+                        continue
+                    matched_codes = {
+                        r[0] for r in db.session.query(ProductFinished.code).join(
+                            ft_tbl, ProductFinished.id == ft_tbl.c.finished_id
+                        ).join(ProductTag, ft_tbl.c.tag_id == ProductTag.id
+                        ).filter(ProductTag.category_id == f_cat_id, ProductTag.id.in_(f_tag_ids)).all()
+                    }
+                    q = q.filter(sof.finished_code.in_(matched_codes))
             # 内外销过滤：使用缓存的 ftp_codes 集合，避免 JOIN 产品表
             if needs_trade_filter and ftp_codes:
                 if trade_type == 'domestic':
@@ -848,6 +897,11 @@ class ShippingRepository:
             order_expr = func.sum(sof.actual_quantity).desc()
         elif group_by == 'district':
             label_expr = func.coalesce(sof.district, '未知')
+            name_expr  = None
+            order_expr = func.sum(sof.actual_quantity).desc()
+        elif is_tag_group_by:
+            from database.models.product.finished import ProductTag
+            label_expr = ProductTag.name
             name_expr  = None
             order_expr = func.sum(sof.actual_quantity).desc()
         else:
@@ -995,12 +1049,11 @@ class ShippingRepository:
         return {'items': items, 'total': total}
 
     @staticmethod
-    def get_product_monthly(code: str) -> list:
-        """按月聚合指定成品的发货/销退/实际数量，从最早记录月到最新月（排除售后操作人）"""
+    def get_product_monthly(code: str, source: str = 'shipping') -> list:
+        """按月聚合指定成品的发货/销退/实际数量，source='shipping'(发货端) 或 'finance'(财务端)"""
         from sqlalchemy import func
         sof = ShippingOrderFinished
-        aftersale_ops = db.session.query(ShippingOperatorType.operator).filter_by(type='aftersale').subquery()
-        rows = (
+        q = (
             db.session.query(
                 func.date_format(sof.shipped_date, '%Y-%m').label('month'),
                 func.sum(sof.quantity).label('shipped'),
@@ -1008,14 +1061,16 @@ class ShippingRepository:
                 func.sum(sof.actual_quantity).label('actual'),
             )
             .filter(
+                sof.source == source,
                 sof.finished_code == code,
                 sof.shipped_date.isnot(None),
-                db.or_(sof.operator.is_(None), ~sof.operator.in_(aftersale_ops)),
             )
-            .group_by('month')
-            .order_by('month')
-            .all()
         )
+        # 发货端排除售后操作人
+        if source == 'shipping':
+            aftersale_ops = db.session.query(ShippingOperatorType.operator).filter_by(type='aftersale').subquery()
+            q = q.filter(db.or_(sof.operator.is_(None), ~sof.operator.in_(aftersale_ops)))
+        rows = q.group_by('month').order_by('month').all()
 
         def _f(v):
             return float(v) if v is not None else 0.0

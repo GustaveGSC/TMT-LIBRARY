@@ -490,6 +490,8 @@ def import_excel(file_path: str, snapshot_date, notes: str, created_by: str) -> 
     # 写入物料价格历史（bom_import）
     _write_material_prices(sku_data_list, node_cache, snapshot, snapshot_date, created_by,
                            from_parsed=True)
+    # 写入半成品 BOM 计算价格（bom_calc）
+    _write_bom_calc_prices(snapshot, snapshot_date, created_by, node_cache)
 
     db.session.commit()
 
@@ -501,23 +503,40 @@ def import_excel(file_path: str, snapshot_date, notes: str, created_by: str) -> 
     }
 
 
+def _parse_order_date(order_no):
+    """从订单号中提取日期，如 '2M2-SC20240620-050' → date(2024,6,20)。找不到则返回 None。"""
+    from datetime import date as _date
+    if not order_no:
+        return None
+    m = re.search(r'(\d{4})(\d{2})(\d{2})', order_no)
+    if not m:
+        return None
+    try:
+        return _date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return None
+
+
 def _write_material_prices(skus_data, node_cache, snapshot, snapshot_date, created_by,
                            from_parsed=False):
     """
     将 BOM 明细中的物料单价写入 cost_material_price（source=bom_import）。
+    price_date 优先取订单号中的日期，取不到才用 snapshot_date。
     去重：同一次导入同一物料只写一条；相同 (node_id, price_date, unit_price) 已存在则跳过。
     from_parsed=True 时 skus_data 为 [(sheet_name, parsed_dict), ...]，否则为 [sku_data_dict, ...]
     """
     from database.models.rd.cost import CostMaterialPrice
 
+    price_date = _parse_order_date(snapshot.order_no) or snapshot_date
+
     written_node_ids = set()  # 本次已处理的 node_id，每物料取首次价格
 
-    # 查询当日已有的 bom_import 记录，用于跨次导入去重
+    # 查询已有的 bom_import 记录（同 price_date），用于跨次导入去重
     existing = set()
-    if snapshot_date:
+    if price_date:
         rows = (
             CostMaterialPrice.query
-            .filter_by(source='bom_import', price_date=snapshot_date)
+            .filter_by(source='bom_import', price_date=price_date)
             .with_entities(CostMaterialPrice.node_id, CostMaterialPrice.unit_price)
             .all()
         )
@@ -560,11 +579,126 @@ def _write_material_prices(skus_data, node_cache, snapshot, snapshot_date, creat
         db.session.add(CostMaterialPrice(
             node_id=node.id,
             unit_price=price,
-            price_date=snapshot_date,
+            price_date=price_date,
             supplier_name=None,
             source='bom_import',
             snapshot_id=snapshot.id,
             created_by=created_by,
+        ))
+
+
+def _write_bom_calc_prices(snapshot, snapshot_date, created_by, node_cache):
+    """
+    计算半成品/产成品的 BOM 合计单价，写入 cost_material_price（source=bom_calc）。
+    - 半成品：unit_price = 子件 total_price 合计 / quantity
+    - 产成品：unit_price = CostSnapshotSku.total_cost（Excel 合计行单件成本）
+    price_date 优先取订单号中的日期，取不到才用 snapshot_date。
+    在所有 BOM 行写入并 flush 后调用。
+    """
+    from database.models.rd.cost import CostMaterialPrice, CostBomLine, CostSnapshotSku
+
+    skus = CostSnapshotSku.query.filter_by(snapshot_id=snapshot.id).all()
+    if not skus:
+        return
+    sku_ids = [s.id for s in skus]
+
+    lines = CostBomLine.query.filter(CostBomLine.sku_id.in_(sku_ids)).all()
+
+    # children_map: parent_node_id -> [line, ...]
+    children_map = {}
+    for line in lines:
+        children_map.setdefault(line.parent_node_id, []).append(line)
+
+    # 找出所有非外购半成品节点 id
+    semi_node_ids = {
+        node.id for node in node_cache.values()
+        if node.node_type == 'semi' and not node.is_purchased_semi
+    }
+
+    # 递归计算某节点的子件总价（post-order）
+    def compute_total(node_id, visited):
+        if node_id in visited:
+            return 0.0
+        visited = visited | {node_id}
+        total = 0.0
+        for kid in children_map.get(node_id, []):
+            if kid.child_node_id in semi_node_ids:
+                total += compute_total(kid.child_node_id, visited)
+            else:
+                total += float(kid.total_price or 0)
+        return total
+
+    price_date = _parse_order_date(snapshot.order_no) or snapshot_date
+
+    # 已有 bom_calc 记录（防重复）
+    existing = set()
+    if price_date:
+        rows = (
+            CostMaterialPrice.query
+            .filter_by(source='bom_calc', price_date=price_date)
+            .with_entities(CostMaterialPrice.node_id, CostMaterialPrice.unit_price)
+            .all()
+        )
+        existing = {(r.node_id, round(float(r.unit_price), 4)) for r in rows}
+
+    written = set()
+
+    # ── 半成品：从 BOM 行递归计算 ──────────────────────
+    for line in lines:
+        if line.child_node_id not in semi_node_ids:
+            continue
+        if line.child_node_id in written:
+            continue
+
+        total = compute_total(line.child_node_id, set())
+        qty   = float(line.quantity or 1)
+        unit_price = round(total / qty if qty else total, 4)
+
+        if not unit_price:
+            continue
+
+        written.add(line.child_node_id)
+
+        if (line.child_node_id, unit_price) in existing:
+            continue
+
+        db.session.add(CostMaterialPrice(
+            node_id=line.child_node_id,
+            unit_price=unit_price,
+            price_date=price_date,
+            source='bom_calc',
+            snapshot_id=snapshot.id,
+            created_by=created_by,
+            notes='由BOM子件合计计算',
+        ))
+
+    # ── 产成品：直接用 SKU 的 total_cost（单件总成本）──
+    finished_base_to_node = {
+        node.code: node for node in node_cache.values()
+        if node.node_type == 'finished'
+    }
+    for sku in skus:
+        if not sku.total_cost:
+            continue
+        finished_base = _strip_version(sku.finished_code)
+        fn = finished_base_to_node.get(finished_base)
+        if fn is None or fn.id in written:
+            continue
+
+        unit_price = round(float(sku.total_cost), 4)
+        written.add(fn.id)
+
+        if (fn.id, unit_price) in existing:
+            continue
+
+        db.session.add(CostMaterialPrice(
+            node_id=fn.id,
+            unit_price=unit_price,
+            price_date=price_date,
+            source='bom_calc',
+            snapshot_id=snapshot.id,
+            created_by=created_by,
+            notes='产成品单件总成本',
         ))
 
 
@@ -686,6 +820,8 @@ def import_from_data(data: dict, snapshot_date, notes: str, created_by: str) -> 
 
     # 写入物料价格历史（bom_import）
     _write_material_prices(skus_data, node_cache, snapshot, snapshot_date, created_by)
+    # 写入半成品 BOM 计算价格（bom_calc）
+    _write_bom_calc_prices(snapshot, snapshot_date, created_by, node_cache)
 
     db.session.commit()
 

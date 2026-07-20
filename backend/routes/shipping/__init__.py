@@ -364,7 +364,10 @@ def get_orders():
 def get_product_monthly(code):
     """返回指定成品编码按月聚合的发货/销退/实际数量"""
     try:
-        return shipping_service.get_product_monthly(code).to_response()
+        source = request.args.get('source', 'shipping')
+        if source not in ('shipping', 'finance'):
+            source = 'shipping'
+        return shipping_service.get_product_monthly(code, source=source).to_response()
     except Exception as e:
         return Result.fail(str(e)).to_response()
 
@@ -389,8 +392,11 @@ def get_chart_data():
     返回 { summary: {quantity, return_quantity, actual_quantity},
             items: [{label, quantity, return_quantity, actual_quantity}] }
     """
+    import re
     params = request.get_json(silent=True) or {}
-    if params.get('group_by') not in {'date', 'category', 'series', 'model', 'channel', 'channel_code', 'province', 'city', 'district'}:
+    gb = params.get('group_by')
+    valid_fixed = {'date', 'category', 'series', 'model', 'channel', 'channel_code', 'province', 'city', 'district'}
+    if not (gb in valid_fixed or (isinstance(gb, str) and re.match(r'^tag:\d+$', gb))):
         params['group_by'] = 'date'
     try:
         return Result.ok(data=shipping_service.get_chart_data(params)).to_response()

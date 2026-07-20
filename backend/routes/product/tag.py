@@ -24,11 +24,13 @@ def create_category():
 
 @bp.put('/categories/<int:category_id>')
 def update_category(category_id):
-    body       = request.get_json() or {}
-    name       = body.get('name', '')
-    color      = body.get('color', '#c4883a')
-    sort_order = body.get('sort_order', 0)
-    return TagCategoryService.update(category_id=category_id, name=name, color=color, sort_order=sort_order).to_response()
+    body            = request.get_json() or {}
+    name            = body.get('name', '')
+    color           = body.get('color', '#c4883a')
+    sort_order      = body.get('sort_order', 0)
+    is_shipping_dim = body.get('is_shipping_dim')  # 未传则保留原值
+    return TagCategoryService.update(category_id=category_id, name=name, color=color, sort_order=sort_order,
+                                      is_shipping_dim=is_shipping_dim).to_response()
 
 
 @bp.delete('/categories/<int:category_id>')
@@ -54,11 +56,13 @@ def create_tag():
 
 @bp.put('/<int:tag_id>')
 def update_tag(tag_id):
-    body        = request.get_json() or {}
-    name        = body.get('name', '')
-    category_id = body.get('category_id')
-    color       = body.get('color')
-    return TagService.update(tag_id=tag_id, name=name, category_id=category_id, color=color).to_response()
+    body                  = request.get_json() or {}
+    name                  = body.get('name', '')
+    category_id           = body.get('category_id')
+    color                 = body.get('color')
+    shipping_dim_enabled  = body.get('shipping_dim_enabled')  # 未传则保留原值
+    return TagService.update(tag_id=tag_id, name=name, category_id=category_id, color=color,
+                              shipping_dim_enabled=shipping_dim_enabled).to_response()
 
 
 @bp.delete('/<int:tag_id>')

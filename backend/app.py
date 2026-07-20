@@ -182,6 +182,25 @@ def _run_migrations(db):
     except Exception as e:
         print(f'[migration] product_finished img_updated_at 迁移失败（可忽略）: {e}', flush=True)
 
+    # 为 product_finished 补充封面原图尺寸列
+    try:
+        with db.engine.connect() as conn:
+            for column_name in ('cover_image_width', 'cover_image_height'):
+                row = conn.execute(db.text(
+                    "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+                    "WHERE TABLE_SCHEMA = DATABASE() "
+                    "AND TABLE_NAME = 'product_finished' "
+                    "AND COLUMN_NAME = :column_name"
+                ), {'column_name': column_name}).fetchone()
+                if not row:
+                    conn.execute(db.text(
+                        f"ALTER TABLE product_finished ADD COLUMN {column_name} INT NULL"
+                    ))
+                    print(f'[migration] product_finished.{column_name} 列已添加', flush=True)
+            conn.commit()
+    except Exception as e:
+        print(f'[migration] product_finished cover image size 迁移失败（可忽略）: {e}', flush=True)
+
     try:
         with db.engine.connect() as conn:
             # aftersale_product_remark_dict.type Enum 中补充 series_alias

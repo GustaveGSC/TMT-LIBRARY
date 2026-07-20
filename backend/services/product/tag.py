@@ -53,7 +53,8 @@ class TagCategoryService:
         return Result.ok(data=cat.to_dict(), message='创建成功')
 
     @staticmethod
-    def update(category_id: int, name: str, color: str, sort_order: int = 0) -> Result:
+    def update(category_id: int, name: str, color: str, sort_order: int = 0,
+               is_shipping_dim=None) -> Result:
         cat = TagCategoryRepository.get_by_id(category_id)
         if not cat:
             return Result.fail('分类不存在')
@@ -65,7 +66,11 @@ class TagCategoryService:
         existing = TagCategoryRepository.get_by_name(name)
         if existing and existing.id != category_id:
             return Result.fail(f'分类「{name}」已存在')
-        cat = TagCategoryRepository.update(cat, name=name, color=color or '#c4883a', sort_order=sort_order)
+        cat = TagCategoryRepository.update(cat, name=name, color=color or '#c4883a', sort_order=sort_order,
+                                            is_shipping_dim=is_shipping_dim)
+        if is_shipping_dim is not None:
+            from database.repository.shipping import _invalidate_chart_options_cache
+            _invalidate_chart_options_cache()
         return Result.ok(data=cat.to_dict(), message='更新成功')
 
     @staticmethod
@@ -114,7 +119,8 @@ class TagService:
         return Result.ok(data=tag.to_dict(), message='创建成功')
 
     @staticmethod
-    def update(tag_id: int, name: str, category_id=None, color: str = None) -> Result:
+    def update(tag_id: int, name: str, category_id=None, color: str = None,
+               shipping_dim_enabled=None) -> Result:
         tag = TagRepository.get_by_id(tag_id)
         if not tag:
             return Result.fail('标签不存在')
@@ -130,7 +136,11 @@ class TagService:
             cat = TagCategoryRepository.get_by_id(int(category_id))
             if not cat:
                 return Result.fail('所选分类不存在')
-        tag = TagRepository.update(tag, name=name, category_id=int(category_id) if category_id else None)
+        tag = TagRepository.update(tag, name=name, category_id=int(category_id) if category_id else None,
+                                    shipping_dim_enabled=shipping_dim_enabled)
+        if shipping_dim_enabled is not None:
+            from database.repository.shipping import _invalidate_chart_options_cache
+            _invalidate_chart_options_cache()
         return Result.ok(data=tag.to_dict(), message='更新成功')
 
     @staticmethod

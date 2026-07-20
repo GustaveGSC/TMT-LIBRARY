@@ -5,21 +5,23 @@ from utils import now_cst
 class ProductTagCategory(db.Model):
     __tablename__ = 'product_tag_category'
 
-    id         = db.Column(db.Integer,    primary_key=True, autoincrement=True)
-    name       = db.Column(db.String(32), nullable=False, unique=True)
-    color      = db.Column(db.String(16), nullable=False, default='#c4883a')
-    sort_order = db.Column(db.Integer,    nullable=False, default=0)
-    created_at = db.Column(db.DateTime,   nullable=False, default=now_cst)
+    id              = db.Column(db.Integer,    primary_key=True, autoincrement=True)
+    name            = db.Column(db.String(32), nullable=False, unique=True)
+    color           = db.Column(db.String(16), nullable=False, default='#c4883a')
+    sort_order      = db.Column(db.Integer,    nullable=False, default=0)
+    is_shipping_dim = db.Column(db.Boolean,    nullable=False, default=False)  # 是否用作发货图表分析维度
+    created_at      = db.Column(db.DateTime,   nullable=False, default=now_cst)
 
     tags = db.relationship('ProductTag', backref='category', lazy='dynamic')
 
     def to_dict(self) -> dict:
         return {
-            'id':         self.id,
-            'name':       self.name,
-            'color':      self.color,
-            'sort_order': self.sort_order,
-            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
+            'id':              self.id,
+            'name':            self.name,
+            'color':           self.color,
+            'sort_order':      self.sort_order,
+            'is_shipping_dim': bool(self.is_shipping_dim),
+            'created_at':      self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
         }
 
 
@@ -34,11 +36,12 @@ finished_tag = db.Table(
 class ProductTag(db.Model):
     __tablename__ = 'product_tag'
 
-    id          = db.Column(db.Integer,     primary_key=True, autoincrement=True)
-    name        = db.Column(db.String(32),  nullable=False, unique=True)
-    color       = db.Column(db.String(16),  nullable=True)   # 保留旧字段（兼容），分类颜色优先
-    category_id = db.Column(db.Integer,     db.ForeignKey('product_tag_category.id'), nullable=True)
-    created_at  = db.Column(db.DateTime,    nullable=False, default=now_cst)
+    id                   = db.Column(db.Integer,     primary_key=True, autoincrement=True)
+    name                 = db.Column(db.String(32),  nullable=False, unique=True)
+    color                = db.Column(db.String(16),  nullable=True)   # 保留旧字段（兼容），分类颜色优先
+    category_id          = db.Column(db.Integer,     db.ForeignKey('product_tag_category.id'), nullable=True)
+    shipping_dim_enabled = db.Column(db.Boolean,      nullable=False, default=True)  # 分类作为发货维度时，该标签是否纳入统计
+    created_at           = db.Column(db.DateTime,    nullable=False, default=now_cst)
 
     def to_dict(self) -> dict:
         # 颜色：优先取分类颜色，其次旧标签自身颜色，默认主色
@@ -47,11 +50,12 @@ class ProductTag(db.Model):
             (self.color if self.color else '#c4883a')
         )
         return {
-            'id':          self.id,
-            'name':        self.name,
-            'color':       resolved_color,
-            'category_id': self.category_id,
-            'created_at':  self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
+            'id':                    self.id,
+            'name':                  self.name,
+            'color':                 resolved_color,
+            'category_id':           self.category_id,
+            'shipping_dim_enabled':  bool(self.shipping_dim_enabled),
+            'created_at':            self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
         }
 
 
@@ -88,6 +92,8 @@ class ProductFinished(db.Model):
     market        = db.Column(db.String(16),  nullable=True)   # domestic/foreign/both
     cover_image          = db.Column(db.String(500), nullable=True)
     cover_image_original = db.Column(db.String(500), nullable=True)   # 原始高清图 OSS URL
+    cover_image_width    = db.Column(db.Integer,     nullable=True)   # 原始高清图宽度（像素）
+    cover_image_height   = db.Column(db.Integer,     nullable=True)   # 原始高清图高度（像素）
     img_updated_at       = db.Column(db.Integer,     nullable=True)   # 封面图更新时间戳（秒），用于缓存破坏
     created_at       = db.Column(db.DateTime,    nullable=False, default=now_cst)
     updated_at       = db.Column(db.DateTime,    nullable=False, default=now_cst, onupdate=now_cst)
@@ -133,6 +139,8 @@ class ProductFinished(db.Model):
             'market':        self.market,
             'cover_image':          self.cover_image,
             'cover_image_original': self.cover_image_original,
+            'cover_image_width':    self.cover_image_width,
+            'cover_image_height':   self.cover_image_height,
             'img_updated_at':       self.img_updated_at,
             'tags':          [t.to_dict() for t in self.tags],
             'created_at':    self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,

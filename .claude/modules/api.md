@@ -75,9 +75,17 @@ POST   /api/category/models
 PUT    /api/category/models/:id
 DELETE /api/category/models/:id
 
+GET    /api/product/tags/categories/                  # 标签分类列表（含旗下 tags[]）
+POST   /api/product/tags/categories/                  # 新增分类 {name,color?,sort_order?}
+PUT    /api/product/tags/categories/:id                # 更新分类 {name,color?,sort_order?,is_shipping_dim?}
+                                                      #   is_shipping_dim 未传则保留原值；传 true/false 控制该分类是否作为发货图表聚合维度
+                                                      #   传了 is_shipping_dim 时会顺带清空 shipping chart-options 缓存（否则最多 5 分钟才生效）
+DELETE /api/product/tags/categories/:id                # 删除分类（旗下标签移至未分类）
 GET    /api/product/tags/
 POST   /api/product/tags/
-PUT    /api/product/tags/:id
+PUT    /api/product/tags/:id                          # {name,category_id?,color?,shipping_dim_enabled?}
+                                                      #   shipping_dim_enabled 未传则保留原值；控制该标签在其分类作为发货维度时是否纳入统计
+                                                      #   传了 shipping_dim_enabled 时同上会清空 chart-options 缓存
 DELETE /api/product/tags/:id
 POST   /api/product/tags/finished/:finished_id/:tag_id
 DELETE /api/product/tags/finished/:finished_id/:tag_id
@@ -127,8 +135,13 @@ GET    /api/shipping/equivalents                      # 列出所有通用件对
 POST   /api/shipping/equivalents                      # 新增 {code_a, code_b, note?}；服务端保证 code_a<code_b；校验产成品存在
 DELETE /api/shipping/equivalents/<id>                 # 删除通用件对
 GET    /api/shipping/chart-options                    # 渠道名和省份去重列表；?source=shipping|finance 过滤来源
+                                                      #   返回额外含 tag_dimensions: [{category_id,name,color,tags:[{id,name}]}]
+                                                      #   （已配置 is_shipping_dim=1 的标签分类及其 shipping_dim_enabled=1 的标签，见 database.md product_tag_category）
 POST   /api/shipping/chart-data                       # 图表聚合数据，body 含 source('shipping'|'finance')、trade_type('all'|'domestic'|'foreign')
                                                       #   trade_type: domestic 排除 %-FTP 系列，foreign 仅保留 %-FTP 系列（后端 SQL LIKE）
+                                                      #   group_by 除固定维度外，可传 'tag:<category_id>' 按该标签分类聚合（需先在数据配置中启用该分类为发货维度）
+                                                      #   tag_filters?: [{category_id, tag_ids}]，与 group_by 相互独立的标签筛选（不管当前按什么维度聚合都生效），
+                                                      #     同一分类内多个 tag_id 为 OR，不同分类之间为 AND
 
 GET    /api/aftersale/pending                         # 待处理订单列表（动态查询，尚未建工单的售后操作人订单）
 GET    /api/aftersale/pending/count                   # 待处理订单数量

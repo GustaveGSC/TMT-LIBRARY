@@ -25,10 +25,13 @@ class TagCategoryRepository:
         return cat
 
     @staticmethod
-    def update(cat: ProductTagCategory, name: str, color: str, sort_order: int) -> ProductTagCategory:
+    def update(cat: ProductTagCategory, name: str, color: str, sort_order: int,
+               is_shipping_dim: Optional[bool] = None) -> ProductTagCategory:
         cat.name       = name
         cat.color      = color
         cat.sort_order = sort_order
+        if is_shipping_dim is not None:
+            cat.is_shipping_dim = is_shipping_dim
         db.session.commit()
         return cat
 
@@ -63,9 +66,12 @@ class TagRepository:
         return tag
 
     @staticmethod
-    def update(tag: ProductTag, name: str, category_id: Optional[int]) -> ProductTag:
+    def update(tag: ProductTag, name: str, category_id: Optional[int],
+               shipping_dim_enabled: Optional[bool] = None) -> ProductTag:
         tag.name        = name
         tag.category_id = category_id
+        if shipping_dim_enabled is not None:
+            tag.shipping_dim_enabled = shipping_dim_enabled
         db.session.commit()
         return tag
 
