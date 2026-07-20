@@ -1,6 +1,11 @@
 import argparse
 import os
 import sys
+from pathlib import Path
+
+from alembic.config import Config
+from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from flask import Flask
 from flask_cors import CORS
 from database.base import db
@@ -47,6 +52,9 @@ def create_app() -> Flask:
 
     # ── 初始化扩展 ────────────────────────────────────
     db.init_app(app)
+    with app.app_context():
+        _validate_database_revision(db)
+
     # CORS_ORIGINS 可通过环境变量覆盖（逗号分隔），生产环境配置实际域名
     _cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
     if not _cors_origins:
@@ -86,10 +94,6 @@ def create_app() -> Flask:
     app.register_blueprint(resource_bp,       url_prefix="/api/resources")
     app.register_blueprint(config_bp,         url_prefix="/api/config")
 
-    # ── 数据库自动迁移（非破坏性，仅补充缺失变更）──────────
-    with app.app_context():
-        _run_migrations(db)
-
     # ── 健康检查 ──────────────────────────────────────
     @app.get("/health")
     def health():
@@ -108,168 +112,33 @@ def create_app() -> Flask:
     return app
 
 
-def _run_migrations(db):
-    """轻量自动迁移：检测列定义，仅在需要时执行 ALTER TABLE；并确保新表存在。"""
-    # 确保新增表存在（checkfirst=True 保证幂等）
-    try:
-        from database.models.rd import EcrReminder, EcrNote
-        from database.models.aftersale import AftersaleSetting
-        from database.models.product.finished import ProductTagCategory
-        from database.models.product.resource import ProductResourceType, ProductResource, finished_resource, resource_tag, resource_model
-        from database.models.account import SiteConfig, User
-        from database.models.rd.cost import (
-            CostBomNode, CostSnapshot, CostSnapshotSku,
-            CostBomLine, CostMaterialSupplier, CostMaterialRule,
+def _validate_database_revision(database) -> None:
+    """只读校验数据库 revision；迁移未执行时拒绝启动应用。"""
+    config_path = Path(os.getenv(
+        'ALEMBIC_CONFIG',
+        str(Path(BASE_DIR).parent / 'alembic.ini'),
+    )).resolve()
+    if not config_path.is_file():
+        raise RuntimeError(f'Alembic 配置不存在，拒绝启动: {config_path}')
+
+    config = Config(str(config_path))
+    expected_heads = set(ScriptDirectory.from_config(config).get_heads())
+    if len(expected_heads) != 1:
+        raise RuntimeError(
+            f'Alembic 必须且只能有一个 head，当前为: {sorted(expected_heads)}'
         )
-        EcrReminder.__table__.create(bind=db.engine, checkfirst=True)
-        EcrNote.__table__.create(bind=db.engine, checkfirst=True)
-        AftersaleSetting.__table__.create(bind=db.engine, checkfirst=True)
-        ProductTagCategory.__table__.create(bind=db.engine, checkfirst=True)
-        ProductResourceType.__table__.create(bind=db.engine, checkfirst=True)
-        ProductResource.__table__.create(bind=db.engine, checkfirst=True)
-        finished_resource.create(bind=db.engine, checkfirst=True)
-        resource_tag.create(bind=db.engine, checkfirst=True)
-        resource_model.create(bind=db.engine, checkfirst=True)
-        SiteConfig.__table__.create(bind=db.engine, checkfirst=True)
-        # BOM 成本库表（节点表需先于其他表创建，因为其他表有外键指向它）
-        CostBomNode.__table__.create(bind=db.engine, checkfirst=True)
-        CostSnapshot.__table__.create(bind=db.engine, checkfirst=True)
-        CostSnapshotSku.__table__.create(bind=db.engine, checkfirst=True)
-        CostBomLine.__table__.create(bind=db.engine, checkfirst=True)
-        CostMaterialSupplier.__table__.create(bind=db.engine, checkfirst=True)
-        CostMaterialRule.__table__.create(bind=db.engine, checkfirst=True)
-        # 种子数据：预置资料类型
-        _seed_resource_types(db)
-    except Exception as e:
-        print(f'[migration] 建表失败（可忽略）: {e}', flush=True)
 
-    # JWT 主动失效版本：禁用、改密或调权时递增
-    try:
-        with db.engine.connect() as conn:
-            lock_name = 'tmt_migrate_users_token_version'
-            locked = conn.execute(
-                db.text("SELECT GET_LOCK(:lock_name, 30)"),
-                {'lock_name': lock_name},
-            ).scalar()
-            if locked != 1:
-                raise RuntimeError('获取 users.token_version 迁移锁超时')
-            try:
-                row = conn.execute(db.text(
-                    "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
-                    "WHERE TABLE_SCHEMA = DATABASE() "
-                    "AND TABLE_NAME = 'users' "
-                    "AND COLUMN_NAME = 'token_version'"
-                )).fetchone()
-                if not row:
-                    conn.execute(db.text(
-                        "ALTER TABLE users "
-                        "ADD COLUMN token_version INT NOT NULL DEFAULT 0"
-                    ))
-                    conn.commit()
-                    print('[migration] users.token_version 列已添加', flush=True)
-            finally:
-                conn.execute(
-                    db.text("SELECT RELEASE_LOCK(:lock_name)"),
-                    {'lock_name': lock_name},
-                )
-    except Exception as e:
-        print(f'[migration] users.token_version 迁移失败（不可忽略）: {e}', flush=True)
-        raise
+    with database.engine.connect() as connection:
+        current_heads = set(
+            MigrationContext.configure(connection).get_current_heads()
+        )
 
-    # 为 product_tag 表补充 category_id 列
-    try:
-        with db.engine.connect() as conn:
-            row = conn.execute(db.text(
-                "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
-                "WHERE TABLE_SCHEMA = DATABASE() "
-                "AND TABLE_NAME = 'product_tag' "
-                "AND COLUMN_NAME = 'category_id'"
-            )).fetchone()
-            if not row:
-                conn.execute(db.text(
-                    "ALTER TABLE product_tag "
-                    "ADD COLUMN category_id INT NULL, "
-                    "ADD CONSTRAINT fk_tag_category "
-                    "FOREIGN KEY (category_id) REFERENCES product_tag_category(id) ON DELETE SET NULL"
-                ))
-                conn.commit()
-                print('[migration] product_tag.category_id 列已添加', flush=True)
-    except Exception as e:
-        print(f'[migration] product_tag 迁移失败（可忽略）: {e}', flush=True)
-
-    # 为 product_finished 补充 img_updated_at 列（阻断问题：列不存在会 Unknown column）
-    try:
-        with db.engine.connect() as conn:
-            row = conn.execute(db.text(
-                "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
-                "WHERE TABLE_SCHEMA = DATABASE() "
-                "AND TABLE_NAME = 'product_finished' "
-                "AND COLUMN_NAME = 'img_updated_at'"
-            )).fetchone()
-            if not row:
-                conn.execute(db.text(
-                    "ALTER TABLE product_finished ADD COLUMN img_updated_at INT NULL"
-                ))
-                conn.commit()
-                print('[migration] product_finished.img_updated_at 列已添加', flush=True)
-    except Exception as e:
-        print(f'[migration] product_finished img_updated_at 迁移失败（可忽略）: {e}', flush=True)
-
-    # 为 product_finished 补充封面原图尺寸列
-    try:
-        with db.engine.connect() as conn:
-            for column_name in ('cover_image_width', 'cover_image_height'):
-                row = conn.execute(db.text(
-                    "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
-                    "WHERE TABLE_SCHEMA = DATABASE() "
-                    "AND TABLE_NAME = 'product_finished' "
-                    "AND COLUMN_NAME = :column_name"
-                ), {'column_name': column_name}).fetchone()
-                if not row:
-                    conn.execute(db.text(
-                        f"ALTER TABLE product_finished ADD COLUMN {column_name} INT NULL"
-                    ))
-                    print(f'[migration] product_finished.{column_name} 列已添加', flush=True)
-            conn.commit()
-    except Exception as e:
-        print(f'[migration] product_finished cover image size 迁移失败（可忽略）: {e}', flush=True)
-
-    try:
-        with db.engine.connect() as conn:
-            # aftersale_product_remark_dict.type Enum 中补充 series_alias
-            row = conn.execute(db.text(
-                "SELECT COLUMN_TYPE FROM information_schema.COLUMNS "
-                "WHERE TABLE_SCHEMA = DATABASE() "
-                "AND TABLE_NAME = 'aftersale_product_remark_dict' "
-                "AND COLUMN_NAME = 'type'"
-            )).fetchone()
-            if row and 'series_alias' not in (row[0] or ''):
-                conn.execute(db.text(
-                    "ALTER TABLE aftersale_product_remark_dict "
-                    "MODIFY COLUMN type ENUM('material','color','drive_type','size','series_alias') NOT NULL"
-                ))
-                conn.commit()
-    except Exception as e:
-        print(f'[migration] 自动迁移失败（可忽略）: {e}', flush=True)
-
-
-def _seed_resource_types(db):
-    """幂等写入预置资料类型种子数据。"""
-    try:
-        from database.models.product.resource import ProductResourceType
-        preset = ['说明书', '安装视频', '售后视频', '专利', '认证']
-        existing = {t.name for t in ProductResourceType.query.all()}
-        new_types = [
-            ProductResourceType(name=name, sort_order=idx)
-            for idx, name in enumerate(preset)
-            if name not in existing
-        ]
-        if new_types:
-            db.session.add_all(new_types)
-            db.session.commit()
-            print(f'[seed] 新增资料类型: {[t.name for t in new_types]}', flush=True)
-    except Exception as e:
-        print(f'[seed] 资料类型种子数据写入失败（可忽略）: {e}', flush=True)
+    if current_heads != expected_heads:
+        raise RuntimeError(
+            '数据库迁移版本不匹配，拒绝启动；'
+            f'current={sorted(current_heads)}, expected={sorted(expected_heads)}。'
+            '请先执行 python -m alembic -c alembic.ini upgrade head。'
+        )
 
 
 if __name__ == "__main__":
