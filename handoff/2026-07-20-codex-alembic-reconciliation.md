@@ -37,3 +37,13 @@ git diff --check
 4. 只有 `DIFF_COUNT=0` 后，才执行 `alembic stamp 20260720_01`，随后验证 `current` 和 `upgrade head` 空操作。
 5. stamp 与空升级验证完成后仍先停止，把结果交回 Codex；移除 `app.py::_run_migrations()` 属于下一提交。
 
+## 第二轮核验后的修正
+
+Claude 第二轮得到 `39 → 12`，其中 6 条为 3 组外键删除行为不一致，6 条为字段 comment：
+
+- `fk_finished_model` 已补回生产现状 `ON DELETE SET NULL`。
+- `fk_fp_finished`、`fk_fp_packaged` 已补回生产现状 `ON DELETE CASCADE`。
+- Alembic 1.18.5 的 comment 比较由独立插件实现，`compare_comments=False` 会被保存在 opts 中但没有消费者，因而无效。现改用 `autogenerate_plugins=('alembic.autogenerate.*', '~alembic.autogenerate.comments')`，只关闭 comment 比较。
+- 自动化测试直接实例化 `AutogenContext`，确认 comments 比较器未加载，同时 types、nullable、indexes、foreignkeys 比较器仍然存在；另逐个断言三个生产外键的名称和 `ondelete`。
+
+第三轮生产只读脚本必须传入上述 `autogenerate_plugins`，不能继续传 `compare_comments=False`。预期结果为 `DIFF_COUNT=0`；若不为 0，仍按原门禁停止。

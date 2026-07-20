@@ -63,8 +63,10 @@ class ProductTag(db.Model):
 
 finished_packaged = db.Table(
     'product_finished_packaged',
-    db.Column('finished_id', db.Integer, db.ForeignKey('product_finished.id', name='fk_fp_finished'), primary_key=True),
-    db.Column('packaged_id', db.Integer, db.ForeignKey('product_packaged.id', name='fk_fp_packaged'), primary_key=True),
+    db.Column('finished_id', db.Integer, db.ForeignKey(
+        'product_finished.id', name='fk_fp_finished', ondelete='CASCADE'), primary_key=True),
+    db.Column('packaged_id', db.Integer, db.ForeignKey(
+        'product_packaged.id', name='fk_fp_packaged', ondelete='CASCADE'), primary_key=True),
 )
 
 # status 常量
@@ -87,7 +89,8 @@ class ProductFinished(db.Model):
     id            = db.Column(db.Integer,     primary_key=True, autoincrement=True)
     code          = db.Column(db.String(64),  nullable=False, unique=True)
     status        = db.Column(db.String(20),  nullable=False, default=STATUS_UNRECORDED)
-    model_id      = db.Column(db.Integer,     db.ForeignKey('product_model.id', name='fk_finished_model'), nullable=True)
+    model_id      = db.Column(db.Integer,     db.ForeignKey(
+        'product_model.id', name='fk_finished_model', ondelete='SET NULL'), nullable=True)
     listed_yymm   = db.Column(db.String(7),   nullable=True)
     delisted_yymm = db.Column(db.String(7),   nullable=True)
     market        = db.Column(db.String(16),  nullable=True)   # domestic/foreign/both

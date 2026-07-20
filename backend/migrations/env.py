@@ -49,6 +49,13 @@ import database.models.product.resource  # noqa: E402,F401
 
 target_metadata = db.metadata
 
+# Alembic 1.18 将 comment 比较实现成 autogenerate plugin；compare_comments=False
+# 不是有效开关。保留全部结构比较，仅明确排除 comments plugin。
+AUTOGENERATE_PLUGINS = (
+    'alembic.autogenerate.*',
+    '~alembic.autogenerate.comments',
+)
+
 # 这些表对应的功能已在 7736296 中从业务代码移除，但生产数据仍待归档。
 # Alembic 暂不管理它们，避免 autogenerate 静默生成 DROP TABLE。
 LEGACY_UNMANAGED_TABLES = frozenset({
@@ -85,7 +92,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={'paramstyle': 'named'},
         compare_type=True,
-        compare_comments=False,
+        autogenerate_plugins=AUTOGENERATE_PLUGINS,
         include_object=include_object,
     )
     with context.begin_transaction():
@@ -103,7 +110,7 @@ def run_migrations_online() -> None:
             connection=connection,
             target_metadata=target_metadata,
             compare_type=True,
-            compare_comments=False,
+            autogenerate_plugins=AUTOGENERATE_PLUGINS,
             include_object=include_object,
         )
         with context.begin_transaction():

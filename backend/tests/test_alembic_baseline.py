@@ -2,6 +2,7 @@ from pathlib import Path
 
 import sqlalchemy as sa
 from alembic import command
+from alembic.autogenerate.api import AutogenContext
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
@@ -89,6 +90,38 @@ def test_known_production_schema_details_are_reflected_in_metadata():
         if isinstance(constraint, sa.UniqueConstraint)
     }
     assert ('model_code',) not in model_code_unique_constraints
+
+
+def test_production_foreign_key_delete_behaviour_is_preserved():
+    from database.base import db
+    import database.models.product.finished  # noqa: F401
+
+    expected = {
+        ('product_finished', 'model_id'): ('fk_finished_model', 'SET NULL'),
+        ('product_finished_packaged', 'finished_id'): ('fk_fp_finished', 'CASCADE'),
+        ('product_finished_packaged', 'packaged_id'): ('fk_fp_packaged', 'CASCADE'),
+    }
+    for (table_name, column_name), (constraint_name, ondelete) in expected.items():
+        foreign_key, = db.metadata.tables[table_name].c[column_name].foreign_keys
+        assert foreign_key.constraint.name == constraint_name
+        assert foreign_key.ondelete == ondelete
+
+
+def test_alembic_comment_plugin_is_disabled_but_structure_plugins_remain_enabled():
+    plugins = ['alembic.autogenerate.*', '~alembic.autogenerate.comments']
+    context = MigrationContext.configure(
+        dialect_name='mysql',
+        opts={'autogenerate_plugins': plugins},
+    )
+    autogen_context = AutogenContext(context, sa.MetaData())
+    comparator_labels = {
+        label
+        for entries in autogen_context.comparators._registry.values()
+        for _function, label in entries
+    }
+
+    assert 'comments' not in comparator_labels
+    assert {'types', 'indexes', 'foreignkeys', 'nullable'} <= comparator_labels
 
 
 def test_stamp_then_upgrade_head_does_not_change_existing_schema(tmp_path, monkeypatch):
