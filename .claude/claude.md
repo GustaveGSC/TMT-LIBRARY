@@ -167,5 +167,5 @@ const { isAdmin, can, canEditProduct, canViewProduct, canDeleteProduct } = usePe
 ## 版本规则
 - `Beta x.x.x` 或主/次版本变更 → 强制更新
 - 仅修订版变更 → 可选更新（红点提示）
-- 当前版本：`1.1.5`（以 package.json 为准）
+- 当前版本以 `package.json` 的 `version` 字段为准，本文件不再手工复制具体版本号（历史上出现过手工复制的数字过期没同步的问题）
 - OSS上传 key 格式：`tmt-library/releases/{filename}`（含前缀）
