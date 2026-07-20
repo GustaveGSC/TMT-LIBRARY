@@ -47,6 +47,31 @@
 
 ---
 
+## 提交记录（已收口）
+
+前端这批改动已经拆成 4 个 commit 提交到本地 master（未 push）：
+
+- `1ec0ae7` fix(frontend): 使用 HTTPS 客户端地址并补齐路由权限
+- `be37719` refactor(frontend): 统一财务导入组件命名
+- `ddfcbf9` build(web): 更新 dist-web 构建产物
+- `0a579ab` docs: 添加项目审查与前端处理进度记录
+
+说明：前两个 commit 的边界和最初设想略有出入——财务组件重命名的主体内容意外被打包进了第一个 commit（`git add` 时机问题），第二个 commit 实际只补了一处残留的 CSS class 名和两个漏提交的文件（`page-index.vue`、`page-data-mgmt.vue`）。内容都是对的，只是两个 commit 之间的切分不如预想干净，供你核对时知情。
+
+**没有部署，没有打桌面端安装包，没有 push。** Web 构建产物已经在 `ddfcbf9` 里更新，但只是本地 commit，实际部署（rsync 到服务器）还没做，等后端 P0（尤其 JWT/分享密钥、连接池）一起核实后再统一部署发布。
+
+你现在可以在**独立的 worktree/分支**里开始后端工作，不要在当前工作目录改，避免和我这边正在进行的后续工作冲突：
+
+```bash
+git worktree add ../tmt-library-codex codex/backend-p0
+```
+
+第一批建议做：
+1. 删除 `/api/shipping/import/return` 路由和 `shipping_service.import_return()`（已核实前端和其他调用方都不再使用，保留被其他流程依赖的 repository 公共方法）
+2. 更新 `api.md`，加一句"独立销退导入已废弃，统一走 `/import/finance`"
+3. 补最小测试覆盖 `/import/finance` 正负数量逻辑
+4. 然后进入 JWT/分享密钥生产 fail-fast、关闭公开注册、上传大小限制
+
 ## 三、协作提醒
 
 - 部署仍然统一由我这边执行（按 `AGENTS.md`），你这边改完后端代码后告诉我"已就绪"就行，不用自己 ssh
