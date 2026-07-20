@@ -133,27 +133,25 @@ export function useProductResources(codeGetter = null) {
     try {
       // 1. 获取预签名 URL（视频统一用 mp4）
       const uploadExt  = isVideo ? 'mp4' : ext
-      const presignRes = await http.post('/api/resources/presign', { ext: uploadExt })
+      const presignRes = await http.post('/api/resources/presign', { ext: uploadExt, file_size: file.size })
       if (!presignRes.success) {
         ElMessage.error(presignRes.message || '获取上传凭证失败')
         return null
       }
-      const { presign_url, oss_url, storage_key, file_type } = presignRes.data
+      const { presign_url, oss_url, storage_key, file_type, required_headers } = presignRes.data
 
       // 2. 直传 OSS（视频用 XHR 以便显示进度和中止，其他用 fetch + AbortController）
-      const contentTypeMap = {
-        pdf: 'application/pdf',
-        png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
-        mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm',
-      }
-      const contentType = contentTypeMap[uploadExt] || 'application/octet-stream'
+      // required_headers 里的 Content-Type/Content-Length 已经签进 presign_url，必须一致才能通过 OSS 签名校验。
+      // Content-Length 是浏览器禁止脚本设置的 header，setRequestHeader 对它是静默 no-op，
+      // 但浏览器发送时会按实际 body（就是这个 file，大小等于签名时declare的 file_size）自动填正确值，无需手动处理。
+      const headers = required_headers || {}
 
       // XHR 上传，所有类型统一支持进度显示和中止
       await new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest()
         _currentXhr = xhr
         xhr.open('PUT', presign_url)
-        xhr.setRequestHeader('Content-Type', contentType)
+        Object.entries(headers).forEach(([key, value]) => xhr.setRequestHeader(key, value))
         xhr.upload.onprogress = (e) => {
           if (e.lengthComputable) uploadPercent.value = Math.round(e.loaded / e.total * 100)
         }

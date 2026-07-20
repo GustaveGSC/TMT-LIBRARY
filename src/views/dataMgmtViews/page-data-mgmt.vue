@@ -5,6 +5,7 @@ import { useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import http, { getBaseURL } from '@/api/http'
+import { recoverShippingTaskAfterSseError } from '@/utils/shippingTaskRecovery'
 import WindowControls  from '@/components/common/WindowControls.vue'
 import DataImport        from './DataImport.vue'
 import FinanceImport     from './FinanceImport.vue'
@@ -73,9 +74,8 @@ async function handleResolveAll() {
     const taskId = res.data.task_id
 
     await new Promise((resolve, reject) => {
-      const es = new EventSource(`${getBaseURL()}/api/shipping/import/progress/${taskId}`)
-      es.onmessage = (event) => {
-        const data = JSON.parse(event.data)
+      let es
+      function handleData(data) {
         if (data.step === 'preparing') {
           resolvePrepareMsg.value   = data.message  ?? '正在准备数据…'
           resolveTotalOrders.value  = data.total    ?? 0
@@ -90,17 +90,25 @@ async function handleResolveAll() {
           resolveSaveCurrent.value = data.current ?? 0
           resolveSaveTotal.value   = data.total   ?? 0
         } else if (data.step === 'done') {
-          es.close()
+          es?.close()
           resolveCurrentOrder.value = data.data.resolved
           resolveTotalOrders.value  = data.data.resolved
           resolve()
         } else if (data.step === 'error') {
-          es.close()
+          es?.close()
           ElMessage.error(data.message || '计算失败')
           reject()
         }
       }
-      es.onerror = () => { es.close(); reject() }
+      function connect() {
+        es = new EventSource(`${getBaseURL()}/api/shipping/import/progress/${taskId}`)
+        es.onmessage = (event) => handleData(JSON.parse(event.data))
+        es.onerror = () => {
+          es.close()
+          recoverShippingTaskAfterSseError(taskId, { onEvent: handleData, retry: connect })
+        }
+      }
+      connect()
     })
     ElMessage.success(`刷新完成，共处理 ${resolveCurrentOrder.value.toLocaleString()} 条订单`)
   } catch {

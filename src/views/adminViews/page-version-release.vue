@@ -74,11 +74,12 @@ const uploadStage   = ref('')
 // 上传单个文件到 OSS（直传），返回 OSS URL；progress 回调接收 0~1
 async function uploadToOss(file, onProgress) {
   // 1. 从后端获取预签名 PUT URL
-  const res = await http.post('/api/version/presign', { filename: file.name })
+  const res = await http.post('/api/version/presign', { filename: file.name, file_size: file.size })
   if (!res.success) throw new Error(res.message || '获取上传凭证失败')
-  const { presign_url, oss_url } = res.data
+  const { presign_url, oss_url, required_headers } = res.data
 
   // 2. 直接 PUT 到 OSS，带进度回调
+  // required_headers（Content-Type/Content-Length）已经签进 presign_url，必须原样带上才能通过 OSS 签名校验
   await new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     xhr.upload.onprogress = e => {
@@ -90,7 +91,8 @@ async function uploadToOss(file, onProgress) {
     }
     xhr.onerror = () => reject(new Error('上传连接失败'))
     xhr.open('PUT', presign_url)
-    xhr.setRequestHeader('Content-Type', 'application/octet-stream')
+    Object.entries(required_headers || { 'Content-Type': 'application/octet-stream' })
+      .forEach(([key, value]) => xhr.setRequestHeader(key, value))
     xhr.send(file)
   })
 

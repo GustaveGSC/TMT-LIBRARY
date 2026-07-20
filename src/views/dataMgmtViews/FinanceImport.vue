@@ -3,6 +3,7 @@
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import http, { getBaseURL } from '@/api/http'
+import { recoverShippingTaskAfterSseError } from '@/utils/shippingTaskRecovery'
 
 // ── 响应式状态 ────────────────────────────────────
 const file      = ref(null)
@@ -121,26 +122,31 @@ async function doImport() {
     progress.value = 5
 
     await new Promise((resolve, reject) => {
-      const es = new EventSource(`${getBaseURL()}/api/shipping/import/progress/${currentTaskId.value}`)
-
-      es.onmessage = (event) => {
-        const data = JSON.parse(event.data)
+      let es
+      function handleData(data) {
         handleEvent(data)
         if (data.step === 'done') {
           result.value = data.data
-          es.close()
+          es?.close()
           resolve()
         } else if (data.step === 'cancelled') {
           wasCancelled = true
-          es.close()
+          es?.close()
           resolve()
         } else if (data.step === 'error') {
-          es.close()
+          es?.close()
           reject(new Error(data.message || '导入失败'))
         }
       }
-
-      es.onerror = () => { es.close(); reject(new Error('SSE 连接中断，请重试')) }
+      function connect() {
+        es = new EventSource(`${getBaseURL()}/api/shipping/import/progress/${currentTaskId.value}`)
+        es.onmessage = (event) => handleData(JSON.parse(event.data))
+        es.onerror = () => {
+          es.close()
+          recoverShippingTaskAfterSseError(currentTaskId.value, { onEvent: handleData, retry: connect })
+        }
+      }
+      connect()
     })
 
     if (wasCancelled) {
