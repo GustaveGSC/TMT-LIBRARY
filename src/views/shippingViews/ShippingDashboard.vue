@@ -446,20 +446,26 @@ function seriesCategoryName(seriesCode) {
 let breakdownFetchToken = 0
 /** 按当前 tooltipMode，为地图上每个有数据的国家批量拉一份细分数据（系列或品牌） */
 async function fetchTooltipBreakdown() {
-  if (tooltipMode.value === 'default' || lastMapKey !== 'world') { tooltipBreakdown.value = {}; return }
+  if (tooltipMode.value === 'default' || lastMapKey !== 'world') {
+    tooltipBreakdown.value = {}; breakdownLoading.value = false; return
+  }
   const regionDim = findTagDim(groupBy.value)
-  if (!regionDim) { tooltipBreakdown.value = {}; return }
+  if (!regionDim) { tooltipBreakdown.value = {}; breakdownLoading.value = false; return }
 
   let subGroupBy
   if (tooltipMode.value === 'series') {
     subGroupBy = 'series'
   } else {
     const brandDim = tagDimensions.value.find(td => td.name === '品牌')
-    if (!brandDim) { ElMessage.warning('未找到「品牌」标签维度，请先在标签维度配置里启用'); tooltipBreakdown.value = {}; return }
+    if (!brandDim) {
+      ElMessage.warning('未找到「品牌」标签维度，请先在标签维度配置里启用')
+      tooltipBreakdown.value = {}; breakdownLoading.value = false; return
+    }
     subGroupBy = `tag:${brandDim.category_id}`
   }
 
   const token = ++breakdownFetchToken
+  breakdownLoading.value = true
   const { field } = METRIC_MAP[dataMetric.value]
   const [start, end] = filters.value.dateRange || []
   const baseBody = {
@@ -479,23 +485,29 @@ async function fetchTooltipBreakdown() {
 
   const countries = lastMapItems.filter(i => i.rawValue > 0)
   const results = {}
-  await Promise.all(countries.map(async (item) => {
-    const tagId = regionDim.tags?.find(t => t.name === item.originalName)?.id
-    if (tagId == null) return
-    const tagFilters = [...buildTagFilters(), { category_id: regionDim.category_id, tag_ids: [tagId] }]
-    try {
-      const res = await http.post('/api/shipping/chart-data', {
-        ...baseBody, group_by: subGroupBy, tag_filters: tagFilters,
-      })
-      if (res.success) {
-        results[item.originalName] = res.data.items
-          .map(r => ({ label: r.label, name: r.name || r.label, value: r[field] ?? 0 }))
-          .filter(r => r.value > 0)
-          .sort((a, b) => b.value - a.value)
-      }
-    } catch { /* 单个国家失败不影响其它国家 */ }
-  }))
-  if (token === breakdownFetchToken) tooltipBreakdown.value = results
+  try {
+    await Promise.all(countries.map(async (item) => {
+      const tagId = regionDim.tags?.find(t => t.name === item.originalName)?.id
+      if (tagId == null) return
+      const tagFilters = [...buildTagFilters(), { category_id: regionDim.category_id, tag_ids: [tagId] }]
+      try {
+        const res = await http.post('/api/shipping/chart-data', {
+          ...baseBody, group_by: subGroupBy, tag_filters: tagFilters,
+        })
+        if (res.success) {
+          results[item.originalName] = res.data.items
+            .map(r => ({ label: r.label, name: r.name || r.label, value: r[field] ?? 0 }))
+            .filter(r => r.value > 0)
+            .sort((a, b) => b.value - a.value)
+        }
+      } catch { /* 单个国家失败不影响其它国家 */ }
+    }))
+  } finally {
+    if (token === breakdownFetchToken) {
+      tooltipBreakdown.value = results
+      breakdownLoading.value = false
+    }
+  }
 }
 
 /** 把某国家的细分数据转成展示行；系列模式下按品类分组、同品类相邻，超过上限截断。
@@ -623,6 +635,7 @@ const TOOLTIP_MODE_OPTIONS = [
 ]
 const tooltipMode      = ref('default')
 const tooltipBreakdown = ref({})   // { [国家中文名]: [{label, name, value}] }，已过滤0值
+const breakdownLoading = ref(false) // 批量拉取细分数据进行中：面板显示加载动画，避免误以为"没有数据"
 watch(tooltipMode, fetchTooltipBreakdown)
 
 // 当前维度下允许的图表类型 / 对比模式
@@ -2592,14 +2605,19 @@ function buildMapOption(items, mapKey = 'china') {
         const name = d?.originalName ?? params.name
         let extra = ''
         if (isWorld && tooltipMode.value !== 'default' && d?.originalName) {
-          const lines = buildBreakdownLines(d.originalName)
-          if (lines.length) {
+          if (breakdownLoading.value && !tooltipBreakdown.value[d.originalName]) {
             extra = `<div style="border-top:1px solid #e0d4c0;margin:6px 0 4px"></div>` +
-              lines.map(l => {
-                if (l.header) return `<div style="color:#c4883a;font-weight:600;margin:4px 0 2px">${l.header}</div>`
-                if (l.more != null) return `<div style="color:#8a7a6a;font-size:12px">……还有 ${l.more} 项</div>`
-                return `<div style="${ROW};color:#6b5e4e"><span>${l.name}</span><span style="font-weight:600">${l.value.toLocaleString()}</span></div>`
-              }).join('')
+              `<div style="color:#8a7a6a;font-size:12px">加载中…</div>`
+          } else {
+            const lines = buildBreakdownLines(d.originalName)
+            if (lines.length) {
+              extra = `<div style="border-top:1px solid #e0d4c0;margin:6px 0 4px"></div>` +
+                lines.map(l => {
+                  if (l.header) return `<div style="color:#c4883a;font-weight:600;margin:4px 0 2px">${l.header}</div>`
+                  if (l.more != null) return `<div style="color:#8a7a6a;font-size:12px">……还有 ${l.more} 项</div>`
+                  return `<div style="${ROW};color:#6b5e4e"><span>${l.name}</span><span style="font-weight:600">${l.value.toLocaleString()}</span></div>`
+                }).join('')
+            }
           }
         }
         return `<div style="${W}">` +
@@ -3093,7 +3111,10 @@ watch(groupBy, () => {
             <div class="map-detail-panel-val">{{ lastMapMetricLabel }}：{{ p.item.rawValue.toLocaleString() }}</div>
             <template v-if="tooltipMode !== 'default'">
               <div class="map-detail-panel-divider"></div>
-              <template v-for="(line, i) in buildBreakdownLines(p.item.originalName)" :key="i">
+              <div v-if="breakdownLoading && !tooltipBreakdown[p.item.originalName]" class="map-detail-panel-loading">
+                <span class="map-detail-spinner"></span>加载中…
+              </div>
+              <template v-else v-for="(line, i) in buildBreakdownLines(p.item.originalName)" :key="i">
                 <div v-if="line.header" class="map-detail-panel-cat">{{ line.header }}</div>
                 <div v-else-if="line.more != null" class="map-detail-panel-more">……还有 {{ line.more }} 项</div>
                 <div v-else class="map-detail-panel-row">
@@ -3482,7 +3503,7 @@ watch(groupBy, () => {
 .map-detail-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 20; }
 .map-detail-lines   { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
 .map-detail-panel {
-  position: absolute; width: 130px; min-height: 46px; max-height: 260px; overflow-y: auto;
+  position: absolute; width: 130px; min-height: 46px;
   background: #fff; border: 1px solid #c4883a; border-radius: 6px;
   box-shadow: 0 2px 6px rgba(0,0,0,0.15);
   padding: 4px 8px; display: flex; flex-direction: column; justify-content: center; gap: 2px;
@@ -3498,6 +3519,13 @@ watch(groupBy, () => {
 .map-detail-panel-more { color: #8a7a6a; font-size: 11px; }
 .map-detail-panel-row  { display: flex; justify-content: space-between; gap: 10px; color: #6b5e4e; }
 .map-detail-panel-row span:last-child { font-weight: 600; color: #3a3028; }
+.map-detail-panel-loading { display: flex; align-items: center; gap: 6px; color: #8a7a6a; font-size: 12px; padding: 2px 0; }
+.map-detail-spinner {
+  width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0;
+  border: 2px solid #e0d4c0; border-top-color: #c4883a;
+  animation: map-detail-spin .7s linear infinite;
+}
+@keyframes map-detail-spin { to { transform: rotate(360deg); } }
 
 /* 地图 Top10 侧边表格 */
 .map-rank-panel {
