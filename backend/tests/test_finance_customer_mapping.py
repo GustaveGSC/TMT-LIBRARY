@@ -111,7 +111,7 @@ def test_mapping_service_validates_and_forwards_clean_values(monkeypatch):
 
     result = shipping_service.save_finance_customer_mapping({
         'customer_alias': '  外贸-印尼-PT  ',
-        'is_export': True,
+        'status': 'export',
         'country': ' 印尼 ',
         'brand': ' Brand A ',
         'note': ' 人工确认 ',
@@ -119,12 +119,13 @@ def test_mapping_service_validates_and_forwards_clean_values(monkeypatch):
 
     assert result['customer_alias'] == '外贸-印尼-PT'
     assert captured['country'] == '印尼'
-    assert captured['is_export'] is True
+    assert captured['status'] == 'export'
 
 
 @pytest.mark.parametrize('payload', [
-    {'customer_alias': '', 'is_export': True},
-    {'customer_alias': '客户', 'is_export': 'true'},
+    {'customer_alias': '', 'status': 'export'},
+    {'customer_alias': '客户', 'status': 'excluded'},
+    {'customer_alias': '客户', 'status': None},
 ])
 def test_mapping_service_rejects_invalid_payload(payload):
     with pytest.raises(ValueError):
@@ -254,10 +255,16 @@ def test_finance_chart_uses_manual_mapping_for_trade_country_brand_and_filters()
         db.session.add(canada)
         db.session.add_all([
             ShippingFinanceCustomerMapping(
-                customer_alias='EXPORT', is_export=True, country='加拿大', brand='品牌甲',
+                customer_alias='EXPORT', status='export', country='加拿大', brand='品牌甲',
             ),
             ShippingFinanceCustomerMapping(
-                customer_alias='DOMESTIC', is_export=False, country='中国', brand='品牌乙',
+                customer_alias='DOMESTIC', status='domestic', country='中国', brand='品牌乙',
+            ),
+            ShippingFinanceCustomerMapping(
+                customer_alias='NON-SALES', status='non_sales', country='德国', brand='品牌丙',
+            ),
+            ShippingFinanceCustomerMapping(
+                customer_alias='PENDING', status='pending', country='俄罗斯', brand='品牌丁',
             ),
             ShippingOrderFinished(
                 ecommerce_order_no='E', finished_code='SKU-E', quantity=10,
@@ -274,6 +281,16 @@ def test_finance_chart_uses_manual_mapping_for_trade_country_brand_and_filters()
                 return_quantity=0, actual_quantity=30, source='finance',
                 customer_alias='UNMAPPED', channel_name='未映射部',
             ),
+            ShippingOrderFinished(
+                ecommerce_order_no='N', finished_code='SKU-N', quantity=40,
+                return_quantity=0, actual_quantity=40, source='finance',
+                customer_alias='NON-SALES', channel_name='非销售部',
+            ),
+            ShippingOrderFinished(
+                ecommerce_order_no='P', finished_code='SKU-P', quantity=50,
+                return_quantity=0, actual_quantity=50, source='finance',
+                customer_alias='PENDING', channel_name='未审核部',
+            ),
         ])
         db.session.commit()
 
@@ -285,6 +302,9 @@ def test_finance_chart_uses_manual_mapping_for_trade_country_brand_and_filters()
         })
         domestic = ShippingRepository.get_chart_data({
             'source': 'finance', 'group_by': 'channel', 'trade_type': 'domestic',
+        })
+        foreign = ShippingRepository.get_chart_data({
+            'source': 'finance', 'group_by': 'channel', 'trade_type': 'foreign',
         })
         all_rows = ShippingRepository.get_chart_data({
             'source': 'finance', 'group_by': 'channel', 'trade_type': 'all',
@@ -300,7 +320,10 @@ def test_finance_chart_uses_manual_mapping_for_trade_country_brand_and_filters()
         }]
         assert [row['label'] for row in brand_rows['items']] == ['品牌甲']
         assert [row['label'] for row in domestic['items']] == ['内销部']
-        assert {row['label'] for row in all_rows['items']} == {'外贸部', '内销部', '未映射部'}
+        assert [row['label'] for row in foreign['items']] == ['外贸部']
+        assert {row['label'] for row in all_rows['items']} == {
+            '外贸部', '内销部', '未映射部', '非销售部', '未审核部',
+        }
         assert [row['label'] for row in filtered['items']] == ['外贸部']
 
 
@@ -310,9 +333,9 @@ def test_finance_customer_mapping_api_contract_and_permissions(monkeypatch):
     monkeypatch.setattr(UserRepository, 'get_auth_state', lambda _id: (True, 0))
     monkeypatch.setattr(
         shipping_module.shipping_service, 'get_finance_customer_aliases',
-        lambda keyword, page, per_page: {
+        lambda keyword, status, page, per_page: {
             'items': [], 'total': 0, 'page': page, 'per_page': per_page,
-            'keyword': keyword,
+            'keyword': keyword, 'status': status,
         },
     )
     monkeypatch.setattr(
@@ -326,19 +349,23 @@ def test_finance_customer_mapping_api_contract_and_permissions(monkeypatch):
     }
     client.set_cookie('tmt_session', generate_token(view_user, csrf_token='csrf'))
 
-    response = client.get('/api/shipping/finance-customer-aliases?keyword=外贸&page=2&per_page=20')
+    response = client.get('/api/shipping/finance-customer-aliases?keyword=外贸&status=pending&page=2&per_page=20')
     assert response.status_code == 200
     assert response.get_json()['data']['keyword'] == '外贸'
+    assert response.get_json()['data']['status'] == 'pending'
+    assert client.get(
+        '/api/shipping/finance-customer-aliases?status=excluded'
+    ).status_code == 400
     assert client.post(
         '/api/shipping/finance-customer-aliases/mapping',
-        json={'customer_alias': '客户', 'is_export': True},
+        json={'customer_alias': '客户', 'status': 'export'},
     ).status_code == 403
 
     edit_user = {**view_user, 'permissions': ['shipping:view', 'shipping:edit']}
     client.set_cookie('tmt_session', generate_token(edit_user, csrf_token='csrf'))
     response = client.post(
         '/api/shipping/finance-customer-aliases/mapping',
-        json={'customer_alias': '客户', 'is_export': True},
+        json={'customer_alias': '客户', 'status': 'export'},
     )
     assert response.status_code == 200
     assert response.get_json()['data']['customer_alias'] == '客户'
@@ -433,3 +460,38 @@ def test_order_finished_alias_migration_adds_column_and_lookup_index(tmp_path, m
         for index in inspector.get_indexes('shipping_order_finished')
     }
     assert indexes['ix_sof_source_customer_alias'] == ('source', 'customer_alias')
+
+
+def test_mapping_status_migration_preserves_review_decisions(tmp_path, monkeypatch):
+    database_url = f"sqlite:///{(tmp_path / 'mapping-status.db').as_posix()}"
+    engine = sa.create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(sa.text("""
+            CREATE TABLE shipping_finance_customer_mapping (
+                id INTEGER PRIMARY KEY, customer_alias VARCHAR(255) NOT NULL,
+                is_export BOOLEAN NOT NULL DEFAULT 0
+            )
+        """))
+        connection.execute(sa.text("""
+            INSERT INTO shipping_finance_customer_mapping
+                (id, customer_alias, is_export)
+            VALUES (1, '外贸客户', 1), (2, '赠品样品', 0)
+        """))
+    monkeypatch.setenv('DATABASE_URL', database_url)
+    config = _migration_config(database_url)
+    command.stamp(config, '20260721_03')
+
+    command.upgrade(config, 'head')
+
+    inspector = sa.inspect(engine)
+    columns = {column['name'] for column in inspector.get_columns(
+        'shipping_finance_customer_mapping'
+    )}
+    assert 'status' in columns
+    assert 'is_export' not in columns
+    with engine.connect() as connection:
+        rows = connection.execute(sa.text("""
+            SELECT customer_alias, status
+            FROM shipping_finance_customer_mapping ORDER BY id
+        """)).all()
+    assert rows == [('外贸客户', 'export'), ('赠品样品', 'non_sales')]

@@ -7,7 +7,8 @@
 - `20260720_02` 新增 `shipping_task`
 - `20260721_01` 清理不受支持的 `product:delete` 权限及既有角色关联
 - `20260721_02` 增加财务客户简称字段、人工映射表，并规范财务行内部唯一键
-- `20260721_03` 将客户简称带入成品组合结果，并增加 `(source, customer_alias)` 聚合索引，是当前代码 head
+- `20260721_03` 将客户简称带入成品组合结果，并增加 `(source, customer_alias)` 聚合索引
+- `20260721_04` 将财务客户映射从布尔值改为四态审核状态，是当前代码 head
 - 生产已完成 `stamp 20260720_01`，模型差异检查为 0
 - `app.py` 启动时只校验数据库 revision，不执行隐式 DDL 或自动 upgrade
 - 后续结构变更必须使用经人工审查的 Alembic revision，部署前单独 `upgrade head`
@@ -79,9 +80,10 @@ shipping_operator_type
   # 「最近操作人」→ 发货/售后/未分类
 
 shipping_finance_customer_mapping
-  id, customer_alias(UNIQUE), is_export, country, brand, note, updated_at
+  id, customer_alias(UNIQUE), status, country, brand, note, updated_at
   # 人工维护财务客户简称的外贸/国家/品牌属性；财务图表完全以此表为准
-  # is_export=false 与未映射订单均不进入国家/品牌维度；未映射订单也不进入 domestic/foreign 子集
+  # status: pending(未审核，默认) / export(外贸客户) / domestic(内销客户) / non_sales(非销售客户)
+  # non_sales、pending 与未映射订单均不进入 domestic/foreign；国家/品牌维度只包含 export
 
   # 按订单对发货/销退数据分别贪心匹配成品组合，写入三列数量
 

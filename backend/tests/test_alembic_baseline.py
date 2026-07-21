@@ -13,7 +13,8 @@ BASELINE_REVISION = '20260720_01'
 TASK_REVISION = '20260720_02'
 PERMISSION_REVISION = '20260721_01'
 CUSTOMER_MAPPING_REVISION = '20260721_02'
-HEAD_REVISION = '20260721_03'
+ORDER_ALIAS_REVISION = '20260721_03'
+HEAD_REVISION = '20260721_04'
 CRITICAL_INDEXES = {
     'shipping_order_finished': {
         'ix_sof_source',
@@ -43,7 +44,8 @@ def test_baseline_has_linear_history_and_permission_cleanup_is_the_only_head():
     assert scripts.get_revision(TASK_REVISION).down_revision == BASELINE_REVISION
     assert scripts.get_revision(PERMISSION_REVISION).down_revision == TASK_REVISION
     assert scripts.get_revision(CUSTOMER_MAPPING_REVISION).down_revision == PERMISSION_REVISION
-    assert scripts.get_revision(HEAD_REVISION).down_revision == CUSTOMER_MAPPING_REVISION
+    assert scripts.get_revision(ORDER_ALIAS_REVISION).down_revision == CUSTOMER_MAPPING_REVISION
+    assert scripts.get_revision(HEAD_REVISION).down_revision == ORDER_ALIAS_REVISION
 
 
 def test_performance_critical_production_indexes_are_declared_in_metadata():

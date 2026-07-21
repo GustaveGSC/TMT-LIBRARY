@@ -735,9 +735,9 @@ class ShippingService:
         count = shipping_repository.save_warehouse_filters(items)
         return {'updated': count}
 
-    def get_finance_customer_aliases(self, keyword=None, page=1, per_page=100) -> Dict:
+    def get_finance_customer_aliases(self, keyword=None, status=None, page=1, per_page=100) -> Dict:
         return shipping_repository.get_finance_customer_aliases(
-            keyword=keyword, page=page, per_page=per_page,
+            keyword=keyword, status=status, page=page, per_page=per_page,
         )
 
     def save_finance_customer_mapping(self, payload: Dict) -> Dict:
@@ -746,9 +746,10 @@ class ShippingService:
             raise ValueError('customer_alias 不能为空')
         if len(customer_alias) > 255:
             raise ValueError('customer_alias 不能超过 255 个字符')
-        is_export = payload.get('is_export')
-        if not isinstance(is_export, bool):
-            raise ValueError('is_export 必须是布尔值')
+        status = payload.get('status')
+        valid_statuses = {'pending', 'export', 'domestic', 'non_sales'}
+        if status not in valid_statuses:
+            raise ValueError('status 必须是 pending、export、domestic、non_sales 之一')
 
         def optional_text(name, max_length):
             value = _str(payload.get(name)) or None
@@ -758,7 +759,7 @@ class ShippingService:
 
         return shipping_repository.save_finance_customer_mapping(
             customer_alias=customer_alias,
-            is_export=is_export,
+            status=status,
             country=optional_text('country', 100),
             brand=optional_text('brand', 100),
             note=optional_text('note', 1000),

@@ -365,10 +365,13 @@ def save_warehouse_filters():
 @shipping_bp.get('/finance-customer-aliases')
 def get_finance_customer_aliases():
     keyword = (request.args.get('keyword') or '').strip() or None
+    status = (request.args.get('status') or '').strip() or None
+    if status not in (None, 'pending', 'export', 'domestic', 'non_sales'):
+        return Result.fail('status 必须是 pending、export、domestic、non_sales 之一').to_response()
     page = max(request.args.get('page', 1, type=int), 1)
     per_page = min(max(request.args.get('per_page', 100, type=int), 1), 500)
     try:
-        data = shipping_service.get_finance_customer_aliases(keyword, page, per_page)
+        data = shipping_service.get_finance_customer_aliases(keyword, status, page, per_page)
         return Result.ok(data=data).to_response()
     except Exception:
         return internal_error_response('查询财务客户简称失败')

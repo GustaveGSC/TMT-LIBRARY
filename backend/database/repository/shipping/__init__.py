@@ -48,7 +48,7 @@ class ShippingRepository:
     # ── 持久化后台任务（独立事务，不得提交导入业务 session）──
 
     @staticmethod
-    def get_finance_customer_aliases(keyword=None, page=1, per_page=100) -> Dict:
+    def get_finance_customer_aliases(keyword=None, status=None, page=1, per_page=100) -> Dict:
         """合并发货/销退客户简称计数，并一次性关联人工映射，避免 N+1。"""
         def counts_for(model):
             # shipping_record 表整体排序规则是 utf8mb4_unicode_ci，return_record 是
@@ -80,7 +80,15 @@ class ShippingRepository:
         ).outerjoin(
             ShippingFinanceCustomerMapping,
             ShippingFinanceCustomerMapping.customer_alias.collate('utf8mb4_unicode_ci') == totals.c.customer_alias,
-        ).order_by(totals.c.occurrences.desc(), totals.c.customer_alias.asc())
+        )
+        if status == 'pending':
+            query = query.filter(db.or_(
+                ShippingFinanceCustomerMapping.id.is_(None),
+                ShippingFinanceCustomerMapping.status == 'pending',
+            ))
+        elif status:
+            query = query.filter(ShippingFinanceCustomerMapping.status == status)
+        query = query.order_by(totals.c.occurrences.desc(), totals.c.customer_alias.asc())
 
         total = query.count()
         rows = query.offset((page - 1) * per_page).limit(per_page).all()
@@ -96,10 +104,11 @@ class ShippingRepository:
             'page': page,
             'per_page': per_page,
             'total': total,
+            'status': status,
         }
 
     @staticmethod
-    def save_finance_customer_mapping(customer_alias, is_export, country=None,
+    def save_finance_customer_mapping(customer_alias, status, country=None,
                                       brand=None, note=None) -> Dict:
         mapping = ShippingFinanceCustomerMapping.query.filter_by(
             customer_alias=customer_alias,
@@ -107,7 +116,7 @@ class ShippingRepository:
         if mapping is None:
             mapping = ShippingFinanceCustomerMapping(customer_alias=customer_alias)
             db.session.add(mapping)
-        mapping.is_export = is_export
+        mapping.status = status
         mapping.country = country
         mapping.brand = brand
         mapping.note = note
@@ -1058,15 +1067,14 @@ class ShippingRepository:
                     q = q.filter(sof.finished_code.in_(matched_codes))
             for mapping_field, selected_names in finance_mapping_filters:
                 q = q.filter(
-                    ShippingFinanceCustomerMapping.is_export.is_(True),
+                    ShippingFinanceCustomerMapping.status == 'export',
                     mapping_field.in_(selected_names),
                 )
             # 内外销过滤：使用缓存的 ftp_codes 集合，避免 JOIN 产品表
             if needs_trade_filter:
                 if source == 'finance':
-                    q = q.filter(
-                        ShippingFinanceCustomerMapping.is_export.is_(trade_type == 'foreign')
-                    )
+                    expected_status = 'export' if trade_type == 'foreign' else 'domestic'
+                    q = q.filter(ShippingFinanceCustomerMapping.status == expected_status)
                 elif ftp_codes:
                     if trade_type == 'domestic':
                         q = q.filter(~sof.finished_code.in_(ftp_codes))
@@ -1076,7 +1084,7 @@ class ShippingRepository:
                     q = q.filter(db.false())
             if is_finance_mapping_group:
                 q = q.filter(
-                    ShippingFinanceCustomerMapping.is_export.is_(True),
+                    ShippingFinanceCustomerMapping.status == 'export',
                     finance_mapping_field.isnot(None),
                     finance_mapping_field != '',
                 )

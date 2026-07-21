@@ -154,10 +154,10 @@ POST   /api/shipping/finance-customer-aliases/mapping # shipping:edit；新增�
 `GET /api/shipping/finance-customer-aliases` 查询参数：`keyword` 可选字符串，按客户简称包含匹配；`page` 默认 1；`per_page` 默认 100、最大 500。成功响应：
 
 ```json
-{"success":true,"message":"success","data":{"items":[{"customer_alias":"外贸-印尼-PT","occurrences":120,"mapping":{"id":1,"customer_alias":"外贸-印尼-PT","is_export":true,"country":"印尼","brand":"Brand A","note":null,"updated_at":"2026-07-21 18:00:00"}}],"page":1,"per_page":100,"total":1}}
+{"success":true,"message":"success","data":{"items":[{"customer_alias":"外贸-印尼-PT","occurrences":120,"mapping":{"id":1,"customer_alias":"外贸-印尼-PT","status":"export","country":"印尼","brand":"Brand A","note":null,"updated_at":"2026-07-21 18:00:00"}}],"page":1,"per_page":100,"total":1,"status":null}}
 ```
 
-未维护的简称其 `mapping` 为 `null`。`POST /api/shipping/finance-customer-aliases/mapping` 请求体：`customer_alias`（必填字符串，最长255）、`is_export`（必填布尔值）、`country`（可选，最长100）、`brand`（可选，最长100）、`note`（可选，最长1000）。成功返回 `{success,message,data}`，其中 `data` 是保存后的完整 mapping；参数错误返回 400，无编辑权限返回 403。
+未维护的简称其 `mapping` 为 `null`。GET 可传 `status=pending|export|domestic|non_sales`；其中 `pending` 同时包含 `mapping=null` 和显式 pending，非法值返回 400。`POST /api/shipping/finance-customer-aliases/mapping` 请求体：`customer_alias`（必填字符串，最长255）、`status`（必填，四选一：`pending` 未审核、`export` 外贸客户、`domestic` 内销客户、`non_sales` 非销售客户）、`country`（可选，最长100）、`brand`（可选，最长100）、`note`（可选，最长1000）。成功返回 `{success,message,data}`，其中 `data` 是保存后的完整 mapping；参数错误返回 400，无编辑权限返回 403。该接口已移除 `is_export`，旧前端请求不兼容。
 GET    /api/shipping/equivalents                      # 列出所有通用件对（含 name_a/name_b 产成品名称）
 POST   /api/shipping/equivalents                      # 新增 {code_a, code_b, note?}；服务端保证 code_a<code_b；校验产成品存在
 DELETE /api/shipping/equivalents/<id>                 # 删除通用件对
@@ -166,9 +166,9 @@ GET    /api/shipping/chart-options                    # 渠道名和省份去重
                                                       #   （已配置 is_shipping_dim=1 的标签分类及其 shipping_dim_enabled=1 的标签，见 database.md product_tag_category）
 POST   /api/shipping/chart-data                       # 图表聚合数据，body 含 source('shipping'|'finance')、trade_type('all'|'domestic'|'foreign')
                                                       #   source=shipping：trade_type 保留历史 FTP 产品判断（前端固定传 all）
-                                                      #   source=finance：domestic/foreign 仅按人工客户简称映射 is_export=false/true；未映射订单不进入两者，all 仍包含全部
+                                                      #   source=finance：domestic/foreign 仅按人工映射 status=domestic/export；pending、non_sales、未映射均不进入两者，all 仍包含全部
                                                       #   group_by 除固定维度外，可传 'tag:<category_id>' 按该标签分类聚合（需先在数据配置中启用该分类为发货维度）
-                                                      #   source=finance 且标签分类名为「地域」或「品牌」时，按人工映射的 country/brand 聚合；仅 is_export=true 且值非空的数据参与，响应结构不变
+                                                      #   source=finance 且标签分类名为「地域」或「品牌」时，按人工映射的 country/brand 聚合；仅 status=export 且值非空的数据参与，响应结构不变
                                                       #   财务端上述两个分类的 tag_filters 同样按所选标签名称匹配人工映射，不使用产品标签关系
                                                       #   tag_filters?: [{category_id, tag_ids}]，与 group_by 相互独立的标签筛选（不管当前按什么维度聚合都生效），
                                                       #     同一分类内多个 tag_id 为 OR，不同分类之间为 AND

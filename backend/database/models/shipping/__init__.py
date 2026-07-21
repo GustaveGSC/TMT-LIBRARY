@@ -126,7 +126,7 @@ class ShippingFinanceCustomerMapping(db.Model):
 
     id             = db.Column(db.Integer,     primary_key=True, autoincrement=True)
     customer_alias = db.Column(db.String(255), nullable=False)
-    is_export      = db.Column(db.Boolean,     nullable=False, default=False, server_default=db.false())
+    status         = db.Column(db.String(20),  nullable=False, default='pending', server_default='pending')
     country        = db.Column(db.String(100), nullable=True)
     brand          = db.Column(db.String(100), nullable=True)
     note           = db.Column(db.String(1000), nullable=True)
@@ -136,7 +136,7 @@ class ShippingFinanceCustomerMapping(db.Model):
         return {
             'id': self.id,
             'customer_alias': self.customer_alias,
-            'is_export': bool(self.is_export),
+            'status': self.status,
             'country': self.country,
             'brand': self.brand,
             'note': self.note,
