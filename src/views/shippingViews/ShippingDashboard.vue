@@ -147,9 +147,11 @@ const PROVINCE_ADCODE = {
   '台湾省': '710000', '香港特别行政区': '810000', '澳门特别行政区': '820000',
 }
 
-// "地域"标签维度：国家中文名 → 世界地图 GeoJSON 英文名（world.json 里没有台湾/香港单独区划，归入 China）
+// "地域"标签维度：国家中文名 → 世界地图 GeoJSON 英文名
+// 台湾/香港/澳门不在这里映射：ensureWorldMap 已经把它们从中国省级地图里抠出来，
+// 以"台湾"/"香港"/"澳门"这三个中文名直接注册成独立区划，标签值本身就能匹配上，无需转换
 const COUNTRY_NAME_MAP = {
-  '中国': 'China', '台湾': 'China', '香港': 'China', '澳门': 'China',
+  '中国': 'China',
   '美国': 'United States', '加拿大': 'Canada', '墨西哥': 'Mexico',
   '德国': 'Germany', '法国': 'France', '英国': 'United Kingdom', '意大利': 'Italy',
   '西班牙': 'Spain', '葡萄牙': 'Portugal', '荷兰': 'Netherlands', '比利时': 'Belgium',
@@ -199,13 +201,31 @@ async function ensureChinaMap() {
   }
 }
 
+// world.json 把台湾/香港/澳门都并进「中国」这一整块轮廓里，无法单独着色。
+// 从已有的中国省级地图（china-map.json）里把这三块单独抠出来，叠加到世界地图上方，
+// 这样"中国"底图依然存在（大陆部分聚合展示），台湾/香港/澳门可以各自独立着色。
+const WORLD_OVERLAY_RENAME = {
+  '台湾省':       '台湾',
+  '香港特别行政区': '香港',
+  '澳门特别行政区': '澳门',
+}
+
 async function ensureWorldMap() {
   if (registeredMaps.has('world')) return true
-  const loader = findLoader('world')
-  if (!loader) { ElMessage.error('世界地图数据未找到，请将 world.json 放入 src/assets/maps/ 目录'); return false }
+  const worldLoader = findLoader('world')
+  const chinaLoader  = findLoader('china-map')
+  if (!worldLoader || !chinaLoader) { ElMessage.error('世界地图数据未找到，请将 world.json 放入 src/assets/maps/ 目录'); return false }
   try {
-    const mod = await loader()
-    echarts.registerMap('world', mod.default)
+    const [worldMod, chinaMod] = await Promise.all([worldLoader(), chinaLoader()])
+    const worldGeo = worldMod.default
+    const chinaGeo = chinaMod.default
+    const overlayFeatures = (chinaGeo.features || [])
+      .filter(f => WORLD_OVERLAY_RENAME[f.properties?.name])
+      .map(f => ({ ...f, properties: { ...f.properties, name: WORLD_OVERLAY_RENAME[f.properties.name] } }))
+    echarts.registerMap('world', {
+      ...worldGeo,
+      features: [...worldGeo.features, ...overlayFeatures],
+    })
     registeredMaps.add('world')
     return true
   } catch {
