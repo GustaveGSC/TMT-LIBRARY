@@ -93,6 +93,7 @@ class ShippingRecord(db.Model):
     address            = db.Column(db.Text,           nullable=True)
     buyer_remark       = db.Column(db.Text,           nullable=True)
     seller_remark      = db.Column(db.Text,           nullable=True)
+    customer_alias     = db.Column(db.String(255),    nullable=True, index=True)
 
 
 class ReturnRecord(db.Model):
@@ -113,6 +114,34 @@ class ReturnRecord(db.Model):
     product_code       = db.Column(db.String(100),    nullable=True)   # 品号
     quantity           = db.Column(db.Numeric(12, 2), nullable=True)   # 数量（负值）
     warehouse_name     = db.Column(db.String(100),    nullable=True)   # 仓库名称
+    customer_alias     = db.Column(db.String(255),    nullable=True, index=True)
+
+
+class ShippingFinanceCustomerMapping(db.Model):
+    """财务客户简称的人工外贸属性映射；暂不参与聚合计算。"""
+    __tablename__ = 'shipping_finance_customer_mapping'
+    __table_args__ = (
+        db.UniqueConstraint('customer_alias', name='uq_finance_customer_mapping_alias'),
+    )
+
+    id             = db.Column(db.Integer,     primary_key=True, autoincrement=True)
+    customer_alias = db.Column(db.String(255), nullable=False)
+    is_export      = db.Column(db.Boolean,     nullable=False, default=False, server_default=db.false())
+    country        = db.Column(db.String(100), nullable=True)
+    brand          = db.Column(db.String(100), nullable=True)
+    note           = db.Column(db.String(1000), nullable=True)
+    updated_at     = db.Column(db.DateTime,    nullable=False, default=now_cst, onupdate=now_cst)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'customer_alias': self.customer_alias,
+            'is_export': bool(self.is_export),
+            'country': self.country,
+            'brand': self.brand,
+            'note': self.note,
+            'updated_at': self.updated_at.strftime('%Y-%m-%d %H:%M:%S') if self.updated_at else None,
+        }
 
 
 class ReturnWarehouseFilter(db.Model):

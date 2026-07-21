@@ -361,6 +361,29 @@ def save_warehouse_filters():
     return Result.ok(data=result).to_response()
 
 
+@shipping_bp.get('/finance-customer-aliases')
+def get_finance_customer_aliases():
+    keyword = (request.args.get('keyword') or '').strip() or None
+    page = max(request.args.get('page', 1, type=int), 1)
+    per_page = min(max(request.args.get('per_page', 100, type=int), 1), 500)
+    try:
+        data = shipping_service.get_finance_customer_aliases(keyword, page, per_page)
+        return Result.ok(data=data).to_response()
+    except Exception:
+        return internal_error_response('查询财务客户简称失败')
+
+
+@shipping_bp.post('/finance-customer-aliases/mapping')
+def save_finance_customer_mapping():
+    try:
+        data = shipping_service.save_finance_customer_mapping(request.get_json() or {})
+        return Result.ok(data=data, message='保存成功').to_response()
+    except ValueError as exc:
+        return Result.fail(str(exc)).to_response()
+    except Exception:
+        return internal_error_response('保存财务客户映射失败')
+
+
 @shipping_bp.get('/orders')
 def get_orders():
     """分页查询 shipping_order_finished，支持筛选和排序"""

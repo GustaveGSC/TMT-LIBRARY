@@ -6,6 +6,7 @@ from database.base import db
 from database.models.shipping import (
     ShippingBatch, ShippingRecord, ReturnRecord, ReturnWarehouseFilter,
     ShippingOperatorType, ShippingOrderFinished, ShippingTask,
+    ShippingFinanceCustomerMapping,
 )
 from utils import now_cst
 
@@ -45,6 +46,70 @@ def _invalidate_chart_options_cache():
 class ShippingRepository:
 
     # ── 持久化后台任务（独立事务，不得提交导入业务 session）──
+
+    @staticmethod
+    def get_finance_customer_aliases(keyword=None, page=1, per_page=100) -> Dict:
+        """合并发货/销退客户简称计数，并一次性关联人工映射，避免 N+1。"""
+        def counts_for(model):
+            query = db.session.query(
+                model.customer_alias.label('customer_alias'),
+                db.func.count(model.id).label('occurrences'),
+            ).filter(
+                model.customer_alias.isnot(None),
+                model.customer_alias != '',
+            )
+            if model is ShippingRecord:
+                query = query.filter(ShippingRecord.source == 'finance')
+            if keyword:
+                query = query.filter(model.customer_alias.contains(keyword, autoescape=True))
+            return query.group_by(model.customer_alias)
+
+        combined = counts_for(ShippingRecord).union_all(counts_for(ReturnRecord)).subquery()
+        totals = db.session.query(
+            combined.c.customer_alias,
+            db.func.sum(combined.c.occurrences).label('occurrences'),
+        ).group_by(combined.c.customer_alias).subquery()
+        query = db.session.query(
+            totals.c.customer_alias,
+            totals.c.occurrences,
+            ShippingFinanceCustomerMapping,
+        ).outerjoin(
+            ShippingFinanceCustomerMapping,
+            ShippingFinanceCustomerMapping.customer_alias == totals.c.customer_alias,
+        ).order_by(totals.c.occurrences.desc(), totals.c.customer_alias.asc())
+
+        total = query.count()
+        rows = query.offset((page - 1) * per_page).limit(per_page).all()
+        return {
+            'items': [
+                {
+                    'customer_alias': customer_alias,
+                    'occurrences': int(occurrences),
+                    'mapping': mapping.to_dict() if mapping else None,
+                }
+                for customer_alias, occurrences, mapping in rows
+            ],
+            'page': page,
+            'per_page': per_page,
+            'total': total,
+        }
+
+    @staticmethod
+    def save_finance_customer_mapping(customer_alias, is_export, country=None,
+                                      brand=None, note=None) -> Dict:
+        mapping = ShippingFinanceCustomerMapping.query.filter_by(
+            customer_alias=customer_alias,
+        ).first()
+        if mapping is None:
+            mapping = ShippingFinanceCustomerMapping(customer_alias=customer_alias)
+            db.session.add(mapping)
+        mapping.is_export = is_export
+        mapping.country = country
+        mapping.brand = brand
+        mapping.note = note
+        mapping.updated_at = now_cst()
+        db.session.commit()
+        return mapping.to_dict()
 
     @staticmethod
     def create_task(task_id: str, task_type: str, filename: str = None):
@@ -214,10 +279,11 @@ class ShippingRepository:
     def bulk_insert_shipping(batch_id: int, rows: List[Dict],
                               progress_cb=None, record_type: str = 'shipping',
                               source: str = 'shipping', commit_chunks: bool = True) -> int:
-        """分块 INSERT IGNORE，已存在行静默跳过，返回实际新增行数"""
+        """分块 UPSERT；重复键更新可更正字段，返回处理行数。"""
         if not rows:
             return 0
-        from sqlalchemy import insert as sa_insert
+        from sqlalchemy import func
+        from sqlalchemy.dialects.mysql import insert as mysql_insert
 
         CHUNK = 100
         total = len(rows)
@@ -246,9 +312,23 @@ class ShippingRepository:
                 'address':            row.get('address'),
                 'buyer_remark':       row.get('buyer_remark'),
                 'seller_remark':      row.get('seller_remark'),
+                'customer_alias':     row.get('customer_alias'),
             }
 
-        stmt = sa_insert(ShippingRecord).prefix_with('IGNORE')
+        stmt = mysql_insert(ShippingRecord)
+        stmt = stmt.on_duplicate_key_update(
+            shipped_date=stmt.inserted.shipped_date,
+            channel_name=stmt.inserted.channel_name,
+            product_name=stmt.inserted.product_name,
+            spec=stmt.inserted.spec,
+            quantity=stmt.inserted.quantity,
+            province=stmt.inserted.province,
+            city=stmt.inserted.city,
+            district=stmt.inserted.district,
+            customer_alias=func.coalesce(
+                stmt.inserted.customer_alias, ShippingRecord.customer_alias,
+            ),
+        )
         for i in range(0, total, CHUNK):
             chunk = rows[i:i + CHUNK]
             db.session.execute(stmt, [_make_param(r) for r in chunk])
@@ -291,10 +371,11 @@ class ShippingRepository:
     @staticmethod
     def bulk_insert_return(batch_id: int, rows: List[Dict], progress_cb=None,
                            commit_chunks: bool = True) -> int:
-        """分块 INSERT IGNORE 写入 return_record，返回实际新增行数"""
+        """分块 UPSERT 写入 return_record，返回处理行数。"""
         if not rows:
             return 0
-        from sqlalchemy import insert as sa_insert
+        from sqlalchemy import func
+        from sqlalchemy.dialects.mysql import insert as mysql_insert
 
         CHUNK = 100
         total = len(rows)
@@ -307,9 +388,17 @@ class ShippingRepository:
                 'product_code':       row.get('product_code'),
                 'quantity':           row.get('quantity'),
                 'warehouse_name':     row.get('warehouse_name'),
+                'customer_alias':     row.get('customer_alias'),
             }
 
-        stmt = sa_insert(ReturnRecord).prefix_with('IGNORE')
+        stmt = mysql_insert(ReturnRecord)
+        stmt = stmt.on_duplicate_key_update(
+            quantity=stmt.inserted.quantity,
+            warehouse_name=stmt.inserted.warehouse_name,
+            customer_alias=func.coalesce(
+                stmt.inserted.customer_alias, ReturnRecord.customer_alias,
+            ),
+        )
         for i in range(0, total, CHUNK):
             chunk = rows[i:i + CHUNK]
             db.session.execute(stmt, [_make_param(r) for r in chunk])

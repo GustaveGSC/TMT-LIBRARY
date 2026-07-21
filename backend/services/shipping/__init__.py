@@ -169,10 +169,13 @@ def _extract_finance_row(row, col_map: Dict[str, int]) -> Dict:
         return _get(row, col_map[name]) if name in col_map else None
 
     province = _str(gc('省')) or None
+    shipped_date = _parse_shipped_date(gc('交易日期'))
     return {
         'ecommerce_order_no': _extract_finance_order_no(row, col_map) or None,
         'channel_name':       _str(gc('部门名称'))  or None,
-        'shipped_date':       _parse_shipped_date(gc('交易日期')),
+        'shipped_date':       shipped_date,
+        # MySQL UNIQUE 允许多个 NULL；财务行必须使用稳定非空内部行号才能真正 UPSERT。
+        'line_no':            f'F:{shipped_date:%Y%m%d}' if shipped_date else None,
         'product_code':       _str(gc('品号'))       or None,
         'product_name':       _str(gc('品名'))       or None,
         'spec':               _str(gc('规格'))       or None,
@@ -180,6 +183,7 @@ def _extract_finance_row(row, col_map: Dict[str, int]) -> Dict:
         'province':           province,
         'city':               _normalize_city(province or '', _str(gc('市')) or None),
         'district':           _str(gc('区'))         or None,
+        'customer_alias':     _str(gc('客户简称'))   or None,
     }
 
 
@@ -200,7 +204,7 @@ def _parse_xlsx_finance_rows(file_bytes: bytes):
             aftersale_count += 1
             continue
         r = _extract_finance_row(row, col_map)
-        if not r.get('ecommerce_order_no'):
+        if not r.get('ecommerce_order_no') or not r.get('shipped_date'):
             continue
         qty = r.get('quantity')
         if qty is None:
@@ -231,7 +235,7 @@ def _parse_csv_finance_rows(file_bytes: bytes):
             aftersale_count += 1
             continue
         r = _extract_finance_row(row, col_map)
-        if not r.get('ecommerce_order_no'):
+        if not r.get('ecommerce_order_no') or not r.get('shipped_date'):
             continue
         qty = r.get('quantity')
         if qty is None:
@@ -245,12 +249,12 @@ def _parse_csv_finance_rows(file_bytes: bytes):
 
 
 def _merge_finance_shipping_rows(rows: List[Dict]):
-    """财务发货行文件内合并：按 (order_no, product_code) 合并，无 line_no"""
+    """财务发货行文件内合并：按订单、品号、交易日期合并。"""
     from collections import OrderedDict
     merged: OrderedDict = OrderedDict()
     merged_away: List[Dict] = []
     for row in rows:
-        key = (row.get('ecommerce_order_no'), row.get('product_code'))
+        key = (row.get('ecommerce_order_no'), row.get('product_code'), row.get('shipped_date'))
         if key in merged:
             existing_qty = merged[key].get('quantity') or Decimal('0')
             new_qty      = row.get('quantity') or Decimal('0')
@@ -642,19 +646,21 @@ class ShippingService:
                     raise InterruptedError('用户已中止导入')
                 notify('inserting', current=current, total=total_rows)
 
-            inserted_shipping = shipping_repository.bulk_insert_shipping(
-                batch.id, new_shipping,
+            shipping_repository.bulk_insert_shipping(
+                batch.id, shipping_rows,
                 progress_cb=on_insert_progress,
                 record_type='shipping', source='finance', commit_chunks=False,
             )
-            inserted_returns = shipping_repository.bulk_insert_return(
-                batch.id, new_returns,
+            shipping_repository.bulk_insert_return(
+                batch.id, return_rows,
                 progress_cb=on_insert_progress,
                 commit_chunks=False,
             )
             notify('inserted',
-                   inserted=inserted_shipping,
-                   inserted_returns=inserted_returns,
+                   inserted=len(new_shipping),
+                   updated=len(skipped_shipping),
+                   inserted_returns=len(new_returns),
+                   updated_returns=len(skipped_returns),
                    skipped=len(skipped_shipping),
                    aftersale_filtered=aftersale_count)
 
@@ -672,8 +678,10 @@ class ShippingService:
             return {
                 'total':              total,
                 'aftersale_filtered': aftersale_count,
-                'inserted':           inserted_shipping,
-                'inserted_returns':   inserted_returns,
+                'inserted':           len(new_shipping),
+                'updated':            len(skipped_shipping),
+                'inserted_returns':   len(new_returns),
+                'updated_returns':    len(skipped_returns),
                 'skipped':            len(skipped_shipping),
                 'skipped_returns':    len(skipped_returns),
                 'skipped_rows':       [_serialize_finance_skipped_row(r) for r in skipped_shipping],
@@ -724,6 +732,35 @@ class ShippingService:
     def save_warehouse_filters(self, items: List[Dict]) -> Dict:
         count = shipping_repository.save_warehouse_filters(items)
         return {'updated': count}
+
+    def get_finance_customer_aliases(self, keyword=None, page=1, per_page=100) -> Dict:
+        return shipping_repository.get_finance_customer_aliases(
+            keyword=keyword, page=page, per_page=per_page,
+        )
+
+    def save_finance_customer_mapping(self, payload: Dict) -> Dict:
+        customer_alias = _str(payload.get('customer_alias'))
+        if not customer_alias:
+            raise ValueError('customer_alias 不能为空')
+        if len(customer_alias) > 255:
+            raise ValueError('customer_alias 不能超过 255 个字符')
+        is_export = payload.get('is_export')
+        if not isinstance(is_export, bool):
+            raise ValueError('is_export 必须是布尔值')
+
+        def optional_text(name, max_length):
+            value = _str(payload.get(name)) or None
+            if value and len(value) > max_length:
+                raise ValueError(f'{name} 不能超过 {max_length} 个字符')
+            return value
+
+        return shipping_repository.save_finance_customer_mapping(
+            customer_alias=customer_alias,
+            is_export=is_export,
+            country=optional_text('country', 100),
+            brand=optional_text('brand', 100),
+            note=optional_text('note', 1000),
+        )
 
     def get_chart_options(self, date_start=None, date_end=None, source: str = 'shipping') -> Dict:
         return shipping_repository.get_chart_options(date_start=date_start, date_end=date_end, source=source)

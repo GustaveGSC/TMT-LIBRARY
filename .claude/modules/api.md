@@ -148,6 +148,16 @@ POST   /api/shipping/resolve-all                      # 全量重新计算所有
                                                       #   import/shipping、import/finance、resolve-all 均可通过 import/status 回查终态
 GET    /api/shipping/warehouses                       # 所有出现过的仓库名及 is_excluded 状态
 POST   /api/shipping/warehouses/filter                # 批量保存仓库过滤配置 [{warehouse_name, is_excluded}]
+GET    /api/shipping/finance-customer-aliases         # shipping:view；客户简称计数+人工映射，?keyword=&page=1&per_page=100（上限500）
+POST   /api/shipping/finance-customer-aliases/mapping # shipping:edit；新增或更新人工映射
+
+`GET /api/shipping/finance-customer-aliases` 查询参数：`keyword` 可选字符串，按客户简称包含匹配；`page` 默认 1；`per_page` 默认 100、最大 500。成功响应：
+
+```json
+{"success":true,"message":"success","data":{"items":[{"customer_alias":"外贸-印尼-PT","occurrences":120,"mapping":{"id":1,"customer_alias":"外贸-印尼-PT","is_export":true,"country":"印尼","brand":"Brand A","note":null,"updated_at":"2026-07-21 18:00:00"}}],"page":1,"per_page":100,"total":1}}
+```
+
+未维护的简称其 `mapping` 为 `null`。`POST /api/shipping/finance-customer-aliases/mapping` 请求体：`customer_alias`（必填字符串，最长255）、`is_export`（必填布尔值）、`country`（可选，最长100）、`brand`（可选，最长100）、`note`（可选，最长1000）。成功返回 `{success,message,data}`，其中 `data` 是保存后的完整 mapping；参数错误返回 400，无编辑权限返回 403。
 GET    /api/shipping/equivalents                      # 列出所有通用件对（含 name_a/name_b 产成品名称）
 POST   /api/shipping/equivalents                      # 新增 {code_a, code_b, note?}；服务端保证 code_a<code_b；校验产成品存在
 DELETE /api/shipping/equivalents/<id>                 # 删除通用件对

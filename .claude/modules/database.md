@@ -5,7 +5,8 @@
 - Alembic 配置：`alembic.ini`，迁移目录：`backend/migrations/`
 - `20260720_01` 是生产现状的空 baseline，不包含业务 DDL
 - `20260720_02` 新增 `shipping_task`
-- `20260721_01` 清理不受支持的 `product:delete` 权限及既有角色关联，是当前代码 head
+- `20260721_01` 清理不受支持的 `product:delete` 权限及既有角色关联
+- `20260721_02` 增加财务客户简称字段、人工映射表，并规范财务行内部唯一键，是当前代码 head
 - 生产已完成 `stamp 20260720_01`，模型差异检查为 0
 - `app.py` 启动时只校验数据库 revision，不执行隐式 DDL 或自动 upgrade
 - 后续结构变更必须使用经人工审查的 Alembic revision，部署前单独 `upgrade head`
@@ -46,14 +47,15 @@ shipping_record
   channel_name, channel_code, channel_org_name, operator(最近操作人),
   product_code, product_name, spec, quantity, country, province, city,
   district, street, address, buyer_remark, seller_remark,
+  customer_alias(客户简称，可空),
   source ENUM('shipping','finance') DEFAULT 'shipping'
   # UNIQUE(ecommerce_order_no, line_no, product_code, record_type, source)
-  # source='shipping'：发货端 ERP 导出；source='finance'：财务端 ERP 导出（line_no=None）
-  # 财务端必要列：交易日期/部门名称/品号/品名/规格/数量/平台订单/省/市/区
+  # source='shipping'：发货端 ERP 导出；source='finance'：财务端 ERP 导出（line_no='F:YYYYMMDD' 内部键）
+  # 财务端「客户简称」为可选列；重导时按唯一键 UPSERT，非空 customer_alias 覆盖历史值
 
 return_record
   id, batch_id(FK→shipping_batch), ecommerce_order_no, shipped_date,
-  product_code, quantity(负值), warehouse_name
+  product_code, quantity(负值), warehouse_name, customer_alias(客户简称，可空)
   # UNIQUE(ecommerce_order_no, product_code, shipped_date)
   # 发货端/财务端负数量行均写入此表
 
@@ -73,6 +75,10 @@ return_warehouse_filter
 shipping_operator_type
   id, operator(UNIQUE), type(shipping/aftersale/unknown), created_at, updated_at
   # 「最近操作人」→ 发货/售后/未分类
+
+shipping_finance_customer_mapping
+  id, customer_alias(UNIQUE), is_export, country, brand, note, updated_at
+  # 人工维护财务客户简称的外贸/国家/品牌属性；当前不参与 shipping_order_finished 聚合
 
   # 按订单对发货/销退数据分别贪心匹配成品组合，写入三列数量
 

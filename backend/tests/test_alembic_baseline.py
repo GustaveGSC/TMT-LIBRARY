@@ -11,7 +11,8 @@ from alembic.script import ScriptDirectory
 ROOT = Path(__file__).resolve().parents[2]
 BASELINE_REVISION = '20260720_01'
 TASK_REVISION = '20260720_02'
-HEAD_REVISION = '20260721_01'
+PERMISSION_REVISION = '20260721_01'
+HEAD_REVISION = '20260721_02'
 CRITICAL_INDEXES = {
     'shipping_order_finished': {
         'ix_sof_source',
@@ -38,7 +39,8 @@ def test_baseline_has_linear_history_and_permission_cleanup_is_the_only_head():
     assert scripts.get_heads() == [HEAD_REVISION]
     assert scripts.get_revision(BASELINE_REVISION).down_revision is None
     assert scripts.get_revision(TASK_REVISION).down_revision == BASELINE_REVISION
-    assert scripts.get_revision(HEAD_REVISION).down_revision == TASK_REVISION
+    assert scripts.get_revision(PERMISSION_REVISION).down_revision == TASK_REVISION
+    assert scripts.get_revision(HEAD_REVISION).down_revision == PERMISSION_REVISION
 
 
 def test_performance_critical_production_indexes_are_declared_in_metadata():
