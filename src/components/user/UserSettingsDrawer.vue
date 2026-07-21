@@ -80,9 +80,19 @@ async function handleChangePassword() {
       new_password: passwordForm.value.new,
     })
     if (res.success) {
-      ElMessage.success('密码修改成功')
+      // 本人改密后端会立即清会话 Cookie（旧 token_version 已失效），前端同步清本地状态并跳登录页，
+      // 不等下一次请求 401 才发现——避免用户改完密码继续操作后突然被踢出的困惑体验
+      ElMessage.success('密码修改成功，请重新登录')
       passwordForm.value = { old: '', new: '', confirm: '' }
       openSection.value  = ''
+      visible.value      = false
+      localStorage.removeItem('user')
+      localStorage.removeItem('login_time')
+      if (window.electronAPI) {
+        window.electronAPI.logout()
+      } else {
+        router.push('/login')
+      }
     } else {
       ElMessage.error(res.message || '修改失败')
     }

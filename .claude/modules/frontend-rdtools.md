@@ -242,7 +242,7 @@
 | PUT | `/notes/<id>` | `rd:view` | 编辑笔记内容（只能改自己的） |
 | DELETE | `/notes/<id>` | `rd:view` | 删除笔记（只能删自己的） |
 
-`rd:admin` 权限由服务端从 JWT token 解析（`@require_auth` + `is_rd_admin()`），前端**无需**手动注入 `X-User-Roles` / `X-User-Permissions` 请求头（旧方案已移除）。鉴权凭据统一通过 `Authorization: Bearer <token>` 传递（`http.js` 请求拦截器自动注入）。
+`rd:admin` 权限由服务端从 JWT token 解析（`@require_auth` + `is_rd_admin()`），前端**无需**手动注入 `X-User-Roles` / `X-User-Permissions` 请求头（旧方案已移除）。鉴权凭据通过 httpOnly Cookie（`tmt_session`）自动携带，不再走 `Authorization: Bearer <token>`；写请求需要 `http.js` 从 `tmt_csrf` Cookie 读值附加的 `X-CSRF-Token` 请求头（浏览器自动处理，组件代码无需关心）。
 
 笔记接口仍通过 `X-Username` 请求头识别用户（待迁移至 JWT），前端从 `localStorage.user.username` 取值注入。
 
