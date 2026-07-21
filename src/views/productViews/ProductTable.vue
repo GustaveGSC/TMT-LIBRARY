@@ -77,6 +77,24 @@ const packagedCollapsed = ref(false)
 // ── 全部产成品数据弹窗 ────────────────────────────
 const showAllPackagedDialog = ref(false)
 const allPackagedSearch     = ref('')
+// 已录入尺寸数据的只是 product_packaged 表里的一部分；还有一批编码已经在原始导入数据里
+// 出现过（符合产成品编码前缀规则）但还没补录尺寸/重量，这里懒加载一次，弹窗才需要
+const packagedCandidates       = ref([])
+const packagedCandidatesLoaded = ref(false)
+const packagedCandidatesLoading = ref(false)
+async function ensurePackagedCandidatesLoaded() {
+  if (packagedCandidatesLoaded.value || packagedCandidatesLoading.value) return
+  packagedCandidatesLoading.value = true
+  try {
+    const res = await http.get('/api/product/packaged/candidates/all')
+    if (res.success) { packagedCandidates.value = res.data; packagedCandidatesLoaded.value = true }
+  } catch (e) {
+    console.error('产成品候选编码加载失败', e)
+  } finally {
+    packagedCandidatesLoading.value = false
+  }
+}
+watch(showAllPackagedDialog, (open) => { if (open) ensurePackagedCandidatesLoaded() })
 
 // 产成品 code → 使用它的成品 code 数组（从已加载的成品数据里反查，随 rawItems 后台加载逐步补全）
 const packagedUsageMap = computed(() => {
@@ -89,13 +107,25 @@ const packagedUsageMap = computed(() => {
   return usage
 })
 
-// 全部产成品（含使用它的成品列表），供弹窗表格使用
-const allPackagedRows = computed(() =>
-  Object.values(packagedStore.map).map(p => ({
+// 全部产成品：已录入尺寸数据的（product_packaged）+ 已出现在原始导入数据但还没录入的候选编码，
+// 后者只有 code/name，尺寸/重量字段为空，用 recorded 区分两种状态
+const allPackagedRows = computed(() => {
+  const recorded = Object.values(packagedStore.map).map(p => ({
     ...p,
+    recorded: true,
     used_by: packagedUsageMap.value[p.code] || [],
   }))
-)
+  const recordedCodes = new Set(recorded.map(p => p.code))
+  const unrecorded = packagedCandidates.value
+    .filter(c => !recordedCodes.has(c.code))
+    .map(c => ({
+      code: c.code, name: c.name,
+      length: null, width: null, height: null, volume: null, gross_weight: null, net_weight: null,
+      recorded: false,
+      used_by: packagedUsageMap.value[c.code] || [],
+    }))
+  return [...recorded, ...unrecorded]
+})
 
 const filteredAllPackagedRows = computed(() => {
   const kw = allPackagedSearch.value.trim().toLowerCase()
@@ -630,9 +660,15 @@ watch(
         <span class="apk-count">
           共 {{ filteredAllPackagedRows.length }} 条
           <span v-if="finishedStore.loadingMore" class="apk-loading-hint">（成品数据后台加载中，使用关系可能还不完整）</span>
+          <span v-if="packagedCandidatesLoading" class="apk-loading-hint">（候选编码加载中…）</span>
         </span>
       </div>
       <el-table :data="filteredAllPackagedRows" size="small" height="65vh" border :show-overflow-tooltip="true">
+        <el-table-column label="状态" width="76">
+          <template #default="{ row }">
+            <span :class="row.recorded ? 'apk-status-ok' : 'apk-status-pending'">{{ row.recorded ? '已录入' : '未录入' }}</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="code" label="产成品编码" width="150">
           <template #default="{ row }"><span style="font-weight:700;color:#2c2420;">{{ row.code }}</span></template>
         </el-table-column>
@@ -915,6 +951,8 @@ watch(
 .apk-toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
 .apk-count { font-size: 12px; color: var(--text-secondary); }
 .apk-loading-hint { color: var(--accent); }
+.apk-status-ok      { color: #3a7a5c; font-size: 12px; }
+.apk-status-pending { color: #c4883a; font-size: 12px; font-weight: 600; }
 .apk-usage-tag {
   display: inline-block; background: var(--bg-table-hover); color: var(--text-secondary);
   border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px;
