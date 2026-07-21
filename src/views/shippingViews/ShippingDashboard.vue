@@ -270,19 +270,26 @@ function getFeatureCentroids(mapKey) {
   return map
 }
 
+// 黄金角：相邻索引之间方向差 137.5°，用来给默认偏移量分配方向，
+// 避免地理位置相近的国家（比如欧洲这一片）全部把面板甩向同一个方向导致互相压字
+const GOLDEN_ANGLE = 137.5 * Math.PI / 180
+const DEFAULT_PANEL_DIST = 70
+
 /** 计算每个国家面板应处的像素位置：定位点（国家中心投影到屏幕）+ 用户拖拽偏移 */
 function computeDetailPanelLayout() {
   if (!chartInst) return []
   const centroids = getFeatureCentroids(lastMapKey)
   const layout = []
-  for (const item of lastMapItems) {
+  lastMapItems.forEach((item, idx) => {
     const centroid = centroids.get(item.name)
-    if (!centroid) continue
+    if (!centroid) return
     const anchor = chartInst.convertToPixel({ seriesIndex: 0 }, centroid)
-    if (!anchor) continue
-    const offset = detailPanelOffsets.value[item.originalName] || [30, -30]
+    if (!anchor) return
+    const angle = idx * GOLDEN_ANGLE
+    const defaultOffset = [Math.cos(angle) * DEFAULT_PANEL_DIST, Math.sin(angle) * DEFAULT_PANEL_DIST]
+    const offset = detailPanelOffsets.value[item.originalName] || defaultOffset
     layout.push({ key: item.originalName, item, anchor, panel: [anchor[0] + offset[0], anchor[1] + offset[1]] })
-  }
+  })
   return layout
 }
 
