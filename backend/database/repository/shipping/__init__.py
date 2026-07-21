@@ -51,8 +51,12 @@ class ShippingRepository:
     def get_finance_customer_aliases(keyword=None, page=1, per_page=100) -> Dict:
         """合并发货/销退客户简称计数，并一次性关联人工映射，避免 N+1。"""
         def counts_for(model):
+            # shipping_record 表整体排序规则是 utf8mb4_unicode_ci，return_record 是
+            # utf8mb4_0900_ai_ci（历史遗留，两表建表时字符集默认值不同），
+            # customer_alias 列各自继承所在表的排序规则，UNION ALL 时 MySQL 直接报
+            # "Illegal mix of collations"，必须显式统一。
             query = db.session.query(
-                model.customer_alias.label('customer_alias'),
+                model.customer_alias.collate('utf8mb4_unicode_ci').label('customer_alias'),
                 db.func.count(model.id).label('occurrences'),
             ).filter(
                 model.customer_alias.isnot(None),
@@ -75,7 +79,7 @@ class ShippingRepository:
             ShippingFinanceCustomerMapping,
         ).outerjoin(
             ShippingFinanceCustomerMapping,
-            ShippingFinanceCustomerMapping.customer_alias == totals.c.customer_alias,
+            ShippingFinanceCustomerMapping.customer_alias.collate('utf8mb4_unicode_ci') == totals.c.customer_alias,
         ).order_by(totals.c.occurrences.desc(), totals.c.customer_alias.asc())
 
         total = query.count()
