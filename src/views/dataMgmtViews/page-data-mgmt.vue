@@ -13,6 +13,7 @@ import OperatorConfig      from './OperatorConfig.vue'
 import WarehouseConfig     from './WarehouseConfig.vue'
 import EquivalentConfig    from './EquivalentConfig.vue'
 import TagDimensionConfig  from './TagDimensionConfig.vue'
+import FinanceCustomerMapping from './FinanceCustomerMapping.vue'
 
 // ── 路由 ──────────────────────────────────────────
 const router = useRouter()
@@ -263,6 +264,8 @@ async function handleResolveAll() {
           <EquivalentConfig />
           <div class="import-divider"></div>
           <TagDimensionConfig />
+          <div class="import-divider"></div>
+          <FinanceCustomerMapping />
         </div>
       </div>
     </main>
@@ -393,10 +396,10 @@ async function handleResolveAll() {
   min-height: 200px;
 }
 
-/* 数据配置多列布局（操作人 + 仓库 + 通用件 + 标签维度） */
+/* 数据配置多列布局（操作人 + 仓库 + 通用件 + 标签维度 + 外贸客户匹配） */
 .config-layout {
   display: grid;
-  grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr;
+  grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr auto 1fr;
   gap: 0;
   align-items: start;
 }

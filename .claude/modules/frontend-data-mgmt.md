@@ -2,7 +2,7 @@
 
 ## page-data-mgmt.vue 说明
 - 路由 `/data-mgmt`，`onMounted` 调用 `maximizeApp()`，返回按钮先 `unmaximizeApp()` 再 `router.back()`
-- 顶部导航两个 Tab：**导入数据**（DataImport + ReturnImport 左右并排）/ **数据配置**（OperatorConfig + WarehouseConfig + EquivalentConfig 三列并排）
+- 顶部导航两个 Tab：**导入数据**（DataImport + FinanceImport 左右并排）/ **数据配置**（OperatorConfig + WarehouseConfig + EquivalentConfig + TagDimensionConfig + FinanceCustomerMapping 五列并排）
 - 右上角「刷新全局数据」按钮：点击先弹二次确认框，确认后调 `POST /api/shipping/resolve-all` → 订阅 SSE 进度（复用 `import/progress/:task_id`），实时显示"xxx / xxx 个订单"；刷新时同时计算发货数量、销退数量、实际数量；SSE 完成后弹 `ElMessage.success` 告知完成数量
 
 ## DataImport.vue 说明
@@ -54,6 +54,14 @@
 - 调 `GET /api/shipping/equivalents` 加载，`POST /api/shipping/equivalents` 新增，`DELETE /api/shipping/equivalents/<id>` 删除
 - 权限：`shipping:edit`（canEditShipping）
 - 新增/删除后提示用户前往全量刷新更新历史数据
+
+## FinanceCustomerMapping.vue 说明
+- 财务原始数据"客户简称"去重列表（合并 shipping_record 与 return_record 出现次数），人工确认是否真实外贸订单 + 填写国家/品牌/备注，**完全人工，不做自动解析**
+- 顶部筛选：关键字输入框（默认 `外贸`，400ms 防抖）+「仅看未匹配」勾选，均触发重新拉取第 1 页
+- 每行草稿态存于 `drafts[customer_alias]`（is_export/country/brand/note/dirty），编辑后标记 dirty，「保存」按钮仅在 dirty 时可点，保存成功后用响应覆盖该行 `mapping` 并清 dirty
+- 调 `GET /api/shipping/finance-customer-aliases`（`?keyword=&page=&per_page=`，`shipping:view`）加载，`POST /api/shipping/finance-customer-aliases/mapping`（`shipping:edit`）保存单条
+- 无 `shipping:edit` 权限时所有输入框/勾选框/保存按钮禁用（只读展示）
+- 应用到 `shipping_order_finished` 聚合表/图表分析是下一批范围，本页面只负责维护映射表，不影响现有发货图表
 
 ## page-shipping.vue 说明
 - 路由 `/shipping`，`onMounted` 调用 `maximizeApp()`，返回按钮先 `unmaximizeApp()`
