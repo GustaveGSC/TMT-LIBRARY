@@ -74,6 +74,37 @@ const LIFECYCLE_TABS = [
 // ── packaged 折叠 ─────────────────────────────────
 const packagedCollapsed = ref(false)
 
+// ── 全部产成品数据弹窗 ────────────────────────────
+const showAllPackagedDialog = ref(false)
+const allPackagedSearch     = ref('')
+
+// 产成品 code → 使用它的成品 code 数组（从已加载的成品数据里反查，随 rawItems 后台加载逐步补全）
+const packagedUsageMap = computed(() => {
+  const usage = {}
+  for (const row of finishedStore.rawItems) {
+    for (const code of (row.packaged_list || [])) {
+      (usage[code] ??= []).push(row.code)
+    }
+  }
+  return usage
+})
+
+// 全部产成品（含使用它的成品列表），供弹窗表格使用
+const allPackagedRows = computed(() =>
+  Object.values(packagedStore.map).map(p => ({
+    ...p,
+    used_by: packagedUsageMap.value[p.code] || [],
+  }))
+)
+
+const filteredAllPackagedRows = computed(() => {
+  const kw = allPackagedSearch.value.trim().toLowerCase()
+  if (!kw) return allPackagedRows.value
+  return allPackagedRows.value.filter(p =>
+    p.code?.toLowerCase().includes(kw) || p.name?.toLowerCase().includes(kw)
+  )
+})
+
 // ── 展开行 ────────────────────────────────────────
 const expandedCode = ref(null)
 const expandedKeys = computed(() => expandedCode.value ? [expandedCode.value] : [])
@@ -570,6 +601,7 @@ watch(
         <span class="pk-hd-title">产成品清单</span>
         <span v-if="finishedStore.selected" class="pk-hd-code">· {{ finishedStore.selected.code }}</span>
         <span v-if="!finishedStore.selected && !packagedCollapsed" class="pk-hd-hint">点击成品行查看关联产成品</span>
+        <button class="pk-hd-all-btn" @click.stop="showAllPackagedDialog = true">查看所有产成品数据</button>
         <el-icon class="pk-toggle"><CaretBottom v-if="!packagedCollapsed"/><CaretTop v-else/></el-icon>
       </div>
       <div v-show="!packagedCollapsed" class="pk-body">
@@ -590,6 +622,49 @@ watch(
         </el-table>
       </div>
     </div><!-- /packaged-card -->
+
+    <!-- ══ 全部产成品数据弹窗 ════════════════════════════ -->
+    <el-dialog v-model="showAllPackagedDialog" title="所有产成品数据" width="90%" top="6vh" append-to-body destroy-on-close>
+      <div class="apk-toolbar">
+        <el-input v-model="allPackagedSearch" placeholder="搜索产成品编码/名称" clearable style="width: 260px" />
+        <span class="apk-count">
+          共 {{ filteredAllPackagedRows.length }} 条
+          <span v-if="finishedStore.loadingMore" class="apk-loading-hint">（成品数据后台加载中，使用关系可能还不完整）</span>
+        </span>
+      </div>
+      <el-table :data="filteredAllPackagedRows" size="small" height="65vh" border :show-overflow-tooltip="true">
+        <el-table-column prop="code" label="产成品编码" width="150">
+          <template #default="{ row }"><span style="font-weight:700;color:#2c2420;">{{ row.code }}</span></template>
+        </el-table-column>
+        <el-table-column prop="name" label="产成品名称" min-width="140" />
+        <el-table-column prop="length" label="长 (cm)" width="90" align="right">
+          <template #default="{ row }">{{ row.length ?? '—' }}</template>
+        </el-table-column>
+        <el-table-column prop="width" label="宽 (cm)" width="90" align="right">
+          <template #default="{ row }">{{ row.width ?? '—' }}</template>
+        </el-table-column>
+        <el-table-column prop="height" label="高 (cm)" width="90" align="right">
+          <template #default="{ row }">{{ row.height ?? '—' }}</template>
+        </el-table-column>
+        <el-table-column prop="volume" label="体积 (m³)" width="100" align="right">
+          <template #default="{ row }">{{ row.volume ?? '—' }}</template>
+        </el-table-column>
+        <el-table-column prop="gross_weight" label="毛重 (kg)" width="90" align="right">
+          <template #default="{ row }">{{ row.gross_weight ?? '—' }}</template>
+        </el-table-column>
+        <el-table-column prop="net_weight" label="净重 (kg)" width="90" align="right">
+          <template #default="{ row }">{{ row.net_weight ?? '—' }}</template>
+        </el-table-column>
+        <el-table-column label="被以下成品使用" min-width="260">
+          <template #default="{ row }">
+            <template v-if="row.used_by.length">
+              <span v-for="c in row.used_by" :key="c" class="apk-usage-tag">{{ c }}</span>
+            </template>
+            <span v-else class="apk-usage-empty">未被任何成品使用</span>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-dialog>
 
   </div><!-- /pt-root -->
 </template>
@@ -828,7 +903,24 @@ watch(
 .pk-hd-title { font-size: 12px; font-weight: 700; color: var(--text-secondary); }
 .pk-hd-code  { color: var(--accent); font-size: 12px; font-weight: 500; }
 .pk-hd-hint  { font-size: 11px; color: var(--text-muted); }
-.pk-toggle   { margin-left: auto; color: var(--text-muted); font-size: 13px; }
+.pk-hd-all-btn {
+  margin-left: auto; border: 1px solid var(--accent); background: transparent;
+  color: var(--accent); font-size: 11px; border-radius: 6px; padding: 3px 10px;
+  cursor: pointer; transition: all .15s; flex-shrink: 0;
+}
+.pk-hd-all-btn:hover { background: var(--accent); color: #fff; }
+.pk-toggle   { color: var(--text-muted); font-size: 13px; }
+
+/* 全部产成品弹窗 */
+.apk-toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
+.apk-count { font-size: 12px; color: var(--text-secondary); }
+.apk-loading-hint { color: var(--accent); }
+.apk-usage-tag {
+  display: inline-block; background: var(--bg-table-hover); color: var(--text-secondary);
+  border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px;
+  font-size: 11px; margin: 1px 3px 1px 0;
+}
+.apk-usage-empty { font-size: 12px; color: var(--text-muted); }
 
 .pk-body { flex: 1; min-height: 0; overflow: hidden; }
 .pk-empty {
