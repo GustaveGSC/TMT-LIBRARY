@@ -296,6 +296,7 @@ def resolve_stale():
                     task_id, status='running', progress={'step': 'resolving'},
                 )
                 result = shipping_service.resolve_stale()
+                _invalidate_chart_options_cache()
                 shipping_repository.update_task(
                     task_id, status='done', progress={'step': 'done'}, result=result,
                 )

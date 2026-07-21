@@ -118,7 +118,7 @@ class ReturnRecord(db.Model):
 
 
 class ShippingFinanceCustomerMapping(db.Model):
-    """财务客户简称的人工外贸属性映射；暂不参与聚合计算。"""
+    """财务客户简称的人工外贸属性映射；财务图表以此为准。"""
     __tablename__ = 'shipping_finance_customer_mapping'
     __table_args__ = (
         db.UniqueConstraint('customer_alias', name='uq_finance_customer_mapping_alias'),
@@ -190,6 +190,7 @@ class ShippingOrderFinished(db.Model):
         db.Index('ix_sof_source',                'source'),
         db.Index('ix_sof_source_date',           'source', 'shipped_date'),
         db.Index('ix_sof_source_finished_code',  'source', 'finished_code'),
+        db.Index('ix_sof_source_customer_alias', 'source', 'customer_alias'),
         db.Index('ix_sof_finished_code_date',    'finished_code', 'shipped_date'),
     )
 
@@ -208,6 +209,7 @@ class ShippingOrderFinished(db.Model):
     province           = db.Column(db.String(50),     nullable=True)
     city               = db.Column(db.String(100),    nullable=True)
     district           = db.Column(db.String(100),    nullable=True)
+    customer_alias     = db.Column(db.String(255),    nullable=True)
     source             = db.Column(db.Enum('shipping', 'finance'), nullable=False, default='shipping')
     is_stale           = db.Column(db.Boolean,        nullable=False, default=False)
     resolved_at        = db.Column(db.DateTime,       nullable=True)
@@ -230,6 +232,7 @@ class ShippingOrderFinished(db.Model):
             'province':           self.province,
             'city':               self.city,
             'district':           self.district,
+            'customer_alias':     self.customer_alias,
             'source':             self.source,
             'is_stale':           self.is_stale,
         }

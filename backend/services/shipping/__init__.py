@@ -497,6 +497,7 @@ def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=
                 'province':           meta['province'],
                 'city':               _normalize_city(meta['province'], meta.get('city')),
                 'district':           meta.get('district'),
+                'customer_alias':     meta.get('customer_alias'),
                 'source':             source,
                 'resolved_at':        resolved_at,
             })
@@ -521,6 +522,7 @@ def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=
                     'province':           meta['province'],
                     'city':               _normalize_city(meta['province'], meta.get('city')),
                     'district':           meta.get('district'),
+                    'customer_alias':     meta.get('customer_alias'),
                     'source':             source,
                     'resolved_at':        resolved_at,
                 })

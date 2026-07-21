@@ -6,7 +6,8 @@
 - `20260720_01` 是生产现状的空 baseline，不包含业务 DDL
 - `20260720_02` 新增 `shipping_task`
 - `20260721_01` 清理不受支持的 `product:delete` 权限及既有角色关联
-- `20260721_02` 增加财务客户简称字段、人工映射表，并规范财务行内部唯一键，是当前代码 head
+- `20260721_02` 增加财务客户简称字段、人工映射表，并规范财务行内部唯一键
+- `20260721_03` 将客户简称带入成品组合结果，并增加 `(source, customer_alias)` 聚合索引，是当前代码 head
 - 生产已完成 `stamp 20260720_01`，模型差异检查为 0
 - `app.py` 启动时只校验数据库 revision，不执行隐式 DDL 或自动 upgrade
 - 后续结构变更必须使用经人工审查的 Alembic revision，部署前单独 `upgrade head`
@@ -62,11 +63,12 @@ return_record
 shipping_order_finished
   id, ecommerce_order_no, finished_code(NULL=未匹配), finished_name,
   quantity(发货数量), return_quantity(销退数量), actual_quantity(实际=发货-销退),
-  shipped_date, operator, channel_name, province,
+  shipped_date, operator, channel_name, province, customer_alias(客户简称，可空),
   is_stale, resolved_at,
   source ENUM('shipping','finance') DEFAULT 'shipping'
   # source 与 shipping_record 对应；两个来源独立 resolve，互不干扰
-  # INDEX(source)；图表查询必须带 source 过滤
+  # 财务端 resolve 时从订单原始行取首个非空 customer_alias；全量重算可补齐历史结果
+  # INDEX(source)；INDEX(source, customer_alias)；图表查询必须带 source 过滤
 
 return_warehouse_filter
   id, warehouse_name(UNIQUE), is_excluded(默认False), created_at
@@ -78,7 +80,8 @@ shipping_operator_type
 
 shipping_finance_customer_mapping
   id, customer_alias(UNIQUE), is_export, country, brand, note, updated_at
-  # 人工维护财务客户简称的外贸/国家/品牌属性；当前不参与 shipping_order_finished 聚合
+  # 人工维护财务客户简称的外贸/国家/品牌属性；财务图表完全以此表为准
+  # is_export=false 与未映射订单均不进入国家/品牌维度；未映射订单也不进入 domestic/foreign 子集
 
   # 按订单对发货/销退数据分别贪心匹配成品组合，写入三列数量
 

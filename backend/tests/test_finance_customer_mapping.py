@@ -8,7 +8,17 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.dialects import mysql
 
-from database.models.shipping import ShippingRecord, ReturnRecord
+from database.models.shipping import (
+    ShippingFinanceCustomerMapping,
+    ShippingOperatorType,
+    ShippingOrderFinished,
+    ShippingRecord,
+    ReturnRecord,
+)
+from database.models.product.erp_code_rules import ErpCodeRule
+from database.models.product.finished import ProductTag, ProductTagCategory
+import database.models.product.category  # noqa: F401 - resolve ORM relationships
+import database.models.product.resource  # noqa: F401 - resolve ORM relationships
 from database.repository.shipping import ShippingRepository
 from services.shipping import (
     _REQUIRED_FINANCE_COL_NAMES,
@@ -165,6 +175,135 @@ def test_finance_reimport_sends_existing_rows_through_upsert(monkeypatch):
     assert result['updated_returns'] == 1
 
 
+def test_resolve_input_prefers_first_nonempty_customer_alias(monkeypatch):
+    app = Flask(__name__)
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite://'
+    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+    from database.base import db
+    db.init_app(app)
+    records = [
+        SimpleNamespace(
+            ecommerce_order_no='ORDER-1', record_type='shipping', source='finance',
+            shipped_date=date(2026, 7, 21), operator=None, channel_name=None,
+            channel_code=None, channel_org_name=None, province=None, city=None,
+            district=None, customer_alias=None, product_code='SKU-1', quantity=1,
+        ),
+        SimpleNamespace(
+            ecommerce_order_no='ORDER-1', record_type='shipping', source='finance',
+            shipped_date=date(2026, 7, 21), operator=None, channel_name=None,
+            channel_code=None, channel_org_name=None, province=None, city=None,
+            district=None, customer_alias='人工客户', product_code='SKU-2', quantity=1,
+        ),
+        SimpleNamespace(
+            ecommerce_order_no='ORDER-1', record_type='shipping', source='finance',
+            shipped_date=date(2026, 7, 21), operator=None, channel_name=None,
+            channel_code=None, channel_org_name=None, province=None, city=None,
+            district=None, customer_alias='不同简称', product_code='SKU-3', quantity=1,
+        ),
+    ]
+
+    class FakeQuery:
+        def filter(self, *_args):
+            return self
+
+        def all(self):
+            return records
+
+    with app.app_context():
+        monkeypatch.setattr(ShippingRecord, 'query', FakeQuery())
+        result = ShippingRepository.get_order_products(['ORDER-1'], source='finance')
+
+    assert result['ORDER-1']['meta']['customer_alias'] == '人工客户'
+
+
+def test_resolved_rows_persist_customer_alias(monkeypatch):
+    saved = []
+    monkeypatch.setattr(
+        'database.repository.shipping.db.session.bulk_save_objects',
+        lambda objects: saved.extend(objects),
+    )
+
+    ShippingRepository.bulk_insert_order_finished([{
+        'ecommerce_order_no': 'ORDER-1',
+        'customer_alias': '人工客户',
+        'source': 'finance',
+    }], commit_chunks=False)
+
+    assert saved[0].customer_alias == '人工客户'
+    assert ShippingOrderFinished.__table__.c.customer_alias.type.length == 255
+
+
+def test_finance_chart_uses_manual_mapping_for_trade_country_brand_and_filters():
+    app = Flask(__name__)
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite://'
+    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+    from database.base import db
+    db.init_app(app)
+
+    with app.app_context():
+        for model in (
+            ProductTagCategory, ProductTag, ErpCodeRule, ShippingOperatorType,
+            ShippingOrderFinished, ShippingFinanceCustomerMapping,
+        ):
+            model.__table__.create(db.engine)
+        region = ProductTagCategory(name='地域', is_shipping_dim=True)
+        brand = ProductTagCategory(name='品牌', is_shipping_dim=True)
+        db.session.add_all([region, brand])
+        db.session.flush()
+        canada = ProductTag(name='加拿大', category_id=region.id)
+        db.session.add(canada)
+        db.session.add_all([
+            ShippingFinanceCustomerMapping(
+                customer_alias='EXPORT', is_export=True, country='加拿大', brand='品牌甲',
+            ),
+            ShippingFinanceCustomerMapping(
+                customer_alias='DOMESTIC', is_export=False, country='中国', brand='品牌乙',
+            ),
+            ShippingOrderFinished(
+                ecommerce_order_no='E', finished_code='SKU-E', quantity=10,
+                return_quantity=0, actual_quantity=10, source='finance',
+                customer_alias='EXPORT', channel_name='外贸部',
+            ),
+            ShippingOrderFinished(
+                ecommerce_order_no='D', finished_code='SKU-D', quantity=20,
+                return_quantity=0, actual_quantity=20, source='finance',
+                customer_alias='DOMESTIC', channel_name='内销部',
+            ),
+            ShippingOrderFinished(
+                ecommerce_order_no='U', finished_code='SKU-U', quantity=30,
+                return_quantity=0, actual_quantity=30, source='finance',
+                customer_alias='UNMAPPED', channel_name='未映射部',
+            ),
+        ])
+        db.session.commit()
+
+        country = ShippingRepository.get_chart_data({
+            'source': 'finance', 'group_by': f'tag:{region.id}', 'trade_type': 'all',
+        })
+        brand_rows = ShippingRepository.get_chart_data({
+            'source': 'finance', 'group_by': f'tag:{brand.id}', 'trade_type': 'all',
+        })
+        domestic = ShippingRepository.get_chart_data({
+            'source': 'finance', 'group_by': 'channel', 'trade_type': 'domestic',
+        })
+        all_rows = ShippingRepository.get_chart_data({
+            'source': 'finance', 'group_by': 'channel', 'trade_type': 'all',
+        })
+        filtered = ShippingRepository.get_chart_data({
+            'source': 'finance', 'group_by': 'channel', 'trade_type': 'all',
+            'tag_filters': [{'category_id': region.id, 'tag_ids': [canada.id]}],
+        })
+
+        assert country['items'] == [{
+            'label': '加拿大', 'quantity': 10.0, 'return_quantity': 0.0,
+            'actual_quantity': 10.0,
+        }]
+        assert [row['label'] for row in brand_rows['items']] == ['品牌甲']
+        assert [row['label'] for row in domestic['items']] == ['内销部']
+        assert {row['label'] for row in all_rows['items']} == {'外贸部', '内销部', '未映射部'}
+        assert [row['label'] for row in filtered['items']] == ['外贸部']
+
+
 def test_finance_customer_mapping_api_contract_and_permissions(monkeypatch):
     app = Flask(__name__)
     app.register_blueprint(shipping_bp, url_prefix='/api/shipping')
@@ -268,3 +407,29 @@ def test_customer_mapping_migration_refuses_duplicate_finance_keys(tmp_path, mon
 
     with pytest.raises(RuntimeError, match='重复财务发货键'):
         command.upgrade(config, 'head')
+
+
+def test_order_finished_alias_migration_adds_column_and_lookup_index(tmp_path, monkeypatch):
+    database_url = f"sqlite:///{(tmp_path / 'resolved-alias.db').as_posix()}"
+    engine = sa.create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(sa.text("""
+            CREATE TABLE shipping_order_finished (
+                id INTEGER PRIMARY KEY, source VARCHAR(20) NOT NULL
+            )
+        """))
+    monkeypatch.setenv('DATABASE_URL', database_url)
+    config = _migration_config(database_url)
+    command.stamp(config, '20260721_02')
+
+    command.upgrade(config, 'head')
+
+    inspector = sa.inspect(engine)
+    assert 'customer_alias' in {
+        column['name'] for column in inspector.get_columns('shipping_order_finished')
+    }
+    indexes = {
+        index['name']: tuple(index['column_names'])
+        for index in inspector.get_indexes('shipping_order_finished')
+    }
+    assert indexes['ix_sof_source_customer_alias'] == ('source', 'customer_alias')

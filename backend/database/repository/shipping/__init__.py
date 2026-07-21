@@ -614,7 +614,7 @@ class ShippingRepository:
     def get_order_products(order_nos: List[str], source: str = 'shipping') -> Dict[str, Dict]:
         """
         返回 {order_no: {'product_codes': {code: qty}, 'meta': {...}}}
-        meta 取该订单第一行的 shipped_date/operator/channel_name/province
+        meta 取该订单第一行的基础字段；customer_alias 取首个非空值。
         """
         records = ShippingRecord.query.filter(
             ShippingRecord.ecommerce_order_no.in_(order_nos),
@@ -636,8 +636,11 @@ class ShippingRepository:
                         'province':         r.province,
                         'city':             r.city,
                         'district':         r.district,
+                        'customer_alias':   r.customer_alias,
                     },
                 }
+            elif not result[on]['meta'].get('customer_alias') and r.customer_alias:
+                result[on]['meta']['customer_alias'] = r.customer_alias
             qty = float(r.quantity) if r.quantity else 0
             if r.product_code and qty > 0:
                 result[on]['product_codes'][r.product_code] = (
@@ -684,6 +687,7 @@ class ShippingRepository:
                     province           = r.get('province'),
                     city               = r.get('city'),
                     district           = r.get('district'),
+                    customer_alias     = r.get('customer_alias'),
                     source             = r.get('source', 'shipping'),
                     is_stale           = False,
                     resolved_at        = r.get('resolved_at'),
@@ -897,10 +901,11 @@ class ShippingRepository:
                      category_id, series_id, model_id
         """
         from database.models.product.category import ProductCategory, ProductSeries, ProductModel
-        from database.models.product.finished import ProductFinished
+        from database.models.product.finished import ProductFinished, ProductTag, ProductTagCategory
         from sqlalchemy import func
 
         from database.models.product.erp_code_rules import ErpCodeRule
+        from database.models.shipping import ShippingFinanceCustomerMapping
 
         sof = ShippingOrderFinished
         group_by      = params.get('group_by', 'date')
@@ -929,16 +934,62 @@ class ShippingRepository:
         # 标签维度：group_by 形如 'tag:<category_id>'
         is_tag_group_by = isinstance(group_by, str) and group_by.startswith('tag:')
         tag_category_id = int(group_by.split(':', 1)[1]) if is_tag_group_by else None
+        finance_mapping_field = None
+        if source == 'finance' and is_tag_group_by:
+            tag_category_name = db.session.query(ProductTagCategory.name).filter(
+                ProductTagCategory.id == tag_category_id,
+            ).scalar()
+            if tag_category_name == '地域':
+                finance_mapping_field = ShippingFinanceCustomerMapping.country
+            elif tag_category_name == '品牌':
+                finance_mapping_field = ShippingFinanceCustomerMapping.brand
+        is_finance_mapping_group = finance_mapping_field is not None
+
+        # 保留前端既有 tag_filters 契约：财务端「地域/品牌」标签 ID
+        # 只用来查出其显示名，实际筛选改走人工客户映射，不再碰产品标签关系。
+        finance_mapping_filters = []
+        product_tag_filters = []
+        for tag_filter in tag_filters:
+            filter_category_id = tag_filter.get('category_id')
+            filter_tag_ids = tag_filter.get('tag_ids') or []
+            if not filter_category_id or not filter_tag_ids:
+                continue
+            filter_category_name = None
+            if source == 'finance':
+                filter_category_name = db.session.query(ProductTagCategory.name).filter(
+                    ProductTagCategory.id == filter_category_id,
+                ).scalar()
+            mapping_field = {
+                '地域': ShippingFinanceCustomerMapping.country,
+                '品牌': ShippingFinanceCustomerMapping.brand,
+            }.get(filter_category_name)
+            if mapping_field is None:
+                product_tag_filters.append(tag_filter)
+                continue
+            tag_names = [
+                row[0] for row in db.session.query(ProductTag.name).filter(
+                    ProductTag.category_id == filter_category_id,
+                    ProductTag.id.in_(filter_tag_ids),
+                ).all()
+            ]
+            finance_mapping_filters.append((mapping_field, tag_names))
 
         # 根据 group_by 判断需要 JOIN 到哪一层产品表
         # 注意：trade_type 过滤已改为用缓存的 finished_code 集合，不再需要 JOIN 产品表
         needs_trade_filter = trade_type in ('domestic', 'foreign')
+        needs_finance_mapping = source == 'finance' and (
+            needs_trade_filter or is_finance_mapping_group or finance_mapping_filters
+        )
         product_group_by  = group_by in ('category', 'series', 'model')
-        needs_model_join  = product_group_by or is_tag_group_by or bool(category_ids or series_ids or model_ids)
+        needs_model_join  = product_group_by or (
+            is_tag_group_by and not is_finance_mapping_group
+        ) or bool(category_ids or series_ids or model_ids)
         needs_series_join = group_by in ('category', 'series') or bool(category_ids or series_ids)
         needs_cat_join    = group_by == 'category' or bool(category_ids)
         # 预取 FTP finished_code（带缓存，仅 trade_type 过滤时需要）
-        ftp_codes = _get_ftp_finished_codes() if needs_trade_filter else set()
+        ftp_codes = _get_ftp_finished_codes() if (
+            needs_trade_filter and source != 'finance'
+        ) else set()
 
         # 售后操作人子查询（在整个 get_chart_data 调用中复用，仅发货端需要）
         aftersale_ops_sub = db.session.query(ShippingOperatorType.operator).filter_by(type='aftersale').subquery()
@@ -949,6 +1000,8 @@ class ShippingRepository:
             # MySQL 优化器对 source 选择性低（50%）时不会自动选复合索引
             if date_start or date_end:
                 q = q.with_hint(sof, 'USE INDEX (ix_sof_source_date)', dialect_name='mysql')
+            elif needs_finance_mapping:
+                q = q.with_hint(sof, 'USE INDEX (ix_sof_source_customer_alias)', dialect_name='mysql')
             else:
                 q = q.with_hint(sof, 'USE INDEX (ix_sof_source_finished_code)', dialect_name='mysql')
             base_conditions = [
@@ -966,7 +1019,12 @@ class ShippingRepository:
                 q = q.join(ProductSeries, ProductModel.series_id == ProductSeries.id)
             if needs_cat_join:
                 q = q.join(ProductCategory, ProductSeries.category_id == ProductCategory.id)
-            if is_tag_group_by:
+            if needs_finance_mapping:
+                q = q.join(
+                    ShippingFinanceCustomerMapping,
+                    sof.customer_alias == ShippingFinanceCustomerMapping.customer_alias,
+                )
+            if is_tag_group_by and not is_finance_mapping_group:
                 from database.models.product.finished import ProductTag, finished_tag
                 q = q.join(finished_tag, ProductFinished.id == finished_tag.c.finished_id
                 ).join(ProductTag, db.and_(
@@ -984,9 +1042,9 @@ class ShippingRepository:
             # 标签筛选（与 group_by 的标签维度相互独立，可同时叠加多个分类）
             # 先取出符合条件的 finished_code 集合再用 IN 过滤，而非 JOIN：
             # 避免一个产品在同一分类下命中多个已选标签时导致 sof 行重复计入（JOIN 会 fan-out）
-            if tag_filters:
+            if product_tag_filters:
                 from database.models.product.finished import ProductTag, finished_tag as ft_tbl
-                for tf in tag_filters:
+                for tf in product_tag_filters:
                     f_cat_id = tf.get('category_id')
                     f_tag_ids = tf.get('tag_ids') or []
                     if not f_cat_id or not f_tag_ids:
@@ -998,12 +1056,30 @@ class ShippingRepository:
                         ).filter(ProductTag.category_id == f_cat_id, ProductTag.id.in_(f_tag_ids)).all()
                     }
                     q = q.filter(sof.finished_code.in_(matched_codes))
+            for mapping_field, selected_names in finance_mapping_filters:
+                q = q.filter(
+                    ShippingFinanceCustomerMapping.is_export.is_(True),
+                    mapping_field.in_(selected_names),
+                )
             # 内外销过滤：使用缓存的 ftp_codes 集合，避免 JOIN 产品表
-            if needs_trade_filter and ftp_codes:
-                if trade_type == 'domestic':
-                    q = q.filter(~sof.finished_code.in_(ftp_codes))
+            if needs_trade_filter:
+                if source == 'finance':
+                    q = q.filter(
+                        ShippingFinanceCustomerMapping.is_export.is_(trade_type == 'foreign')
+                    )
+                elif ftp_codes:
+                    if trade_type == 'domestic':
+                        q = q.filter(~sof.finished_code.in_(ftp_codes))
+                    elif trade_type == 'foreign':
+                        q = q.filter(sof.finished_code.in_(ftp_codes))
                 elif trade_type == 'foreign':
-                    q = q.filter(sof.finished_code.in_(ftp_codes))
+                    q = q.filter(db.false())
+            if is_finance_mapping_group:
+                q = q.filter(
+                    ShippingFinanceCustomerMapping.is_export.is_(True),
+                    finance_mapping_field.isnot(None),
+                    finance_mapping_field != '',
+                )
             # 日期过滤
             if date_start:
                 try:
@@ -1087,6 +1163,10 @@ class ShippingRepository:
             order_expr = func.sum(sof.actual_quantity).desc()
         elif group_by == 'district':
             label_expr = func.coalesce(sof.district, '未知')
+            name_expr  = None
+            order_expr = func.sum(sof.actual_quantity).desc()
+        elif is_finance_mapping_group:
+            label_expr = finance_mapping_field
             name_expr  = None
             order_expr = func.sum(sof.actual_quantity).desc()
         elif is_tag_group_by:

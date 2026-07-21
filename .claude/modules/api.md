@@ -165,8 +165,11 @@ GET    /api/shipping/chart-options                    # 渠道名和省份去重
                                                       #   返回额外含 tag_dimensions: [{category_id,name,color,tags:[{id,name}]}]
                                                       #   （已配置 is_shipping_dim=1 的标签分类及其 shipping_dim_enabled=1 的标签，见 database.md product_tag_category）
 POST   /api/shipping/chart-data                       # 图表聚合数据，body 含 source('shipping'|'finance')、trade_type('all'|'domestic'|'foreign')
-                                                      #   trade_type: domestic 排除 %-FTP 系列，foreign 仅保留 %-FTP 系列（后端 SQL LIKE）
+                                                      #   source=shipping：trade_type 保留历史 FTP 产品判断（前端固定传 all）
+                                                      #   source=finance：domestic/foreign 仅按人工客户简称映射 is_export=false/true；未映射订单不进入两者，all 仍包含全部
                                                       #   group_by 除固定维度外，可传 'tag:<category_id>' 按该标签分类聚合（需先在数据配置中启用该分类为发货维度）
+                                                      #   source=finance 且标签分类名为「地域」或「品牌」时，按人工映射的 country/brand 聚合；仅 is_export=true 且值非空的数据参与，响应结构不变
+                                                      #   财务端上述两个分类的 tag_filters 同样按所选标签名称匹配人工映射，不使用产品标签关系
                                                       #   tag_filters?: [{category_id, tag_ids}]，与 group_by 相互独立的标签筛选（不管当前按什么维度聚合都生效），
                                                       #     同一分类内多个 tag_id 为 OR，不同分类之间为 AND
 
