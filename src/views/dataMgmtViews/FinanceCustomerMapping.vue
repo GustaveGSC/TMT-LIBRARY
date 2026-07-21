@@ -164,23 +164,23 @@ function handlePageChange(p) {
           </el-select>
           <el-input
             v-model="drafts[item.customer_alias].country"
-            placeholder="国家"
+            placeholder="国家/地区"
             :disabled="!canEditShipping"
-            style="width: 110px"
+            style="width: 130px"
             @input="markDirty(item.customer_alias)"
           />
           <el-input
             v-model="drafts[item.customer_alias].brand"
             placeholder="品牌"
             :disabled="!canEditShipping"
-            style="width: 110px"
+            style="width: 130px"
             @input="markDirty(item.customer_alias)"
           />
           <el-input
             v-model="drafts[item.customer_alias].note"
             placeholder="备注（可选）"
             :disabled="!canEditShipping"
-            style="width: 220px; flex: 1"
+            style="min-width: 260px; flex: 1"
             @input="markDirty(item.customer_alias)"
           />
           <button

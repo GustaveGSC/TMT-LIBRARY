@@ -432,5 +432,5 @@ async function handleResolveAll() {
 .config-tab-item:hover { background: rgba(196,136,58,0.07); color: var(--text-primary); }
 .config-tab-item.active { color: #fff; font-weight: 600; background: var(--accent); }
 
-.config-tab-body { width: 100%; max-width: 760px; }
+.config-tab-body { width: 100%; max-width: 1100px; }
 </style>
