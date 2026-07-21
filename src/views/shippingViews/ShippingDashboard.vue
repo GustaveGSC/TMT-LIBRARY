@@ -433,6 +433,98 @@ function onDragPanelEnd() {
   window.removeEventListener('mouseup', onDragPanelEnd)
 }
 
+// ── tooltip/详情面板细分数据（按系列/按品牌） ──────────
+// 系列本身没有品类信息，用已加载的 categoryTree 反查每个系列所属品类，
+// 保证"相同品类的系列挨在一起"——分组用，不发额外请求
+function seriesCategoryName(seriesCode) {
+  for (const cat of categoryTree.value) {
+    if ((cat.series || []).some(s => s.code === seriesCode)) return cat.name
+  }
+  return '未分类'
+}
+
+let breakdownFetchToken = 0
+/** 按当前 tooltipMode，为地图上每个有数据的国家批量拉一份细分数据（系列或品牌） */
+async function fetchTooltipBreakdown() {
+  if (tooltipMode.value === 'default' || lastMapKey !== 'world') { tooltipBreakdown.value = {}; return }
+  const regionDim = findTagDim(groupBy.value)
+  if (!regionDim) { tooltipBreakdown.value = {}; return }
+
+  let subGroupBy
+  if (tooltipMode.value === 'series') {
+    subGroupBy = 'series'
+  } else {
+    const brandDim = tagDimensions.value.find(td => td.name === '品牌')
+    if (!brandDim) { ElMessage.warning('未找到「品牌」标签维度，请先在标签维度配置里启用'); tooltipBreakdown.value = {}; return }
+    subGroupBy = `tag:${brandDim.category_id}`
+  }
+
+  const token = ++breakdownFetchToken
+  const { field } = METRIC_MAP[dataMetric.value]
+  const [start, end] = filters.value.dateRange || []
+  const baseBody = {
+    date_start:    start ? formatDate(start) : null,
+    date_end:      end   ? formatDate(end)   : null,
+    category_ids:  effCategoryIds(),
+    series_ids:    effSeriesIds(),
+    model_ids:     effModelIds(),
+    trade_type:    tradeType.value,
+    channel_names: effChannelNames(),
+    channel_codes: effChannelCodes(),
+    provinces:     effProvinces(),
+    cities:        effCities(),
+    districts:     effDistricts(),
+    source:        dataSource.value,
+  }
+
+  const countries = lastMapItems.filter(i => i.rawValue > 0)
+  const results = {}
+  await Promise.all(countries.map(async (item) => {
+    const tagId = regionDim.tags?.find(t => t.name === item.originalName)?.id
+    if (tagId == null) return
+    const tagFilters = [...buildTagFilters(), { category_id: regionDim.category_id, tag_ids: [tagId] }]
+    try {
+      const res = await http.post('/api/shipping/chart-data', {
+        ...baseBody, group_by: subGroupBy, tag_filters: tagFilters,
+      })
+      if (res.success) {
+        results[item.originalName] = res.data.items
+          .map(r => ({ label: r.label, name: r.name || r.label, value: r[field] ?? 0 }))
+          .filter(r => r.value > 0)
+          .sort((a, b) => b.value - a.value)
+      }
+    } catch { /* 单个国家失败不影响其它国家 */ }
+  }))
+  if (token === breakdownFetchToken) tooltipBreakdown.value = results
+}
+watch(tooltipMode, fetchTooltipBreakdown)
+
+/** 把某国家的细分数据转成展示行；系列模式下按品类分组、同品类相邻，超过上限截断。
+ * 每行是 { header } 或 { name, value } 二选一，由调用方各自渲染（tooltip 用 HTML，面板用 DOM）。 */
+const BREAKDOWN_MAX_LINES = 10
+function buildBreakdownLines(countryLabel) {
+  const items = tooltipBreakdown.value[countryLabel]
+  if (!items?.length) return []
+  if (tooltipMode.value !== 'series') {
+    const shown = items.slice(0, BREAKDOWN_MAX_LINES)
+    const lines = shown.map(i => ({ name: i.name, value: i.value }))
+    if (items.length > shown.length) lines.push({ more: items.length - shown.length })
+    return lines
+  }
+  const withCat = items.map(i => ({ ...i, cat: seriesCategoryName(i.label) }))
+  withCat.sort((a, b) => a.cat === b.cat ? 0 : (a.cat < b.cat ? -1 : 1))
+  const lines = []
+  let curCat = null, shownCount = 0
+  for (const it of withCat) {
+    if (shownCount >= BREAKDOWN_MAX_LINES) break
+    if (it.cat !== curCat) { lines.push({ header: it.cat }); curCat = it.cat }
+    lines.push({ name: it.name, value: it.value })
+    shownCount++
+  }
+  if (withCat.length > shownCount) lines.push({ more: withCat.length - shownCount })
+  return lines
+}
+
 /** 加载并注册全国城市级地图，返回 mapKey 或 null */
 async function ensureChinaCityMap() {
   if (registeredMaps.has('china-city')) return 'china-city'
@@ -523,6 +615,15 @@ const showDetailPanels = ref(false)
 const currentMapKey    = ref('china')
 // 用户拖拽后的面板偏移量（相对国家定位点的像素偏移），key 为国家中文名（原始 label）
 const detailPanelOffsets = ref({})
+
+// 世界地图 tooltip/详情面板显示内容：默认只显示总量；系列/品牌模式下按国家拉一份细分数据
+const TOOLTIP_MODE_OPTIONS = [
+  { value: 'default', label: '默认' },
+  { value: 'series',  label: '按系列' },
+  { value: 'brand',   label: '按品牌' },
+]
+const tooltipMode      = ref('default')
+const tooltipBreakdown = ref({})   // { [国家中文名]: [{label, name, value}] }，已过滤0值
 
 // 当前维度下允许的图表类型 / 对比模式
 const allowedChartTypes  = computed(() => groupByConfig(groupBy.value).chartTypes  ?? [])
@@ -1591,10 +1692,12 @@ async function renderChart() {
   }
   chartInst.setOption(opt, { notMerge: true })
 
-  // 世界地图详情面板（DOM 叠层）：地图重渲染后坐标系变了，重新计算面板位置
+  // 世界地图详情面板（DOM 叠层）：地图重渲染后坐标系变了，重新计算面板位置；
+  // 数据也可能变了（切筛选/翻页等），非默认模式下需要重新拉一遍细分数据
   if (chartType.value === 'map') {
     await nextTick()
     recomputeDetailPanelLayout()
+    if (tooltipMode.value !== 'default') fetchTooltipBreakdown()
   }
 }
 
@@ -2487,9 +2590,22 @@ function buildMapOption(items, mapKey = 'china') {
             `</div>`
         }
         const name = d?.originalName ?? params.name
+        let extra = ''
+        if (isWorld && tooltipMode.value !== 'default' && d?.originalName) {
+          const lines = buildBreakdownLines(d.originalName)
+          if (lines.length) {
+            extra = `<div style="border-top:1px solid #e0d4c0;margin:6px 0 4px"></div>` +
+              lines.map(l => {
+                if (l.header) return `<div style="color:#c4883a;font-weight:600;margin:4px 0 2px">${l.header}</div>`
+                if (l.more != null) return `<div style="color:#8a7a6a;font-size:12px">……还有 ${l.more} 项</div>`
+                return `<div style="${ROW};color:#6b5e4e"><span>${l.name}</span><span style="font-weight:600">${l.value.toLocaleString()}</span></div>`
+              }).join('')
+          }
+        }
         return `<div style="${W}">` +
           `<div style="font-weight:600;margin-bottom:4px">${name}</div>` +
           `<div style="${ROW}"><span>${label}</span><span style="font-weight:600">${d?.rawValue ?? params.value}</span></div>` +
+          extra +
           `</div>`
       },
     },
@@ -2970,10 +3086,21 @@ watch(groupBy, () => {
               stroke="#c4883a" stroke-width="1" opacity="0.7" />
           </svg>
           <div v-for="p in detailPanelLayout" :key="'p-' + p.key" class="map-detail-panel"
-            :style="{ left: (p.panel[0] - 65) + 'px', top: (p.panel[1] - 23) + 'px' }"
+            :class="{ 'map-detail-panel--wide': tooltipMode !== 'default' }"
+            :style="{ left: (p.panel[0] - (tooltipMode !== 'default' ? 90 : 65)) + 'px', top: (p.panel[1] - 23) + 'px' }"
             @mousedown="startDragPanel($event, p.key)">
             <div class="map-detail-panel-name">{{ p.item.originalName }}</div>
             <div class="map-detail-panel-val">{{ lastMapMetricLabel }}：{{ p.item.rawValue.toLocaleString() }}</div>
+            <template v-if="tooltipMode !== 'default'">
+              <div class="map-detail-panel-divider"></div>
+              <template v-for="(line, i) in buildBreakdownLines(p.item.originalName)" :key="i">
+                <div v-if="line.header" class="map-detail-panel-cat">{{ line.header }}</div>
+                <div v-else-if="line.more != null" class="map-detail-panel-more">……还有 {{ line.more }} 项</div>
+                <div v-else class="map-detail-panel-row">
+                  <span>{{ line.name }}</span><span>{{ line.value.toLocaleString() }}</span>
+                </div>
+              </template>
+            </template>
           </div>
         </div>
 
@@ -2997,8 +3124,13 @@ watch(groupBy, () => {
           <div v-if="groupBy === 'province'" class="footer-city-mode">
             <el-switch v-model="cityMode" size="small" active-text="城市模式" active-color="#c4883a" @change="loadChartData()" />
           </div>
-          <div v-else-if="chartType === 'map' && currentMapKey === 'world'" class="footer-city-mode">
+          <div v-else-if="chartType === 'map' && currentMapKey === 'world'" class="footer-city-mode footer-world-controls">
             <el-switch v-model="showDetailPanels" size="small" active-text="显示详细数据" active-color="#c4883a" @change="renderChart()" />
+            <div class="tooltip-mode-group">
+              <button v-for="opt in TOOLTIP_MODE_OPTIONS" :key="opt.value"
+                class="tooltip-mode-btn" :class="{ active: tooltipMode === opt.value }"
+                @click="tooltipMode = opt.value">{{ opt.label }}</button>
+            </div>
           </div>
         </div>
         <div class="footer-dims">
@@ -3350,7 +3482,7 @@ watch(groupBy, () => {
 .map-detail-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 20; }
 .map-detail-lines   { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
 .map-detail-panel {
-  position: absolute; width: 130px; min-height: 46px;
+  position: absolute; width: 130px; min-height: 46px; max-height: 260px; overflow-y: auto;
   background: #fff; border: 1px solid #c4883a; border-radius: 6px;
   box-shadow: 0 2px 6px rgba(0,0,0,0.15);
   padding: 4px 8px; display: flex; flex-direction: column; justify-content: center; gap: 2px;
@@ -3358,8 +3490,14 @@ watch(groupBy, () => {
   font-size: 12px; color: #3a3028; text-align: center;
   pointer-events: auto; cursor: move; user-select: none;
 }
-.map-detail-panel-name { font-weight: 600; }
-.map-detail-panel-val  { color: #6b5e4e; }
+.map-detail-panel--wide { width: 180px; text-align: left; }
+.map-detail-panel-name { font-weight: 600; text-align: center; }
+.map-detail-panel-val  { color: #6b5e4e; text-align: center; }
+.map-detail-panel-divider { border-top: 1px solid #e0d4c0; margin: 4px 0 2px; }
+.map-detail-panel-cat  { color: #c4883a; font-weight: 600; margin-top: 4px; }
+.map-detail-panel-more { color: #8a7a6a; font-size: 11px; }
+.map-detail-panel-row  { display: flex; justify-content: space-between; gap: 10px; color: #6b5e4e; }
+.map-detail-panel-row span:last-child { font-weight: 600; color: #3a3028; }
 
 /* 地图 Top10 侧边表格 */
 .map-rank-panel {
@@ -3401,6 +3539,15 @@ watch(groupBy, () => {
 }
 .footer-placeholder { flex: 1; display: flex; align-items: center; padding-left: 8px; }
 .footer-city-mode { display: flex; align-items: center; }
+.footer-world-controls { gap: 14px; }
+.tooltip-mode-group { display: flex; gap: 4px; background: var(--bg-hover, #f5f0e8); border-radius: 8px; padding: 2px; }
+.tooltip-mode-btn {
+  border: none; background: transparent; padding: 4px 10px; border-radius: 6px;
+  font-family: 'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', sans-serif;
+  font-size: 12px; color: #6b5e4e; cursor: pointer; transition: all .15s;
+}
+.tooltip-mode-btn:hover { color: #c4883a; }
+.tooltip-mode-btn.active { background: #c4883a; color: #fff; }
 .footer-dims { display: flex; gap: 4px; }
 .footer-date-range {
   flex: 1; display: flex; align-items: center; justify-content: flex-end;
