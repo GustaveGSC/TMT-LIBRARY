@@ -123,8 +123,10 @@ async function handleLogout() {
       cancelButtonText:  '取消',
       type:              'warning',
     })
+    // 主动登出才调后端接口清 httpOnly Cookie（401 场景不调，避免重复处理链路）
+    try { await http.post('/api/account/logout') } catch { /* 即使请求失败也继续清本地状态 */ }
     localStorage.removeItem('user')
-    localStorage.removeItem('tmt_token')
+    localStorage.removeItem('login_time')
     visible.value = false
     if (window.electronAPI) {
       window.electronAPI.logout()

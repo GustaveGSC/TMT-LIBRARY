@@ -12,8 +12,8 @@
 - `frontend-rdtools.md` — 研发工具页（ECR变更申请单、ECN变更通知单、变更提醒）
 
 ## 技术栈
-- **桌面端**：Electron + Vue 3 + Vite（electron-vite）
-- **Web 端**：同一套 Vue 代码，`npm run build:web` → `dist-web/`，部署于 47.99.100.138（nginx + gunicorn）
+- **桌面端（已暂停，2026-07-21）**：Electron + Vue 3 + Vite（electron-vite）。决策：正式停止支持现有 Electron 客户端，代码保留但不再投入新功能开发或验证，不制作/发布新安装包，详见 `handoff/2026-07-21-electron-support-end-decision.md`。新功能默认只需支持 Web 端，不用再兼容 Electron。
+- **Web 端**：同一套 Vue 代码，`npm run build:web` → `dist-web/`，部署于 tmt-library.cn（nginx + gunicorn，HTTPS）
 - **前端**：Vue 3 Composition API、Pinia、Element Plus、Axios
 - **后端**：Python Flask + SQLAlchemy + PyMySQL，端口 8765
 - **数据库**：MySQL（host: 47.99.100.138，库名: tmt_db）
@@ -21,10 +21,10 @@
 
 ## 关键路径
 ```
-electron/main/index.ts   # 主进程、IPC、updater 生命周期；桌面端直连云端后端（不再启动本地 Flask）
-electron/main/window.ts  # 登录窗 420×640 / 主窗 800×600，frame:false，bg:#ede8dc
-electron/main/python.ts  # 已不使用（桌面端改为直连云端）
-src/api/http.js          # axios；getBaseURL() 已 export：Electron→http://47.99.100.138，Web→VITE_API_BASE 或代理
+electron/main/index.ts   # 主进程/IPC（桌面端已暂停，代码保留不再维护）
+electron/main/window.ts  # 登录窗/主窗（桌面端已暂停，代码保留不再维护）
+electron/main/python.ts  # 已不使用
+src/api/http.js          # axios；getBaseURL() 已 export：Electron→https://tmt-library.cn，Web→VITE_API_BASE 或代理
 src/routers/index.js     # Hash路由：/login /index /product /shipping /data-mgmt /aftersale /rd-tools /admin/*
 src/styles/themes.css    # 全局CSS变量（勿硬编码颜色）
 backend/app.py           # Flask 工厂；SQLAlchemy QueuePool + connect/read/write 超时（见源码）
@@ -70,7 +70,7 @@ backend/result.py        # Result.ok/fail → { success, message, data }
 
 ## 多端开发规范
 
-**优先级：Web 端 > 桌面端（Electron）**，新功能默认同时支持两端。
+**桌面端（Electron）已暂停（2026-07-21），新功能默认只需支持 Web 端**，不用再兼容 Electron。以下 `isElectron` 相关说明保留供桌面端代码本身参考（不删除现有代码），新功能不需要按此分支处理。
 
 ### 环境判断
 ```js
@@ -139,7 +139,7 @@ const res = await http.get('/api/...')
 if (res.success) { /* use res.data */ } else { errorMsg = res.message }
 ```
 
-## electronAPI（preload 暴露）
+## electronAPI（preload 暴露，桌面端已暂停，仅存档）
 ```typescript
 window.electronAPI = {
   getApiBase, getVersion, loginSuccess, logout, quitApp, openExternal, showOpenDialog,

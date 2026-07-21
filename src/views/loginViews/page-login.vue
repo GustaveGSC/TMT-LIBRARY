@@ -277,9 +277,9 @@ async function handleLogin() {
       } else {
         localStorage.removeItem('remembered_username')
       }
+      // 会话已由后端 Set-Cookie 下发（httpOnly tmt_session + tmt_csrf），前端只存展示信息
       localStorage.setItem('user', JSON.stringify(res.data))
       localStorage.setItem('login_time', Date.now().toString())
-      if (res.data.token) localStorage.setItem('tmt_token', res.data.token)
       window.electronAPI ? window.electronAPI.loginSuccess() : router.push('/index')
     } else {
       toast.value?.show(res.message || '登录失败，请重试', 'error')
