@@ -12,6 +12,7 @@ from werkzeug.exceptions import RequestEntityTooLarge
 from database.base import db
 from dotenv import load_dotenv
 from sqlalchemy.pool import QueuePool
+from sqlalchemy import text
 from security_config import validate_security_config
 from result import Result
 from upload_validation import GLOBAL_REQUEST_LIMIT
@@ -117,6 +118,15 @@ def create_app() -> Flask:
     def health():
         return {"status": "ok"}
 
+    @app.get("/ready")
+    def ready():
+        try:
+            _check_database_readiness(db)
+        except Exception:
+            app.logger.exception('数据库 readiness 检查失败')
+            return {"status": "not_ready"}, 503
+        return {"status": "ready"}
+
     # ── 语义模型：启动时自动下载/加载 ────────────────
     import threading
     def _bg_model_init():
@@ -128,6 +138,11 @@ def create_app() -> Flask:
     threading.Thread(target=_bg_model_init, daemon=True, name='model-init').start()
 
     return app
+
+
+def _check_database_readiness(database) -> None:
+    """执行最小只读查询，确认数据库连接和查询均可用。"""
+    database.session.execute(text('SELECT 1')).scalar_one()
 
 
 def _validate_database_revision(database) -> None:

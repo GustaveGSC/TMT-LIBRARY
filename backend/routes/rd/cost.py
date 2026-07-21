@@ -14,6 +14,7 @@ from database.models.rd.cost import (
     CostBomLine, CostMaterialSupplier, CostMaterialRule, CostMaterialPrice,
 )
 from upload_validation import read_spreadsheet_upload, UploadValidationError
+from error_handling import internal_error_response
 
 cost_bp = Blueprint('rd_cost', __name__)
 
@@ -93,8 +94,8 @@ def preview_snapshot():
     try:
         from services.rd.cost_import import preview_excel
         result = preview_excel(tmp_path)
-    except Exception as e:
-        return Result.fail(f'解析失败：{e}').to_response()
+    except Exception:
+        return internal_error_response('BOM 成本预览解析失败', '解析失败')
     finally:
         os.unlink(tmp_path)
 
@@ -143,9 +144,9 @@ def import_snapshot():
         try:
             from services.rd.cost_import import import_from_data
             result = import_from_data(preview_data, snapshot_date, notes, created_by)
-        except Exception as e:
+        except Exception:
             db.session.rollback()
-            return Result.fail(f'导入失败：{e}').to_response()
+            return internal_error_response('BOM 成本数据导入失败', '导入失败')
 
         return Result.ok(data=result, message='导入成功').to_response()
 
@@ -176,9 +177,9 @@ def import_snapshot():
     try:
         from services.rd.cost_import import import_excel
         result = import_excel(tmp_path, snapshot_date, notes, created_by)
-    except Exception as e:
+    except Exception:
         db.session.rollback()
-        return Result.fail(f'解析失败：{e}').to_response()
+        return internal_error_response('BOM 成本文件导入失败', '解析失败')
     finally:
         os.unlink(tmp_path)
 

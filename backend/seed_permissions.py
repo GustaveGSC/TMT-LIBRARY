@@ -17,7 +17,6 @@ PERMISSIONS = [
     # 产品库
     ("product:view",   "查看产品列表、成品详情"),
     ("product:edit",   "录入/编辑成品信息、导入ERP数据、管理分类/标签/参数"),
-    ("product:delete", "删除产品记录"),
     # 发货数据
     ("shipping:view",   "查看发货看板与统计图表"),
     ("shipping:edit",   "导入发货/销退清单、配置操作人与仓库过滤"),

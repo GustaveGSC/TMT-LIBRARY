@@ -7,6 +7,7 @@ import io
 from upload_validation import (
     read_spreadsheet_upload, ensure_spreadsheet_row_limit, UploadValidationError,
 )
+from error_handling import internal_error_response
 
 product_bp = Blueprint('product', __name__)
 product_bp.before_request(make_blueprint_guard('product:view', 'product:edit'))
@@ -49,8 +50,8 @@ def preview():
         raw_rows = _parse_excel(read_spreadsheet_upload(file, label='产品 Excel'))
     except UploadValidationError as e:
         return Result.fail(str(e)).to_response(413 if '不能超过' in str(e) else 400)
-    except Exception as e:
-        return Result.fail(f'文件解析失败：{str(e)}').to_response()
+    except Exception:
+        return internal_error_response('产品导入预览解析失败', '文件解析失败')
     return Result.ok(data={
         'total':  len(raw_rows),
         'sample': raw_rows[:5],
@@ -68,8 +69,8 @@ def import_data():
         result   = import_product_service.import_rows(raw_rows)
     except UploadValidationError as e:
         return Result.fail(str(e)).to_response(413 if '不能超过' in str(e) else 400)
-    except Exception as e:
-        return Result.fail(f'导入失败：{str(e)}').to_response()
+    except Exception:
+        return internal_error_response('产品数据导入失败', '导入失败')
     return Result.ok(data=result).to_response()
 
 

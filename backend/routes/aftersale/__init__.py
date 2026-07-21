@@ -4,6 +4,7 @@ from flask import Blueprint, request, current_app, g, send_file
 from services.aftersale import AftersaleService
 from auth import make_blueprint_guard
 from result import Result
+from error_handling import internal_task_error
 import aftersale_export_tasks as export_tasks
 
 aftersale_bp = Blueprint('aftersale', __name__)
@@ -240,8 +241,8 @@ def export_cases_start():
                 export_tasks.update(task_id, 'running')
                 _svc.export_cases_to_file(export_tasks.result_path(task_id), **kwargs)
                 export_tasks.update(task_id, 'done')
-            except Exception as e:
-                export_tasks.update(task_id, 'error', str(e))
+            except Exception:
+                export_tasks.update(task_id, 'error', internal_task_error('售后导出失败'))
 
     threading.Thread(target=run, daemon=True).start()
     return Result.ok(data={'task_id': task_id}).to_response()

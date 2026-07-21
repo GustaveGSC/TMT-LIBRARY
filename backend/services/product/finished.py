@@ -1,6 +1,7 @@
 from database.repository.product.finished import FinishedRepository
 from database.models.product.finished import VALID_STATUSES
 from result import Result
+from error_handling import internal_error_result
 
 VALID_SEARCH_FIELDS = {
     'code', 'name', 'name_en', 'category', 'series_code', 'series_name', 'model_code'
@@ -24,8 +25,8 @@ class FinishedService:
                 'size':  size,
                 'items': items,
             })
-        except Exception as e:
-            return Result.fail(f'查询失败：{str(e)}')
+        except Exception:
+            return internal_error_result('查询成品列表失败', '查询失败')
 
     # ── 保存成品信息 ──────────────────────────────────────────────────────
 
@@ -56,8 +57,8 @@ class FinishedService:
         try:
             items = FinishedRepository.get_all_packaged_candidate_codes()
             return Result.ok(data=items)
-        except Exception as e:
-            return Result.fail(f'查询失败：{str(e)}')
+        except Exception:
+            return internal_error_result('查询成品候选编码失败', '查询失败')
 
     # ── 全量产成品（供前端预加载）────────────────────────────────────────
 
@@ -65,8 +66,8 @@ class FinishedService:
         try:
             items = FinishedRepository.get_all_packaged()
             return Result.ok(data=items)
-        except Exception as e:
-            return Result.fail(f'查询失败：{str(e)}')
+        except Exception:
+            return internal_error_result('查询全量成品失败', '查询失败')
 
     # ── 产成品候选列表 ────────────────────────────────────────────────────
 
@@ -75,8 +76,8 @@ class FinishedService:
         try:
             total, items = FinishedRepository.query_packaged_candidates(search, page, size)
             return Result.ok(data={'total': total, 'page': page, 'size': size, 'items': items})
-        except Exception as e:
-            return Result.fail(f'查询失败：{str(e)}')
+        except Exception:
+            return internal_error_result('查询产成品候选列表失败', '查询失败')
 
     # ── 保存产成品信息 ────────────────────────────────────────────────────
 

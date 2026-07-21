@@ -5,6 +5,7 @@ import json
 from flask import Blueprint, Response, stream_with_context, current_app, g
 from auth import make_blueprint_guard
 from result import Result
+from error_handling import internal_task_error
 
 lifecycle_bp = Blueprint('lifecycle', __name__)
 
@@ -40,8 +41,8 @@ def start_update():
 
                 result = update_lifecycle(progress_cb=progress_cb)
                 q.put({'step': 'done', 'data': result})
-            except Exception as e:
-                q.put({'step': 'error', 'message': str(e)})
+            except Exception:
+                q.put({'step': 'error', 'message': internal_task_error('产品生命周期更新失败')})
 
     threading.Thread(target=run, daemon=True).start()
     return Result.ok(data={'task_id': task_id}).to_response()

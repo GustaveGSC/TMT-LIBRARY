@@ -684,20 +684,26 @@ class AftersaleRepository:
                 now - self._filter_options_cache_ts < self._FILTER_OPTIONS_TTL):
             return self._filter_options_cache
 
-        def q_distinct(col):
-            """单列 DISTINCT，让 MySQL 可走列索引，避免全行扫描"""
+        def q_distinct(column):
+            """只接受 ORM 列对象，避免把标识符拼接进 SQL。"""
             return [
-                r[0] for r in db.session.execute(satext(
-                    f"SELECT DISTINCT {col} FROM aftersale_case "
-                    f"WHERE status='confirmed' AND {col} IS NOT NULL AND {col} != '' "
-                    f"ORDER BY {col}"
-                )).fetchall()
+                r[0] for r in (
+                    db.session.query(column)
+                    .filter(
+                        AftersaleCase.status == 'confirmed',
+                        column.isnot(None),
+                        column != '',
+                    )
+                    .distinct()
+                    .order_by(column)
+                    .all()
+                )
             ]
 
-        channels  = q_distinct('channel_name')
-        provinces = q_distinct('province')
-        cities    = q_distinct('city')
-        districts = q_distinct('district')
+        channels  = q_distinct(AftersaleCase.channel_name)
+        provinces = q_distinct(AftersaleCase.province)
+        cities    = q_distinct(AftersaleCase.city)
+        districts = q_distinct(AftersaleCase.district)
 
         ship_alias_rows = db.session.execute(satext("""
             SELECT DISTINCT sa.id, sa.name FROM aftersale_shipping_alias sa

@@ -4,7 +4,8 @@
 
 - Alembic 配置：`alembic.ini`，迁移目录：`backend/migrations/`
 - `20260720_01` 是生产现状的空 baseline，不包含业务 DDL
-- `20260720_02` 新增 `shipping_task`，是当前代码 head
+- `20260720_02` 新增 `shipping_task`
+- `20260721_01` 清理不受支持的 `product:delete` 权限及既有角色关联，是当前代码 head
 - 生产已完成 `stamp 20260720_01`，模型差异检查为 0
 - `app.py` 启动时只校验数据库 revision，不执行隐式 DDL 或自动 upgrade
 - 后续结构变更必须使用经人工审查的 Alembic revision，部署前单独 `upgrade head`

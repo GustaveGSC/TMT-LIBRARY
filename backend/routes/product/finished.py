@@ -11,6 +11,7 @@ from storage.client import get_bucket
 from auth import make_blueprint_guard
 from result import Result
 from upload_validation import validate_image_bytes, UploadValidationError
+from error_handling import internal_error_response
 
 finished_bp = Blueprint('finished', __name__)
 finished_bp.before_request(make_blueprint_guard('product:view', 'product:edit'))
@@ -208,8 +209,8 @@ def upload_cover_image():
             save_kwargs['cover_image_original'] = orig_url
         finished_service.save_finished(code, **save_kwargs)
         return Result.ok(data={'url': url, 'orig_url': orig_url, 'img_updated_at': ts}).to_response()
-    except Exception as e:
-        return Result.fail(f'上传失败：{str(e)}').to_response()
+    except Exception:
+        return internal_error_response('成品图片上传失败', '上传失败')
 
 
 @finished_bp.post('/finished/copy-cover-image')
@@ -248,5 +249,5 @@ def copy_cover_image():
             save_kwargs['cover_image_original'] = orig_url
         finished_service.save_finished(to_code, **save_kwargs)
         return Result.ok(data={'url': url, 'orig_url': orig_url, 'img_updated_at': ts}).to_response()
-    except Exception as e:
-        return Result.fail(f'复制失败：{str(e)}').to_response()
+    except Exception:
+        return internal_error_response('成品图片复制失败', '复制失败')

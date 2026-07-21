@@ -5,6 +5,8 @@
 token 由登录/游客/注册接口返回，前端存于 `localStorage.tmt_token`，由 axios 拦截器自动附加。  
 401 → 前端清 localStorage 并跳转 `/login`。
 
+未预期的服务端异常统一返回 HTTP 500 和通用消息，`data.error_id` 及消息中的错误编号可用于关联服务端完整 traceback；数据库、文件路径、OSS 等原始异常文本不返回客户端。文件大小、类型等受控校验错误仍返回明确的 400/413 信息。
+
 | 蓝图 | 策略 |
 |------|------|
 | account | login / guest / register 公开；改密需登录（仅限本人或 admin）；其余仅 admin |
@@ -25,6 +27,7 @@ token 由登录/游客/注册接口返回，前端存于 `localStorage.tmt_token
 
 ```
 GET    /health
+GET    /ready                                         # 公开；数据库可查询时 200 {status:"ready"}，否则 503 {status:"not_ready"}
 
 POST   /api/account/login                             # 公开；登录时自动写入 user_login_log（成功/失败均记录）
 GET    /api/account/guest                             # 公开；游客登录，返回 token（仅 product:view 权限）

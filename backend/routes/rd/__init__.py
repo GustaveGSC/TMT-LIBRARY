@@ -5,6 +5,7 @@ from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
 import io, urllib.parse, os, re, sys
 from upload_validation import read_spreadsheet_upload, UploadValidationError
+from error_handling import internal_error_response, report_internal_error
 
 rd_bp = Blueprint('rd', __name__)
 rd_bp.before_request(make_blueprint_guard('rd:view', 'rd:edit'))
@@ -141,9 +142,10 @@ def _validate_bom(path, role='before'):
     from openpyxl import load_workbook
     try:
         wb = load_workbook(path, data_only=True, read_only=True)
-    except Exception as e:
+    except Exception:
         label = '变更前文件' if role == 'before' else '变更审核中文件'
-        return f'{label}无法读取：{e}'
+        error_id = report_internal_error(f'{label}读取失败')
+        return f'{label}无法读取（错误编号：{error_id}）'
     ws = wb.active
 
     # 1. 列名核验
@@ -959,8 +961,8 @@ def export_ecr():
     changes = d.pop('changes', None)
     try:
         xlsx_bytes = _build_ecr_xlsx(d, changes)
-    except Exception as e:
-        return Result.fail(f'生成失败：{str(e)}').to_response()
+    except Exception:
+        return internal_error_response('ECR 文件生成失败', '生成失败')
 
     ecr_code = d.get('ecr_code', 'ECR')
     project  = d.get('project', '')
@@ -1206,8 +1208,8 @@ def parse_ecr():
 
         return Result.ok({**fields, 'changes': changes}).to_response()
 
-    except Exception as e:
-        return Result.fail(f'解析失败：{str(e)}').to_response()
+    except Exception:
+        return internal_error_response('ECN 文件解析失败', '解析失败')
     finally:
         if cleanup and os.path.exists(path):
             os.unlink(path)
@@ -1220,8 +1222,8 @@ def export_ecn():
     changes = d.pop('changes', None)
     try:
         xlsx_bytes = _build_ecn_xlsx(d, changes)
-    except Exception as e:
-        return Result.fail(f'生成失败：{str(e)}').to_response()
+    except Exception:
+        return internal_error_response('ECN 文件生成失败', '生成失败')
 
     ecn_code = d.get('ecn_code', 'ECN')
     product  = d.get('product', d.get('project', ''))
@@ -1287,8 +1289,8 @@ def compare_bom():
 
         result = _compare_bom(before_path, after_path)
         return Result.ok(result).to_response()
-    except Exception as e:
-        return Result.fail(f'比对失败：{str(e)}').to_response()
+    except Exception:
+        return internal_error_response('BOM 文件比对失败', '比对失败')
     finally:
         if before_tmp and os.path.exists(before_tmp): os.unlink(before_tmp)
         if after_tmp  and os.path.exists(after_tmp):  os.unlink(after_tmp)
@@ -1620,8 +1622,8 @@ def pdm2bom_process():
             ws = wb.active
             all_rows = list(ws.iter_rows(values_only=True))
             wb.close()
-        except Exception as e:
-            return Result.fail(f'文件读取失败：{e}').to_response()
+        except Exception:
+            return internal_error_response('PTB 文件读取失败', '文件读取失败')
 
         if not all_rows:
             return Result.fail('文件为空').to_response()
@@ -1693,8 +1695,8 @@ def pdm2bom_export_erp():
     template_path = os.path.join(_PTB_RESOURCES_DIR, 'template_material.xlsx')
     try:
         wb = _xl.load_workbook(template_path)
-    except Exception as e:
-        return Result.fail(f'物料模板加载失败：{e}').to_response()
+    except Exception:
+        return internal_error_response('PTB 物料模板加载失败', '物料模板加载失败')
 
     ws = wb.active
     for i, row in enumerate(erp_data, start=6):
@@ -1736,8 +1738,8 @@ def pdm2bom_export_bom():
     template_path = os.path.join(_PTB_RESOURCES_DIR, 'template_bom.xlsx')
     try:
         wb = _xl.load_workbook(template_path)
-    except Exception as e:
-        return Result.fail(f'BOM 模板加载失败：{e}').to_response()
+    except Exception:
+        return internal_error_response('PTB BOM 模板加载失败', 'BOM 模板加载失败')
 
     ws = wb.active
     for i, row in enumerate(bom_data, start=6):

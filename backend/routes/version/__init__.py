@@ -5,6 +5,7 @@ from storage.client import get_bucket
 from auth import verify_token
 from result import Result
 from upload_validation import parse_declared_size, GLOBAL_REQUEST_LIMIT, UploadValidationError
+from error_handling import internal_error_response
 import os
 
 version_bp = Blueprint('version', __name__)
@@ -143,8 +144,8 @@ def presign_upload():
                 'Content-Length': str(file_size),
             },
         }).to_response()
-    except Exception as e:
-        return Result.fail(f"生成签名失败：{str(e)}").to_response()
+    except Exception:
+        return internal_error_response('生成安装包上传签名失败', '生成签名失败')
 
 
 @version_bp.post("/upload")
@@ -158,5 +159,5 @@ def upload_file():
         bucket   = get_bucket()
         bucket.put_object(key, file.stream)
         return Result.ok(data={"url": _key_to_url(filename), "key": key}).to_response()
-    except Exception as e:
-        return Result.fail(f"上传失败：{str(e)}").to_response()
+    except Exception:
+        return internal_error_response('安装包中转上传失败', '上传失败')

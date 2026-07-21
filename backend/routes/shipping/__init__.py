@@ -9,6 +9,7 @@ from auth import make_blueprint_guard
 from result import Result
 from database.repository.shipping import shipping_repository, _invalidate_chart_options_cache
 from upload_validation import read_spreadsheet_upload, UploadValidationError
+from error_handling import internal_error_response, internal_task_error
 
 shipping_bp = Blueprint('shipping', __name__)
 
@@ -104,8 +105,8 @@ def import_shipping():
                 _finish_task(task_id, q, 'done', data=result)
             except InterruptedError:
                 _finish_task(task_id, q, 'cancelled', message='导入已中止，业务数据已回滚')
-            except Exception as e:
-                _finish_task(task_id, q, 'error', message=str(e))
+            except Exception:
+                _finish_task(task_id, q, 'error', message=internal_task_error('发货数据导入失败'))
             finally:
                 _cancel_flags.pop(task_id, None)
 
@@ -147,8 +148,8 @@ def import_finance():
                 _finish_task(task_id, q, 'done', data=result)
             except InterruptedError:
                 _finish_task(task_id, q, 'cancelled', message='导入已中止，业务数据已回滚')
-            except Exception as e:
-                _finish_task(task_id, q, 'error', message=str(e))
+            except Exception:
+                _finish_task(task_id, q, 'error', message=internal_task_error('财务数据导入失败'))
             finally:
                 _cancel_flags.pop(task_id, None)
 
@@ -231,8 +232,8 @@ def get_operators():
     """获取所有操作人及其分类"""
     try:
         return Result.ok(data=shipping_service.get_operators()).to_response()
-    except Exception as e:
-        return Result.fail(str(e)).to_response()
+    except Exception:
+        return internal_error_response('查询发货操作人失败')
 
 
 @shipping_bp.post('/operators/classify')
@@ -243,8 +244,8 @@ def classify_operators():
         return Result.fail('请求体应为数组').to_response()
     try:
         result = shipping_service.classify_operators(items)
-    except Exception as e:
-        return Result.fail(str(e)).to_response()
+    except Exception:
+        return internal_error_response('保存发货操作人分类失败')
     return Result.ok(data=result).to_response()
 
 
@@ -265,8 +266,8 @@ def resolve_all():
                 result = shipping_service.resolve_all(progress_cb=progress_cb)
                 _invalidate_chart_options_cache()
                 _finish_task(task_id, q, 'done', data=result)
-            except Exception as e:
-                _finish_task(task_id, q, 'error', message=str(e))
+            except Exception:
+                _finish_task(task_id, q, 'error', message=internal_task_error('发货数据重算失败'))
 
     threading.Thread(target=run, daemon=True).start()
     return Result.ok(data={'task_id': task_id}).to_response()
@@ -298,9 +299,10 @@ def resolve_stale():
                 shipping_repository.update_task(
                     task_id, status='done', progress={'step': 'done'}, result=result,
                 )
-            except Exception as e:
+            except Exception:
                 shipping_repository.update_task(
-                    task_id, status='error', progress={'step': 'error'}, message=str(e),
+                    task_id, status='error', progress={'step': 'error'},
+                    message=internal_task_error('旧数据迁移失败'),
                 )
 
     threading.Thread(target=run, daemon=True).start()
@@ -324,8 +326,8 @@ def get_stats():
     """看板统计摘要"""
     try:
         return Result.ok(data=shipping_service.get_stats()).to_response()
-    except Exception as e:
-        return Result.fail(str(e)).to_response()
+    except Exception:
+        return internal_error_response('查询发货统计失败')
 
 
 @shipping_bp.get('/shipped-dates')
@@ -333,8 +335,8 @@ def get_shipped_dates():
     """返回所有已存在的 shipped_date 列表（去重升序）"""
     try:
         return Result.ok(data=shipping_service.get_shipped_dates()).to_response()
-    except Exception as e:
-        return Result.fail(str(e)).to_response()
+    except Exception:
+        return internal_error_response('查询发货日期失败')
 
 
 @shipping_bp.get('/warehouses')
@@ -342,8 +344,8 @@ def get_warehouses():
     """返回所有出现过的仓库名及是否排除状态"""
     try:
         return Result.ok(data=shipping_service.get_warehouses()).to_response()
-    except Exception as e:
-        return Result.fail(str(e)).to_response()
+    except Exception:
+        return internal_error_response('查询仓库配置失败')
 
 
 @shipping_bp.post('/warehouses/filter')
@@ -354,8 +356,8 @@ def save_warehouse_filters():
         return Result.fail('请求体应为数组').to_response()
     try:
         result = shipping_service.save_warehouse_filters(items)
-    except Exception as e:
-        return Result.fail(str(e)).to_response()
+    except Exception:
+        return internal_error_response('保存仓库配置失败')
     return Result.ok(data=result).to_response()
 
 
@@ -385,8 +387,8 @@ def get_orders():
     }
     try:
         return Result.ok(data=shipping_service.get_orders(page, size, filters, sort_field, sort_order)).to_response()
-    except Exception as e:
-        return Result.fail(str(e)).to_response()
+    except Exception:
+        return internal_error_response('查询发货订单失败')
 
 
 @shipping_bp.get('/product/<string:code>/monthly')
@@ -397,8 +399,8 @@ def get_product_monthly(code):
         if source not in ('shipping', 'finance'):
             source = 'shipping'
         return shipping_service.get_product_monthly(code, source=source).to_response()
-    except Exception as e:
-        return Result.fail(str(e)).to_response()
+    except Exception:
+        return internal_error_response('查询产品月度发货数据失败')
 
 
 @shipping_bp.get('/chart-options')
@@ -409,8 +411,8 @@ def get_chart_options():
     source     = request.args.get('source', 'shipping')
     try:
         return Result.ok(data=shipping_service.get_chart_options(date_start, date_end, source=source)).to_response()
-    except Exception as e:
-        return Result.fail(str(e)).to_response()
+    except Exception:
+        return internal_error_response('查询发货图表选项失败')
 
 
 @shipping_bp.post('/chart-data')
@@ -429,8 +431,8 @@ def get_chart_data():
         params['group_by'] = 'date'
     try:
         return Result.ok(data=shipping_service.get_chart_data(params)).to_response()
-    except Exception as e:
-        return Result.fail(str(e)).to_response()
+    except Exception:
+        return internal_error_response('查询发货图表数据失败')
 
 
 # ── 产成品通用件配置 ──────────────────────────────────────

@@ -11,6 +11,7 @@ from storage.client import get_bucket
 from auth import make_blueprint_guard
 from result import Result
 from upload_validation import parse_declared_size, RESOURCE_UPLOAD_LIMIT, UploadValidationError
+from error_handling import internal_error_response
 
 SHARE_SECRET = os.getenv('SHARE_SECRET', 'tmt-share-key-2024')
 SHARE_TTL    = 7 * 24 * 3600   # 7 天
@@ -222,8 +223,8 @@ def get_signed_url(resource_id: int):
             params['response-content-type'] = content_type
         signed_url = bucket.sign_url('GET', storage_key, expiry, params=params)
         return Result.ok(data={'url': signed_url}).to_response()
-    except Exception as e:
-        return Result.fail(f'生成签名失败：{str(e)}').to_response()
+    except Exception:
+        return internal_error_response('生成资料下载签名失败', '生成签名失败')
 
 
 # ── 预签名直传 ────────────────────────────────────────────────────────────
@@ -263,8 +264,8 @@ def presign_upload():
             'file_size':   file_size,
             'required_headers': headers,
         }).to_response()
-    except Exception as e:
-        return Result.fail(f'生成签名失败：{str(e)}').to_response()
+    except Exception:
+        return internal_error_response('生成资料上传签名失败', '生成签名失败')
 
 
 # ── OG 封面代理（供分享链接预览，无需登录）──────────────────────────────
@@ -303,8 +304,8 @@ def og_image(resource_id: int):
             'Content-Disposition': 'inline',
             'Cache-Control': 'public, max-age=86400',
         })
-    except Exception as e:
-        return Response(str(e), status=500)
+    except Exception:
+        return internal_error_response('代理读取资料失败', '读取资料失败')
 
 
 # ── 分享链接 ─────────────────────────────────────────────────────────────
@@ -342,9 +343,8 @@ def proxy_content(resource_id: int):
                 'Access-Control-Allow-Origin': '*',
             }
         )
-    except Exception as e:
-        import traceback; traceback.print_exc()
-        return Response(str(e), status=500, mimetype='text/plain')
+    except Exception:
+        return internal_error_response('共享资料读取失败', '读取资料失败')
 
 
 @resource_bp.get('/<int:resource_id>/share')
