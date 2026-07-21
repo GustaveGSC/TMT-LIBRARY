@@ -497,7 +497,6 @@ async function fetchTooltipBreakdown() {
   }))
   if (token === breakdownFetchToken) tooltipBreakdown.value = results
 }
-watch(tooltipMode, fetchTooltipBreakdown)
 
 /** 把某国家的细分数据转成展示行；系列模式下按品类分组、同品类相邻，超过上限截断。
  * 每行是 { header } 或 { name, value } 二选一，由调用方各自渲染（tooltip 用 HTML，面板用 DOM）。 */
@@ -624,6 +623,7 @@ const TOOLTIP_MODE_OPTIONS = [
 ]
 const tooltipMode      = ref('default')
 const tooltipBreakdown = ref({})   // { [国家中文名]: [{label, name, value}] }，已过滤0值
+watch(tooltipMode, fetchTooltipBreakdown)
 
 // 当前维度下允许的图表类型 / 对比模式
 const allowedChartTypes  = computed(() => groupByConfig(groupBy.value).chartTypes  ?? [])
