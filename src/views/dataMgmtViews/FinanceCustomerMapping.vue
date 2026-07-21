@@ -135,7 +135,7 @@ function handlePageChange(p) {
         :class="{ mapped: item.mapping }"
       >
         <div class="alias-main">
-          <span class="alias-name">{{ item.customer_alias }}</span>
+          <span class="alias-name" :title="item.customer_alias">{{ item.customer_alias }}</span>
           <span class="alias-count">{{ item.occurrences }} 条</span>
           <span class="alias-status" :class="item.mapping ? 'status-mapped' : 'status-unmapped'">
             {{ item.mapping ? '已匹配' : '未匹配' }}
@@ -151,21 +151,21 @@ function handlePageChange(p) {
             v-model="drafts[item.customer_alias].country"
             placeholder="国家"
             :disabled="!canEditShipping"
-            style="width: 120px"
+            style="width: 110px"
             @input="markDirty(item.customer_alias)"
           />
           <el-input
             v-model="drafts[item.customer_alias].brand"
             placeholder="品牌"
             :disabled="!canEditShipping"
-            style="width: 120px"
+            style="width: 110px"
             @input="markDirty(item.customer_alias)"
           />
           <el-input
             v-model="drafts[item.customer_alias].note"
             placeholder="备注（可选）"
             :disabled="!canEditShipping"
-            style="width: 200px"
+            style="width: 220px; flex: 1"
             @input="markDirty(item.customer_alias)"
           />
           <button
@@ -226,9 +226,10 @@ function handlePageChange(p) {
 
 .alias-row {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px 16px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 10px 16px;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -243,6 +244,8 @@ function handlePageChange(p) {
   display: flex;
   align-items: center;
   gap: 10px;
+  width: 260px;
+  flex-shrink: 0;
 }
 .alias-name {
   font-size: 13px;
@@ -272,6 +275,8 @@ function handlePageChange(p) {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex: 1;
+  min-width: 0;
   flex-wrap: wrap;
 }
 
@@ -281,7 +286,6 @@ function handlePageChange(p) {
   border: none; border-radius: 8px;
   font-size: 12px; font-weight: 500; font-family: inherit;
   cursor: pointer; transition: background 0.18s;
-  margin-left: auto;
 }
 .save-btn:hover:not(:disabled) { background: var(--accent-hover); }
 .save-btn:disabled { opacity: 0.45; cursor: not-allowed; }

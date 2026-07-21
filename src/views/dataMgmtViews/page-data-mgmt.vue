@@ -264,7 +264,9 @@ async function handleResolveAll() {
           <EquivalentConfig />
           <div class="import-divider"></div>
           <TagDimensionConfig />
-          <div class="import-divider"></div>
+        </div>
+        <div v-show="activePage === 'config'" class="config-divider-h"></div>
+        <div v-show="activePage === 'config'" class="config-layout-full">
           <FinanceCustomerMapping />
         </div>
       </div>
@@ -396,11 +398,19 @@ async function handleResolveAll() {
   min-height: 200px;
 }
 
-/* 数据配置多列布局（操作人 + 仓库 + 通用件 + 标签维度 + 外贸客户匹配） */
+/* 数据配置多列布局（操作人 + 仓库 + 通用件 + 标签维度） */
 .config-layout {
   display: grid;
-  grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr auto 1fr;
+  grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr;
   gap: 0;
   align-items: start;
 }
+
+/* 外贸客户匹配单独占一整行（每行需要展示多个输入框，窄列会挤变形） */
+.config-divider-h {
+  height: 1px;
+  background: var(--border);
+  margin: 32px 0;
+}
+.config-layout-full { width: 100%; }
 </style>
