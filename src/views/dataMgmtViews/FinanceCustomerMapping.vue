@@ -8,15 +8,24 @@ import { usePermission } from '@/composables/usePermission'
 // ── 权限 ──────────────────────────────────────────
 const { canEditShipping } = usePermission()
 
+// ── 常量 ──────────────────────────────────────────
+const STATUS_OPTIONS = [
+  { label: '未审核',    value: 'pending'   },
+  { label: '外贸客户',  value: 'export'    },
+  { label: '内销客户',  value: 'domestic'  },
+  { label: '非销售客户', value: 'non_sales' },
+]
+const STATUS_LABEL = Object.fromEntries(STATUS_OPTIONS.map(o => [o.value, o.label]))
+
 // ── 响应式状态 ────────────────────────────────────
-const items       = ref([])   // [{ customer_alias, occurrences, mapping }]
-const loading     = ref(false)
-const savingKey    = ref('')  // 正在保存的 customer_alias，用于单行 loading
-const keyword     = ref('外贸')
-const onlyUnmapped = ref(false)
-const page        = ref(1)
-const perPage     = 50
-const total       = ref(0)
+const items         = ref([])   // [{ customer_alias, occurrences, mapping }]
+const loading       = ref(false)
+const savingKey     = ref('')   // 正在保存的 customer_alias，用于单行 loading
+const keyword       = ref('')
+const onlyPending    = ref(false) // 仅看未审核（含尚未创建映射的简称）
+const page          = ref(1)
+const perPage       = 50
+const total         = ref(0)
 
 // 每行的可编辑草稿，key 为 customer_alias
 const drafts = reactive({})
@@ -33,7 +42,7 @@ watch(keyword, () => {
   }, 400)
 })
 
-watch(onlyUnmapped, () => {
+watch(onlyPending, () => {
   page.value = 1
   loadAliases()
 })
@@ -42,11 +51,11 @@ watch(onlyUnmapped, () => {
 function makeDraft(item) {
   const m = item.mapping
   return {
-    is_export: m?.is_export ?? true,
-    country:   m?.country ?? '',
-    brand:     m?.brand ?? '',
-    note:      m?.note ?? '',
-    dirty:     false,
+    status: m?.status ?? 'pending',
+    country: m?.country ?? '',
+    brand:   m?.brand ?? '',
+    note:    m?.note ?? '',
+    dirty:   false,
   }
 }
 
@@ -54,14 +63,17 @@ async function loadAliases() {
   loading.value = true
   try {
     const res = await http.get('/api/shipping/finance-customer-aliases', {
-      params: { keyword: keyword.value || undefined, page: page.value, per_page: perPage },
+      params: {
+        keyword: keyword.value || undefined,
+        status:  onlyPending.value ? 'pending' : undefined,
+        page: page.value,
+        per_page: perPage,
+      },
     })
     if (res.success) {
-      let list = res.data.items
-      if (onlyUnmapped.value) list = list.filter(i => !i.mapping)
-      items.value = list
+      items.value = res.data.items
       total.value = res.data.total
-      for (const item of list) {
+      for (const item of items.value) {
         if (!drafts[item.customer_alias]) drafts[item.customer_alias] = makeDraft(item)
       }
     } else {
@@ -84,7 +96,7 @@ async function saveRow(item) {
   try {
     const res = await http.post('/api/shipping/finance-customer-aliases/mapping', {
       customer_alias: item.customer_alias,
-      is_export: draft.is_export,
+      status: draft.status,
       country: draft.country || null,
       brand: draft.brand || null,
       note: draft.note || null,
@@ -114,13 +126,13 @@ function handlePageChange(p) {
 
     <div class="config-header">
       <div class="config-title">外贸客户匹配</div>
-      <div class="config-sub">财务原始数据"客户简称"列去重列表，人工确认是否真实外贸订单并填写国家/品牌（不做自动解析）</div>
+      <div class="config-sub">财务原始数据"客户简称"列去重列表，人工审核归类为外贸客户/内销客户/非销售客户，并按需填写国家/品牌（不做自动解析）</div>
     </div>
 
     <!-- 筛选栏 -->
     <div class="filter-row">
-      <el-input v-model="keyword" placeholder="按客户简称筛选，如“外贸”" clearable style="width: 220px" />
-      <el-checkbox v-model="onlyUnmapped">仅看未匹配</el-checkbox>
+      <el-input v-model="keyword" placeholder="按客户简称筛选" clearable style="width: 220px" />
+      <el-checkbox v-model="onlyPending">仅看未审核</el-checkbox>
     </div>
 
     <!-- 空状态 -->
@@ -132,21 +144,24 @@ function handlePageChange(p) {
         v-for="item in items"
         :key="item.customer_alias"
         class="alias-row"
-        :class="{ mapped: item.mapping }"
+        :class="`status-${drafts[item.customer_alias]?.status ?? 'pending'}`"
       >
         <div class="alias-main">
           <span class="alias-name" :title="item.customer_alias">{{ item.customer_alias }}</span>
           <span class="alias-count">{{ item.occurrences }} 条</span>
-          <span class="alias-status" :class="item.mapping ? 'status-mapped' : 'status-unmapped'">
-            {{ item.mapping ? '已匹配' : '未匹配' }}
+          <span class="alias-status" :class="`badge-${drafts[item.customer_alias]?.status ?? 'pending'}`">
+            {{ STATUS_LABEL[drafts[item.customer_alias]?.status ?? 'pending'] }}
           </span>
         </div>
         <div class="alias-fields">
-          <el-checkbox
-            v-model="drafts[item.customer_alias].is_export"
+          <el-select
+            v-model="drafts[item.customer_alias].status"
             :disabled="!canEditShipping"
+            style="width: 110px"
             @change="markDirty(item.customer_alias)"
-          >确认外贸</el-checkbox>
+          >
+            <el-option v-for="s in STATUS_OPTIONS" :key="s.value" :label="s.label" :value="s.value" />
+          </el-select>
           <el-input
             v-model="drafts[item.customer_alias].country"
             placeholder="国家"
@@ -235,9 +250,17 @@ function handlePageChange(p) {
   border-radius: 10px;
   transition: border-color 0.18s, background 0.18s;
 }
-.alias-row.mapped {
+.alias-row.status-export {
   border-color: rgba(74, 154, 90, 0.3);
   background: rgba(74, 154, 90, 0.03);
+}
+.alias-row.status-domestic {
+  border-color: rgba(74, 143, 192, 0.3);
+  background: rgba(74, 143, 192, 0.03);
+}
+.alias-row.status-non_sales {
+  border-color: rgba(138, 122, 106, 0.3);
+  background: rgba(138, 122, 106, 0.03);
 }
 
 .alias-main {
@@ -267,9 +290,12 @@ function handlePageChange(p) {
   padding: 2px 8px;
   border-radius: 10px;
   flex-shrink: 0;
+  white-space: nowrap;
 }
-.status-mapped   { color: #4a9a5a; background: rgba(74, 154, 90, 0.1); }
-.status-unmapped { color: #c06030; background: rgba(192, 96, 48, 0.1); }
+.badge-pending    { color: #c06030; background: rgba(192, 96, 48, 0.1); }
+.badge-export     { color: #4a9a5a; background: rgba(74, 154, 90, 0.1); }
+.badge-domestic   { color: #4a8fc0; background: rgba(74, 143, 192, 0.1); }
+.badge-non_sales  { color: #8a7a6a; background: rgba(138, 122, 106, 0.1); }
 
 .alias-fields {
   display: flex;

@@ -2,7 +2,7 @@
 
 ## page-data-mgmt.vue 说明
 - 路由 `/data-mgmt`，`onMounted` 调用 `maximizeApp()`，返回按钮先 `unmaximizeApp()` 再 `router.back()`
-- 顶部导航两个 Tab：**导入数据**（DataImport + FinanceImport 左右并排）/ **数据配置**（OperatorConfig + WarehouseConfig + EquivalentConfig + TagDimensionConfig + FinanceCustomerMapping 五列并排）
+- 顶部导航两个 Tab：**导入数据**（DataImport + FinanceImport 左右并排）/ **数据配置**（子 Tab 切换：操作人分类/仓库过滤配置/产成品通用件配置/标签分析维度/外贸客户匹配，一次只显示一个面板，最大宽度 760px，避免五个面板并排拥挤）
 - 右上角「刷新全局数据」按钮：点击先弹二次确认框，确认后调 `POST /api/shipping/resolve-all` → 订阅 SSE 进度（复用 `import/progress/:task_id`），实时显示"xxx / xxx 个订单"；刷新时同时计算发货数量、销退数量、实际数量；SSE 完成后弹 `ElMessage.success` 告知完成数量
 
 ## DataImport.vue 说明
@@ -56,12 +56,13 @@
 - 新增/删除后提示用户前往全量刷新更新历史数据
 
 ## FinanceCustomerMapping.vue 说明
-- 财务原始数据"客户简称"去重列表（合并 shipping_record 与 return_record 出现次数），人工确认是否真实外贸订单 + 填写国家/品牌/备注，**完全人工，不做自动解析**
-- 顶部筛选：关键字输入框（默认 `外贸`，400ms 防抖）+「仅看未匹配」勾选，均触发重新拉取第 1 页
-- 每行草稿态存于 `drafts[customer_alias]`（is_export/country/brand/note/dirty），编辑后标记 dirty，「保存」按钮仅在 dirty 时可点，保存成功后用响应覆盖该行 `mapping` 并清 dirty
-- 调 `GET /api/shipping/finance-customer-aliases`（`?keyword=&page=&per_page=`，`shipping:view`）加载，`POST /api/shipping/finance-customer-aliases/mapping`（`shipping:edit`）保存单条
-- 无 `shipping:edit` 权限时所有输入框/勾选框/保存按钮禁用（只读展示）
-- 应用到 `shipping_order_finished` 聚合表/图表分析是下一批范围，本页面只负责维护映射表，不影响现有发货图表
+- 财务原始数据"客户简称"去重列表（合并 shipping_record 与 return_record 出现次数），人工审核归类四态 + 填写国家/品牌/备注，**完全人工，不做自动解析**
+- 四态：`pending`未审核（默认）/ `export`外贸客户 / `domestic`内销客户 / `non_sales`非销售客户（已审核但既不算外贸也不算内销的终态，如赠品样品，不会再被"仅看未审核"筛出来提醒处理）
+- 顶部筛选：关键字输入框（默认空，400ms 防抖，不再默认只看含"外贸"的简称——四态上线后所有简称都需要审核）+「仅看未审核」勾选（直接请求后端 `status=pending`，该值同时包含尚未创建映射记录的简称和显式 pending，不在前端二次过滤）
+- 每行草稿态存于 `drafts[customer_alias]`（status/country/brand/note/dirty），状态用 `el-select` 四选一（不再是"确认外贸"勾选框），编辑后标记 dirty，「保存」按钮仅在 dirty 时可点，保存成功后用响应覆盖该行 `mapping` 并清 dirty
+- 调 `GET /api/shipping/finance-customer-aliases`（`?keyword=&status=&page=&per_page=`，`shipping:view`）加载，`POST /api/shipping/finance-customer-aliases/mapping`（`shipping:edit`，请求体 `status` 字段，旧 `is_export` 字段已废弃）保存单条
+- 无 `shipping:edit` 权限时所有输入框/下拉/保存按钮禁用（只读展示）
+- 应用到 `shipping_order_finished` 聚合表/图表分析已上线：`export`进外贸统计+国家/品牌维度，`domestic`进内销统计，`pending`/`non_sales`/未映射均只在"全部"里出现
 
 ## page-shipping.vue 说明
 - 路由 `/shipping`，`onMounted` 调用 `maximizeApp()`，返回按钮先 `unmaximizeApp()`
