@@ -404,6 +404,25 @@ function recomputeDetailPanelLayout() {
   detailPanelLayout.value = layout
 }
 
+/** 重新计算"已参展国家"红点的屏幕位置（不依赖当前地图上有没有发货数据，独立于 lastMapItems） */
+function recomputeExhibitedDots() {
+  if (!chartInst || !showExhibitedCountries.value || lastMapKey !== 'world') {
+    exhibitedDots.value = []
+    return
+  }
+  const centroids = getFeatureCentroids('world')
+  const dots = []
+  for (const zh of EXHIBITED_COUNTRIES) {
+    const mapName = COUNTRY_NAME_MAP[zh] ?? zh
+    const centroid = centroids.get(mapName)
+    if (!centroid) continue
+    const pos = chartInst.convertToPixel({ seriesIndex: 0 }, centroid)
+    if (!pos) continue
+    dots.push({ name: zh, pos })
+  }
+  exhibitedDots.value = dots
+}
+
 // 面板拖拽（原生鼠标事件，避免依赖 ECharts graphic 的 draggable 机制）
 let dragState = null
 function startDragPanel(e, key) {
@@ -649,6 +668,15 @@ const TOOLTIP_MODE_OPTIONS = [
 const tooltipMode      = ref('default')
 const tooltipBreakdown = ref({})   // { [国家中文名]: [{label, name, value}] }，已过滤0值
 const breakdownLoading = ref(false) // 批量拉取细分数据进行中：面板显示加载动画，避免误以为"没有数据"
+
+// 临时需求：标记已参加过展会的国家（红点）。这份名单是用户口头给的一次性数据，
+// 不是后端配置，后续人工改这个数组即可，不用做成界面配置。
+const EXHIBITED_COUNTRIES = [
+  '香港', '哈萨克斯坦', '德国', '俄罗斯', '阿联酋',
+  '波兰', '巴西', '越南', '泰国', '印度尼西亚', '马来西亚', '美国', '中国',
+]
+const showExhibitedCountries = ref(false)
+const exhibitedDots          = ref([]) // [{ name, pos:[x,y] }]
 watch(tooltipMode, fetchTooltipBreakdown)
 
 // 当前维度下允许的图表类型 / 对比模式
@@ -1621,14 +1649,14 @@ function _createChartInst() {
   chartInst.on('mousemove',  () => { clearTimeout(lpTimer); lpActive = false })
   chartInst.on('globalout',  () => { clearTimeout(lpTimer); lpActive = false })
   // 地图缩放/平移（roam）后，详情面板的定位点会跟着变，需要重新计算连线和面板位置
-  chartInst.on('georoam', recomputeDetailPanelLayout)
+  chartInst.on('georoam', () => { recomputeDetailPanelLayout(); recomputeExhibitedDots() })
   renderChart()
 }
 
 function initChart() {
   if (!chartEl.value) return
   resizeObs = new ResizeObserver(() => {
-    if (chartInst) { chartInst.resize(); recomputeDetailPanelLayout(); return }
+    if (chartInst) { chartInst.resize(); recomputeDetailPanelLayout(); recomputeExhibitedDots(); return }
     _createChartInst()
   })
   resizeObs.observe(chartEl.value)
@@ -1723,6 +1751,7 @@ async function renderChart() {
   if (chartType.value === 'map') {
     await nextTick()
     recomputeDetailPanelLayout()
+    recomputeExhibitedDots()
     if (tooltipMode.value !== 'default') fetchTooltipBreakdown()
   }
 }
@@ -3109,6 +3138,12 @@ watch(groupBy, () => {
       <div ref="chartWrapEl" v-loading="loadingChart" class="chart-wrap" :class="{ 'chart-wrap--with-table': showMapTable }" @contextmenu.prevent>
         <div ref="chartEl" class="chart-canvas"></div>
 
+        <!-- 已参展国家：红点标记（临时需求，名单见 EXHIBITED_COUNTRIES） -->
+        <div v-if="exhibitedDots.length" class="map-exhibited-overlay">
+          <div v-for="d in exhibitedDots" :key="d.name" class="map-exhibited-dot"
+            :style="{ left: (d.pos[0] - 5) + 'px', top: (d.pos[1] - 5) + 'px' }" :title="d.name + '：已参展'"></div>
+        </div>
+
         <!-- 世界地图详情面板：DOM 叠层，保证盖在地图 canvas 上方；连线用 SVG，面板可拖拽 -->
         <div v-if="detailPanelLayout.length" class="map-detail-overlay">
           <svg class="map-detail-lines">
@@ -3163,6 +3198,7 @@ watch(groupBy, () => {
           </div>
           <div v-else-if="chartType === 'map' && currentMapKey === 'world'" class="footer-city-mode footer-world-controls">
             <el-switch v-model="showDetailPanels" size="small" active-text="显示详细数据" active-color="#c4883a" @change="renderChart()" />
+            <el-switch v-model="showExhibitedCountries" size="small" active-text="显示展会国家" active-color="#e05252" @change="renderChart()" />
             <div class="tooltip-mode-group">
               <button v-for="opt in TOOLTIP_MODE_OPTIONS" :key="opt.value"
                 class="tooltip-mode-btn" :class="{ active: tooltipMode === opt.value }"
@@ -3514,6 +3550,14 @@ watch(groupBy, () => {
 .chart-wrap--with-table { display: flex; }
 .chart-canvas { width: 100%; height: 100%; }
 .chart-wrap--with-table .chart-canvas { flex: 1; min-width: 0; width: auto; }
+
+/* 已参展国家红点：同样用 DOM 叠层保证盖过地图，z-index 比详情面板低一档，不挡拖拽 */
+.map-exhibited-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 19; }
+.map-exhibited-dot {
+  position: absolute; width: 10px; height: 10px; border-radius: 50%;
+  background: #e05252; border: 2px solid #fff; box-shadow: 0 0 0 1px #e05252, 0 1px 4px rgba(0,0,0,0.3);
+  pointer-events: auto; cursor: default;
+}
 
 /* 世界地图详情面板：DOM 叠层，z-index 保证盖过下方 canvas 地图 */
 .map-detail-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 20; }
