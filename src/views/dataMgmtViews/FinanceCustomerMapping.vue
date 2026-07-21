@@ -22,7 +22,7 @@ const items         = ref([])   // [{ customer_alias, occurrences, mapping }]
 const loading       = ref(false)
 const savingKey     = ref('')   // 正在保存的 customer_alias，用于单行 loading
 const keyword       = ref('')
-const onlyPending    = ref(false) // 仅看未审核（含尚未创建映射的简称）
+const statusFilters = reactive(Object.fromEntries(STATUS_OPTIONS.map(o => [o.value, false]))) // 四态复选筛选
 const page          = ref(1)
 const perPage       = 50
 const total         = ref(0)
@@ -42,10 +42,10 @@ watch(keyword, () => {
   }, 400)
 })
 
-watch(onlyPending, () => {
+watch(statusFilters, () => {
   page.value = 1
   loadAliases()
-})
+}, { deep: true })
 
 // ── 方法 ──────────────────────────────────────────
 function makeDraft(item) {
@@ -59,28 +59,47 @@ function makeDraft(item) {
   }
 }
 
+async function fetchByStatus(status, perPageOverride) {
+  const res = await http.get('/api/shipping/finance-customer-aliases', {
+    params: {
+      keyword: keyword.value || undefined,
+      status,
+      page: status ? 1 : page.value,
+      per_page: perPageOverride ?? perPage,
+    },
+  })
+  if (!res.success) throw new Error(res.message || '加载失败')
+  return res.data
+}
+
 async function loadAliases() {
   loading.value = true
   try {
-    const res = await http.get('/api/shipping/finance-customer-aliases', {
-      params: {
-        keyword: keyword.value || undefined,
-        status:  onlyPending.value ? 'pending' : undefined,
-        page: page.value,
-        per_page: perPage,
-      },
-    })
-    if (res.success) {
-      items.value = res.data.items
-      total.value = res.data.total
-      for (const item of items.value) {
-        if (!drafts[item.customer_alias]) drafts[item.customer_alias] = makeDraft(item)
-      }
+    const selected = STATUS_OPTIONS.map(o => o.value).filter(v => statusFilters[v])
+
+    if (selected.length <= 1) {
+      // 0 或 1 个状态：后端原生支持，走正常服务端分页
+      const data = await fetchByStatus(selected[0] ?? undefined, perPage)
+      items.value = data.items
+      total.value = data.total
     } else {
-      ElMessage.error(res.message || '加载失败')
+      // 多个状态复选：后端暂不支持多值筛选，逐个状态各取一页（每状态最多 500 条，
+      // 当前数据量下够用），前端合并去重后再本地分页
+      const pages = await Promise.all(selected.map(s => fetchByStatus(s, 500)))
+      const merged = new Map()
+      for (const data of pages) {
+        for (const item of data.items) merged.set(item.customer_alias, item)
+      }
+      const all = [...merged.values()].sort((a, b) => b.occurrences - a.occurrences)
+      total.value = all.length
+      items.value = all.slice((page.value - 1) * perPage, page.value * perPage)
     }
-  } catch {
-    ElMessage.error('加载失败')
+
+    for (const item of items.value) {
+      if (!drafts[item.customer_alias]) drafts[item.customer_alias] = makeDraft(item)
+    }
+  } catch (err) {
+    ElMessage.error(err.message || '加载失败')
   } finally {
     loading.value = false
   }
@@ -132,7 +151,11 @@ function handlePageChange(p) {
     <!-- 筛选栏 -->
     <div class="filter-row">
       <el-input v-model="keyword" placeholder="按客户简称筛选" clearable style="width: 220px" />
-      <el-checkbox v-model="onlyPending">仅看未审核</el-checkbox>
+      <div class="status-filter-group">
+        <el-checkbox v-for="s in STATUS_OPTIONS" :key="s.value" v-model="statusFilters[s.value]">
+          {{ s.label }}
+        </el-checkbox>
+      </div>
     </div>
 
     <!-- 空状态 -->
@@ -158,7 +181,7 @@ function handlePageChange(p) {
             v-model="drafts[item.customer_alias].status"
             :disabled="!canEditShipping"
             style="width: 110px"
-            @change="markDirty(item.customer_alias)"
+            @change="markDirty(item.customer_alias); saveRow(item)"
           >
             <el-option v-for="s in STATUS_OPTIONS" :key="s.value" :label="s.label" :value="s.value" />
           </el-select>
@@ -224,6 +247,12 @@ function handlePageChange(p) {
   display: flex;
   align-items: center;
   gap: 16px;
+  flex-wrap: wrap;
+}
+.status-filter-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .empty-tip {
