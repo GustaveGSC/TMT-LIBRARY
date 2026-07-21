@@ -30,10 +30,20 @@ def _protected_app():
 
 
 def _request(token):
-    return _protected_app().test_client().get(
-        '/protected',
-        headers={'Authorization': f'Bearer {token}'},
+    client = _protected_app().test_client()
+    client.set_cookie('tmt_session', token)
+    return client.get('/protected')
+
+
+def test_bearer_token_is_no_longer_accepted(monkeypatch):
+    token = generate_token(_user_payload(token_version=3))
+    monkeypatch.setattr(UserRepository, 'get_auth_state', lambda _id: (True, 3))
+
+    response = _protected_app().test_client().get(
+        '/protected', headers={'Authorization': f'Bearer {token}'},
     )
+
+    assert response.status_code == 401
 
 
 def test_current_active_token_is_accepted(monkeypatch):

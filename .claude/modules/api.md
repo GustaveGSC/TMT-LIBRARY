@@ -1,9 +1,10 @@
 # 后端接口（完整）
 
 ## 鉴权说明
-所有接口（除下方标注「公开」外）均需 `Authorization: Bearer <token>` 请求头。  
-token 由登录/游客/注册接口返回，前端存于 `localStorage.tmt_token`，由 axios 拦截器自动附加。  
-401 → 前端清 localStorage 并跳转 `/login`。
+所有接口（除下方标注「公开」外）均需浏览器携带有效的 `tmt_session` Cookie。
+登录/游客接口通过 `Set-Cookie` 下发 `tmt_session`（httpOnly）和 `tmt_csrf`；响应体不包含 token。注册接口不自动登录。
+后续请求只接受 Cookie 会话，不再接受 `Authorization: Bearer`。写请求必须携带与 `tmt_csrf` Cookie 一致的 `X-CSRF-Token`，且该值与签名会话绑定。
+401 → 后端统一清除认证 Cookie，前端清理本地展示状态并跳转 `/login`。
 
 未预期的服务端异常统一返回 HTTP 500 和通用消息，`data.error_id` 及消息中的错误编号可用于关联服务端完整 traceback；数据库、文件路径、OSS 等原始异常文本不返回客户端。文件大小、类型等受控校验错误仍返回明确的 400/413 信息。
 
@@ -30,8 +31,9 @@ GET    /health
 GET    /ready                                         # 公开；数据库可查询时 200 {status:"ready"}，否则 503 {status:"not_ready"}
 
 POST   /api/account/login                             # 公开；登录时自动写入 user_login_log（成功/失败均记录）
-GET    /api/account/guest                             # 公开；游客登录，返回 token（仅 product:view 权限）
+GET    /api/account/guest                             # 公开；游客登录并下发 Cookie 会话（仅 product:view 权限）
 POST   /api/account/register                          # 公开但默认关闭（通过 ALLOW_REGISTER=true 开启）；注册后默认 guest 角色
+POST   /api/account/logout                            # 清除会话/CSRF Cookie；幂等；有效会话请求需通过 CSRF
 GET    /api/account/login-logs                        # 登录记录原始列表（author 专用）?page&per_page&username
 GET    /api/account/login-stats/dau                   # 日活统计（author 专用）?days=30 → [{date,count}]
 GET    /api/account/login-stats/users                 # 账号登录统计（author 专用）→ [{username,display_name,total,success_count,failed_count,last_login_at,identity_type}]
@@ -48,6 +50,8 @@ POST   /api/account/roles/:id/permissions/:code
 GET    /api/account/permissions
 POST   /api/account/permissions
 PUT    /api/account/permissions/:id
+
+本人成功修改密码后，响应为 200，同时清除当前会话与 CSRF Cookie；前端应在显示成功提示后清理本地展示状态并跳转登录页。管理员修改其他用户密码时不清管理员会话。
 
 GET    /api/version/latest
 GET    /api/version/list

@@ -1,8 +1,8 @@
 import os
 import socket
-from flask import Blueprint, request, g
+from flask import Blueprint, request, g, make_response
 from services.account import account_service
-from auth import generate_token, verify_token
+from auth import get_request_user, set_auth_cookies, clear_auth_cookies
 from result import Result
 
 def _registration_enabled() -> bool:
@@ -19,16 +19,18 @@ def _machine_name():
 account_bp = Blueprint('account', __name__)
 
 # login/guest/register 公开；change_password 任意登录用户；其余仅 admin
-_ACCOUNT_PUBLIC       = frozenset({'account.login', 'account.guest_login', 'account.register'})
+_ACCOUNT_PUBLIC       = frozenset({
+    'account.login', 'account.guest_login', 'account.register', 'account.logout',
+})
 _ACCOUNT_SELF_ALLOWED = frozenset({'account.change_password'})
 
 def _require_account_auth():
     """蓝图级鉴权：login/guest 公开；修改密码需登录；其余仅 admin 可操作。"""
     if request.endpoint in _ACCOUNT_PUBLIC:
         return None
-    raw = request.headers.get('Authorization', '') or ''
-    token = raw.removeprefix('Bearer ').strip()
-    user = verify_token(token)
+    if request.method == 'OPTIONS':
+        return None
+    user = get_request_user()
     if not user:
         return Result.fail('未登录或会话已过期').to_response(401)
     g.current_user = user
@@ -50,8 +52,13 @@ def login():
         return Result.fail("用户名和密码不能为空").to_response()
     result = account_service.verify_password(username, password, machine_name=_machine_name())
     if result.success and result.data:
-        result.data['token'] = generate_token(result.data)
+        return set_auth_cookies(result.to_response(), result.data)
     return result.to_response()
+
+
+@account_bp.post('/logout')
+def logout():
+    return clear_auth_cookies(Result.ok(message='已退出登录').to_response())
 
 
 # ── 用户 CRUD ──────────────────────────────────────
@@ -96,7 +103,11 @@ def change_password(user_id):
     current = g.current_user
     if 'admin' not in current.get('roles', []) and current.get('id') != user_id:
         return Result.fail("无权修改他人密码").to_response(403)
-    return account_service.change_password(user_id, old_password, new_password).to_response()
+    result = account_service.change_password(user_id, old_password, new_password)
+    response = make_response(result.to_response())
+    if result.success and current.get('id') == user_id:
+        return clear_auth_cookies(response)
+    return response
 
 
 @account_bp.put("/users/<int:user_id>/status")
@@ -159,7 +170,7 @@ def assign_permission(role_id, code):
 def guest_login():
     result = account_service.guest_login(machine_name=_machine_name())
     if result.success and result.data:
-        result.data['token'] = generate_token(result.data)
+        return set_auth_cookies(result.to_response(), result.data)
     return result.to_response()
 
 

@@ -2,7 +2,7 @@ from flask import Blueprint, request, g
 from database.models.version import AppVersion
 from services.version import version_service
 from storage.client import get_bucket
-from auth import verify_token
+from auth import get_request_user
 from result import Result
 from upload_validation import parse_declared_size, GLOBAL_REQUEST_LIMIT, UploadValidationError
 from error_handling import internal_error_response
@@ -15,9 +15,9 @@ def _require_version_auth():
     """GET 路由公开（供客户端检查更新）；写操作仅 admin。"""
     if request.method == 'GET':
         return None
-    raw  = request.headers.get('Authorization', '') or ''
-    token = raw.removeprefix('Bearer ').strip()
-    user = verify_token(token)
+    if request.method == 'OPTIONS':
+        return None
+    user = get_request_user()
     if not user:
         return Result.fail('未登录或会话已过期').to_response(401)
     g.current_user = user

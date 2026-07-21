@@ -24,6 +24,9 @@ else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, '.env'), override=True)
 
+# auth 在 .env 加载后导入，确保模块级 JWT_SECRET 使用部署配置。
+from auth import clear_auth_cookies_on_unauthorized, validate_csrf_request
+
 
 def create_app() -> Flask:
     app = Flask(__name__)
@@ -63,10 +66,14 @@ def create_app() -> Flask:
         _validate_database_revision(db)
 
     # CORS_ORIGINS 可通过环境变量覆盖（逗号分隔），生产环境配置实际域名
-    _cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
-    if not _cors_origins:
-        _cors_origins = ["http://localhost:5173", "file://"]
-    CORS(app, origins=_cors_origins)
+    _cors_origins = _get_cors_origins()
+    CORS(app, origins=_cors_origins, supports_credentials=True)
+
+    @app.before_request
+    def enforce_csrf():
+        return validate_csrf_request()
+
+    app.after_request(clear_auth_cookies_on_unauthorized)
 
     @app.errorhandler(RequestEntityTooLarge)
     def request_too_large(_error):
@@ -138,6 +145,17 @@ def create_app() -> Flask:
     threading.Thread(target=_bg_model_init, daemon=True, name='model-init').start()
 
     return app
+
+
+def _get_cors_origins() -> list[str]:
+    origins = [
+        value.strip()
+        for value in os.getenv('CORS_ORIGINS', '').split(',')
+        if value.strip()
+    ]
+    if '*' in origins:
+        raise RuntimeError('Cookie 会话启用 credentials 后，CORS_ORIGINS 禁止使用通配符 *')
+    return origins or ['http://localhost:5173', 'http://localhost:5174']
 
 
 def _check_database_readiness(database) -> None:
