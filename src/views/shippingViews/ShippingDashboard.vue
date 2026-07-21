@@ -495,7 +495,7 @@ async function fetchTooltipBreakdown() {
     category_ids:  effCategoryIds(),
     series_ids:    effSeriesIds(),
     model_ids:     effModelIds(),
-    trade_type:    tradeType.value,
+    trade_type:    effectiveTradeType.value,
     channel_names: effChannelNames(),
     channel_codes: effChannelCodes(),
     provinces:     effProvinces(),
@@ -636,7 +636,13 @@ async function resolveMapKey() {
 // ── 响应式状态 ────────────────────────────────────
 
 const dataSource     = ref('shipping') // 数据来源：'shipping' | 'finance'
-const tradeType      = ref('domestic') // 内外销：'all' | 'domestic' | 'foreign'（仅财务端有效）
+const tradeType      = ref('domestic') // 内外销：'all' | 'domestic' | 'foreign'（仅财务端有效，发货端固定按 'all' 请求）
+
+// 发货端的内外销筛选一直是按 FTP 系列标签的启发式判断，不可靠且发货端订单无法
+// 追溯到真实客户，2026-07-21 起取消发货端这个筛选（财务端改用人工维护的客户
+// 简称映射判断内外销，见 handoff-11）。UI 上隐藏选择器的同时，请求体也必须
+// 跟着固定传 'all'，不能让用户上次在财务端选的 domestic/foreign 顺带影响发货端。
+const effectiveTradeType = computed(() => dataSource.value === 'shipping' ? 'all' : tradeType.value)
 
 const TRADE_TYPE_OPTIONS = [
   { label: '内外销数据', value: 'all'      },
@@ -1590,7 +1596,7 @@ async function loadChartData() {
       // 使用有效筛选函数（含单候选自动下钻逻辑）
       category_ids:  effCategoryIds(),
       series_ids:    effSeriesIds(),
-      trade_type:    tradeType.value,
+      trade_type:    effectiveTradeType.value,
       model_ids:     effModelIds(),
       channel_names: effChannelNames(),
       channel_codes: effChannelCodes(),
@@ -3111,6 +3117,7 @@ watch(groupBy, () => {
         <!-- 右侧：数据指标选择 + 全屏按钮 -->
         <div class="ct-right">
           <el-select
+            v-if="dataSource === 'finance'"
             v-model="tradeType"
             :size="isMobile ? 'small' : 'default'"
             class="trade-type-select"
