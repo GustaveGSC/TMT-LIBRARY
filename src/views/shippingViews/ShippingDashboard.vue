@@ -234,6 +234,106 @@ async function ensureWorldMap() {
   }
 }
 
+// ── 世界地图详情面板（可拖拽，用连线连回国家） ────────
+// 渲染最近一次地图图表所用的数据/指标，供切换开关或地图平移缩放时复用，无需重新请求数据
+let lastMapItems       = []
+let lastMapKey         = 'china'
+let lastMapMetricLabel = ''
+
+// GeoJSON 区划中心点缓存：mapKey → Map(区划名 → [lng, lat])，用外接矩形中心近似几何中心，
+// 世界地图 world.json 本身没有自带中心点属性（不同于 DataV 的中国地图），需要自己算一次并缓存
+const featureCentroidCache = new Map()
+function featureBBoxCenter(feature) {
+  let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity
+  const walk = (coords) => {
+    if (typeof coords[0] === 'number') {
+      const [lng, lat] = coords
+      if (lng < minLng) minLng = lng
+      if (lng > maxLng) maxLng = lng
+      if (lat < minLat) minLat = lat
+      if (lat > maxLat) maxLat = lat
+    } else {
+      coords.forEach(walk)
+    }
+  }
+  walk(feature.geometry.coordinates)
+  return [(minLng + maxLng) / 2, (minLat + maxLat) / 2]
+}
+function getFeatureCentroids(mapKey) {
+  if (featureCentroidCache.has(mapKey)) return featureCentroidCache.get(mapKey)
+  const map = new Map()
+  const geo = echarts.getMap(mapKey)?.geoJSON
+  for (const f of geo?.features || []) {
+    if (f.properties?.name) map.set(f.properties.name, featureBBoxCenter(f))
+  }
+  featureCentroidCache.set(mapKey, map)
+  return map
+}
+
+/** 计算每个国家面板应处的像素位置：定位点（国家中心投影到屏幕）+ 用户拖拽偏移 */
+function computeDetailPanelLayout() {
+  if (!chartInst) return []
+  const centroids = getFeatureCentroids(lastMapKey)
+  const layout = []
+  for (const item of lastMapItems) {
+    const centroid = centroids.get(item.name)
+    if (!centroid) continue
+    const anchor = chartInst.convertToPixel({ seriesIndex: 0 }, centroid)
+    if (!anchor) continue
+    const offset = detailPanelOffsets.value[item.originalName] || [30, -30]
+    layout.push({ key: item.originalName, item, anchor, panel: [anchor[0] + offset[0], anchor[1] + offset[1]] })
+  }
+  return layout
+}
+
+/** 构建详情面板 + 连线的 graphic 元素数组 */
+function buildDetailGraphics() {
+  return computeDetailPanelLayout().flatMap(({ key, item, anchor, panel }) => {
+    const text = `${item.originalName}\n${lastMapMetricLabel}：${item.rawValue.toLocaleString()}`
+    return [
+      {
+        id: `detail-line-${key}`, type: 'line', silent: true, z: 90,
+        shape: { x1: anchor[0], y1: anchor[1], x2: panel[0], y2: panel[1] },
+        style: { stroke: '#c4883a', lineWidth: 1, opacity: 0.7 },
+      },
+      {
+        id: `detail-panel-${key}`, type: 'group', z: 100,
+        position: panel, draggable: true, cursor: 'move',
+        ondrag(e) {
+          detailPanelOffsets.value = {
+            ...detailPanelOffsets.value,
+            [key]: [e.target.x - anchor[0], e.target.y - anchor[1]],
+          }
+          chartInst.setOption({ graphic: [{ id: `detail-line-${key}`, shape: { x2: e.target.x, y2: e.target.y } }] })
+        },
+        children: [
+          {
+            type: 'rect', shape: { x: -65, y: -23, width: 130, height: 46, r: 6 },
+            style: { fill: '#fff', stroke: '#c4883a', lineWidth: 1, shadowBlur: 6, shadowColor: 'rgba(0,0,0,0.15)' },
+          },
+          {
+            type: 'text',
+            style: {
+              text, x: 0, y: 0, textAlign: 'center', textVerticalAlign: 'middle',
+              fontFamily: FONT, fontSize: 12, lineHeight: 18, fill: '#3a3028',
+            },
+          },
+        ],
+      },
+    ]
+  })
+}
+
+/** 地图平移/缩放后，重新计算各面板定位点并更新连线起点、面板位置（偏移量不变） */
+function updateDetailPanelPositions() {
+  if (!chartInst || !showDetailPanels.value || lastMapKey !== 'world') return
+  const patches = computeDetailPanelLayout().flatMap(({ key, anchor, panel }) => [
+    { id: `detail-line-${key}`, shape: { x1: anchor[0], y1: anchor[1], x2: panel[0], y2: panel[1] } },
+    { id: `detail-panel-${key}`, position: panel },
+  ])
+  if (patches.length) chartInst.setOption({ graphic: patches })
+}
+
 /** 加载并注册全国城市级地图，返回 mapKey 或 null */
 async function ensureChinaCityMap() {
   if (registeredMaps.has('china-city')) return 'china-city'
@@ -317,6 +417,13 @@ const comparisonMode = ref(null)     // 对比模式：null | 'yoy'（同比）|
 const groupBy        = ref('product') // 数据聚合维度
 const cityMode       = ref(false)    // 城市模式：地域维度下直接按城市聚合并显示全国城市地图
 const dataMetric     = ref('actual') // 显示指标：quantity/return_quantity/actual
+
+// 世界地图：默认只有 hover 时通过 tooltip 显示数据；开启后为每个有数据的国家常驻显示
+// 一个可拖拽的详情面板，并用连线连回该国家。currentMapKey 供模板判断当前是否在世界地图。
+const showDetailPanels = ref(false)
+const currentMapKey    = ref('china')
+// 用户拖拽后的面板偏移量（相对国家定位点的像素偏移），key 为国家中文名（原始 label）
+const detailPanelOffsets = ref({})
 
 // 当前维度下允许的图表类型 / 对比模式
 const allowedChartTypes  = computed(() => groupByConfig(groupBy.value).chartTypes  ?? [])
@@ -1287,6 +1394,8 @@ function _createChartInst() {
   chartInst.on('mouseup',    () => { clearTimeout(lpTimer); lpActive = false })
   chartInst.on('mousemove',  () => { clearTimeout(lpTimer); lpActive = false })
   chartInst.on('globalout',  () => { clearTimeout(lpTimer); lpActive = false })
+  // 地图缩放/平移（roam）后，详情面板的定位点会跟着变，需要重新计算连线和面板位置
+  chartInst.on('georoam', updateDetailPanelPositions)
   renderChart()
 }
 
@@ -1382,6 +1491,12 @@ async function renderChart() {
         : buildBarOption(items)
   }
   chartInst.setOption(opt, { notMerge: true })
+
+  // 世界地图详情面板：notMerge 已清空上一次的 graphic，这里按需重新叠加
+  if (chartType.value === 'map' && showDetailPanels.value && lastMapKey === 'world') {
+    await nextTick()
+    chartInst.setOption({ graphic: buildDetailGraphics() })
+  }
 }
 
 // 指标 → { field, label, color, areaColor }
@@ -2233,6 +2348,12 @@ function buildMapOption(items, mapKey = 'china') {
   })
   const maxVal = Math.max(...data.map(d => d.value), 1)
 
+  // 供世界地图详情面板复用，避免开关/平移缩放时重新请求数据
+  lastMapItems       = data
+  lastMapKey         = mapKey
+  lastMapMetricLabel = label
+  currentMapKey.value = mapKey
+
   return {
     backgroundColor: 'transparent',
     title: {
@@ -2761,6 +2882,9 @@ watch(groupBy, () => {
         <div class="footer-placeholder">
           <div v-if="groupBy === 'province'" class="footer-city-mode">
             <el-switch v-model="cityMode" size="small" active-text="城市模式" active-color="#c4883a" @change="loadChartData()" />
+          </div>
+          <div v-else-if="chartType === 'map' && currentMapKey === 'world'" class="footer-city-mode">
+            <el-switch v-model="showDetailPanels" size="small" active-text="显示详细数据" active-color="#c4883a" @change="renderChart()" />
           </div>
         </div>
         <div class="footer-dims">
