@@ -21,6 +21,16 @@ const router = useRouter()
 // ── 当前页面 ──────────────────────────────────────
 const activePage = ref('import')
 
+// ── 数据配置子 Tab ──────────────────────────────────
+const configTab = ref('operator')
+const configTabs = [
+  { key: 'operator',   label: '操作人分类' },
+  { key: 'warehouse',  label: '仓库过滤配置' },
+  { key: 'equivalent', label: '产成品通用件配置' },
+  { key: 'tagDim',     label: '标签分析维度' },
+  { key: 'financeMap', label: '外贸客户匹配' },
+]
+
 // ── 刷新全局数据 ────────────────────────────────────
 const resolving          = ref(false)
 const showResolveConfirm = ref(false)
@@ -256,18 +266,23 @@ async function handleResolveAll() {
             <FinanceImport />
           </div>
         </div>
-        <div v-show="activePage === 'config'" class="config-layout">
-          <OperatorConfig />
-          <div class="import-divider"></div>
-          <WarehouseConfig />
-          <div class="import-divider"></div>
-          <EquivalentConfig />
-          <div class="import-divider"></div>
-          <TagDimensionConfig />
+        <div v-show="activePage === 'config'" class="config-tabs">
+          <button
+            v-for="tab in configTabs"
+            :key="tab.key"
+            class="config-tab-item"
+            :class="{ active: configTab === tab.key }"
+            @click="configTab = tab.key"
+          >
+            {{ tab.label }}
+          </button>
         </div>
-        <div v-show="activePage === 'config'" class="config-divider-h"></div>
-        <div v-show="activePage === 'config'" class="config-layout-full">
-          <FinanceCustomerMapping />
+        <div v-show="activePage === 'config'" class="config-tab-body">
+          <OperatorConfig v-show="configTab === 'operator'" />
+          <WarehouseConfig v-show="configTab === 'warehouse'" />
+          <EquivalentConfig v-show="configTab === 'equivalent'" />
+          <TagDimensionConfig v-show="configTab === 'tagDim'" />
+          <FinanceCustomerMapping v-show="configTab === 'financeMap'" />
         </div>
       </div>
     </main>
@@ -398,19 +413,24 @@ async function handleResolveAll() {
   min-height: 200px;
 }
 
-/* 数据配置多列布局（操作人 + 仓库 + 通用件 + 标签维度） */
-.config-layout {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr;
-  gap: 0;
-  align-items: start;
+/* 数据配置子 Tab 切换（操作人 / 仓库 / 通用件 / 标签维度 / 外贸客户匹配） */
+.config-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-bottom: 14px;
+  margin-bottom: 22px;
+  border-bottom: 1px solid var(--border);
 }
+.config-tab-item {
+  padding: 7px 16px;
+  border: none; border-radius: 8px;
+  background: transparent; color: var(--text-muted);
+  font-size: 13px; font-family: inherit;
+  cursor: pointer; transition: all 0.18s; white-space: nowrap;
+}
+.config-tab-item:hover { background: rgba(196,136,58,0.07); color: var(--text-primary); }
+.config-tab-item.active { color: #fff; font-weight: 600; background: var(--accent); }
 
-/* 外贸客户匹配单独占一整行（每行需要展示多个输入框，窄列会挤变形） */
-.config-divider-h {
-  height: 1px;
-  background: var(--border);
-  margin: 32px 0;
-}
-.config-layout-full { width: 100%; }
+.config-tab-body { width: 100%; max-width: 760px; }
 </style>
