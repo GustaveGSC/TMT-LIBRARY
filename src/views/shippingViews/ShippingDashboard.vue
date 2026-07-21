@@ -172,6 +172,64 @@ const COUNTRY_NAME_MAP = {
   '哥伦比亚': 'Colombia', '委内瑞拉': 'Venezuela', '厄瓜多尔': 'Ecuador',
 }
 
+// world.json 里全部 217 个区划的英文名 → 中文名，用于 hover 到没有发货数据的国家时
+// tooltip 也显示中文（"暂无数据"那一支之前直接用了 GeoJSON 原始英文名）
+const WORLD_NAME_ZH = {
+  China: '中国', Afghanistan: '阿富汗', Aland: '奥兰群岛', Albania: '阿尔巴尼亚', Algeria: '阿尔及利亚',
+  'American Samoa': '美属萨摩亚', Andorra: '安道尔', Angola: '安哥拉', 'Antigua and Barb.': '安提瓜和巴布达',
+  Argentina: '阿根廷', Armenia: '亚美尼亚', Australia: '澳大利亚', Austria: '奥地利', Azerbaijan: '阿塞拜疆',
+  Bahamas: '巴哈马', Bahrain: '巴林', Bangladesh: '孟加拉国', Barbados: '巴巴多斯', Belarus: '白俄罗斯',
+  Belgium: '比利时', Belize: '伯利兹', Benin: '贝宁', Bermuda: '百慕大', Bhutan: '不丹', Bolivia: '玻利维亚',
+  'Bosnia and Herz.': '波黑', Botswana: '博茨瓦纳', 'Br. Indian Ocean Ter.': '英属印度洋领地', Brazil: '巴西',
+  Brunei: '文莱', Bulgaria: '保加利亚', 'Burkina Faso': '布基纳法索', Burundi: '布隆迪', Cambodia: '柬埔寨',
+  Cameroon: '喀麦隆', Canada: '加拿大', 'Cape Verde': '佛得角', 'Cayman Is.': '开曼群岛',
+  'Central African Rep.': '中非', Chad: '乍得', Chile: '智利', Colombia: '哥伦比亚', Comoros: '科摩罗',
+  Congo: '刚果（布）', 'Costa Rica': '哥斯达黎加', Croatia: '克罗地亚', Cuba: '古巴', 'Curaçao': '库拉索',
+  Cyprus: '塞浦路斯', 'Czech Rep.': '捷克', "Côte d'Ivoire": '科特迪瓦', 'Dem. Rep. Congo': '刚果（金）',
+  'Dem. Rep. Korea': '朝鲜', Denmark: '丹麦', Djibouti: '吉布提', Dominica: '多米尼克',
+  'Dominican Rep.': '多米尼加', Ecuador: '厄瓜多尔', Egypt: '埃及', 'El Salvador': '萨尔瓦多',
+  'Eq. Guinea': '赤道几内亚', Eritrea: '厄立特里亚', Estonia: '爱沙尼亚', Ethiopia: '埃塞俄比亚',
+  'Faeroe Is.': '法罗群岛', 'Falkland Is.': '福克兰群岛', Fiji: '斐济', Finland: '芬兰',
+  'Fr. Polynesia': '法属波利尼西亚', 'Fr. S. Antarctic Lands': '法属南部领地', France: '法国',
+  Gabon: '加蓬', Gambia: '冈比亚', Georgia: '格鲁吉亚', Germany: '德国', Ghana: '加纳', Greece: '希腊',
+  Greenland: '格陵兰', Grenada: '格林纳达', Guam: '关岛', Guatemala: '危地马拉', Guinea: '几内亚',
+  'Guinea-Bissau': '几内亚比绍', Guyana: '圭亚那', Haiti: '海地', 'Heard I. and McDonald Is.': '赫德岛和麦克唐纳岛',
+  Honduras: '洪都拉斯', Hungary: '匈牙利', Iceland: '冰岛', India: '印度', Indonesia: '印度尼西亚',
+  Iran: '伊朗', Iraq: '伊拉克', Ireland: '爱尔兰', 'Isle of Man': '马恩岛', Israel: '以色列', Italy: '意大利',
+  Jamaica: '牙买加', Japan: '日本', Jersey: '泽西岛', Jordan: '约旦', Kazakhstan: '哈萨克斯坦',
+  Kenya: '肯尼亚', Kiribati: '基里巴斯', Korea: '韩国', Kuwait: '科威特', Kyrgyzstan: '吉尔吉斯斯坦',
+  'Lao PDR': '老挝', Latvia: '拉脱维亚', Lebanon: '黎巴嫩', Lesotho: '莱索托', Liberia: '利比里亚',
+  Libya: '利比亚', Liechtenstein: '列支敦士登', Lithuania: '立陶宛', Luxembourg: '卢森堡',
+  Macedonia: '北马其顿', Madagascar: '马达加斯加', Malawi: '马拉维', Malaysia: '马来西亚', Mali: '马里',
+  Malta: '马耳他', Mauritania: '毛里塔尼亚', Mauritius: '毛里求斯', Mexico: '墨西哥',
+  Micronesia: '密克罗尼西亚', Moldova: '摩尔多瓦', Mongolia: '蒙古', Montenegro: '黑山',
+  Montserrat: '蒙特塞拉特', Morocco: '摩洛哥', Mozambique: '莫桑比克', Myanmar: '缅甸',
+  'N. Cyprus': '北塞浦路斯', 'N. Mariana Is.': '北马里亚纳群岛', Namibia: '纳米比亚', Nepal: '尼泊尔',
+  Netherlands: '荷兰', 'New Caledonia': '新喀里多尼亚', 'New Zealand': '新西兰', Nicaragua: '尼加拉瓜',
+  Niger: '尼日尔', Nigeria: '尼日利亚', Niue: '纽埃', Norway: '挪威', Oman: '阿曼', Pakistan: '巴基斯坦',
+  Palau: '帕劳', Palestine: '巴勒斯坦', Panama: '巴拿马', 'Papua New Guinea': '巴布亚新几内亚',
+  Paraguay: '巴拉圭', Peru: '秘鲁', Philippines: '菲律宾', Poland: '波兰', Portugal: '葡萄牙',
+  'Puerto Rico': '波多黎各', Qatar: '卡塔尔', Romania: '罗马尼亚', Russia: '俄罗斯', Rwanda: '卢旺达',
+  'S. Geo. and S. Sandw. Is.': '南乔治亚和南桑威奇群岛', 'S. Sudan': '南苏丹', 'Saint Helena': '圣赫勒拿',
+  'Saint Lucia': '圣卢西亚', Samoa: '萨摩亚', 'Saudi Arabia': '沙特阿拉伯', Senegal: '塞内加尔',
+  Serbia: '塞尔维亚', Seychelles: '塞舌尔', 'Siachen Glacier': '锡亚琴冰川', 'Sierra Leone': '塞拉利昂',
+  Singapore: '新加坡', Slovakia: '斯洛伐克', Slovenia: '斯洛文尼亚', 'Solomon Is.': '所罗门群岛',
+  Somalia: '索马里', 'South Africa': '南非', Spain: '西班牙', 'Sri Lanka': '斯里兰卡',
+  'St. Pierre and Miquelon': '圣皮埃尔和密克隆', 'St. Vin. and Gren.': '圣文森特和格林纳丁斯',
+  Sudan: '苏丹', Suriname: '苏里南', Swaziland: '斯威士兰', Sweden: '瑞典', Switzerland: '瑞士',
+  Syria: '叙利亚', 'São Tomé and Principe': '圣多美和普林西比', Tajikistan: '塔吉克斯坦',
+  Tanzania: '坦桑尼亚', Thailand: '泰国', 'Timor-Leste': '东帝汶', Togo: '多哥', Tonga: '汤加',
+  'Trinidad and Tobago': '特立尼达和多巴哥', Tunisia: '突尼斯', Turkey: '土耳其', Turkmenistan: '土库曼斯坦',
+  'Turks and Caicos Is.': '特克斯和凯科斯群岛', 'U.S. Virgin Is.': '美属维尔京群岛', Uganda: '乌干达',
+  Ukraine: '乌克兰', 'United Arab Emirates': '阿联酋', 'United Kingdom': '英国', 'United States': '美国',
+  Uruguay: '乌拉圭', Uzbekistan: '乌兹别克斯坦', Vanuatu: '瓦努阿图', Venezuela: '委内瑞拉',
+  Vietnam: '越南', 'W. Sahara': '西撒哈拉', Yemen: '也门', Zambia: '赞比亚', Zimbabwe: '津巴布韦',
+  台湾: '台湾', 香港: '香港', 澳门: '澳门',
+}
+function worldZhName(nameOrEnName) {
+  return WORLD_NAME_ZH[nameOrEnName] ?? nameOrEnName
+}
+
 // 通过 Vite glob 懒加载 src/assets/maps/ 下的省份地图 JSON
 // 省份地图文件命名规则：{adcode}_full.json，从 DataV 下载
 // 下载地址：https://geo.datav.aliyun.com/areas_v3/bound/{adcode}_full.json
@@ -259,12 +317,56 @@ function featureBBoxCenter(feature) {
   walk(feature.geometry.coordinates)
   return [(minLng + maxLng) / 2, (minLat + maxLat) / 2]
 }
+// 外接矩形中心对跨越很大经度范围、或有跨越日期变更线的海外领地/离岛的国家
+// （典型如美国的阿拉斯加/夏威夷、俄罗斯远东部分）算出来的点会偏得很离谱，
+// 改成取"面积最大的那个子多边形"的真实几何中心（鞋带公式面积加权），
+// 相当于只用本土主体那块算中心点，忽略国外飞地/离岛的干扰
+function ringArea(ring) {
+  let area = 0
+  for (let i = 0; i < ring.length - 1; i++) {
+    const [x1, y1] = ring[i]
+    const [x2, y2] = ring[i + 1]
+    area += x1 * y2 - x2 * y1
+  }
+  return area / 2
+}
+function ringCentroid(ring) {
+  let cx = 0, cy = 0, area = 0
+  for (let i = 0; i < ring.length - 1; i++) {
+    const [x1, y1] = ring[i]
+    const [x2, y2] = ring[i + 1]
+    const cross = x1 * y2 - x2 * y1
+    area += cross
+    cx += (x1 + x2) * cross
+    cy += (y1 + y2) * cross
+  }
+  area /= 2
+  if (Math.abs(area) < 1e-9) return null
+  return [cx / (6 * area), cy / (6 * area)]
+}
+function featureLargestRingCentroid(feature) {
+  const geom = feature.geometry
+  if (!geom) return featureBBoxCenter(feature)
+  // Polygon: coordinates = [外环, 内环...]；MultiPolygon: coordinates = [ [外环, 内环...], ... ]
+  const polygons = geom.type === 'Polygon' ? [geom.coordinates] : (geom.coordinates || [])
+  let best = null, bestArea = -1
+  for (const poly of polygons) {
+    const outer = poly?.[0]
+    if (!outer?.length) continue
+    const area = Math.abs(ringArea(outer))
+    if (area > bestArea) {
+      const c = ringCentroid(outer)
+      if (c) { best = c; bestArea = area }
+    }
+  }
+  return best ?? featureBBoxCenter(feature)
+}
 function getFeatureCentroids(mapKey) {
   if (featureCentroidCache.has(mapKey)) return featureCentroidCache.get(mapKey)
   const map = new Map()
   const geo = echarts.getMap(mapKey)?.geoJSON
   for (const f of geo?.features || []) {
-    if (f.properties?.name) map.set(f.properties.name, featureBBoxCenter(f))
+    if (f.properties?.name) map.set(f.properties.name, featureLargestRingCentroid(f))
   }
   featureCentroidCache.set(mapKey, map)
   return map
@@ -2370,7 +2472,7 @@ function buildMapOption(items, mapKey = 'china') {
       trigger: 'item',
       textStyle: { fontFamily: FONT, fontSize: 13 },
       formatter(params) {
-        if (params.value == null || isNaN(params.value)) return `${params.name}：暂无数据`
+        if (params.value == null || isNaN(params.value)) return `${worldZhName(params.name)}：暂无数据`
         const d = params.data
         const W = `font-family:${FONT};font-size:13px;min-width:150px`
         const ROW = `display:flex;justify-content:space-between;align-items:center;gap:20px;line-height:1.8`
@@ -2405,8 +2507,8 @@ function buildMapOption(items, mapKey = 'china') {
       name: label, type: 'map', map: mapKey,
       roam: true,
       data,
-      label: { show: mapKey !== 'china-city' && !isWorld, fontFamily: FONT, fontSize: 11, color: '#3a3028' },
-      emphasis:  { label: { show: mapKey !== 'china-city', fontFamily: FONT, fontSize: 12, fontWeight: 'bold' }, itemStyle: { areaColor: '#e09050' } },
+      label: { show: mapKey !== 'china-city' && !isWorld, fontFamily: FONT, fontSize: 11, color: '#3a3028', formatter: (p) => worldZhName(p.name) },
+      emphasis:  { label: { show: mapKey !== 'china-city', fontFamily: FONT, fontSize: 12, fontWeight: 'bold', formatter: (p) => worldZhName(p.name) }, itemStyle: { areaColor: '#e09050' } },
       select:    { disabled: true },
       itemStyle: { areaColor: '#f5f0e8', borderColor: '#d4c4a8', borderWidth: 0.8 },
     }],
