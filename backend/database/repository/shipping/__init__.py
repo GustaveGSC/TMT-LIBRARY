@@ -286,11 +286,19 @@ class ShippingRepository:
         """分块 UPSERT；重复键更新可更正字段，返回处理行数。"""
         if not rows:
             return 0
-        from sqlalchemy import func
+        from sqlalchemy import func, bindparam
         from sqlalchemy.dialects.mysql import insert as mysql_insert
 
         CHUNK = 100
         total = len(rows)
+
+        _COLUMNS = (
+            'batch_id', 'record_type', 'source', 'ecommerce_order_no', 'line_no',
+            'shipped_date', 'channel_name', 'channel_code', 'channel_org_name',
+            'operator', 'product_code', 'product_name', 'spec', 'quantity',
+            'country', 'province', 'city', 'district', 'street', 'address',
+            'buyer_remark', 'seller_remark', 'customer_alias',
+        )
 
         def _make_param(row):
             return {
@@ -319,7 +327,12 @@ class ShippingRepository:
                 'customer_alias':     row.get('customer_alias'),
             }
 
-        stmt = mysql_insert(ShippingRecord)
+        # mysql_insert(Model) 不带 .values() 时，SQLAlchemy 会按 executemany 第一行参数里
+        # "非 None" 的键动态推导 INSERT 列表，同一批次首行若某列恰好是 None 就会被整体漏掉；
+        # 但 on_duplicate_key_update 里 stmt.inserted.<col> 引用的列是固定的，
+        # 漏掉的列在 MySQL 端就会报 "Unknown column 'new.<col>'"。显式 .values() +
+        # bindparam 强制列集合固定，不再随首行数据内容变化。
+        stmt = mysql_insert(ShippingRecord).values({c: bindparam(c) for c in _COLUMNS})
         stmt = stmt.on_duplicate_key_update(
             shipped_date=stmt.inserted.shipped_date,
             channel_name=stmt.inserted.channel_name,
@@ -378,11 +391,16 @@ class ShippingRepository:
         """分块 UPSERT 写入 return_record，返回处理行数。"""
         if not rows:
             return 0
-        from sqlalchemy import func
+        from sqlalchemy import func, bindparam
         from sqlalchemy.dialects.mysql import insert as mysql_insert
 
         CHUNK = 100
         total = len(rows)
+
+        _COLUMNS = (
+            'batch_id', 'ecommerce_order_no', 'shipped_date', 'product_code',
+            'quantity', 'warehouse_name', 'customer_alias',
+        )
 
         def _make_param(row):
             return {
@@ -395,7 +413,10 @@ class ShippingRepository:
                 'customer_alias':     row.get('customer_alias'),
             }
 
-        stmt = mysql_insert(ReturnRecord)
+        # 同 bulk_insert_shipping：显式 .values() + bindparam 固定 INSERT 列集合，
+        # 避免首行某列为 None 时被 SQLAlchemy 自动推导逻辑漏掉，导致
+        # ON DUPLICATE KEY UPDATE 里 "Unknown column 'new.<col>'"。
+        stmt = mysql_insert(ReturnRecord).values({c: bindparam(c) for c in _COLUMNS})
         stmt = stmt.on_duplicate_key_update(
             quantity=stmt.inserted.quantity,
             warehouse_name=stmt.inserted.warehouse_name,
