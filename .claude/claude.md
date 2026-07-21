@@ -47,6 +47,7 @@ backend/result.py        # Result.ok/fail → { success, message, data }
 - **`shipping_order_finished` 低选择性索引**：`source` 列仅 2 个值（shipping/finance），MySQL 优化器不自动选复合索引。所有对该表的查询必须加 `with_hint(sof, 'USE INDEX (...)', dialect_name='mysql')`：有日期范围用 `ix_sof_source_date`，否则用 `ix_sof_source_finished_code`。
 - **`get_chart_options` 缓存**：该函数结果已做模块级内存缓存（5 分钟 TTL，key=source+日期范围）。导入/resolve-all 完成后必须调 `_invalidate_chart_options_cache()` 清缓存，否则新数据不生效。
 - **trade_type 过滤禁止走 JOIN**：`needs_trade_filter` 不得触发 JOIN 产品表。FTP 系列判断通过 `_get_ftp_finished_codes()` 缓存集合 + `finished_code IN (...)` 实现，避免每次查询都 JOIN ProductModel/ProductSeries。
+- **单 worker + CPU 密集后台任务的看门狗超时风险**：`gunicorn.service` 是 `-w 1`（单 sync worker）+ `--timeout 1800`（2026-07-21 从 300 调大，原因见下）。导入类接口（发货/财务清单）用后台线程跑解析+写库，Python 解析大 Excel（尤其解压后几十上百MB的那种）是纯 CPU 密集操作，几乎不主动让出 GIL；如果这个后台线程持续占用 CPU 超过 gunicorn `--timeout` 秒数，主线程没机会响应 arbiter 心跳，会被判定"卡死"直接 SIGKILL 整个 worker 进程（连带杀掉正在跑的导入任务，前端表现为"任务因服务重启或重载中断"）。改大 timeout 只是缓解症状，没解决"单 worker 场景下 CPU 密集任务会挤占心跳"这个根因；如果后续导入的文件持续变大，仍可能撞到新的 timeout 上限，需要 Codex 评估是否要让解析循环定期让出控制权，或调整后台任务的执行模型。
 
 ### 前端常见陷阱
 - **`watch(x, fn)` 无防抖**：watch 立即触发 API 请求时，快速交互会打爆请求队列。非用户主动操作（如 drillDim 内部联动）的 watch 必须加防抖或用 `_isDrilling` 等 flag 跳过。
