@@ -2212,14 +2212,19 @@ function buildMapOption(items, mapKey = 'china') {
   }
 
   // 构建 data：分组成员共享分组合计值（→ 同色），非分组成员用自身值
+  // 各区域发货量差距悬殊时（比如世界地图上一个大国占了大头，其余国家个位数），
+  // 线性色阶会让绝大多数区域都挤在色阶最浅的一端、肉眼难以区分。
+  // 用 log1p 对"参与着色的值"做压缩，实际数值仍按原样存进 rawValue，tooltip/排行表照常显示原始值。
   const data = items.map(i => {
-    const mapName = isChina ? (PROVINCE_NAME_MAP[i.label] ?? i.label)
-                  : isWorld ? (COUNTRY_NAME_MAP[i.label]  ?? i.label)
-                  : i.label
-    const gInfo   = cityToGroup.get(i.label)
+    const mapName  = isChina ? (PROVINCE_NAME_MAP[i.label] ?? i.label)
+                   : isWorld ? (COUNTRY_NAME_MAP[i.label]  ?? i.label)
+                   : i.label
+    const gInfo    = cityToGroup.get(i.label)
+    const rawValue = gInfo ? gInfo.groupTotal : (i[field] ?? 0)
     return {
       name:         mapName,
-      value:        gInfo ? gInfo.groupTotal : (i[field] ?? 0),
+      value:        Math.log10(Math.max(rawValue, 0) + 1),
+      rawValue,
       originalName: i.label,
       selfValue:    i[field] ?? 0,
       groupName:    gInfo ? gInfo.groupName  : null,
@@ -2264,7 +2269,7 @@ function buildMapOption(items, mapKey = 'china') {
         const name = d?.originalName ?? params.name
         return `<div style="${W}">` +
           `<div style="font-weight:600;margin-bottom:4px">${name}</div>` +
-          `<div style="${ROW}"><span>${label}</span><span style="font-weight:600">${params.value}</span></div>` +
+          `<div style="${ROW}"><span>${label}</span><span style="font-weight:600">${d?.rawValue ?? params.value}</span></div>` +
           `</div>`
       },
     },
@@ -2273,6 +2278,8 @@ function buildMapOption(items, mapKey = 'china') {
       left: 16, bottom: 40,
       text: ['多', '少'],
       calculable: true,
+      // value 已经是 log1p 压缩过的着色值，可拖拽手柄上显示的数字换算回真实发货量，避免露出log值
+      formatter: (value) => Math.round(Math.pow(10, value) - 1).toLocaleString(),
       inRange: { color: ['#fef3e0', '#e8a855', '#c4883a'] },
       textStyle: { color: '#6b5e4e', fontFamily: FONT, fontSize: 12 },
     },
