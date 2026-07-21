@@ -6,7 +6,7 @@
  *   const { isAdmin, can, canEdit } = usePermission()
  *
  * 权限码约定：
- *   product:view / product:edit / product:delete
+ *   product:view / product:edit
  *   shipping:view / shipping:edit / shipping:export
  *   aftersale:view / aftersale:edit / aftersale:export
  *   rd:view / rd:edit
@@ -34,7 +34,6 @@ export function usePermission() {
   // ── 产品库 ────────────────────────────────────────
   const canViewProduct   = can('product:view')
   const canEditProduct   = can('product:edit')
-  const canDeleteProduct = can('product:delete')
 
   // ── 发货数据 / 数据管理 ───────────────────────────
   const canViewShipping   = can('shipping:view')
@@ -57,7 +56,6 @@ export function usePermission() {
     can,
     canViewProduct,
     canEditProduct,
-    canDeleteProduct,
     canViewShipping,
     canEditShipping,
     canExportShipping,

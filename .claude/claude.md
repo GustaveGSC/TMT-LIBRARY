@@ -152,7 +152,7 @@ window.electronAPI = {
 ```
 
 ## 权限设计
-权限码：`product:view/edit/delete`、`shipping:view/edit/export`、`aftersale:view/edit/export`、`rd:view/edit`
+权限码：`product:view/edit`、`shipping:view/edit/export`、`aftersale:view/edit/export`、`rd:view/edit`
 - rd 路由对应研发工具页（`/rd-tools`），权限码 `rd:view/edit`
 - admin 角色后端直接放行；isAdmin 判断：`userInfo.roles?.includes('admin')`
 - username==='admin' 或 'author'：不可删除/禁用，不显示分配角色按钮（后端拦截）
@@ -161,7 +161,7 @@ window.electronAPI = {
 ```javascript
 // usePermission composable
 import { usePermission } from '@/composables/usePermission'
-const { isAdmin, can, canEditProduct, canViewProduct, canDeleteProduct } = usePermission()
+const { isAdmin, can, canEditProduct, canViewProduct } = usePermission()
 ```
 
 ## 版本规则
