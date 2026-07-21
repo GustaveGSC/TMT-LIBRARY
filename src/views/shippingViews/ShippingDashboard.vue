@@ -466,6 +466,8 @@ async function fetchTooltipBreakdown() {
 
   const token = ++breakdownFetchToken
   breakdownLoading.value = true
+  // 立即清空旧数据：否则切系列→品牌时，面板会先用旧模式的数据顶一下（不是加载动画）再刷新
+  tooltipBreakdown.value = {}
   const { field } = METRIC_MAP[dataMetric.value]
   const [start, end] = filters.value.dateRange || []
   const baseBody = {
@@ -510,16 +512,27 @@ async function fetchTooltipBreakdown() {
   }
 }
 
-/** 把某国家的细分数据转成展示行；系列模式下按品类分组、同品类相邻，超过上限截断。
- * 每行是 { header } 或 { name, value } 二选一，由调用方各自渲染（tooltip 用 HTML，面板用 DOM）。 */
+// 面板默认只显示前 N 项 + "展开全部"按钮，点击后记录展开状态、完整显示，不再用纯文字提示"还有N项"
 const BREAKDOWN_MAX_LINES = 10
+const expandedPanels = ref(new Set())
+function togglePanelExpand(key) {
+  const next = new Set(expandedPanels.value)
+  next.has(key) ? next.delete(key) : next.add(key)
+  expandedPanels.value = next
+}
+
+/** 把某国家的细分数据转成展示行；系列模式下按品类分组、同品类相邻。
+ * 未展开时超过上限截断并追加 { expandKey } 供模板渲染"展开全部"按钮；已展开则完整返回。
+ * 每行是 { header }、{ expandKey, more } 或 { name, value } 三选一，由调用方各自渲染（tooltip 用 HTML，面板用 DOM）。 */
 function buildBreakdownLines(countryLabel) {
   const items = tooltipBreakdown.value[countryLabel]
   if (!items?.length) return []
+  const expanded = expandedPanels.value.has(countryLabel)
+  const limit = expanded ? Infinity : BREAKDOWN_MAX_LINES
   if (tooltipMode.value !== 'series') {
-    const shown = items.slice(0, BREAKDOWN_MAX_LINES)
+    const shown = items.slice(0, limit)
     const lines = shown.map(i => ({ name: i.name, value: i.value }))
-    if (items.length > shown.length) lines.push({ more: items.length - shown.length })
+    if (items.length > shown.length) lines.push({ expandKey: countryLabel, more: items.length - shown.length })
     return lines
   }
   const withCat = items.map(i => ({ ...i, cat: seriesCategoryName(i.label) }))
@@ -527,12 +540,12 @@ function buildBreakdownLines(countryLabel) {
   const lines = []
   let curCat = null, shownCount = 0
   for (const it of withCat) {
-    if (shownCount >= BREAKDOWN_MAX_LINES) break
+    if (shownCount >= limit) break
     if (it.cat !== curCat) { lines.push({ header: it.cat }); curCat = it.cat }
     lines.push({ name: it.name, value: it.value })
     shownCount++
   }
-  if (withCat.length > shownCount) lines.push({ more: withCat.length - shownCount })
+  if (withCat.length > shownCount) lines.push({ expandKey: countryLabel, more: withCat.length - shownCount })
   return lines
 }
 
@@ -3116,11 +3129,14 @@ watch(groupBy, () => {
               </div>
               <template v-else v-for="(line, i) in buildBreakdownLines(p.item.originalName)" :key="i">
                 <div v-if="line.header" class="map-detail-panel-cat">{{ line.header }}</div>
-                <div v-else-if="line.more != null" class="map-detail-panel-more">……还有 {{ line.more }} 项</div>
+                <button v-else-if="line.more != null" class="map-detail-expand-btn"
+                  @mousedown.stop @click="togglePanelExpand(line.expandKey)">展开全部（+{{ line.more }}）</button>
                 <div v-else class="map-detail-panel-row">
                   <span>{{ line.name }}</span><span>{{ line.value.toLocaleString() }}</span>
                 </div>
               </template>
+              <button v-if="expandedPanels.has(p.item.originalName) && (tooltipBreakdown[p.item.originalName]?.length ?? 0) > BREAKDOWN_MAX_LINES"
+                class="map-detail-expand-btn" @mousedown.stop @click="togglePanelExpand(p.item.originalName)">收起</button>
             </template>
           </div>
         </div>
@@ -3517,6 +3533,12 @@ watch(groupBy, () => {
 .map-detail-panel-divider { border-top: 1px solid #e0d4c0; margin: 4px 0 2px; }
 .map-detail-panel-cat  { color: #c4883a; font-weight: 600; margin-top: 4px; }
 .map-detail-panel-more { color: #8a7a6a; font-size: 11px; }
+.map-detail-expand-btn {
+  align-self: center; margin-top: 4px; border: 1px solid #c4883a; background: #fff;
+  color: #c4883a; font-family: inherit; font-size: 11px; border-radius: 4px;
+  padding: 2px 10px; cursor: pointer;
+}
+.map-detail-expand-btn:hover { background: #c4883a; color: #fff; }
 .map-detail-panel-row  { display: flex; justify-content: space-between; gap: 10px; color: #6b5e4e; }
 .map-detail-panel-row span:last-child { font-weight: 600; color: #3a3028; }
 .map-detail-panel-loading { display: flex; align-items: center; gap: 6px; color: #8a7a6a; font-size: 12px; padding: 2px 0; }
