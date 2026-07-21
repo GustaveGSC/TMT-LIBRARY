@@ -170,10 +170,10 @@ GET    /api/aftersale/cases                           # 工单列表（分页+�
                                                       #   返回：{total, items[]} items 不含 reasons（两阶段加载）
 POST   /api/aftersale/cases/export/start              # 启动异步导出（后台线程），立即返回 task_id
                                                       #   body: 与 GET /cases query params 同字段（JSON）
-                                                      #   返回：{task_id}；上限 EXPORT_MAX_ROWS=50000 行
+                                                      #   返回：{task_id}；上限 EXPORT_MAX_ROWS=50000 工单；分页+write-only 写临时文件
 GET    /api/aftersale/cases/export/status/<task_id>  # 轮询导出进度
-                                                      #   返回：{status: 'pending'|'done'|'error', message}
-                                                      #   error 状态会自动 pop 任务；任务 30 分钟 TTL 自动清理
+                                                      #   返回：{status: pending|running|done|error, message}；内部 interrupted 对旧前端映射为 error
+                                                      #   状态和结果文件跨 worker reload 保留；任务 30 分钟 TTL 自动清理
 GET    /api/aftersale/cases/export/download/<task_id># 下载已生成的 xlsx，下载后自动清理任务
                                                       #   一行一条原因记录；列：订单号/售后日期/购买日期/间隔天数/
                                                       #   产品型号/产品名称/一级原因/二级原因/发货物料简称/渠道/

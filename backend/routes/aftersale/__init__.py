@@ -1,23 +1,10 @@
 import uuid
-import time
 import threading
-import urllib.parse
-from flask import Blueprint, request, Response, current_app, g
+from flask import Blueprint, request, current_app, g, send_file
 from services.aftersale import AftersaleService
 from auth import make_blueprint_guard
 from result import Result
-
-# 异步导出任务：task_id → {'status': 'pending'|'done'|'error', 'data': bytes, 'message': str, '_at': float}
-_export_tasks: dict = {}
-_EXPORT_TTL = 1800  # 30 分钟后自动清理
-
-
-def _cleanup_export_tasks():
-    """清理超过 TTL 的任务（在每次新建任务时调用）"""
-    cutoff = time.time() - _EXPORT_TTL
-    stale = [k for k, v in _export_tasks.items() if v.get('_at', 0) < cutoff]
-    for k in stale:
-        _export_tasks.pop(k, None)
+import aftersale_export_tasks as export_tasks
 
 aftersale_bp = Blueprint('aftersale', __name__)
 _svc = AftersaleService()
@@ -217,9 +204,8 @@ def export_cases_start():
             return None
         return [x for x in str(raw).split(',') if x.strip()] or None
 
-    _cleanup_export_tasks()
     task_id = str(uuid.uuid4())
-    _export_tasks[task_id] = {'status': 'pending', '_at': time.time()}
+    export_tasks.create(task_id)
     app = current_app._get_current_object()
 
     kwargs = dict(
@@ -251,10 +237,11 @@ def export_cases_start():
     def run():
         with app.app_context():
             try:
-                xlsx_bytes = _svc.export_cases(**kwargs)
-                _export_tasks[task_id] = {'status': 'done', 'data': xlsx_bytes, '_at': time.time()}
+                export_tasks.update(task_id, 'running')
+                _svc.export_cases_to_file(export_tasks.result_path(task_id), **kwargs)
+                export_tasks.update(task_id, 'done')
             except Exception as e:
-                _export_tasks[task_id] = {'status': 'error', 'message': str(e), '_at': time.time()}
+                export_tasks.update(task_id, 'error', str(e))
 
     threading.Thread(target=run, daemon=True).start()
     return Result.ok(data={'task_id': task_id}).to_response()
@@ -263,32 +250,35 @@ def export_cases_start():
 @aftersale_bp.get('/cases/export/status/<task_id>')
 def export_cases_status(task_id):
     """轮询导出进度"""
-    task = _export_tasks.get(task_id)
+    task = export_tasks.get(task_id)
     if not task:
-        return Result.fail('任务不存在').to_response()
-    if task['status'] == 'error':
-        _export_tasks.pop(task_id, None)
-    return Result.ok(data={'status': task['status'], 'message': task.get('message', '')}).to_response()
+        return Result.fail('任务不存在').to_response(404)
+    # 旧前端已处理 error；将内部 interrupted 映射为 error，避免轮询到超时。
+    public_status = 'error' if task['status'] == 'interrupted' else task['status']
+    return Result.ok(data={'status': public_status, 'message': task.get('message', '')}).to_response()
 
 
 @aftersale_bp.get('/cases/export/download/<task_id>')
 def export_cases_download(task_id):
     """下载已生成的 xlsx，下载后自动清理任务"""
-    task = _export_tasks.pop(task_id, None)
+    task = export_tasks.get(task_id)
     if not task or task['status'] != 'done':
         return Result.fail('导出任务未完成或不存在').to_response()
 
     from datetime import date as _date
     filename = f'售后数据_{_date.today().strftime("%Y%m%d")}.xlsx'
-    encoded  = urllib.parse.quote(filename)
-    return Response(
-        task['data'],
+    path = export_tasks.result_path(task_id)
+    if not path.is_file():
+        export_tasks.update(task_id, 'error', '导出文件不存在，请重新发起')
+        return Result.fail('导出文件不存在，请重新发起').to_response()
+    response = send_file(
+        path,
+        as_attachment=True,
+        download_name=filename,
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        headers={
-            'Content-Disposition': f"attachment; filename*=UTF-8''{encoded}",
-            'Content-Length': str(len(task['data'])),
-        },
     )
+    response.call_on_close(lambda: export_tasks.delete(task_id))
+    return response
 
 
 @aftersale_bp.get('/cases/reasons')
