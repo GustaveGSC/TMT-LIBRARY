@@ -107,11 +107,17 @@ const GROUPBY_ALLOWED = {
   province: { chartTypes: ['map', 'bar'],  comparisons: [],             default: 'map' },
   date:     { chartTypes: [],              comparisons: ['yoy', 'mom'], default: null  },
 }
-const TAG_DIM_ALLOWED = { chartTypes: ['bar', 'pie'], comparisons: [], default: 'bar' }
+const TAG_DIM_ALLOWED       = { chartTypes: ['bar', 'pie'],        comparisons: [], default: 'bar' }
+// "地域"标签维度（标签值为国家中文名）额外支持世界地图
+const REGION_TAG_DIM_ALLOWED = { chartTypes: ['bar', 'pie', 'map'], comparisons: [], default: 'bar' }
+const REGION_TAG_DIM_NAME    = '地域'
 
 /** 标签维度（tag:N）不在 GROUPBY_ALLOWED 静态表中，统一走这个 helper 取配置 */
 function groupByConfig(gb) {
-  return GROUPBY_ALLOWED[gb] ?? (typeof gb === 'string' && gb.startsWith('tag:') ? TAG_DIM_ALLOWED : { chartTypes: [], comparisons: [], default: null })
+  if (typeof gb === 'string' && gb.startsWith('tag:')) {
+    return findTagDim(gb)?.name === REGION_TAG_DIM_NAME ? REGION_TAG_DIM_ALLOWED : TAG_DIM_ALLOWED
+  }
+  return GROUPBY_ALLOWED[gb] ?? { chartTypes: [], comparisons: [], default: null }
 }
 
 // 省份简称 → ECharts GeoJSON 标准全称
@@ -141,6 +147,29 @@ const PROVINCE_ADCODE = {
   '台湾省': '710000', '香港特别行政区': '810000', '澳门特别行政区': '820000',
 }
 
+// "地域"标签维度：国家中文名 → 世界地图 GeoJSON 英文名（world.json 里没有台湾/香港单独区划，归入 China）
+const COUNTRY_NAME_MAP = {
+  '中国': 'China', '台湾': 'China', '香港': 'China', '澳门': 'China',
+  '美国': 'United States', '加拿大': 'Canada', '墨西哥': 'Mexico',
+  '德国': 'Germany', '法国': 'France', '英国': 'United Kingdom', '意大利': 'Italy',
+  '西班牙': 'Spain', '葡萄牙': 'Portugal', '荷兰': 'Netherlands', '比利时': 'Belgium',
+  '瑞士': 'Switzerland', '奥地利': 'Austria', '瑞典': 'Sweden', '挪威': 'Norway',
+  '丹麦': 'Denmark', '芬兰': 'Finland', '波兰': 'Poland', '捷克': 'Czech Rep.',
+  '俄罗斯': 'Russia', '乌克兰': 'Ukraine', '白俄罗斯': 'Belarus',
+  '日本': 'Japan', '韩国': 'Korea', '朝鲜': 'North Korea',
+  '印度': 'India', '巴基斯坦': 'Pakistan', '孟加拉国': 'Bangladesh',
+  '印度尼西亚': 'Indonesia', '马来西亚': 'Malaysia', '新加坡': 'Singapore',
+  '泰国': 'Thailand', '越南': 'Vietnam', '菲律宾': 'Philippines', '缅甸': 'Myanmar',
+  '柬埔寨': 'Cambodia', '蒙古': 'Mongolia', '哈萨克斯坦': 'Kazakhstan',
+  '沙特': 'Saudi Arabia', '沙特阿拉伯': 'Saudi Arabia', '阿联酋': 'United Arab Emirates',
+  '土耳其': 'Turkey', '以色列': 'Israel', '伊朗': 'Iran', '伊拉克': 'Iraq',
+  '埃及': 'Egypt', '南非': 'South Africa', '尼日利亚': 'Nigeria', '肯尼亚': 'Kenya',
+  '摩洛哥': 'Morocco', '阿尔及利亚': 'Algeria',
+  '澳大利亚': 'Australia', '新西兰': 'New Zealand',
+  '巴西': 'Brazil', '阿根廷': 'Argentina', '智利': 'Chile', '秘鲁': 'Peru',
+  '哥伦比亚': 'Colombia', '委内瑞拉': 'Venezuela', '厄瓜多尔': 'Ecuador',
+}
+
 // 通过 Vite glob 懒加载 src/assets/maps/ 下的省份地图 JSON
 // 省份地图文件命名规则：{adcode}_full.json，从 DataV 下载
 // 下载地址：https://geo.datav.aliyun.com/areas_v3/bound/{adcode}_full.json
@@ -166,6 +195,21 @@ async function ensureChinaMap() {
     return true
   } catch {
     ElMessage.error('地图数据加载失败')
+    return false
+  }
+}
+
+async function ensureWorldMap() {
+  if (registeredMaps.has('world')) return true
+  const loader = findLoader('world')
+  if (!loader) { ElMessage.error('世界地图数据未找到，请将 world.json 放入 src/assets/maps/ 目录'); return false }
+  try {
+    const mod = await loader()
+    echarts.registerMap('world', mod.default)
+    registeredMaps.add('world')
+    return true
+  } catch {
+    ElMessage.error('世界地图数据加载失败')
     return false
   }
 }
@@ -207,6 +251,11 @@ async function ensureProvinceMap(adcode) {
  * 返回最终使用的 mapKey。
  */
 async function resolveMapKey() {
+  if (findTagDim(groupBy.value)?.name === REGION_TAG_DIM_NAME) {
+    const ok = await ensureWorldMap()
+    return ok ? 'world' : null
+  }
+
   const ok = await ensureChinaMap()
   if (!ok) return null
 
@@ -2095,6 +2144,7 @@ function buildMapOption(items, mapKey = 'china') {
   const { field, label } = METRIC_MAP[dataMetric.value]
   const titleText = buildChartTitle(label)
   const isChina    = mapKey === 'china'
+  const isWorld    = mapKey === 'world'
   const isCityMode = mapKey === 'china-city'
 
   // city 模式下，计算激活分组的城市归属与合计值
@@ -2115,7 +2165,9 @@ function buildMapOption(items, mapKey = 'china') {
 
   // 构建 data：分组成员共享分组合计值（→ 同色），非分组成员用自身值
   const data = items.map(i => {
-    const mapName = isChina ? (PROVINCE_NAME_MAP[i.label] ?? i.label) : i.label
+    const mapName = isChina ? (PROVINCE_NAME_MAP[i.label] ?? i.label)
+                  : isWorld ? (COUNTRY_NAME_MAP[i.label]  ?? i.label)
+                  : i.label
     const gInfo   = cityToGroup.get(i.label)
     return {
       name:         mapName,
@@ -2180,7 +2232,7 @@ function buildMapOption(items, mapKey = 'china') {
       name: label, type: 'map', map: mapKey,
       roam: true,
       data,
-      label: { show: mapKey !== 'china-city', fontFamily: FONT, fontSize: 11, color: '#3a3028' },
+      label: { show: mapKey !== 'china-city' && !isWorld, fontFamily: FONT, fontSize: 11, color: '#3a3028' },
       emphasis:  { label: { show: mapKey !== 'china-city', fontFamily: FONT, fontSize: 12, fontWeight: 'bold' }, itemStyle: { areaColor: '#e09050' } },
       select:    { disabled: true },
       itemStyle: { areaColor: '#f5f0e8', borderColor: '#d4c4a8', borderWidth: 0.8 },
@@ -2189,7 +2241,10 @@ function buildMapOption(items, mapKey = 'china') {
 }
 
 // 地图右侧 Top10 表格：地域维度且图表为地图时显示
-const showMapTable = computed(() => groupBy.value === 'province' && chartType.value === 'map')
+const showMapTable = computed(() =>
+  (groupBy.value === 'province' || findTagDim(groupBy.value)?.name === REGION_TAG_DIM_NAME)
+  && chartType.value === 'map'
+)
 
 // 按当前指标降序取前 10 条（过滤 0 值）
 const mapTopItems = computed(() => {
