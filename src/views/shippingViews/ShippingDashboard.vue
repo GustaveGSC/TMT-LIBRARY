@@ -275,9 +275,18 @@ function getFeatureCentroids(mapKey) {
 const GOLDEN_ANGLE = 137.5 * Math.PI / 180
 const DEFAULT_PANEL_DIST = 70
 
-/** 计算每个国家面板应处的像素位置：定位点（国家中心投影到屏幕）+ 用户拖拽偏移 */
-function computeDetailPanelLayout() {
-  if (!chartInst) return []
+// 详情面板改用普通 DOM 元素叠在 chart-canvas 上层（position:absolute + z-index），
+// 不再用 ECharts 的 graphic 自定义元素画在 canvas 里——canvas 内的 zlevel 分层在
+// roam（地图缩放/平移）时表现不稳定，实测面板仍会被地图画面盖住；DOM 层级由浏览器
+// 原生 CSS 层叠上下文保证，不存在这个问题，拖拽也用原生 mousedown/mousemove 实现。
+const detailPanelLayout = ref([])  // [{ key, item, anchor:[x,y], panel:[x,y] }]
+
+/** 重新计算每个国家面板应处的像素位置：定位点（国家中心投影到屏幕）+ 用户拖拽偏移 */
+function recomputeDetailPanelLayout() {
+  if (!chartInst || !showDetailPanels.value || lastMapKey !== 'world') {
+    detailPanelLayout.value = []
+    return
+  }
   const centroids = getFeatureCentroids(lastMapKey)
   const layout = []
   lastMapItems.forEach((item, idx) => {
@@ -290,55 +299,36 @@ function computeDetailPanelLayout() {
     const offset = detailPanelOffsets.value[item.originalName] || defaultOffset
     layout.push({ key: item.originalName, item, anchor, panel: [anchor[0] + offset[0], anchor[1] + offset[1]] })
   })
-  return layout
+  detailPanelLayout.value = layout
 }
 
-/** 构建详情面板 + 连线的 graphic 元素数组 */
-function buildDetailGraphics() {
-  return computeDetailPanelLayout().flatMap(({ key, item, anchor, panel }) => {
-    const text = `${item.originalName}\n${lastMapMetricLabel}：${item.rawValue.toLocaleString()}`
-    return [
-      {
-        id: `detail-line-${key}`, type: 'line', silent: true, z: 90, zlevel: 10,
-        shape: { x1: anchor[0], y1: anchor[1], x2: panel[0], y2: panel[1] },
-        style: { stroke: '#c4883a', lineWidth: 1, opacity: 0.7 },
-      },
-      {
-        id: `detail-panel-${key}`, type: 'group', z: 100, zlevel: 10,
-        position: panel, draggable: true, cursor: 'move',
-        ondrag(e) {
-          detailPanelOffsets.value = {
-            ...detailPanelOffsets.value,
-            [key]: [e.target.x - anchor[0], e.target.y - anchor[1]],
-          }
-          chartInst.setOption({ graphic: [{ id: `detail-line-${key}`, shape: { x2: e.target.x, y2: e.target.y } }] })
-        },
-        children: [
-          {
-            type: 'rect', shape: { x: -65, y: -23, width: 130, height: 46, r: 6 },
-            style: { fill: '#fff', stroke: '#c4883a', lineWidth: 1, shadowBlur: 6, shadowColor: 'rgba(0,0,0,0.15)' },
-          },
-          {
-            type: 'text',
-            style: {
-              text, x: 0, y: 0, textAlign: 'center', textVerticalAlign: 'middle',
-              fontFamily: FONT, fontSize: 12, lineHeight: 18, fill: '#3a3028',
-            },
-          },
-        ],
-      },
-    ]
-  })
+// 面板拖拽（原生鼠标事件，避免依赖 ECharts graphic 的 draggable 机制）
+let dragState = null
+function startDragPanel(e, key) {
+  e.preventDefault()
+  const cur = detailPanelLayout.value.find(p => p.key === key)
+  if (!cur) return
+  dragState = {
+    key, anchor: cur.anchor, startMouse: [e.clientX, e.clientY],
+    startOffset: [cur.panel[0] - cur.anchor[0], cur.panel[1] - cur.anchor[1]],
+  }
+  window.addEventListener('mousemove', onDragPanelMove)
+  window.addEventListener('mouseup', onDragPanelEnd)
 }
-
-/** 地图平移/缩放后，重新计算各面板定位点并更新连线起点、面板位置（偏移量不变） */
-function updateDetailPanelPositions() {
-  if (!chartInst || !showDetailPanels.value || lastMapKey !== 'world') return
-  const patches = computeDetailPanelLayout().flatMap(({ key, anchor, panel }) => [
-    { id: `detail-line-${key}`, shape: { x1: anchor[0], y1: anchor[1], x2: panel[0], y2: panel[1] } },
-    { id: `detail-panel-${key}`, position: panel },
-  ])
-  if (patches.length) chartInst.setOption({ graphic: patches })
+function onDragPanelMove(e) {
+  if (!dragState) return
+  const dx = e.clientX - dragState.startMouse[0]
+  const dy = e.clientY - dragState.startMouse[1]
+  detailPanelOffsets.value = {
+    ...detailPanelOffsets.value,
+    [dragState.key]: [dragState.startOffset[0] + dx, dragState.startOffset[1] + dy],
+  }
+  recomputeDetailPanelLayout()
+}
+function onDragPanelEnd() {
+  dragState = null
+  window.removeEventListener('mousemove', onDragPanelMove)
+  window.removeEventListener('mouseup', onDragPanelEnd)
 }
 
 /** 加载并注册全国城市级地图，返回 mapKey 或 null */
@@ -1402,14 +1392,14 @@ function _createChartInst() {
   chartInst.on('mousemove',  () => { clearTimeout(lpTimer); lpActive = false })
   chartInst.on('globalout',  () => { clearTimeout(lpTimer); lpActive = false })
   // 地图缩放/平移（roam）后，详情面板的定位点会跟着变，需要重新计算连线和面板位置
-  chartInst.on('georoam', updateDetailPanelPositions)
+  chartInst.on('georoam', recomputeDetailPanelLayout)
   renderChart()
 }
 
 function initChart() {
   if (!chartEl.value) return
   resizeObs = new ResizeObserver(() => {
-    if (chartInst) { chartInst.resize(); return }
+    if (chartInst) { chartInst.resize(); recomputeDetailPanelLayout(); return }
     _createChartInst()
   })
   resizeObs.observe(chartEl.value)
@@ -1499,10 +1489,10 @@ async function renderChart() {
   }
   chartInst.setOption(opt, { notMerge: true })
 
-  // 世界地图详情面板：notMerge 已清空上一次的 graphic，这里按需重新叠加
-  if (chartType.value === 'map' && showDetailPanels.value && lastMapKey === 'world') {
+  // 世界地图详情面板（DOM 叠层）：地图重渲染后坐标系变了，重新计算面板位置
+  if (chartType.value === 'map') {
     await nextTick()
-    chartInst.setOption({ graphic: buildDetailGraphics() })
+    recomputeDetailPanelLayout()
   }
 }
 
@@ -2870,6 +2860,21 @@ watch(groupBy, () => {
       <div ref="chartWrapEl" v-loading="loadingChart" class="chart-wrap" :class="{ 'chart-wrap--with-table': showMapTable }" @contextmenu.prevent>
         <div ref="chartEl" class="chart-canvas"></div>
 
+        <!-- 世界地图详情面板：DOM 叠层，保证盖在地图 canvas 上方；连线用 SVG，面板可拖拽 -->
+        <div v-if="detailPanelLayout.length" class="map-detail-overlay">
+          <svg class="map-detail-lines">
+            <line v-for="p in detailPanelLayout" :key="'l-' + p.key"
+              :x1="p.anchor[0]" :y1="p.anchor[1]" :x2="p.panel[0]" :y2="p.panel[1]"
+              stroke="#c4883a" stroke-width="1" opacity="0.7" />
+          </svg>
+          <div v-for="p in detailPanelLayout" :key="'p-' + p.key" class="map-detail-panel"
+            :style="{ left: (p.panel[0] - 65) + 'px', top: (p.panel[1] - 23) + 'px' }"
+            @mousedown="startDragPanel($event, p.key)">
+            <div class="map-detail-panel-name">{{ p.item.originalName }}</div>
+            <div class="map-detail-panel-val">{{ lastMapMetricLabel }}：{{ p.item.rawValue.toLocaleString() }}</div>
+          </div>
+        </div>
+
         <!-- 地域维度地图：右侧 Top10 排行表 -->
         <div v-if="showMapTable" class="map-rank-panel">
           <div class="map-rank-title">{{ METRIC_MAP[dataMetric].label }} Top 10</div>
@@ -3238,6 +3243,21 @@ watch(groupBy, () => {
 .chart-wrap--with-table { display: flex; }
 .chart-canvas { width: 100%; height: 100%; }
 .chart-wrap--with-table .chart-canvas { flex: 1; min-width: 0; width: auto; }
+
+/* 世界地图详情面板：DOM 叠层，z-index 保证盖过下方 canvas 地图 */
+.map-detail-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 20; }
+.map-detail-lines   { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.map-detail-panel {
+  position: absolute; width: 130px; min-height: 46px;
+  background: #fff; border: 1px solid #c4883a; border-radius: 6px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+  padding: 4px 8px; display: flex; flex-direction: column; justify-content: center; gap: 2px;
+  font-family: 'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', sans-serif;
+  font-size: 12px; color: #3a3028; text-align: center;
+  pointer-events: auto; cursor: move; user-select: none;
+}
+.map-detail-panel-name { font-weight: 600; }
+.map-detail-panel-val  { color: #6b5e4e; }
 
 /* 地图 Top10 侧边表格 */
 .map-rank-panel {
