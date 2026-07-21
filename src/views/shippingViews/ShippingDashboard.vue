@@ -309,7 +309,8 @@ const TRADE_TYPE_OPTIONS = [
   { label: '内销数据',   value: 'domestic' },
   { label: '外贸数据',   value: 'foreign'  },
 ]
-const sections = reactive({ time: true, product: true, channel: true, region: true, tag: true })
+// 左侧筛选面板分区展开状态：默认只展开时间，其余收起
+const sections = reactive({ time: true, product: false, channel: false, region: false, tag: false })
 const selectedPeriod = ref('month')
 const chartType      = ref('bar')    // 图表类型：bar/line/pie/map
 const comparisonMode = ref(null)     // 对比模式：null | 'yoy'（同比）| 'mom'（环比）
@@ -474,6 +475,32 @@ function loadPresetsFromStorage() {
 function savePresetsToStorage() {
   localStorage.setItem('shipping_group_presets', JSON.stringify(groupPresets.value))
 }
+
+// ── 常用偏好持久化（数据端 / 内外贸 / 时间范围） ──────
+const DASHBOARD_PREFS_KEY = 'shipping_dashboard_prefs'
+
+function loadPrefsFromStorage() {
+  try {
+    const raw = localStorage.getItem(DASHBOARD_PREFS_KEY)
+    if (!raw) return
+    const prefs = JSON.parse(raw)
+    if (prefs.dataSource) dataSource.value = prefs.dataSource
+    if (prefs.tradeType)  tradeType.value  = prefs.tradeType
+    if (Array.isArray(prefs.dateRange) && prefs.dateRange.length === 2) {
+      const [s, e] = prefs.dateRange.map(v => new Date(v))
+      if (!isNaN(s) && !isNaN(e)) filters.value.dateRange = [s, e]
+    }
+  } catch { /* 忽略损坏的偏好数据，保留默认值 */ }
+}
+function savePrefsToStorage() {
+  const [s, e] = filters.value.dateRange || []
+  localStorage.setItem(DASHBOARD_PREFS_KEY, JSON.stringify({
+    dataSource: dataSource.value,
+    tradeType:  tradeType.value,
+    dateRange:  (s && e) ? [s.toISOString(), e.toISOString()] : null,
+  }))
+}
+watch([dataSource, tradeType, () => filters.value.dateRange], savePrefsToStorage, { deep: true })
 
 // 按维度分组
 const productGroups = computed(() => customGroups.value.filter(g => g.dimension === 'product'))
@@ -930,6 +957,7 @@ function onFsKeydown(e) {
 onMounted(async () => {
   loadGroupsFromStorage()
   loadPresetsFromStorage()
+  loadPrefsFromStorage()    // 恢复数据端/内外贸/时间范围偏好，需在 loadOptions 前完成
   await loadOptions()       // 先加载选项（categoryTree 等），effectiveGroupBy 依赖它
   await loadChartData()     // 再加载图表，此时 effectiveGroupBy 已能正确推导层级
   initChart()
