@@ -3,7 +3,9 @@
 日期：2026-07-21
 承接 [2026-07-21-token-cookie-design-review.md](2026-07-21-token-cookie-design-review.md)。已确认：**方案 A（httpOnly Cookie + Double Submit CSRF）+ 直接切换**（不做新旧并存，上线那一刻所有已登录用户掉线重新登录，和之前几次密钥变更的做法一致）。范围仅 Web 端，Electron 暂停不涉及。
 
-本文件把方案细化到可以分别交给 Claude（前端）和 Codex（后端）实施的颗粒度。**这一步仍然只是设计定稿，不写代码**——定稿后再各自建 worktree 开始实施。
+本文件把方案细化到可以分别交给 Claude（前端）和 Codex（后端）实施的颗粒度。
+
+**定稿更新（2026-07-21）**：Codex 后端评审（[2026-07-21-codex-token-cookie-design-review.md](2026-07-21-codex-token-cookie-design-review.md)）指出了本文件初版的几个遗漏，用户已确认停止支持现有 Electron 客户端（[2026-07-21-electron-support-end-decision.md](2026-07-21-electron-support-end-decision.md)），解除了唯一的上线阻断项。下面第二、三节已按评审意见更新为定稿版本，**现在可以开始实施**（各自独立 worktree）。
 
 ---
 
@@ -26,53 +28,104 @@
   → 前端跳转登录页
 ```
 
-## 二、后端改动范围（Codex）
+## 二、后端改动范围（Codex）· 定稿版
 
 ### 1. `backend/auth.py`
 
-- `generate_token()` 不变（仍然生成 JWT，只是不再由调用方直接塞进响应体）
-- 新增：CSRF token 生成函数，`secrets.token_urlsafe(32)` 级别的随机值即可，不需要签名（它不代表身份，只用来配合 Cookie 做 Double Submit 校验）
-- `verify_token()` 的调用方式要变：现在从 `request.headers.get('Authorization')` 取 token，改成从 `request.cookies.get('tmt_session')` 取。**这是核心改动点，`make_blueprint_guard`/`require_auth` 里都要跟着改**
-- 新增 CSRF 校验逻辑：在 `make_blueprint_guard` 的写请求分支里，比对 `request.headers.get('X-CSRF-Token')` 和 `request.cookies.get('tmt_csrf')`
+- `generate_token()` 不变
+- CSRF token **不是**普通随机值，而是**和当前会话（JWT）绑定**的 signed double-submit：登录时生成随机值，同时把它（或其不可逆绑定值）写进 JWT 的一个 claim；写请求校验时要求 `X-CSRF-Token` 头、`tmt_csrf` Cookie、JWT claim 三者一致，而不是只比较 Header 和 Cookie 两者（naive double-submit 对 Cookie 注入没有防护）
+- `verify_token(token)` 保持"纯校验函数"职责不变（接收 token 字符串，不读 Header/Cookie）；新增一个统一的请求级读取函数，从 `request.cookies.get('tmt_session')` 取值后调用 `verify_token`
+- **必须替换全部四类调用点**，不能只改 `auth.py` 通用守卫：
+  1. `make_blueprint_guard`
+  2. `require_auth`
+  3. `routes/account/__init__.py` 里的自定义蓝图守卫
+  4. `routes/version/__init__.py` 里的自定义写接口守卫
+- CSRF 校验用统一函数或应用级 `before_request` 覆盖 `POST/PUT/PATCH/DELETE`，不能只放在某一个守卫的"编辑权限"分支：
+  - 登录、游客登录、注册是无现有会话的公开入口，明确豁免
+  - 登出必须验证 CSRF
+  - `OPTIONS`（CORS 预检）直接放行，不要求会话或 CSRF
+  - GET/HEAD/OPTIONS 不做 CSRF 校验，同时保证这些方法本身没有状态变更副作用
+  - 比对用 `hmac.compare_digest`；缺 Cookie/Header/不匹配统一返回 403，不回显 token 内容
 
-### 2. 登录/登出相关路由（`routes/account/__init__.py`）
+### 2. Cookie 生命周期：登录/登出/401/改密要统一清干净
 
-- `login`/`guest_login`：不再往响应体的 `data.token` 塞值，改成用 `flask.Response.set_cookie()` 下发两个 Cookie。注意 Flask 的 `Result.to_response()` 目前是怎么构造 Response 对象的，需要确认能不能在返回前附加 `set_cookie`（大概率需要小改 `Result.to_response()` 或者在路由里拿到 Response 对象后手动调用 `set_cookie`）
-- 新增登出接口（如果现在没有专门的登出接口——目前前端 401 时是本地清 localStorage 直接跳转，没有调后端；改成 Cookie 后，前端主动登出也需要一个后端接口来清 Cookie，纯本地清不掉 httpOnly Cookie）
+- 封装 `set_auth_cookies(response, user)` / `clear_auth_cookies(response)` 两个函数，登录、游客登录、登出、401、本人改密共享完全相同的名称/Path/SameSite/Secure/Max-Age 配置，不要在各个路由里各写一遍
+- **401**：不能指望每个 401 返回点手动加清 Cookie 逻辑，容易漏；用应用级 `after_request` 统一处理，对 401 响应删除两个 Cookie
+- **本人改密**：改完自己的密码后，当前 JWT 的 `token_version` 已经失效，成功响应也要清 Cookie，前端直接跳登录页，不要等下一次请求才发现 401
+- **管理员改别人的密码/状态/角色**：不清管理员自己的 Cookie
+- **登录/游客登录**：每次轮换 JWT 和 CSRF；登录失败不能覆盖已有的有效 Cookie
+- **登出**：幂等，即使当前会话已经失效也要能正常清 Cookie（登出本身不因为 session already invalid 而报错），但如果登出请求带着一个仍然有效的会话，必须照样过 CSRF 校验
+- **注册接口**：不自动登录，不下发 Cookie，保持现有语义不变
 
-### 3. CORS 配置确认
+### 3. `Result.to_response()` 不需要改动
 
-`CORS(app, origins=_cors_origins)` 现在没有 `supports_credentials=True`。Cookie 方案下，跨域场景（本地开发 Vite dev server）必须显式加 `supports_credentials=True`，否则浏览器不会携带/接受跨域 Cookie。生产环境因为同源不受影响，但本地开发链路要过一遍。
+当前返回 `(Response, status)`，路由里用 `flask.make_response(result.to_response())` 拿到可变 Response 对象后调用 `set_auth_cookies`/`clear_auth_cookies` 即可，不需要让通用的 `Result` 类理解认证 Cookie 这件事。
 
-### 4. `Secure` 属性和本地开发的兼容
+### 4. CORS 配置确认
 
-`Secure` Cookie 只在 HTTPS 下生效。本地开发用的是 `http://127.0.0.1:8765`（非 HTTPS），如果 Cookie 强制 `Secure=True`，本地开发登录会直接种不上 Cookie。需要按环境区分：生产 `Secure=True`，本地开发环境（`APP_ENV` 非 production）`Secure=False`。这个和现有 `security_config.py` 里已经有的"非生产环境放宽"的模式一致，可以复用类似判断逻辑。
+- `CORS(app, origins=_cors_origins, supports_credentials=True)`——**origins 必须是精确白名单，不能用 `*`**（浏览器规则：`supports_credentials=True` 时 `Access-Control-Allow-Origin` 不能是通配符）
+- `supports_credentials` 只解决"浏览器要不要在跨域请求里带/接受 Cookie"，不代表 Electron `file://` 场景能用——但这次不涉及 Electron，不用管这条
+- **本地 Web 开发优先继续走 Vite `/api` 代理保持同源**，不要把 `localhost:5174` 页面直接请求 `127.0.0.1:8765`；`localhost` 和 `127.0.0.1` 不是同一站点，`SameSite=Strict` 会导致 Cookie 种不上、联调莫名其妙地全部 401，且很难排查。这条对 Claude 前端联调也很重要，一并记在这里
 
-### 5. 需要新增/调整的测试
+### 5. `Secure` 属性和本地开发的兼容
 
-- `verify_token` 从 Cookie 读取的单测
-- CSRF 校验通过/拒绝的单测（header 和 Cookie 一致/不一致/缺失三种场景）
-- 登录响应确实带上了两个 `Set-Cookie` 头，且 `tmt_session` 有 `HttpOnly` 标记、`tmt_csrf` 没有
-- 登出接口清空 Cookie
+生产 `Secure=True`；明确的非生产环境（`APP_ENV` 非 production）`Secure=False`，复用 `security_config.py` 已有的环境判断模式。
 
-## 三、前端改动范围（Claude）
+### 6. Cookie 参数（已定稿）
+
+| 参数 | 值 |
+|---|---|
+| 名称 | `tmt_session`（会话）、`tmt_csrf`（CSRF） |
+| CSRF header 名 | `X-CSRF-Token` |
+| `Path` | `/` |
+| `Domain` | 不设置，host-only Cookie |
+| `SameSite` | `Strict` |
+| `Max-Age` | `604800`（7 天，和 JWT 有效期一致），同时设置一致的 `Expires` |
+| `Secure` | 生产 `True`，明确非生产环境 `False` |
+| `HttpOnly` | `tmt_session`=`True`，`tmt_csrf`=`False` |
+
+### 7. 需要新增/调整的测试
+
+- 四类鉴权入口均只接受 Cookie，Bearer 被明确拒绝
+- CSRF：一致、缺 Header、缺 Cookie、错误值、`OPTIONS`、公开入口豁免，各自独立场景
+- CSRF 与当前 JWT 会话绑定，不能混用另一个登录会话的 CSRF Cookie
+- 登录/游客登录 Cookie 属性正确，响应体不含 token；登录失败不覆盖已有 Cookie
+- 登出、401、本人改密正确清 Cookie；管理员改别人的密码不清自己的 Cookie
+- `Secure` 仅在明确非生产环境关闭
+- CORS credential 响应只允许配置的 origin，不允许 `*`
+
+## 三、前端改动范围（Claude）· 定稿版
 
 ### 1. `src/api/http.js`
 
 - 移除 `localStorage.getItem('tmt_token')` 读取和 `Authorization` header 设置逻辑
-- axios 需要配置 `withCredentials: true`，否则浏览器不会自动带上 Cookie（尤其本地开发跨域场景下必须；生产同源下大多数浏览器默认也会带，但显式设置更保险，不依赖隐式行为）
-- 写请求前从 `document.cookie` 解析出 `tmt_csrf` 的值，加到请求头 `X-CSRF-Token`（写一个小工具函数读某个 Cookie 的值，原生 `document.cookie` 解析，不需要额外依赖）
-- 401 处理：不再需要清 `localStorage.tmt_token`（Cookie 由后端清，前端读不到也管不着），但 `user`/`login_time` 这类本地展示用的非敏感信息还是可以留在 localStorage，跳转登录页的逻辑不变
+- axios 配置 `withCredentials: true`
+- 写请求前从 `document.cookie` 解析出 `tmt_csrf` 的值，加到请求头 `X-CSRF-Token`
+- **401 处理修正（Codex 指出的点）**：401 时只清本地展示状态（`user`/`login_time`）并跳转登录页，**不要额外调用登出接口**——Cookie 已经由后端 401 响应统一删除（见后端 `after_request` 那条），前端如果在 401 处理里又调一次登出接口，会出现"401 → 登出请求又 401"的重复处理链路。只有用户**主动点退出登录**时才调登出接口。
 
 ### 2. 登录/登出流程
 
-- 登录成功后，前端不再需要主动存 token（后端已经通过 Set-Cookie 存好了），只需要存 `user` 展示信息
-- 新增调用登出接口的逻辑（用户点"退出登录"按钮时，以及可能的其他登出入口，要改成先调后端登出接口再跳转，不能只本地清 localStorage 了事）
+- 登录成功后，前端不再存 token，只存 `user` 展示信息
+- 主动登出（用户点按钮）：调用后端新登出接口，清 Cookie，再清本地展示状态并跳转
 
-### 3. 需要排查的调用点
+### 3. 需要排查/修改的调用点（Codex 核对出的完整清单，比初版遗漏更多）
 
-- 全局搜一遍 `localStorage.getItem('tmt_token')`、`localStorage.setItem('tmt_token'`、`localStorage.removeItem('tmt_token'` 这几个精确写法，确认改造覆盖所有调用点（目前印象里只有 `http.js` 一处读、登录页一处写、`http.js` 401 处理一处删，但要重新搜索确认，不能凭记忆）
-- 检查有没有绕开 `http.js` 拦截器、直接手动构造请求的地方（比如某些下载/预签名场景可能是原生 `fetch`/`XMLHttpRequest`，之前处理预签名上传时见过原生 XHR 用法，这些如果也需要带身份信息，要确认它们是否也需要 `withCredentials`）
+- `src/api/http.js`：读、附加、清除 `tmt_token`
+- `src/views/loginViews/page-login.vue`：登录成功保存 token 的逻辑
+- `src/routers/index.js`：路由守卫里清 token 的逻辑
+- `src/components/user/UserSettingsDrawer.vue`：退出登录按钮，改成调后端登出接口
+
+### 4. 原生请求调用点（已核对，不需要改）
+
+- 资料库/安装包上传用的原生 `XMLHttpRequest` 是直传 OSS 预签名地址，不应该带本站 Cookie/CSRF，维持原样
+- 资料下载用的原生 `fetch(url)` 走的是签名/公开 URL，不应该带本站 Cookie，维持原样
+- SSE 进度接口（`/api/shipping/import/progress/:id`）用不可预测的 `task_id` 作为访问凭证，后端本身豁免鉴权，不依赖 Bearer，Web 同源下不需要额外改造
+
+### 5. Electron 相关清理（决策要求，本批一并做）
+
+- `src/views/indexViews/page-index.vue` 的下载按钮已经隐藏（之前的改动），保持不变
+- 检查 `.claude/claude.md`、`.claude/modules/*.md`、`README` 等文档里残留的 Electron 支持描述，标记为历史/暂停状态，不需要删除 `electron/` 目录代码本身（只是暂停，不是取消）
+- 不需要处理 `electron/main/index.ts`/`window.ts` 里的 `getBaseURL`/`WEB_BASE` 之类的 Electron 专属代码——Electron 暂停后不会有新构建，这些代码保持原样即可，不用为了 Cookie 改造去改它们
 
 ## 四、直接切换的具体步骤（部署顺序）
 
