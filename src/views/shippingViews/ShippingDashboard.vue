@@ -292,12 +292,12 @@ function buildDetailGraphics() {
     const text = `${item.originalName}\n${lastMapMetricLabel}：${item.rawValue.toLocaleString()}`
     return [
       {
-        id: `detail-line-${key}`, type: 'line', silent: true, z: 90,
+        id: `detail-line-${key}`, type: 'line', silent: true, z: 90, zlevel: 10,
         shape: { x1: anchor[0], y1: anchor[1], x2: panel[0], y2: panel[1] },
         style: { stroke: '#c4883a', lineWidth: 1, opacity: 0.7 },
       },
       {
-        id: `detail-panel-${key}`, type: 'group', z: 100,
+        id: `detail-panel-${key}`, type: 'group', z: 100, zlevel: 10,
         position: panel, draggable: true, cursor: 'move',
         ondrag(e) {
           detailPanelOffsets.value = {
