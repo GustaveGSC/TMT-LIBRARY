@@ -6,7 +6,7 @@ import { useFinishedStore } from '@/stores/product'
 import { usePackagedStore  } from '@/stores/product'
 import { CaretBottom, CaretTop } from '@element-plus/icons-vue'
 import http from '@/api/http'
-import FinishedExpandRow from './FinishedExpandRow.vue'
+import FinishedExpandRow from '@/components/product/FinishedExpandRow.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import PackagedEditDialog from '@/components/product/PackagedEditDialog.vue'
 

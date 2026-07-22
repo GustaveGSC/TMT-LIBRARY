@@ -126,6 +126,7 @@ ssh tmt "systemctl reload gunicorn"
 
 ## Vue 文件规范
 - 文件顺序：`<script setup>` → `<template>` → `<style scoped>`
+- **`views/<domain>Views/` vs `components/<domain>/` 归属规则**：能被路由/顶层页面直接整个切换展示的"页面级/Tab级"组件放 `views/<domain>Views/`（如 `page-xxx.vue` 本身，或像 `dataMgmtViews` 下被 tab 切换的 `DataImport.vue`/`OperatorConfig.vue`，或独立路由页如 `AftersaleCasesPage.vue`）；被这些页面内部引用的可复用子组件/弹窗/表格（不会被路由或 tab 直接整个替换）放 `components/<domain>/`（如 `FinishedExpandRow.vue`、`AftersaleCasesTable.vue`、`PackagedEditDialog.vue`）。2026-07-22 起统一，历史遗留问题发现一个改一个，不强制一次性搬完。
 - script 内分区注释：导入 / 响应式状态 / 计算属性 / 生命周期 / 方法，所有逻辑需注释
 - 动态图片路径必须用 `import` 引入，不能在模板写字符串 `@/...`
 - Element Plus 图标从 `@element-plus/icons-vue` 引入

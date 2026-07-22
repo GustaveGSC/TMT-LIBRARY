@@ -4,7 +4,7 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { Picture, Search, Close } from '@element-plus/icons-vue'
 import { useFinishedStore } from '@/stores/product/finished'
 import { ensureTableData } from '@/stores/product'
-import FinishedExpandRow from './FinishedExpandRow.vue'
+import FinishedExpandRow from '@/components/product/FinishedExpandRow.vue'
 
 // ── 移动端检测 ─────────────────────────────────────
 const isMobile = ref(window.innerWidth <= 768)
