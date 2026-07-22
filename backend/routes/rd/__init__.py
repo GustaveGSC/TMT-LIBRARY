@@ -1,5 +1,5 @@
 from flask import Blueprint, request, Response, g
-from auth import require_auth, is_rd_admin, make_blueprint_guard
+from auth import make_blueprint_guard
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
@@ -1264,112 +1264,6 @@ def compare_bom():
         if after_tmp  and os.path.exists(after_tmp):  os.unlink(after_tmp)
 
 
-# ── 变更提醒 CRUD ──────────────────────────────────
-
-# 管理员权限校验：通过 @require_auth 装饰器验证 JWT token 后，使用 is_rd_admin() 检查权限
-# （原 _check_rd_admin 依赖客户端传递 X-User-* 头，已废弃）
-
-
-@rd_bp.get('/reminders')
-def list_reminders():
-    """返回所有在架（is_active=True）的变更提醒（所有 rd 用户可读）"""
-    from result import Result
-    from database.models.rd import EcrReminder
-    items = EcrReminder.query.filter_by(is_active=True).order_by(EcrReminder.created_at.desc()).all()
-    return Result.ok([i.to_dict() for i in items]).to_response()
-
-
-@rd_bp.get('/reminders/all')
-@require_auth
-def list_reminders_all():
-    """返回全部提醒（含下架历史），仅 rd:admin 可用"""
-    from result import Result
-    from database.models.rd import EcrReminder
-    if not is_rd_admin():
-        return Result.fail('权限不足：需要研发部管理员权限').to_response()
-    items = EcrReminder.query.order_by(EcrReminder.created_at.desc()).all()
-    return Result.ok([i.to_dict() for i in items]).to_response()
-
-
-@rd_bp.post('/reminders')
-@require_auth
-def create_reminder():
-    """新建变更提醒，仅 rd:admin 可用"""
-    from result import Result
-    from database.base import db
-    from database.models.rd import EcrReminder
-    if not is_rd_admin():
-        return Result.fail('权限不足：需要研发部管理员权限').to_response()
-    d = request.get_json() or {}
-    content = (d.get('content') or '').strip()
-    if not content:
-        return Result.fail('提醒内容不能为空').to_response()
-    item = EcrReminder(
-        content    = content,
-        notes      = (d.get('notes') or '').strip() or None,
-        created_by = (d.get('created_by') or '').strip() or None,
-    )
-    db.session.add(item)
-    db.session.commit()
-    return Result.ok(item.to_dict()).to_response()
-
-
-@rd_bp.put('/reminders/<int:rid>')
-@require_auth
-def update_reminder(rid):
-    """编辑提醒内容/备注，仅 rd:admin 可用"""
-    from result import Result
-    from database.base import db
-    from database.models.rd import EcrReminder
-    if not is_rd_admin():
-        return Result.fail('权限不足：需要研发部管理员权限').to_response()
-    item = EcrReminder.query.get(rid)
-    if not item:
-        return Result.fail('提醒不存在').to_response()
-    d = request.get_json() or {}
-    content = (d.get('content') or '').strip()
-    if not content:
-        return Result.fail('提醒内容不能为空').to_response()
-    item.content = content
-    item.notes   = (d.get('notes') or '').strip() or None
-    db.session.commit()
-    return Result.ok(item.to_dict()).to_response()
-
-
-@rd_bp.put('/reminders/<int:rid>/deactivate')
-@require_auth
-def deactivate_reminder(rid):
-    """下架（软删除）指定提醒，仅 rd:admin 可用"""
-    from result import Result
-    from database.base import db
-    from database.models.rd import EcrReminder
-    if not is_rd_admin():
-        return Result.fail('权限不足：需要研发部管理员权限').to_response()
-    item = EcrReminder.query.get(rid)
-    if not item:
-        return Result.fail('提醒不存在').to_response()
-    item.is_active = False
-    db.session.commit()
-    return Result.ok(item.to_dict()).to_response()
-
-
-@rd_bp.put('/reminders/<int:rid>/activate')
-@require_auth
-def activate_reminder(rid):
-    """重新上架已下架提醒，仅 rd:admin 可用"""
-    from result import Result
-    from database.base import db
-    from database.models.rd import EcrReminder
-    if not is_rd_admin():
-        return Result.fail('权限不足：需要研发部管理员权限').to_response()
-    item = EcrReminder.query.get(rid)
-    if not item:
-        return Result.fail('提醒不存在').to_response()
-    item.is_active = True
-    db.session.commit()
-    return Result.ok(item.to_dict()).to_response()
-
-
 # ─────────────────────────────────────────────────────────────
 # PDM 转 BOM
 # ─────────────────────────────────────────────────────────────
@@ -1651,3 +1545,4 @@ def pdm2bom_export_bom():
 
 # 子模块在 rd_bp 建立后导入，以便其路由继续挂载在同一个 Blueprint 上。
 from . import notes as _notes_routes  # noqa: E402,F401
+from . import reminders as _reminder_routes  # noqa: E402,F401

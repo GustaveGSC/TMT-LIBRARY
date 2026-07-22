@@ -101,6 +101,13 @@ def test_rd_route_map_is_stable_before_module_split():
     }
     assert note_modules == {'routes.rd.notes'}
 
+    reminder_modules = {
+        app.view_functions[rule.endpoint].__module__
+        for rule in app.url_map.iter_rules()
+        if rule.rule.startswith('/api/rd/reminders')
+    }
+    assert reminder_modules == {'routes.rd.reminders'}
+
 
 @pytest.fixture
 def rd_app_client(monkeypatch):
@@ -120,6 +127,12 @@ def test_reminders_require_rd_admin_for_management(rd_app_client):
     denied = client.get('/api/rd/reminders/all')
     assert denied.status_code == 400
     assert denied.get_json()['success'] is False
+    denied_create = client.post(
+        '/api/rd/reminders', json={'content': '越权创建'},
+        headers={'X-CSRF-Token': 'csrf'},
+    )
+    assert denied_create.status_code == 400
+    assert denied_create.get_json()['message'] == '权限不足：需要研发部管理员权限'
 
     _set_user(
         client, username='rd-admin',
@@ -136,6 +149,15 @@ def test_reminders_require_rd_admin_for_management(rd_app_client):
     assert all_items.status_code == 200
     assert [item['content'] for item in all_items.get_json()['data']] == ['审核 BOM']
 
+    updated = client.put(
+        f'/api/rd/reminders/{reminder_id}',
+        json={'content': '复核 BOM', 'notes': '已更新'},
+        headers={'X-CSRF-Token': 'csrf'},
+    )
+    assert updated.status_code == 200
+    assert updated.get_json()['data']['content'] == '复核 BOM'
+    assert updated.get_json()['data']['notes'] == '已更新'
+
     deactivated = client.put(
         f'/api/rd/reminders/{reminder_id}/deactivate',
         headers={'X-CSRF-Token': 'csrf'},
@@ -143,6 +165,16 @@ def test_reminders_require_rd_admin_for_management(rd_app_client):
     assert deactivated.status_code == 200
     assert deactivated.get_json()['data']['is_active'] is False
     assert client.get('/api/rd/reminders').get_json()['data'] == []
+
+    activated = client.put(
+        f'/api/rd/reminders/{reminder_id}/activate',
+        headers={'X-CSRF-Token': 'csrf'},
+    )
+    assert activated.status_code == 200
+    assert activated.get_json()['data']['is_active'] is True
+    assert [
+        item['content'] for item in client.get('/api/rd/reminders').get_json()['data']
+    ] == ['复核 BOM']
 
 
 def test_notes_are_isolated_by_authenticated_username(rd_app_client):
