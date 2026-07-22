@@ -2,11 +2,12 @@
 回填脚本：为已有的 aftersale_case 记录计算 days_since_purchase
   条件：shipped_date 和 purchase_date 均不为空，且 days_since_purchase 为 NULL
 
-在 backend/ 目录下执行：python backfill_days_since_purchase.py
+在项目根目录执行：python backend/scripts/backfill_days_since_purchase.py
 """
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BACKEND_DIR)
 
 from app import create_app
 from database.base import db

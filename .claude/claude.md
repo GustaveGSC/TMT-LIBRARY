@@ -29,8 +29,7 @@ src/routers/index.js     # Hash路由：/login /index /product /shipping /data-m
 src/styles/themes.css    # 全局CSS变量（勿硬编码颜色）
 backend/app.py           # Flask 工厂；SQLAlchemy QueuePool + connect/read/write 超时（见源码）
                           # 生产：1 个 Gunicorn worker，POOL_SIZE=5 + MAX_OVERFLOW=5（.env 显式配置），单进程理论峰值 10 个数据库连接
-backend/create_reason_keyword_rules.py  # 售后「原因词典」相关表初始化与种子数据（表结构见 database.md）
-backend/create_ecr_reminders.py        # 研发工具「ECR提醒」相关表初始化与种子数据
+backend/scripts/          # 一次性建表、种子、回填与诊断脚本；从项目根目录直接运行具体脚本
 backend/model_manager.py               # 模型/系列管理工具（研发工具辅助脚本）
 backend/result.py        # Result.ok/fail → { success, message, data }
 ```

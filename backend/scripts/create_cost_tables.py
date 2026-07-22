@@ -1,13 +1,14 @@
 """
 创建 BOM 成本库相关数据表。
 用法：
-    python create_cost_tables.py
+    python backend/scripts/create_cost_tables.py
 """
 import os, sys
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BACKEND_DIR)
 
 from dotenv import load_dotenv
-load_dotenv(os.path.join(os.path.dirname(__file__), '.env'), override=True)
+load_dotenv(os.path.join(BACKEND_DIR, '.env'), override=True)
 
 from app import create_app
 from database.base import db

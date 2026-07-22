@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 import sys, os
-sys.path.insert(0, os.path.dirname(__file__))
-os.chdir(os.path.dirname(__file__))
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BACKEND_DIR)
+os.chdir(BACKEND_DIR)
 
 from app import create_app
 app = create_app()

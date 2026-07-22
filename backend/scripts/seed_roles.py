@@ -1,11 +1,12 @@
 """
 内置角色初始化脚本：创建固定角色并绑定权限。
-在 backend/ 目录下执行：python seed_roles.py
+在项目根目录执行：python backend/scripts/seed_roles.py
 已存在的角色会跳过（不重复创建）。
 """
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BACKEND_DIR)
 
 from app import create_app
 from database.base import db
@@ -37,7 +38,7 @@ with app.app_context():
         for code in perm_codes:
             perm = Permission.query.filter_by(code=code).first()
             if not perm:
-                print(f"    ! 权限码不存在，跳过: {code}  （请先运行 seed_permissions.py）")
+                print(f"    ! 权限码不存在，跳过: {code}  （请先运行 backend/scripts/seed_permissions.py）")
                 continue
             if perm not in role.permissions:
                 role.permissions.append(perm)

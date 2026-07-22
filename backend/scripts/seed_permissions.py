@@ -1,11 +1,12 @@
 """
 权限初始化脚本：写入所有标准权限项。
-在 backend/ 目录下执行：python seed_permissions.py
+在项目根目录执行：python backend/scripts/seed_permissions.py
 已存在的权限码会跳过（不重复创建）。
 """
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BACKEND_DIR)
 
 from app import create_app
 from database.base import db

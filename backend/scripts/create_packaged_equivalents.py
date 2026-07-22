@@ -1,11 +1,12 @@
 """
 建表脚本：创建产成品通用件表 packaged_equivalent。
-在 backend/ 目录下执行：python3.11 create_packaged_equivalents.py
+在项目根目录执行：python3.11 backend/scripts/create_packaged_equivalents.py
 表已存在时跳过，不会重复创建或清空数据。
 """
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BACKEND_DIR)
 
 from app import create_app
 from database.base import db

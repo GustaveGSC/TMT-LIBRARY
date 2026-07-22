@@ -74,7 +74,7 @@ def test_aftersale_filter_options_do_not_interpolate_column_names_into_sql():
 
 
 def test_unsupported_product_delete_permission_is_removed_from_seed_and_migrated():
-    seed = (BACKEND_DIR / 'seed_permissions.py').read_text(encoding='utf-8')
+    seed = (BACKEND_DIR / 'scripts' / 'seed_permissions.py').read_text(encoding='utf-8')
     migration = (
         BACKEND_DIR / 'migrations' / 'versions'
         / '20260721_01_remove_product_delete_permission.py'

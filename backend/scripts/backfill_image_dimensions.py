@@ -1,14 +1,15 @@
 """
 批量回填 product_finished.cover_image_width / cover_image_height
 对所有有 cover_image_original 但尚无尺寸记录的成品，从 OSS 拉取原图读取像素尺寸并写回 DB。
-用法：cd backend && python3.11 backfill_image_dimensions.py
+用法：python3.11 backend/scripts/backfill_image_dimensions.py
 """
 import io
 import os
 import sys
 
-# 让脚本能找到 backend 模块
-sys.path.insert(0, os.path.dirname(__file__))
+# 让直接运行的脚本能找到 backend 模块
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BACKEND_DIR)
 
 from dotenv import load_dotenv
 load_dotenv()
