@@ -1068,13 +1068,13 @@ defineExpose({ total, exportLoading, exportData, initSort, refresh: loadData })
   overflow: auto;
   font-size: 12px;
 }
-:deep(.el-table__header th) { background: #f5f0e8 !important; color: var(--text-secondary); font-weight: 600; font-size: 12px; }
+:deep(.el-table__header th) { background: var(--bg-table-header) !important; color: var(--text-secondary); font-weight: 600; font-size: 12px; }
 :deep(.el-table__header th:not(.col-fixed) .th-lbl) { cursor: grab; }
 :deep(.el-table__header th:not(.col-fixed) .th-lbl:active) { cursor: grabbing; }
 :deep(.el-table__header th .el-resizable-handle) { cursor: col-resize; }
 :deep(.el-table__header th .cell) { white-space: nowrap; overflow: visible; text-overflow: clip; padding: 4px 8px; }
 :deep(.sortable-ghost th), :deep(.sortable-ghost td) { background: #fdf3e3 !important; opacity: 0.6; }
-:deep(.el-table__row:hover > td) { background: #faf7f2 !important; }
+:deep(.el-table__row:hover > td) { background: var(--bg-table-hover) !important; }
 :deep(.el-table__column-resize-proxy) { border-color: var(--accent) !important; }
 :deep(.el-table__row td .cell) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
