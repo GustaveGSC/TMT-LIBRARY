@@ -819,8 +819,11 @@ watch(
 :deep(.el-table__fixed)       { box-shadow:  4px 0 10px rgba(0,0,0,0.08) !important; }
 :deep(.el-table__fixed-right) { box-shadow: -4px 0 10px rgba(0,0,0,0.06) !important; }
 :deep(.el-table__fixed .el-table__header th.el-table__cell) { background: var(--bg-table-header) !important; }
-:deep(.el-table__header th.el-table__cell:first-child) { position: relative; }
-:deep(.el-table__header th.el-table__cell:first-child .cell) {
+/* 展开列（type="expand"）表头图标居中；用具体的 expand-column 类而非
+   :first-child，避免误伤其它 el-table（比如"所有产成品数据"弹窗表格）
+   第一列是普通文本列的情况 */
+:deep(.el-table__header th.el-table__cell.el-table__expand-column) { position: relative; }
+:deep(.el-table__header th.el-table__cell.el-table__expand-column .cell) {
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
   padding: 0; overflow: visible;
