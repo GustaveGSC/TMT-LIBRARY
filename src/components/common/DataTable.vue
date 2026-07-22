@@ -17,6 +17,7 @@ import { ref, reactive, computed } from 'vue'
  *     filterable,                  // 显示筛选下拉；未传 filterOptions 时自动从 data 里取该列去重值
  *     filterOptions,               // [{ label, value }]，不传则自动生成
  *     filterValue,                 // 自定义取筛选比较值的函数 (row) => any，默认取 row[prop]
+ *     formatter,                   // 自定义显示格式 (row) => string，默认原样显示（空值显示"—"）
  *     showOverflowTooltip }
  *
  * 单元格自定义：#cell-{prop} 具名 slot，作用域 { row, $index }
@@ -41,6 +42,12 @@ defineEmits(['row-click'])
 
 function slotKey(col) {
   return col.prop || col.label
+}
+
+function formatCell(col, row) {
+  const value = row[col.prop]
+  if (value == null || value === '') return '—'
+  return col.formatter ? col.formatter(row) : value
 }
 
 // ── 列筛选 ────────────────────────────────────────
@@ -154,7 +161,7 @@ const displayData = computed(() => {
         </template>
         <template #default="scope">
           <slot :name="`cell-${slotKey(col)}`" v-bind="scope">
-            {{ col.prop ? (scope.row[col.prop] ?? '—') : '' }}
+            {{ col.prop ? formatCell(col, scope.row) : '' }}
           </slot>
         </template>
       </el-table-column>
