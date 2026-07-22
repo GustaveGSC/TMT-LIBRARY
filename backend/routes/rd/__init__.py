@@ -1159,38 +1159,22 @@ def _parse_ecr_rows_xls(ws):
 
 @rd_bp.post('/ecr/parse-ecr')
 def parse_ecr():
-    """解析已导出的 ECR xlsx/xls，返回表单字段和变更明细。
-    桌面端请求体：{ ecr_path: str }
-    网页端：multipart/form-data，字段名 ecr_file"""
+    """解析上传的 ECR xlsx/xls，字段名 ecr_file。"""
     from result import Result
     import tempfile
 
-    content_type = request.content_type or ''
-    if 'multipart' in content_type:
-        # 网页端：文件上传
-        f = request.files.get('ecr_file')
-        if not f:
-            return Result.fail('请上传 ECR 文件').to_response()
-        try:
-            read_spreadsheet_upload(f, label='ECR 文件')
-        except UploadValidationError as exc:
-            return Result.fail(str(exc)).to_response(413 if '不能超过' in str(exc) else 400)
-        ext = os.path.splitext(f.filename)[1].lower() or '.xlsx'
-        tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
-        tmp_path = tmp.name
-        tmp.close()
-        f.save(tmp_path)
-        path = tmp_path
-        cleanup = True
-    else:
-        # 桌面端：JSON 路径
-        d    = request.get_json() or {}
-        path = (d.get('ecr_path') or '').strip()
-        cleanup = False
-        if not path:
-            return Result.fail('请提供文件路径').to_response()
-        if not os.path.exists(path):
-            return Result.fail('文件不存在，请重新选择').to_response()
+    f = request.files.get('ecr_file')
+    if not f:
+        return Result.fail('请上传 ECR 文件').to_response()
+    try:
+        read_spreadsheet_upload(f, label='ECR 文件')
+    except UploadValidationError as exc:
+        return Result.fail(str(exc)).to_response(413 if '不能超过' in str(exc) else 400)
+    ext = os.path.splitext(f.filename)[1].lower() or '.xlsx'
+    tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
+    path = tmp.name
+    tmp.close()
+    f.save(path)
 
     ext = os.path.splitext(path)[1].lower()
     try:
@@ -1211,7 +1195,7 @@ def parse_ecr():
     except Exception:
         return internal_error_response('ECN 文件解析失败', '解析失败')
     finally:
-        if cleanup and os.path.exists(path):
+        if os.path.exists(path):
             os.unlink(path)
 
 
@@ -1242,42 +1226,26 @@ def export_ecn():
 
 @rd_bp.post('/ecr/compare-bom')
 def compare_bom():
-    """比对两个 BOM 文件。
-    桌面端请求体：{ bom_before_path, bom_after_path }
-    网页端：multipart/form-data，字段名 bom_before / bom_after"""
+    """比对上传的两个 BOM 文件，字段名 bom_before / bom_after。"""
     from result import Result
     import tempfile
 
-    content_type = request.content_type or ''
     before_tmp = after_tmp = None
     try:
-        if 'multipart' in content_type:
-            # 网页端：文件上传
-            before_f = request.files.get('bom_before')
-            after_f  = request.files.get('bom_after')
-            if not before_f or not after_f:
-                return Result.fail('请上传两个BOM文件').to_response()
-            try:
-                read_spreadsheet_upload(before_f, label='变更前 BOM')
-                read_spreadsheet_upload(after_f, label='变更后 BOM')
-            except UploadValidationError as exc:
-                return Result.fail(str(exc)).to_response(413 if '不能超过' in str(exc) else 400)
-            t1 = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False)
-            before_tmp = t1.name; t1.close(); before_f.save(before_tmp)
-            t2 = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False)
-            after_tmp  = t2.name; t2.close(); after_f.save(after_tmp)
-            before_path, after_path = before_tmp, after_tmp
-        else:
-            # 桌面端：JSON 路径
-            d = request.get_json() or {}
-            before_path = (d.get('bom_before_path') or '').strip()
-            after_path  = (d.get('bom_after_path')  or '').strip()
-            if not before_path or not after_path:
-                return Result.fail('请先选择两个BOM文件').to_response()
-            if not os.path.exists(before_path):
-                return Result.fail('变更前文件不存在，请重新选择').to_response()
-            if not os.path.exists(after_path):
-                return Result.fail('变更审核中文件不存在，请重新选择').to_response()
+        before_f = request.files.get('bom_before')
+        after_f  = request.files.get('bom_after')
+        if not before_f or not after_f:
+            return Result.fail('请上传两个BOM文件').to_response()
+        try:
+            read_spreadsheet_upload(before_f, label='变更前 BOM')
+            read_spreadsheet_upload(after_f, label='变更后 BOM')
+        except UploadValidationError as exc:
+            return Result.fail(str(exc)).to_response(413 if '不能超过' in str(exc) else 400)
+        t1 = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False)
+        before_tmp = t1.name; t1.close(); before_f.save(before_tmp)
+        t2 = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False)
+        after_tmp  = t2.name; t2.close(); after_f.save(after_tmp)
+        before_path, after_path = before_tmp, after_tmp
 
         # 文件合法性校验（变更前文件不校验状态）
         err = _validate_bom(before_path, role='any')
@@ -1584,41 +1552,27 @@ def _ptb_build_bom_data(columns, table_data, total_level):
 
 @rd_bp.post('/pdm2bom/process')
 def pdm2bom_process():
-    """解析 PDM 导出文件，校验必填列，返回表格数据与错误索引。
-    桌面端请求体：{ file_path: str }
-    网页端：multipart/form-data，字段名 pdm_file"""
+    """解析上传的 PDM 文件，字段名 pdm_file。"""
     from result import Result
     import openpyxl as _xl
     import tempfile
 
-    content_type = request.content_type or ''
     tmp_path = None
-    if 'multipart' in content_type:
-        # 网页端：文件上传
-        f = request.files.get('pdm_file')
-        if not f:
-            return Result.fail('请上传 PDM 导出文件').to_response()
-        if not f.filename.lower().endswith('.xlsx'):
-            return Result.fail('仅支持 .xlsx 格式').to_response()
-        try:
-            read_spreadsheet_upload(f, label='PDM 文件')
-        except UploadValidationError as exc:
-            return Result.fail(str(exc)).to_response(413 if '不能超过' in str(exc) else 400)
-        tmp = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False)
-        tmp_path = tmp.name; tmp.close(); f.save(tmp_path)
-        file_path = tmp_path
-    else:
-        # 桌面端：JSON 路径
-        d = request.get_json() or {}
-        file_path = (d.get('file_path') or '').strip()
-        if not file_path or not os.path.isfile(file_path):
-            return Result.fail('文件不存在或路径无效').to_response()
-        if not file_path.lower().endswith('.xlsx'):
-            return Result.fail('仅支持 .xlsx 格式').to_response()
+    f = request.files.get('pdm_file')
+    if not f:
+        return Result.fail('请上传 PDM 导出文件').to_response()
+    if not f.filename.lower().endswith('.xlsx'):
+        return Result.fail('仅支持 .xlsx 格式').to_response()
+    try:
+        read_spreadsheet_upload(f, label='PDM 文件')
+    except UploadValidationError as exc:
+        return Result.fail(str(exc)).to_response(413 if '不能超过' in str(exc) else 400)
+    tmp = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False)
+    tmp_path = tmp.name; tmp.close(); f.save(tmp_path)
 
     try:
         try:
-            wb = _xl.load_workbook(file_path, read_only=True, data_only=True)
+            wb = _xl.load_workbook(tmp_path, read_only=True, data_only=True)
             ws = wb.active
             all_rows = list(ws.iter_rows(values_only=True))
             wb.close()

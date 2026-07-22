@@ -303,6 +303,19 @@ POST   /api/aftersale/chart-data                      # 图表聚合数据，bod
 - 产品封面及原始封面：每张 Base64 解码后 10MB，仅 PNG/JPEG/WebP，声明 MIME 必须与真实图片格式一致。
 - OSS 预签名接口必须接收 `file_size`，签名绑定 `Content-Length`；前端 PUT 时必须使用响应中的 `required_headers`。
 
+## /api/rd（研发工具）
+
+权限：`rd:view`（读/处理）与 `rd:edit`（POST 写请求，沿用 Blueprint 守卫）。以下文件解析接口仅接受经过上传校验的 `multipart/form-data`：
+
+```
+POST   /api/rd/ecr/parse-ecr             # ecr_file：ECR xlsx/xls；返回表单字段与 changes
+POST   /api/rd/ecr/compare-bom           # bom_before + bom_after：两个 BOM xlsx；返回 changes/stats
+POST   /api/rd/pdm2bom/process            # pdm_file：PDM xlsx；返回 columns/table_data/error_map/total_level
+```
+
+- 缺文件、非法类型/文件头返回 400，文件超限返回 413。
+- `ecr_path`、`bom_before_path`、`bom_after_path`、`file_path` 旧 Electron JSON 协议已下线；非 multipart 请求返回 400，服务端不会检查或读取请求中指定的路径。
+
 ## /api/rd/cost（BOM 成本库）
 
 权限：`rd:view`（读）/ `rd:edit`（写）
