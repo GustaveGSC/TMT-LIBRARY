@@ -32,8 +32,8 @@
 
 ### 工作流程
 
-1. 点击「选择文件」→ `electronAPI.showOpenDialog`（仅 `.xlsx`）
-2. 点击「处理」→ `POST /api/rd/pdm2bom/process`（发送本地文件路径）
+1. 点击「选择文件」→ `electronAPI.showOpenDialog`（仅 `.xlsx`，Electron 已停用，该分支实际不可达；Web 端用原生文件选择）
+2. 点击「处理」→ `POST /api/rd/pdm2bom/process`（multipart 上传，字段名 `pdm_file`；2026-07-22 起后端移除了旧的 JSON 路径协议，不再接受 `file_path` 字段，详见 `handoff/2026-07-22-codex-rd-upload-security.md`）
 3. 后端返回 `{ columns, table_data, error_map, required_col_indices, total_level }`
 4. **有错误**（`error_map` 非空）→ 显示可编辑错误表格，错误行黄底，缺失格红底；用户可直接编辑后点「重新校验」（本地重校，不再往返后端）
 5. **无错误** → 就绪态，显示两个导出按钮
@@ -90,7 +90,7 @@
 ### BOM 比对（右列）
 
 - 支持多个变更组（`bomGroups`），每组独立选择「变更前」和「变更审核中」两个 `.xlsx` 文件
-- 通过 `window.electronAPI.showOpenDialog` 选择文件（本地路径）
+- 通过 `window.electronAPI.showOpenDialog` 选择文件（Electron 已停用，该分支实际不可达）；Web 端用原生文件选择，上传时走 multipart（字段名 `bom_before`/`bom_after`），后端不再接受 `bom_before_path`/`bom_after_path` JSON 字段
 - 比对结果须手动确认（`confirmed = true`）后才纳入预览/导出
 - `allChanges` 计算属性汇总所有已确认组的变更行
 
