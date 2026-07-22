@@ -77,7 +77,6 @@ const packagedCollapsed = ref(false)
 
 // ── 全部产成品数据弹窗 ────────────────────────────
 const showAllPackagedDialog = ref(false)
-const allPackagedSearch     = ref('')
 // 已录入尺寸数据的只是 product_packaged 表里的一部分；还有一批编码已经在原始导入数据里
 // 出现过（符合产成品编码前缀规则）但还没补录尺寸/重量，这里懒加载一次，弹窗才需要
 const packagedCandidates       = ref([])
@@ -128,22 +127,14 @@ const allPackagedRows = computed(() => {
   return [...recorded, ...unrecorded]
 })
 
-const filteredAllPackagedRows = computed(() => {
-  const kw = allPackagedSearch.value.trim().toLowerCase()
-  if (!kw) return allPackagedRows.value
-  return allPackagedRows.value.filter(p =>
-    p.code?.toLowerCase().includes(kw) || p.name?.toLowerCase().includes(kw)
-  )
-})
-
 // ── DataTable 列配置（所有产成品数据弹窗） ────────────
 const allPackagedColumns = [
   {
     prop: 'recorded', label: '状态', width: 90, sortable: true, filterable: true,
     filterOptions: [{ label: '已录入', value: true }, { label: '未录入', value: false }],
   },
-  { prop: 'code', label: '产成品编码', width: 150, sortable: true },
-  { prop: 'name', label: '产成品名称', minWidth: 140, sortable: true },
+  { prop: 'code', label: '产成品编码', width: 150, sortable: true, filterable: true },
+  { prop: 'name', label: '产成品名称', minWidth: 140, sortable: true, filterable: true },
   { prop: 'length', label: '长 (cm)', width: 90, align: 'right', sortable: true },
   { prop: 'width', label: '宽 (cm)', width: 90, align: 'right', sortable: true },
   { prop: 'height', label: '高 (cm)', width: 90, align: 'right', sortable: true },
@@ -679,15 +670,14 @@ watch(
     <!-- ══ 全部产成品数据弹窗 ════════════════════════════ -->
     <el-dialog v-model="showAllPackagedDialog" title="所有产成品数据" width="90%" top="6vh" append-to-body destroy-on-close>
       <div class="apk-toolbar">
-        <el-input v-model="allPackagedSearch" placeholder="搜索产成品编码/名称" clearable style="width: 260px" />
         <span class="apk-count">
-          共 {{ filteredAllPackagedRows.length }} 条
+          共 {{ allPackagedRows.length }} 条
           <span v-if="finishedStore.loadingMore" class="apk-loading-hint">（成品数据后台加载中，使用关系可能还不完整）</span>
           <span v-if="packagedCandidatesLoading" class="apk-loading-hint">（候选编码加载中…）</span>
         </span>
       </div>
       <DataTable
-        :data="filteredAllPackagedRows"
+        :data="allPackagedRows"
         :columns="allPackagedColumns"
         size="small"
         height="65vh"
