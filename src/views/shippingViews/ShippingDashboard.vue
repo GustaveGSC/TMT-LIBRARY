@@ -508,9 +508,18 @@ async function fetchTooltipBreakdown() {
   const results = {}
   try {
     await Promise.all(countries.map(async (item) => {
-      const tagId = regionDim.tags?.find(t => t.name === item.originalName)?.id
-      if (tagId == null) return
-      const tagFilters = [...buildTagFilters(), { category_id: regionDim.category_id, tag_ids: [tagId] }]
+      let countryFilter
+      if (dataSource.value === 'finance') {
+        // 财务端地域/品牌完全以人工映射文本为准，不要求该国家/品牌在
+        // product_tag 里有对应记录（很多国家是这次才第一次通过客户简称
+        // 映射识别出来的，产品库里从来没有打过这个地域标签）
+        countryFilter = { category_id: regionDim.category_id, tag_names: [item.originalName] }
+      } else {
+        const tagId = regionDim.tags?.find(t => t.name === item.originalName)?.id
+        if (tagId == null) return
+        countryFilter = { category_id: regionDim.category_id, tag_ids: [tagId] }
+      }
+      const tagFilters = [...buildTagFilters(), countryFilter]
       try {
         const res = await http.post('/api/shipping/chart-data', {
           ...baseBody, group_by: subGroupBy, tag_filters: tagFilters,
