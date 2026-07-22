@@ -30,7 +30,7 @@ src/styles/themes.css    # 全局CSS变量（勿硬编码颜色）
 backend/app.py           # Flask 工厂；SQLAlchemy QueuePool + connect/read/write 超时（见源码）
                           # 生产：1 个 Gunicorn worker，POOL_SIZE=5 + MAX_OVERFLOW=5（.env 显式配置），单进程理论峰值 10 个数据库连接
 backend/scripts/          # 一次性建表、种子、回填与诊断脚本；从项目根目录直接运行具体脚本
-backend/model_manager.py               # 模型/系列管理工具（研发工具辅助脚本）
+backend/services/semantic_model.py     # 售后语义匹配 ONNX 模型下载、懒加载与推理状态
 backend/result.py        # Result.ok/fail → { success, message, data }
 ```
 

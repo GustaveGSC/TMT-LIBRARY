@@ -1,5 +1,5 @@
 """
-语义向量模型管理器（bge-small-zh-v1.5）
+售后语义向量模型服务（bge-small-zh-v1.5）
 - 模型文件存储在 ~/.tmt-library/models/bge-small-zh-v1.5/
 - 首次使用前需从 OSS 下载
 - 提供下载进度轮询接口
@@ -151,9 +151,9 @@ def _load_model():
                 providers=['CPUExecutionProvider'],
             )
             _model = (tok, sess)
-            print('[model_manager] 语义模型已加载', flush=True)
+            print('[semantic_model] 语义模型已加载', flush=True)
         except Exception as e:
-            print(f'[model_manager] 模型加载失败: {e}', flush=True)
+            print(f'[semantic_model] 模型加载失败: {e}', flush=True)
         finally:
             _model_loading = False
 
@@ -203,5 +203,5 @@ def cosine_sim(a, b) -> float:
 def _auto_start_download_if_needed():
     """服务启动后若模型未安装，自动在后台下载；已安装则不预加载（懒加载，首次请求时再加载）"""
     if not is_model_installed() and not _state['running']:
-        print('[model_manager] 语义模型未安装，开始后台下载...', flush=True)
+        print('[semantic_model] 语义模型未安装，开始后台下载...', flush=True)
         start_download()

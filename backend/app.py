@@ -138,8 +138,8 @@ def create_app() -> Flask:
     import threading
     def _bg_model_init():
         try:
-            import model_manager
-            model_manager._auto_start_download_if_needed()
+            from services import semantic_model
+            semantic_model._auto_start_download_if_needed()
         except Exception as e:
             print(f'[app] 语义模型初始化失败: {e}', flush=True)
     threading.Thread(target=_bg_model_init, daemon=True, name='model-init').start()

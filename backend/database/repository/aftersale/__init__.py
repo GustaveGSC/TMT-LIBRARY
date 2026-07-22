@@ -1254,10 +1254,10 @@ class AftersaleRepository:
 
         # 用 bge 对工单文本编码（模型不可用时 vecs 保持 None，退回 difflib）
         try:
-            import model_manager
-            model = model_manager.get_model()
+            from services import semantic_model
+            model = semantic_model.get_model()
             if model is not None and texts:
-                cache['vecs'] = model_manager.encode(texts)   # (N, dim)
+                cache['vecs'] = semantic_model.encode(texts)   # (N, dim)
         except Exception:
             pass
 
@@ -1792,11 +1792,11 @@ class AftersaleRepository:
         query_vec = None
         if semantic:
             try:
-                import model_manager
+                from services import semantic_model
                 import numpy as np
-                _model = model_manager.get_model()
+                _model = semantic_model.get_model()
                 if _model is not None and text_lower.strip():
-                    query_vec = model_manager.encode([text_lower])[0]   # (dim,)
+                    query_vec = semantic_model.encode([text_lower])[0]   # (dim,)
             except Exception:
                 pass
 
@@ -1871,7 +1871,7 @@ class AftersaleRepository:
                         doc = r.name + ('，' + kws_part if kws_part else '')
                         reason_docs.append(doc)
                         reason_id_order.append(r.id)
-                    reason_vecs = model_manager.encode(reason_docs)   # (N, dim)
+                    reason_vecs = semantic_model.encode(reason_docs)   # (N, dim)
                     if reason_vecs is None:
                         # 模型未就绪，不缓存 None，等下次请求重试
                         reason_vecs = None
@@ -2817,22 +2817,22 @@ class AftersaleRepository:
             # 1a-sem. 语义兜底：名称匹配均无结果时，用 bge 向量找最近系列
             if not candidate_sids and base_text.strip():
                 try:
-                    import model_manager
+                    from services import semantic_model
                     import numpy as np
-                    model = model_manager.get_model()
+                    model = semantic_model.get_model()
                     if model is not None:
                         all_sids = list(series_dict.keys())
                         series_key = tuple(sorted(all_sids))
                         if (not hasattr(self, '_series_sem_cache') or
                                 self._series_sem_cache.get('key') != series_key):
                             docs = [series_dict[s]['base_name'] for s in all_sids]
-                            vecs = model_manager.encode(docs)
+                            vecs = semantic_model.encode(docs)
                             self._series_sem_cache = {
                                 'key':  series_key,
                                 'vecs': vecs,
                                 'ids':  all_sids,
                             }
-                        q_vec    = model_manager.encode([base_text])[0]
+                        q_vec    = semantic_model.encode([base_text])[0]
                         sims     = np.dot(self._series_sem_cache['vecs'], q_vec)
                         best_idx = int(np.argmax(sims))
                         if float(sims[best_idx]) >= 0.72:
@@ -3387,21 +3387,21 @@ class AftersaleRepository:
         # 阶段2：语义向量评分（仅在模型就绪且允许语义时）
         sem_scores = {}  # alias_id → cosine_sim
         try:
-            import model_manager
+            from services import semantic_model
             import numpy as np
-            model = model_manager.get_model() if semantic else None
+            model = semantic_model.get_model() if semantic else None
             if model is not None and combined_name.strip():
                 alias_ids_key = tuple(sorted(a.id for a in aliases))
                 if (not hasattr(self, '_alias_sem_cache') or
                         self._alias_sem_cache.get('key') != alias_ids_key):
                     alias_docs = [a.name for a in aliases]
-                    alias_vecs = model_manager.encode(alias_docs)
+                    alias_vecs = semantic_model.encode(alias_docs)
                     self._alias_sem_cache = {
                         'key':  alias_ids_key,
                         'vecs': alias_vecs,
                         'ids':  [a.id for a in aliases],
                     }
-                query_vec  = model_manager.encode([combined_name])[0]
+                query_vec  = semantic_model.encode([combined_name])[0]
                 alias_vecs = self._alias_sem_cache['vecs']
                 alias_ids  = self._alias_sem_cache['ids']
                 sims = np.dot(alias_vecs, query_vec)
