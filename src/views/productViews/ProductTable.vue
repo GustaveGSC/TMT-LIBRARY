@@ -664,34 +664,44 @@ watch(
         </span>
       </div>
       <el-table :data="filteredAllPackagedRows" size="small" height="65vh" border :show-overflow-tooltip="true">
-        <el-table-column label="状态" width="76">
+        <el-table-column
+          label="状态" width="76" prop="recorded" sortable
+          :filters="[{ text: '已录入', value: true }, { text: '未录入', value: false }]"
+          :filter-method="(value, row) => row.recorded === value"
+        >
           <template #default="{ row }">
             <span :class="row.recorded ? 'apk-status-ok' : 'apk-status-pending'">{{ row.recorded ? '已录入' : '未录入' }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="code" label="产成品编码" width="150">
+        <el-table-column prop="code" label="产成品编码" width="150" sortable>
           <template #default="{ row }"><span style="font-weight:700;color:#2c2420;">{{ row.code }}</span></template>
         </el-table-column>
-        <el-table-column prop="name" label="产成品名称" min-width="140" />
-        <el-table-column prop="length" label="长 (cm)" width="90" align="right">
+        <el-table-column prop="name" label="产成品名称" min-width="140" sortable />
+        <el-table-column prop="length" label="长 (cm)" width="90" align="right" sortable>
           <template #default="{ row }">{{ row.length ?? '—' }}</template>
         </el-table-column>
-        <el-table-column prop="width" label="宽 (cm)" width="90" align="right">
+        <el-table-column prop="width" label="宽 (cm)" width="90" align="right" sortable>
           <template #default="{ row }">{{ row.width ?? '—' }}</template>
         </el-table-column>
-        <el-table-column prop="height" label="高 (cm)" width="90" align="right">
+        <el-table-column prop="height" label="高 (cm)" width="90" align="right" sortable>
           <template #default="{ row }">{{ row.height ?? '—' }}</template>
         </el-table-column>
-        <el-table-column prop="volume" label="体积 (m³)" width="100" align="right">
+        <el-table-column prop="volume" label="体积 (m³)" width="100" align="right" sortable>
           <template #default="{ row }">{{ row.volume ?? '—' }}</template>
         </el-table-column>
-        <el-table-column prop="gross_weight" label="毛重 (kg)" width="90" align="right">
+        <el-table-column prop="gross_weight" label="毛重 (kg)" width="90" align="right" sortable>
           <template #default="{ row }">{{ row.gross_weight ?? '—' }}</template>
         </el-table-column>
-        <el-table-column prop="net_weight" label="净重 (kg)" width="90" align="right">
+        <el-table-column prop="net_weight" label="净重 (kg)" width="90" align="right" sortable>
           <template #default="{ row }">{{ row.net_weight ?? '—' }}</template>
         </el-table-column>
-        <el-table-column label="被以下成品使用" min-width="260">
+        <el-table-column
+          label="被以下成品使用" min-width="260" prop="used_by"
+          :sort-method="(a, b) => a.used_by.length - b.used_by.length"
+          sortable
+          :filters="[{ text: '有使用记录', value: true }, { text: '未被使用', value: false }]"
+          :filter-method="(value, row) => (row.used_by.length > 0) === value"
+        >
           <template #default="{ row }">
             <template v-if="row.used_by.length">
               <span v-for="c in row.used_by" :key="c" class="apk-usage-tag">{{ c }}</span>
