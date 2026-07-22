@@ -1371,72 +1371,6 @@ def activate_reminder(rid):
 
 
 # ─────────────────────────────────────────────────────────────
-# 个人笔记（按用户隔离）
-# ─────────────────────────────────────────────────────────────
-
-@rd_bp.get('/notes')
-def list_notes():
-    """返回当前用户的笔记列表（按创建时间倒序）"""
-    from result import Result
-    from database.models.rd import EcrNote
-    from database.base import db
-    username = g.current_user.get('username', '')
-    items = EcrNote.query.filter_by(username=username).order_by(EcrNote.created_at.desc()).all()
-    return Result.ok([i.to_dict() for i in items]).to_response()
-
-
-@rd_bp.post('/notes')
-def create_note():
-    """新建一条笔记"""
-    from result import Result
-    from database.models.rd import EcrNote
-    from database.base import db
-    username = g.current_user.get('username', '')
-    data = request.get_json(silent=True) or {}
-    content = (data.get('content') or '').strip()
-    if not content:
-        return Result.fail('笔记内容不能为空').to_response()
-    note = EcrNote(username=username, content=content)
-    db.session.add(note)
-    db.session.commit()
-    return Result.ok(note.to_dict()).to_response()
-
-
-@rd_bp.put('/notes/<int:nid>')
-def update_note(nid):
-    """编辑笔记内容（只能改自己的）"""
-    from result import Result
-    from database.models.rd import EcrNote
-    from database.base import db
-    username = g.current_user.get('username', '')
-    note = EcrNote.query.get(nid)
-    if not note or note.username != username:
-        return Result.fail('笔记不存在或无权限').to_response()
-    data = request.get_json(silent=True) or {}
-    content = (data.get('content') or '').strip()
-    if not content:
-        return Result.fail('笔记内容不能为空').to_response()
-    note.content = content
-    db.session.commit()
-    return Result.ok(note.to_dict()).to_response()
-
-
-@rd_bp.delete('/notes/<int:nid>')
-def delete_note(nid):
-    """删除一条笔记（只能删自己的）"""
-    from result import Result
-    from database.models.rd import EcrNote
-    from database.base import db
-    username = g.current_user.get('username', '')
-    note = EcrNote.query.get(nid)
-    if not note or note.username != username:
-        return Result.fail('笔记不存在或无权限').to_response()
-    db.session.delete(note)
-    db.session.commit()
-    return Result.ok(None).to_response()
-
-
-# ─────────────────────────────────────────────────────────────
 # PDM 转 BOM
 # ─────────────────────────────────────────────────────────────
 
@@ -1713,3 +1647,7 @@ def pdm2bom_export_bom():
             'Content-Length': str(len(xlsx_bytes)),
         },
     )
+
+
+# 子模块在 rd_bp 建立后导入，以便其路由继续挂载在同一个 Blueprint 上。
+from . import notes as _notes_routes  # noqa: E402,F401

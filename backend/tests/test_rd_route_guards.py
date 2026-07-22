@@ -94,6 +94,13 @@ def test_rd_route_map_is_stable_before_module_split():
     assert len(RD_ROUTES) == 17
     assert len(RD_COST_ROUTES) == 26
 
+    note_modules = {
+        app.view_functions[rule.endpoint].__module__
+        for rule in app.url_map.iter_rules()
+        if rule.rule.startswith('/api/rd/notes')
+    }
+    assert note_modules == {'routes.rd.notes'}
+
 
 @pytest.fixture
 def rd_app_client(monkeypatch):
@@ -148,6 +155,13 @@ def test_notes_are_isolated_by_authenticated_username(rd_app_client):
     )
     assert created.status_code == 200
     note_id = created.get_json()['data']['id']
+
+    blank = client.post(
+        '/api/rd/notes', json={'content': '   '},
+        headers={'X-CSRF-Token': 'csrf'},
+    )
+    assert blank.status_code == 400
+    assert blank.get_json()['message'] == '笔记内容不能为空'
 
     _set_user(client, username='bob', permissions=permissions)
     assert client.get('/api/rd/notes').get_json()['data'] == []
