@@ -30,6 +30,9 @@
 GET    /health
 GET    /ready                                         # 公开；数据库可查询时 200 {status:"ready"}，否则 503 {status:"not_ready"}
 
+GET    /api/config/login-mottos                       # 公开；返回登录页轮播语句字符串数组，配置缺失/损坏时返回内置默认值
+PUT    /api/config/login-mottos                       # author/admin；body {mottos:string[]}，去除空白项后至少保留一条；成功返回保存后的数组
+
 POST   /api/account/login                             # 公开；登录时自动写入 user_login_log（成功/失败均记录）
 GET    /api/account/guest                             # 公开；游客登录并下发 Cookie 会话（仅 product:view 权限）
 POST   /api/account/register                          # 公开但默认关闭（通过 ALLOW_REGISTER=true 开启）；注册后默认 guest 角色

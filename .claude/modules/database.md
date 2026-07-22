@@ -32,6 +32,10 @@ user_login_log
   # 每次登录尝试（包括密码错误/账号不存在/账号禁用）均写入；游客登录也写入
   # verify_password + guest_login 均记录；user_id 找不到用户时为 NULL
   # 游客以 machine_name 区分不同用户（socket.gethostname() 服务端获取）
+
+site_config       key(VARCHAR 64 PK), value(TEXT)
+  # 生产 baseline 已有的站点级 key-value 配置；当前 login_mottos 以 JSON 字符串数组存储
+  # 不允许应用启动时自动建表，后续结构变更统一走 Alembic
 ```
 
 ## 版本

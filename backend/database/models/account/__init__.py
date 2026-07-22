@@ -118,7 +118,7 @@ class UserLoginLog(db.Model):
 
 
 class SiteConfig(db.Model):
-    """站点配置 key-value 表（自动建表，无需手动迁移）。"""
+    """站点配置 key-value 表（生产 baseline 已有，结构变更走 Alembic）。"""
     __tablename__ = "site_config"
 
     key   = db.Column(db.String(64),  primary_key=True)
