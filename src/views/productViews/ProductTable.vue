@@ -8,6 +8,7 @@ import { CaretBottom, CaretTop } from '@element-plus/icons-vue'
 import http from '@/api/http'
 import FinishedExpandRow from './FinishedExpandRow.vue'
 import DataTable from '@/components/common/DataTable.vue'
+import PackagedEditDialog from '@/components/product/PackagedEditDialog.vue'
 
 const finishedStore = useFinishedStore()
 const packagedStore = usePackagedStore()
@@ -147,7 +148,14 @@ const allPackagedColumns = [
     filterValue: (row) => row.used_by.length > 0,
     filterOptions: [{ label: '有使用记录', value: true }, { label: '未被使用', value: false }],
   },
+  { label: '操作', width: 76, align: 'center' },
 ]
+
+// 编辑弹窗内容和"成品详情"里的产成品编辑完全一致（同一个 PackagedEditDialog 组件）
+const packagedEditDialogRef = ref(null)
+function openPackagedEdit(code) {
+  packagedEditDialogRef.value?.open(code)
+}
 
 // ── 展开行 ────────────────────────────────────────
 const expandedCode = ref(null)
@@ -695,8 +703,14 @@ watch(
           </template>
           <span v-else class="apk-usage-empty">未被任何成品使用</span>
         </template>
+        <template #cell-操作="{ row }">
+          <button class="apk-edit-btn" @click.stop="openPackagedEdit(row.code)">编辑</button>
+        </template>
       </DataTable>
     </el-dialog>
+
+    <!-- 编辑产成品弹窗：内容和成品详情里的编辑一致（同一个组件） -->
+    <PackagedEditDialog ref="packagedEditDialogRef" />
 
   </div><!-- /pt-root -->
 </template>
@@ -958,6 +972,12 @@ watch(
   font-size: 11px; margin: 1px 3px 1px 0;
 }
 .apk-usage-empty { font-size: 12px; color: var(--text-muted); }
+.apk-edit-btn {
+  padding: 3px 12px; border-radius: 5px; font-size: 12px;
+  border: 1px solid var(--border); background: #fff; color: var(--text-secondary);
+  cursor: pointer; transition: all 0.15s;
+}
+.apk-edit-btn:hover { border-color: var(--accent); color: var(--accent); }
 
 .pk-body { flex: 1; min-height: 0; overflow: hidden; }
 .pk-empty {
