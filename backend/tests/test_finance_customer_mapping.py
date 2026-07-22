@@ -258,6 +258,9 @@ def test_finance_chart_uses_manual_mapping_for_trade_country_brand_and_filters()
                 customer_alias='EXPORT', status='export', country='加拿大', brand='品牌甲',
             ),
             ShippingFinanceCustomerMapping(
+                customer_alias='THAILAND', status='export', country='泰国', brand='品牌泰',
+            ),
+            ShippingFinanceCustomerMapping(
                 customer_alias='DOMESTIC', status='domestic', country='中国', brand='品牌乙',
             ),
             ShippingFinanceCustomerMapping(
@@ -275,6 +278,11 @@ def test_finance_chart_uses_manual_mapping_for_trade_country_brand_and_filters()
                 ecommerce_order_no='D', finished_code='SKU-D', quantity=20,
                 return_quantity=0, actual_quantity=20, source='finance',
                 customer_alias='DOMESTIC', channel_name='内销部',
+            ),
+            ShippingOrderFinished(
+                ecommerce_order_no='T', finished_code='SKU-T', quantity=15,
+                return_quantity=0, actual_quantity=15, source='finance',
+                customer_alias='THAILAND', channel_name='泰国渠道',
             ),
             ShippingOrderFinished(
                 ecommerce_order_no='U', finished_code='SKU-U', quantity=30,
@@ -313,18 +321,23 @@ def test_finance_chart_uses_manual_mapping_for_trade_country_brand_and_filters()
             'source': 'finance', 'group_by': 'channel', 'trade_type': 'all',
             'tag_filters': [{'category_id': region.id, 'tag_ids': [canada.id]}],
         })
+        text_filtered_breakdown = ShippingRepository.get_chart_data({
+            'source': 'finance', 'group_by': f'tag:{brand.id}', 'trade_type': 'foreign',
+            'tag_filters': [{'category_id': region.id, 'tag_names': ['泰国']}],
+        })
 
-        assert country['items'] == [{
-            'label': '加拿大', 'quantity': 10.0, 'return_quantity': 0.0,
-            'actual_quantity': 10.0,
-        }]
-        assert [row['label'] for row in brand_rows['items']] == ['品牌甲']
+        assert {row['label'] for row in country['items']} == {'加拿大', '泰国'}
+        assert {row['label'] for row in brand_rows['items']} == {'品牌甲', '品牌泰'}
         assert [row['label'] for row in domestic['items']] == ['内销部']
-        assert [row['label'] for row in foreign['items']] == ['外贸部']
+        assert {row['label'] for row in foreign['items']} == {'外贸部', '泰国渠道'}
         assert {row['label'] for row in all_rows['items']} == {
-            '外贸部', '内销部', '未映射部', '非销售部', '未审核部',
+            '外贸部', '泰国渠道', '内销部', '未映射部', '非销售部', '未审核部',
         }
         assert [row['label'] for row in filtered['items']] == ['外贸部']
+        assert text_filtered_breakdown['items'] == [{
+            'label': '品牌泰', 'quantity': 15.0, 'return_quantity': 0.0,
+            'actual_quantity': 15.0,
+        }]
 
 
 def test_finance_customer_mapping_api_contract_and_permissions(monkeypatch):

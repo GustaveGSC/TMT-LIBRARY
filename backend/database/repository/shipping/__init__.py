@@ -930,7 +930,7 @@ class ShippingRepository:
         series_ids    = params.get('series_ids') or []
         model_ids     = params.get('model_ids') or []
         trade_type    = params.get('trade_type', 'all')  # 'all'|'domestic'|'foreign'
-        tag_filters   = params.get('tag_filters') or []  # [{category_id, tag_ids}]，与 group_by 的标签维度相互独立
+        tag_filters   = params.get('tag_filters') or []  # [{category_id, tag_ids?, tag_names?}]
 
         # 禁用的 finished 类型编码前缀，查询时排除对应发货记录
         disabled_prefixes = [
@@ -954,14 +954,22 @@ class ShippingRepository:
                 finance_mapping_field = ShippingFinanceCustomerMapping.brand
         is_finance_mapping_group = finance_mapping_field is not None
 
-        # 保留前端既有 tag_filters 契约：财务端「地域/品牌」标签 ID
-        # 只用来查出其显示名，实际筛选改走人工客户映射，不再碰产品标签关系。
+        # 财务端「地域/品牌」既兼容原有 tag_ids，也允许直接传 tag_names，
+        # 避免人工映射中的新国家/品牌必须先在产品标签表建档才能下钻。
         finance_mapping_filters = []
         product_tag_filters = []
         for tag_filter in tag_filters:
             filter_category_id = tag_filter.get('category_id')
             filter_tag_ids = tag_filter.get('tag_ids') or []
-            if not filter_category_id or not filter_tag_ids:
+            raw_tag_names = tag_filter.get('tag_names') or []
+            if not isinstance(raw_tag_names, (list, tuple, set)):
+                raw_tag_names = []
+            filter_tag_names = {
+                name.strip()
+                for name in list(raw_tag_names)[:100]
+                if isinstance(name, str) and name.strip() and len(name.strip()) <= 100
+            }
+            if not filter_category_id:
                 continue
             filter_category_name = None
             if source == 'finance':
@@ -973,15 +981,18 @@ class ShippingRepository:
                 '品牌': ShippingFinanceCustomerMapping.brand,
             }.get(filter_category_name)
             if mapping_field is None:
-                product_tag_filters.append(tag_filter)
+                if filter_tag_ids:
+                    product_tag_filters.append(tag_filter)
                 continue
-            tag_names = [
-                row[0] for row in db.session.query(ProductTag.name).filter(
-                    ProductTag.category_id == filter_category_id,
-                    ProductTag.id.in_(filter_tag_ids),
-                ).all()
-            ]
-            finance_mapping_filters.append((mapping_field, tag_names))
+            if filter_tag_ids:
+                filter_tag_names.update(
+                    row[0] for row in db.session.query(ProductTag.name).filter(
+                        ProductTag.category_id == filter_category_id,
+                        ProductTag.id.in_(filter_tag_ids),
+                    ).all()
+                )
+            if filter_tag_names:
+                finance_mapping_filters.append((mapping_field, sorted(filter_tag_names)))
 
         # 根据 group_by 判断需要 JOIN 到哪一层产品表
         # 注意：trade_type 过滤已改为用缓存的 finished_code 集合，不再需要 JOIN 产品表
