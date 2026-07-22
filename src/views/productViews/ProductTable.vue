@@ -139,23 +139,22 @@ const filteredAllPackagedRows = computed(() => {
 // ── DataTable 列配置（所有产成品数据弹窗） ────────────
 const allPackagedColumns = [
   {
-    prop: 'recorded', label: '状态', width: 76, sortable: true,
-    filters: [{ text: '已录入', value: true }, { text: '未录入', value: false }],
-    filterMethod: (value, row) => row.recorded === value,
+    prop: 'recorded', label: '状态', width: 90, sortable: true, filterable: true,
+    filterOptions: [{ label: '已录入', value: true }, { label: '未录入', value: false }],
   },
   { prop: 'code', label: '产成品编码', width: 150, sortable: true },
   { prop: 'name', label: '产成品名称', minWidth: 140, sortable: true },
   { prop: 'length', label: '长 (cm)', width: 90, align: 'right', sortable: true },
   { prop: 'width', label: '宽 (cm)', width: 90, align: 'right', sortable: true },
   { prop: 'height', label: '高 (cm)', width: 90, align: 'right', sortable: true },
-  { prop: 'volume', label: '体积 (m³)', width: 100, align: 'right', sortable: true },
-  { prop: 'gross_weight', label: '毛重 (kg)', width: 90, align: 'right', sortable: true },
-  { prop: 'net_weight', label: '净重 (kg)', width: 90, align: 'right', sortable: true },
+  { prop: 'volume', label: '体积 (m³)', width: 110, align: 'right', sortable: true },
+  { prop: 'gross_weight', label: '毛重 (kg)', width: 100, align: 'right', sortable: true },
+  { prop: 'net_weight', label: '净重 (kg)', width: 100, align: 'right', sortable: true },
   {
-    prop: 'used_by', label: '被以下成品使用', minWidth: 260, sortable: true,
+    prop: 'used_by', label: '被以下成品使用', minWidth: 260, sortable: true, filterable: true,
     sortMethod: (a, b) => a.used_by.length - b.used_by.length,
-    filters: [{ text: '有使用记录', value: true }, { text: '未被使用', value: false }],
-    filterMethod: (value, row) => (row.used_by.length > 0) === value,
+    filterValue: (row) => row.used_by.length > 0,
+    filterOptions: [{ label: '有使用记录', value: true }, { label: '未被使用', value: false }],
   },
 ]
 
