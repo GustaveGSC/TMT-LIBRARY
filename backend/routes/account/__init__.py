@@ -1,7 +1,11 @@
 import os
 import socket
 from flask import Blueprint, request, g, make_response
-from services.account import account_service
+from services.account import (
+    ADMIN_ROLE_GUARD_ERROR,
+    PROTECTED_ACCOUNT_GUARD_ERROR,
+    account_service,
+)
 from auth import get_request_user, has_permission, set_auth_cookies, clear_auth_cookies
 from result import Result
 from rate_limit import (
@@ -172,18 +176,37 @@ def reset_password(user_id):
     new_password = body.get("new_password", "")
     if not new_password:
         return Result.fail("新密码不能为空").to_response()
-    return account_service.reset_password(user_id, new_password).to_response()
+    result = account_service.reset_password(
+        user_id, new_password, operator=g.current_user
+    )
+    return _guarded_mutation_response(result)
 
 
 # ── 角色分配 ──────────────────────────────────────
+def _guarded_mutation_response(result):
+    status_code = (
+        403
+        if not result.success
+        and isinstance(result.data, dict)
+        and result.data.get("error_code") in {
+            ADMIN_ROLE_GUARD_ERROR,
+            PROTECTED_ACCOUNT_GUARD_ERROR,
+        }
+        else None
+    )
+    return result.to_response(status_code)
+
+
 @account_bp.post("/users/<int:user_id>/roles/<int:role_id>")
 def assign_role(user_id, role_id):
-    return account_service.assign_role(user_id, role_id).to_response()
+    result = account_service.assign_role(user_id, role_id, operator=g.current_user)
+    return _guarded_mutation_response(result)
 
 
 @account_bp.delete("/users/<int:user_id>/roles/<int:role_id>")
 def remove_role(user_id, role_id):
-    return account_service.remove_role(user_id, role_id).to_response()
+    result = account_service.remove_role(user_id, role_id, operator=g.current_user)
+    return _guarded_mutation_response(result)
 
 
 # ── 角色管理 ──────────────────────────────────────
@@ -204,7 +227,7 @@ def create_role():
 
 @account_bp.delete("/roles/<int:role_id>")
 def delete_role(role_id):
-    return account_service.delete_role(role_id).to_response()
+    return _guarded_mutation_response(account_service.delete_role(role_id))
 
 
 @account_bp.post("/roles/<int:role_id>/permissions/<string:code>")

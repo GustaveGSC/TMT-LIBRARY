@@ -55,16 +55,16 @@ GET    /api/account/login-stats/dau                   # developer:analytics:view
 GET    /api/account/login-stats/users                 # developer:analytics:view → [{username,display_name,total,success_count,failed_count,last_login_at,identity_type}]
 GET    /api/account/users                             # account:users:view
 POST   /api/account/users                             # account:users:edit
-PUT    /api/account/users/:id                         # account:users:edit
+PUT    /api/account/users/:id                         # account:users:edit；仅允许 display_name，禁止 roles/token_version/status/password 等 mass assignment
 DELETE /api/account/users/:id                         # account:users:edit
 PUT    /api/account/users/:id/password                # 本人，或 account:users:edit
 PUT    /api/account/users/:id/status                  # account:users:edit
-POST   /api/account/users/:id/reset-password          # account:users:edit
-POST   /api/account/users/:id/roles/:id               # account:users:edit
-DELETE /api/account/users/:id/roles/:id               # account:users:edit
+POST   /api/account/users/:id/reset-password          # account:users:edit；admin/author 受保护账号仅 admin 角色操作者可重置
+POST   /api/account/users/:id/roles/:id               # account:users:edit；分配 admin 角色额外要求操作者已是 admin
+DELETE /api/account/users/:id/roles/:id               # account:users:edit；撤销 admin 角色额外要求操作者已是 admin
 GET    /api/account/roles                             # account:roles:view
 POST   /api/account/roles                             # account:roles:edit
-DELETE /api/account/roles/:id                         # account:roles:edit
+DELETE /api/account/roles/:id                         # account:roles:edit；内置 admin 角色不可删除
 POST   /api/account/roles/:id/permissions/:code       # account:roles:edit
 GET    /api/account/permissions                       # account:roles:view
 POST   /api/account/permissions                       # account:roles:edit

@@ -43,13 +43,17 @@ def test_password_rule_rejects_short_password_at_service_boundary(monkeypatch, m
     assert "至少 6 位" in result.message
 
 
-def test_update_user_rejects_short_password(monkeypatch):
+def test_update_user_rejects_mass_assignment_fields(monkeypatch):
     monkeypatch.setattr(UserRepository, "get_by_id", lambda _user_id: _user())
 
-    result = account_service.update_user(7, password="12345")
+    result = account_service.update_user(
+        7, roles=[], token_version=999, is_active=False, password="123456"
+    )
 
     assert not result.success
-    assert "至少 6 位" in result.message
+    assert "不允许" in result.message
+    assert "roles" in result.message
+    assert "token_version" in result.message
 
 
 def test_change_password_rejects_password_over_bcrypt_byte_limit(monkeypatch):

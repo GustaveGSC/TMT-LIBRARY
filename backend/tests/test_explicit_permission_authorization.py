@@ -1,8 +1,10 @@
+from types import SimpleNamespace
+
 from flask import Flask, g
 import pytest
 
 from auth import generate_token, has_permission, is_rd_admin
-from database.repository.account import UserRepository
+from database.repository.account import RoleRepository, UserRepository
 from result import Result
 from routes.account import account_bp
 from routes.product.resource import resource_bp
@@ -96,6 +98,221 @@ def test_legacy_admin_role_without_permissions_is_denied(account_client):
     _set_user(account_client, username='admin', roles=['admin'], permissions=[])
 
     assert account_client.get('/api/account/users').status_code == 403
+
+
+@pytest.mark.parametrize('method', ['post', 'delete'])
+def test_manager_cannot_assign_or_remove_admin_role(
+    account_client, monkeypatch, method
+):
+    monkeypatch.setattr(
+        UserRepository, 'get_by_id',
+        lambda _user_id: SimpleNamespace(id=9, roles=[], token_version=0),
+    )
+    monkeypatch.setattr(
+        RoleRepository, 'get_by_id',
+        lambda _role_id: SimpleNamespace(id=1, name='admin'),
+    )
+    mutated = []
+    monkeypatch.setattr(
+        UserRepository, 'assign_role',
+        lambda *_args: mutated.append('assigned'),
+    )
+    monkeypatch.setattr(
+        UserRepository, 'remove_role',
+        lambda *_args: mutated.append('removed'),
+    )
+    _set_user(
+        account_client,
+        username='manager',
+        roles=['manager'],
+        permissions=['account:users:edit'],
+    )
+
+    response = getattr(account_client, method)('/api/account/users/9/roles/1')
+
+    assert response.status_code == 403
+    assert response.get_json()['data']['error_code'] == 'admin_role_requires_admin'
+    assert mutated == []
+
+
+def test_manager_can_assign_non_admin_role(account_client, monkeypatch):
+    monkeypatch.setattr(
+        UserRepository, 'get_by_id',
+        lambda _user_id: SimpleNamespace(id=9, roles=[], token_version=0),
+    )
+    monkeypatch.setattr(
+        RoleRepository, 'get_by_id',
+        lambda _role_id: SimpleNamespace(id=2, name='developer'),
+    )
+    assigned = []
+    monkeypatch.setattr(
+        UserRepository, 'assign_role',
+        lambda user, role: assigned.append((user.id, role.name)),
+    )
+    _set_user(
+        account_client,
+        username='manager',
+        roles=['manager'],
+        permissions=['account:users:edit'],
+    )
+
+    response = account_client.post('/api/account/users/9/roles/2')
+
+    assert response.status_code == 200
+    assert assigned == [(9, 'developer')]
+
+
+def test_service_denies_admin_role_mutation_without_operator_context(monkeypatch):
+    monkeypatch.setattr(
+        UserRepository, 'get_by_id',
+        lambda _user_id: SimpleNamespace(id=9, roles=[], token_version=0),
+    )
+    monkeypatch.setattr(
+        RoleRepository, 'get_by_id',
+        lambda _role_id: SimpleNamespace(id=1, name='admin'),
+    )
+    monkeypatch.setattr(
+        UserRepository, 'assign_role',
+        lambda *_args: pytest.fail('admin role mutation must not reach repository'),
+    )
+
+    result = account_service.assign_role(9, 1)
+
+    assert not result.success
+    assert result.data['error_code'] == 'admin_role_requires_admin'
+
+
+def test_builtin_admin_role_cannot_be_deleted(account_client, monkeypatch):
+    monkeypatch.setattr(
+        RoleRepository, 'get_by_id',
+        lambda _role_id: SimpleNamespace(id=1, name='admin'),
+    )
+    monkeypatch.setattr(
+        RoleRepository, 'delete',
+        lambda *_args: pytest.fail('built-in admin role must not be deleted'),
+    )
+    _set_user(
+        account_client,
+        username='admin',
+        roles=['admin'],
+        permissions=['account:roles:edit'],
+    )
+
+    response = account_client.delete('/api/account/roles/1')
+
+    assert response.status_code == 403
+    assert response.get_json()['data']['error_code'] == 'admin_role_requires_admin'
+
+
+def test_user_update_cannot_bypass_role_guard_with_mass_assignment(
+    account_client, monkeypatch
+):
+    monkeypatch.setattr(
+        UserRepository, 'get_by_id',
+        lambda _user_id: SimpleNamespace(id=9, username='admin'),
+    )
+    monkeypatch.setattr(
+        UserRepository, 'update',
+        lambda *_args, **_kwargs: pytest.fail('mass assignment must not reach repository'),
+    )
+    _set_user(
+        account_client,
+        username='manager',
+        roles=['manager'],
+        permissions=['account:users:edit'],
+    )
+
+    response = account_client.put(
+        '/api/account/users/9',
+        json={'roles': [], 'token_version': 999, 'is_active': False},
+    )
+
+    assert response.status_code == 400
+    assert '不允许' in response.get_json()['message']
+
+
+def test_manager_cannot_reset_protected_account_password(
+    account_client, monkeypatch
+):
+    monkeypatch.setattr(
+        UserRepository, 'get_by_id',
+        lambda _user_id: SimpleNamespace(id=9, username='admin'),
+    )
+    _set_user(
+        account_client,
+        username='manager',
+        roles=['manager'],
+        permissions=['account:users:edit'],
+    )
+
+    response = account_client.post(
+        '/api/account/users/9/reset-password',
+        json={'new_password': 'new-password'},
+    )
+
+    assert response.status_code == 403
+    assert response.get_json()['data']['error_code'] == 'protected_account_requires_admin'
+
+
+def test_admin_can_reset_protected_account_password(account_client, monkeypatch):
+    protected_user = SimpleNamespace(id=9, username='author')
+    monkeypatch.setattr(UserRepository, 'get_by_id', lambda _user_id: protected_user)
+    monkeypatch.setattr('services.account.bcrypt.hashpw', lambda *_args: b'new-hash')
+    monkeypatch.setattr('services.account.bcrypt.gensalt', lambda: b'salt')
+    updates = []
+    monkeypatch.setattr(
+        UserRepository, 'update',
+        lambda user, **kwargs: updates.append((user.id, kwargs)),
+    )
+    _set_user(
+        account_client,
+        username='admin',
+        roles=['admin'],
+        permissions=['account:users:edit'],
+    )
+
+    response = account_client.post(
+        '/api/account/users/9/reset-password',
+        json={'new_password': 'new-password'},
+    )
+
+    assert response.status_code == 200
+    assert updates[0][0] == 9
+    assert updates[0][1]['invalidate_tokens'] is True
+
+
+@pytest.mark.parametrize('method', ['post', 'delete'])
+def test_admin_can_assign_or_remove_admin_role(
+    account_client, monkeypatch, method
+):
+    monkeypatch.setattr(
+        UserRepository, 'get_by_id',
+        lambda _user_id: SimpleNamespace(id=9, roles=[], token_version=0),
+    )
+    monkeypatch.setattr(
+        RoleRepository, 'get_by_id',
+        lambda _role_id: SimpleNamespace(id=1, name='admin'),
+    )
+    mutated = []
+    monkeypatch.setattr(
+        UserRepository, 'assign_role',
+        lambda *_args: mutated.append('assigned'),
+    )
+    monkeypatch.setattr(
+        UserRepository, 'remove_role',
+        lambda *_args: mutated.append('removed'),
+    )
+    _set_user(
+        account_client,
+        username='admin',
+        roles=['admin'],
+        permissions=['account:users:edit'],
+    )
+
+    response = getattr(account_client, method)('/api/account/users/9/roles/1')
+
+    assert response.status_code == 200
+    assert mutated == ['assigned' if method == 'post' else 'removed']
 
 
 def test_author_username_without_developer_permission_is_denied(account_client):

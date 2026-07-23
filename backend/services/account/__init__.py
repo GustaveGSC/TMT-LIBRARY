@@ -11,6 +11,9 @@ MAX_PASSWORD_BYTES = 72
 MAX_USERNAME_LENGTH = 64
 MAX_DISPLAY_NAME_LENGTH = 64
 _DUMMY_PASSWORD_HASH = b"$2b$12$yn369zGOz9RgxI.UJnOhJOkffgSSEMIXEorNXdLZRLs0Jo8haRbq6"
+ADMIN_ROLE_GUARD_ERROR = "admin_role_requires_admin"
+PROTECTED_ACCOUNT_GUARD_ERROR = "protected_account_requires_admin"
+_GENERIC_USER_UPDATE_FIELDS = frozenset({"display_name"})
 
 
 def _password_error(password, label: str = "密码"):
@@ -76,32 +79,17 @@ class AccountService:
         user = UserRepository.get_by_id(user_id)
         if not user:
             return Result.fail(f"用户 {user_id} 不存在")
-        if "username" in kwargs:
-            if error := _username_error(kwargs["username"]):
-                return Result.fail(error)
-            kwargs["username"] = kwargs["username"].strip()
+        unsupported = set(kwargs) - _GENERIC_USER_UPDATE_FIELDS
+        if unsupported:
+            return Result.fail(
+                f"不允许通过用户信息接口修改字段: {', '.join(sorted(unsupported))}"
+            )
         if "display_name" in kwargs:
             if error := _display_name_error(kwargs["display_name"]):
                 return Result.fail(error)
             if isinstance(kwargs["display_name"], str):
                 kwargs["display_name"] = kwargs["display_name"].strip() or None
-        password_changed = "password" in kwargs
-        status_changed = "is_active" in kwargs and kwargs["is_active"] is not None
-        if password_changed:
-            if error := _password_error(kwargs["password"]):
-                return Result.fail(error)
-            kwargs["password"] = bcrypt.hashpw(
-                kwargs["password"].encode(), bcrypt.gensalt()
-            ).decode()
-        try:
-            updated = UserRepository.update(
-                user,
-                invalidate_tokens=password_changed or status_changed,
-                **kwargs,
-            )
-        except IntegrityError:
-            db.session.rollback()
-            return Result.fail(f"用户名 '{kwargs.get('username')}' 已存在")
+        updated = UserRepository.update(user, **kwargs)
         return Result.ok(updated.to_dict(), message="更新成功")
 
     def delete_user(self, user_id: int) -> Result:
@@ -161,10 +149,20 @@ class AccountService:
         UserRepository.update(user, invalidate_tokens=True, is_active=is_active)
         return Result.ok(message="状态更新成功")
 
-    def reset_password(self, user_id: int, new_password: str) -> Result:
+    def reset_password(
+        self, user_id: int, new_password: str, operator: dict = None
+    ) -> Result:
         user = UserRepository.get_by_id(user_id)
         if not user:
             return Result.fail("用户不存在")
+        if (
+            user.username in ('admin', 'author')
+            and 'admin' not in (operator or {}).get('roles', [])
+        ):
+            return Result.fail(
+                "只有超级管理员可以重置受保护账号密码",
+                data={"error_code": PROTECTED_ACCOUNT_GUARD_ERROR},
+            )
         if error := _password_error(new_password, "新密码"):
             return Result.fail(error)
         new_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
@@ -172,18 +170,28 @@ class AccountService:
         return Result.ok(message="密码重置成功")
 
     # ── 角色分配 ──────────────────────────────────────
-    def assign_role(self, user_id: int, role_id: int) -> Result:
+    def assign_role(self, user_id: int, role_id: int, operator: dict = None) -> Result:
         user = UserRepository.get_by_id(user_id)
         role = RoleRepository.get_by_id(role_id)
         if not user: return Result.fail(f"用户 {user_id} 不存在")
         if not role: return Result.fail(f"角色 {role_id} 不存在")
+        if role.name == 'admin' and 'admin' not in (operator or {}).get('roles', []):
+            return Result.fail(
+                "只有超级管理员可以分配 admin 角色",
+                data={"error_code": ADMIN_ROLE_GUARD_ERROR},
+            )
         UserRepository.assign_role(user, role)
         return Result.ok(message="角色分配成功")
 
-    def remove_role(self, user_id: int, role_id: int) -> Result:
+    def remove_role(self, user_id: int, role_id: int, operator: dict = None) -> Result:
         user = UserRepository.get_by_id(user_id)
         role = RoleRepository.get_by_id(role_id)
         if not user or not role: return Result.fail("用户或角色不存在")
+        if role.name == 'admin' and 'admin' not in (operator or {}).get('roles', []):
+            return Result.fail(
+                "只有超级管理员可以撤销 admin 角色",
+                data={"error_code": ADMIN_ROLE_GUARD_ERROR},
+            )
         UserRepository.remove_role(user, role)
         return Result.ok(message="角色移除成功")
 
@@ -199,6 +207,11 @@ class AccountService:
     def delete_role(self, role_id: int) -> Result:
         role = RoleRepository.get_by_id(role_id)
         if not role: return Result.fail(f"角色 {role_id} 不存在")
+        if role.name == 'admin':
+            return Result.fail(
+                "内置 admin 角色不可删除",
+                data={"error_code": ADMIN_ROLE_GUARD_ERROR},
+            )
         RoleRepository.delete(role)
         return Result.ok(message="角色删除成功")
 
