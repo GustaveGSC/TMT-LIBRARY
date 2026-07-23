@@ -4,6 +4,7 @@ from datetime import datetime, date
 from collections import defaultdict
 from typing import Optional
 from aftersale_logger import write_confirm_log
+from error_handling import report_internal_error
 from database.base import db
 from database.models.aftersale import (
     AftersaleReasonCategory, AftersaleReason, AftersaleKeywordCandidate,
@@ -2979,7 +2980,12 @@ class AftersaleRepository:
         # ── 发货物料简称：绑定库匹配优先，历史频次二次验证兜底 ─────────────
         _ignore_terms_list = [t.term for t in AftersaleShippingIgnoreTerm.query.all()]
         product_tokens = sorted(self._parse_product_tokens(products or [], _ignore_terms_list))
-        binding_shipping_id, _ = self.match_shipping_alias(products or [], seller_remark=seller_remark, buyer_remark=buyer_remark)
+        binding_shipping_id, _ = self.match_shipping_alias(
+            products or [],
+            seller_remark=seller_remark,
+            buyer_remark=buyer_remark,
+            semantic=semantic,
+        )
         history_shipping_id     = _top_alias_id(AftersaleCaseReason.shipping_alias_id)
 
         # 二次验证：只有当历史数据指向另一个简称时才降级（防止泛化词误命中）。
@@ -3340,7 +3346,8 @@ class AftersaleRepository:
                     tokens.add(part)
         return tokens
 
-    def match_shipping_alias(self, products, seller_remark=None, buyer_remark=None):
+    def match_shipping_alias(self, products, seller_remark=None, buyer_remark=None,
+                             semantic=True):
         """
         根据发货物料列表（含 name 字段）匹配最佳发货物料简称。
         返回 (alias_id, score) 或 (None, 0)。
@@ -3408,7 +3415,7 @@ class AftersaleRepository:
                 for aid, sim in zip(alias_ids, sims):
                     sem_scores[aid] = float(sim)
         except Exception:
-            pass   # 语义模块异常不影响主流程
+            report_internal_error('售后发货简称语义匹配失败')
 
         # ── 备注 × 简称名 tie-breaking 工具 ──────────────────────────────────
         # 当多个简称关键词分相同时（如"气弹簧"和"气弹簧手柄"关联同一物料清单），
@@ -3439,6 +3446,8 @@ class AftersaleRepository:
         if best_kw_matched >= 2 or not sem_scores:
             # 找出与最高命中数并列的全部候选
             top_candidates = [(aid, m, r) for aid, (m, r) in kw_scores.items() if m == best_kw_matched]
+            if not top_candidates:
+                return None, 0.0
             if len(top_candidates) == 1:
                 aid, _, r = top_candidates[0]
                 return aid, r
