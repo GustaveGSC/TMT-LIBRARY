@@ -29,8 +29,8 @@ user_login_log
   id, user_id(FK→users SET NULL nullable), username(输入的用户名),
   display_name(成功时记录), status(ENUM success/failed),
   machine_name(VARCHAR 128，主机名，用于区分游客身份), login_at(CST DateTime)
-  # 每次登录尝试（包括密码错误/账号不存在/账号禁用）均写入；游客登录也写入
-  # verify_password + guest_login 均记录；user_id 找不到用户时为 NULL
+  # 每次登录尝试（包括密码错误/账号不存在/账号禁用）均写入
+  # verify_password 记录；user_id 找不到用户时为 NULL；历史游客记录保留
   # 游客以 machine_name 区分不同用户（socket.gethostname() 服务端获取）
 
 site_config       key(VARCHAR 64 PK), value(TEXT)

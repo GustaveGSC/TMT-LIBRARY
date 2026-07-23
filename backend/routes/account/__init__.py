@@ -29,14 +29,14 @@ def _machine_name():
 
 account_bp = Blueprint('account', __name__)
 
-# login/guest/register 公开；change_password 任意登录用户；其余仅 admin
+# login/register 公开；change_password 任意登录用户；其余仅 admin
 _ACCOUNT_PUBLIC       = frozenset({
-    'account.login', 'account.guest_login', 'account.register', 'account.logout',
+    'account.login', 'account.register', 'account.logout',
 })
 _ACCOUNT_SELF_ALLOWED = frozenset({'account.change_password'})
 
 def _require_account_auth():
-    """蓝图级鉴权：login/guest 公开；修改密码需登录；其余仅 admin 可操作。"""
+    """蓝图级鉴权：login/register 公开；修改密码需登录；其余仅 admin 可操作。"""
     if request.endpoint in _ACCOUNT_PUBLIC:
         return None
     if request.method == 'OPTIONS':
@@ -186,15 +186,6 @@ def delete_role(role_id):
 @account_bp.post("/roles/<int:role_id>/permissions/<string:code>")
 def assign_permission(role_id, code):
     return account_service.assign_permission_to_role(role_id, code).to_response()
-
-
-# ── 游客登录 ──────────────────────────────────────
-@account_bp.get("/guest")
-def guest_login():
-    result = account_service.guest_login(machine_name=_machine_name())
-    if result.success and result.data:
-        return set_auth_cookies(result.to_response(), result.data)
-    return result.to_response()
 
 
 # ── 登录记录与统计（author 专用）──────────────────

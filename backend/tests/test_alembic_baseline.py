@@ -14,7 +14,8 @@ TASK_REVISION = '20260720_02'
 PERMISSION_REVISION = '20260721_01'
 CUSTOMER_MAPPING_REVISION = '20260721_02'
 ORDER_ALIAS_REVISION = '20260721_03'
-HEAD_REVISION = '20260721_04'
+MAPPING_STATUS_REVISION = '20260721_04'
+HEAD_REVISION = '20260723_01'
 CRITICAL_INDEXES = {
     'shipping_order_finished': {
         'ix_sof_source',
@@ -45,7 +46,8 @@ def test_baseline_has_linear_history_and_permission_cleanup_is_the_only_head():
     assert scripts.get_revision(PERMISSION_REVISION).down_revision == TASK_REVISION
     assert scripts.get_revision(CUSTOMER_MAPPING_REVISION).down_revision == PERMISSION_REVISION
     assert scripts.get_revision(ORDER_ALIAS_REVISION).down_revision == CUSTOMER_MAPPING_REVISION
-    assert scripts.get_revision(HEAD_REVISION).down_revision == ORDER_ALIAS_REVISION
+    assert scripts.get_revision(MAPPING_STATUS_REVISION).down_revision == ORDER_ALIAS_REVISION
+    assert scripts.get_revision(HEAD_REVISION).down_revision == MAPPING_STATUS_REVISION
 
 
 def test_performance_critical_production_indexes_are_declared_in_metadata():
@@ -155,3 +157,47 @@ def test_baseline_upgrade_adds_only_shipping_task_schema(tmp_path, monkeypatch):
     with engine.connect() as connection:
         current = MigrationContext.configure(connection).get_current_revision()
     assert current == HEAD_REVISION
+
+
+def test_guest_role_migration_removes_role_and_associations(tmp_path, monkeypatch):
+    database_path = tmp_path / 'guest-role.db'
+    database_url = f'sqlite:///{database_path.as_posix()}'
+    engine = sa.create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            'CREATE TABLE roles (id INTEGER PRIMARY KEY, name VARCHAR(64), description VARCHAR(255))'
+        ))
+        connection.execute(sa.text(
+            'CREATE TABLE user_roles (user_id INTEGER, role_id INTEGER)'
+        ))
+        connection.execute(sa.text(
+            'CREATE TABLE role_permissions (role_id INTEGER, permission_id INTEGER)'
+        ))
+        connection.execute(sa.text(
+            "INSERT INTO roles (id, name) VALUES (1, 'guest'), (2, 'admin')"
+        ))
+        connection.execute(sa.text(
+            'INSERT INTO user_roles (user_id, role_id) VALUES (7, 1), (8, 2)'
+        ))
+        connection.execute(sa.text(
+            'INSERT INTO role_permissions (role_id, permission_id) VALUES (1, 10), (2, 11)'
+        ))
+
+    monkeypatch.setenv('DATABASE_URL', database_url)
+    config = _config(database_url)
+    command.stamp(config, MAPPING_STATUS_REVISION)
+    command.upgrade(config, 'head')
+
+    with engine.connect() as connection:
+        assert connection.execute(
+            sa.text("SELECT COUNT(*) FROM roles WHERE name = 'guest'")
+        ).scalar_one() == 0
+        assert connection.execute(
+            sa.text('SELECT COUNT(*) FROM user_roles WHERE role_id = 1')
+        ).scalar_one() == 0
+        assert connection.execute(
+            sa.text('SELECT COUNT(*) FROM role_permissions WHERE role_id = 1')
+        ).scalar_one() == 0
+        assert connection.execute(
+            sa.text("SELECT COUNT(*) FROM roles WHERE name = 'admin'")
+        ).scalar_one() == 1

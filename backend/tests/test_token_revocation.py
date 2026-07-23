@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from flask import Flask, g
 
 from auth import generate_token, require_auth
-from database.repository.account import RoleRepository, UserRepository
+from database.repository.account import UserRepository
 from result import Result
 from services.account import AccountService
 
@@ -84,22 +84,17 @@ def test_deleted_account_rejects_existing_token(monkeypatch):
     assert response.status_code == 401
 
 
-def test_guest_token_uses_current_guest_permissions(monkeypatch):
+def test_legacy_guest_token_is_rejected():
     token = generate_token({
         'id': None,
         'username': 'guest',
         'roles': ['guest'],
         'permissions': ['stale:permission'],
     })
-    guest_role = SimpleNamespace(
-        permissions=[SimpleNamespace(code='product:view')],
-    )
-    monkeypatch.setattr(RoleRepository, 'get_by_name', lambda _name: guest_role)
 
     response = _request(token)
 
-    assert response.status_code == 200
-    assert response.get_json()['data']['permissions'] == ['product:view']
+    assert response.status_code == 401
 
 
 def test_user_update_can_increment_token_version_without_database(monkeypatch):

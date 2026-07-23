@@ -2,7 +2,7 @@
 
 ## 鉴权说明
 所有接口（除下方标注「公开」外）均需浏览器携带有效的 `tmt_session` Cookie。
-登录/游客接口通过 `Set-Cookie` 下发 `tmt_session`（httpOnly）和 `tmt_csrf`；响应体不包含 token。注册接口不自动登录。
+登录接口通过 `Set-Cookie` 下发 `tmt_session`（httpOnly）和 `tmt_csrf`；响应体不包含 token。注册接口不自动登录。
 后续请求只接受 Cookie 会话，不再接受 `Authorization: Bearer`。写请求必须携带与 `tmt_csrf` Cookie 一致的 `X-CSRF-Token`，且该值与签名会话绑定。
 401 → 后端统一清除认证 Cookie，前端清理本地展示状态并跳转 `/login`。
 
@@ -10,7 +10,7 @@
 
 | 蓝图 | 策略 |
 |------|------|
-| account | login / guest / register 公开；改密需登录（仅限本人或 admin）；其余仅 admin |
+| account | login / register 公开；改密需登录（仅限本人或 admin）；其余仅 admin |
 | version | GET 公开；POST 仅 admin |
 | product / category / lifecycle 等 | `product:view`（读）+ `product:edit`（写） |
 | shipping | `shipping:view` + `shipping:edit`；导出需 `shipping:export` |
@@ -27,7 +27,6 @@
 - 注册限流：公开注册开启时，同一客户端 IP 每小时最多 5 次；超限统一返回 HTTP 429 `{success:false,message:"尝试次数过多，请稍后重试"}`
 - 客户端 IP 读取 nginx 设置的 `X-Real-IP`，本地未经过代理时回退到 `request.remote_addr`
 - 注册用户 JWT 包含 `ver`；账号被禁用、删除、改密、重置密码或权限变化后，旧 token 立即失效
-- 游客 JWT 每次请求使用数据库中的当前 guest 角色权限，不长期信任 token 内嵌权限
 - 过期、伪造、旧版本、已禁用或已删除账号的 token 均返回标准 HTTP 401，前端沿用现有统一登出处理
 
 ```
@@ -38,7 +37,6 @@ GET    /api/config/login-mottos                       # 公开；返回登录页
 PUT    /api/config/login-mottos                       # author/admin；body {mottos:string[]}，去除空白项后至少保留一条；成功返回保存后的数组
 
 POST   /api/account/login                             # 公开；登录时自动写入 user_login_log（成功/失败均记录）；失败受账号+IP双维度限流
-GET    /api/account/guest                             # 公开；游客登录并下发 Cookie 会话（仅 product:view 权限）
 POST   /api/account/register                          # 公开但默认关闭（通过 ALLOW_REGISTER=true 开启）；注册后无角色/业务权限，仅可使用无需权限码的通用工具；同IP每小时最多5次
 POST   /api/account/logout                            # 清除会话/CSRF Cookie；幂等；有效会话请求需通过 CSRF
 GET    /api/account/login-logs                        # 登录记录原始列表（author 专用）?page&per_page&username

@@ -219,21 +219,6 @@ class AccountService:
         if not perm: return Result.fail(f"权限 {perm_id} 不存在")
         return Result.ok(PermissionRepository.update(perm, **kwargs).to_dict(), message="更新成功")
 
-    def guest_login(self, machine_name: str = None) -> Result:
-        """返回游客身份信息，权限取自 guest 角色；同时写入登录日志"""
-        guest_role = RoleRepository.get_by_name("guest")
-        perm_codes = [p.code for p in guest_role.permissions] if guest_role else []
-        LoginLogRepository.create(username='guest', status='success', machine_name=machine_name)
-        return Result.ok({
-            "id":           None,
-            "username":     "guest",
-            "display_name": "游客",
-            "is_active":    True,
-            "roles":        ["guest"],
-            "permissions":  perm_codes,
-            "created_at":   None,
-        })
-
     def get_login_logs(self, page: int = 1, per_page: int = 50, username: str = None) -> Result:
         return Result.ok(LoginLogRepository.get_all(page=page, per_page=per_page, username=username))
 

@@ -17,7 +17,7 @@ CSRF_COOKIE = 'tmt_csrf'
 CSRF_HEADER = 'X-CSRF-Token'
 _SAFE_METHODS = frozenset({'GET', 'HEAD', 'OPTIONS'})
 _CSRF_EXEMPT_ENDPOINTS = frozenset({
-    'account.login', 'account.guest_login', 'account.register',
+    'account.login', 'account.register',
 })
 
 
@@ -84,15 +84,7 @@ def verify_token(token: str) -> dict | None:
     token_version = payload.get('ver')
     user_id = payload.get('id')
     if user_id is None:
-        if payload.get('username') != 'guest' or token_version != 0:
-            return None
-        from database.repository.account import RoleRepository
-        guest_role = RoleRepository.get_by_name('guest')
-        if not guest_role:
-            return None
-        payload['roles'] = ['guest']
-        payload['permissions'] = [p.code for p in guest_role.permissions]
-        return payload
+        return None
     if token_version is None:
         return None
     from database.repository.account import UserRepository

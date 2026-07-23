@@ -99,7 +99,7 @@ class UserLoginLog(db.Model):
 
     id           = db.Column(db.Integer,    primary_key=True, autoincrement=True)
     user_id      = db.Column(db.Integer,    db.ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    username     = db.Column(db.String(64), nullable=False)              # 登录时输入的用户名（游客为 'guest'）
+    username     = db.Column(db.String(64), nullable=False)              # 登录时输入的用户名
     display_name = db.Column(db.String(64), nullable=True)              # 成功时记录显示名
     status       = db.Column(db.Enum("success", "failed"), nullable=False, default="success")
     machine_name = db.Column(db.String(128), nullable=True)             # 机器名/主机名，用于区分游客身份
