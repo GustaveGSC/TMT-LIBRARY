@@ -1,0 +1,91 @@
+/* ══════════════════════════════════════════════
+   响应式基线 · 全局 token + 页面壳契约
+   方案见 handoff/2026-07-23-codex-responsive-ui-redesign-proposal.md
+   断点数值必须和 src/utils/responsiveBreakpoints.js 保持一致，改一处两处都要改
+══════════════════════════════════════════════ */
+
+:root {
+  /* ── 连续缩放 token（clamp 负责宽屏到标准桌面间的平滑变化）──
+     不用于把固定侧栏无限缩到不可用宽度；到达最小值后应该改变结构（抽屉/折叠），
+     不能继续挤压，参见下方 compact 档位契约 */
+  --space-page:    clamp(8px, 1.2vw, 20px);
+  --space-gap:     clamp(4px, 0.6vw, 12px);
+  --filter-width:  clamp(220px, 18vw, 280px);
+  --rank-width:    clamp(150px, 12vw, 190px);
+  --dialog-width:  min(560px, calc(100vw - 32px));
+}
+
+/* ── 结构断点参考表（数值来自 responsiveBreakpoints.js，此处仅注释，
+   实际媒体查询按需在各页面/组件里手写同样的数字）──
+   wide      >= 1440px  完整侧栏、完整标签、多列
+   standard  1200~1439  流式缩小间距/侧栏，工具栏允许轻度压缩
+   compact   900~1199   筛选栏变抽屉；工具栏两行；次要侧栏折叠
+   tablet    600~899    单主内容列；筛选/排行均为抽屉或弹层
+   mobile    < 600      手机专用单列、底部抽屉、精简工具栏
+*/
+
+/* ══════════════════════════════════════════════
+   页面壳契约：四种滚动模式，新页面/改造页面从这四个类里选一个
+   不要在页面根节点上另外发明一套 overflow 处理方式
+══════════════════════════════════════════════ */
+
+/* 基础壳：占满视口高度（含地址栏变化的移动端用 dvh，避免 100vh 裁切），
+   自身不滚动，交给下面的模式类决定谁滚动 */
+.app-page {
+  min-inline-size: 0;
+  min-block-size: 0;
+  block-size: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* page-scroll：管理页/表单页——头部固定，内容区整体纵向滚动 */
+.app-page.page-scroll > .app-page__body {
+  flex: 1;
+  min-inline-size: 0;
+  min-block-size: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* workspace：仪表盘/编辑器——外壳固定不滚动，由内部具体子面板各自决定是否滚动
+   （例如图表区不滚动、旁边的列表面板滚动），子面板需要滚动时自己加 overflow-y:auto */
+.app-page.workspace {
+  overflow: hidden;
+}
+.app-page.workspace > .app-page__body {
+  flex: 1;
+  min-inline-size: 0;
+  min-block-size: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+/* table-scroll：表格容器只在自身区域横向滚动，不撑开页面产生双轴滚动 */
+.table-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-inline-size: 100%;
+}
+
+/* drawer-scroll：抽屉 body 滚动，header/footer 固定 */
+.drawer-scroll {
+  display: flex;
+  flex-direction: column;
+  block-size: 100%;
+  overflow: hidden;
+}
+.drawer-scroll > .drawer-scroll__body {
+  flex: 1;
+  min-block-size: 0;
+  overflow-y: auto;
+}
+
+/* ══════════════════════════════════════════════
+   容器查询开关：需要"组件根据自己实际拿到的空间"而不是整个视口宽度
+   来调整内部布局时（工具栏、卡片、图表附属面板），给父容器加这个类
+══════════════════════════════════════════════ */
+.responsive-container {
+  container-type: inline-size;
+}

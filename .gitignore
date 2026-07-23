@@ -47,3 +47,8 @@ electron/resources/python-backend/backend.exe
 # Temp
 *.tmp
 *.temp
+
+# Playwright
+/test-results/
+/playwright-report/
+/playwright/.cache/

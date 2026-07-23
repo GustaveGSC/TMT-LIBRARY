@@ -9,6 +9,7 @@ import App from './app.vue'
 import router from './routers/index.js'
 
 import '@/styles/themes.css'
+import '@/styles/responsive.css'
 
 // 恢复上次选择的主题
 const savedTheme = localStorage.getItem('theme')

@@ -16,7 +16,8 @@
     "upload-release": "node scripts/upload-release.js",
     "dev:web": "vite --config vite.config.web.ts",
     "dev:all": "concurrently -n web,flask -c cyan,yellow \"npm run dev:web\" \"cd backend && python app.py\"",
-    "build:web": "vite build --config vite.config.web.ts"
+    "build:web": "vite build --config vite.config.web.ts",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@electron-toolkit/utils": "^4.0.0",
@@ -38,6 +39,7 @@
     "vue-router": "^5.0.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@vitejs/plugin-vue": "^4.5.0",
     "ali-oss": "^6.23.0",
     "concurrently": "^9.2.1",
