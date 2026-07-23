@@ -1,7 +1,14 @@
 /* ══════════════════════════════════════════════
    响应式基线 · 全局 token + 页面壳契约
    方案见 handoff/2026-07-23-codex-responsive-ui-redesign-proposal.md
-   断点数值必须和 src/utils/responsiveBreakpoints.js 保持一致，改一处两处都要改
+
+   断点数值必须和 src/utils/responsiveBreakpoints.js 的 BREAKPOINTS 保持一致。
+   下面这四行是唯一一致性校验能解析的位置（tests/e2e/breakpoint-consistency.spec.js
+   用固定正则提取），改动断点数值时两处都要改，格式不要动：
+   BREAKPOINT-WIDE: 1440
+   BREAKPOINT-STANDARD: 1200
+   BREAKPOINT-COMPACT: 900
+   BREAKPOINT-TABLET: 600
 ══════════════════════════════════════════════ */
 
 :root {

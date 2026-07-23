@@ -457,6 +457,7 @@ function handleForgotPassword() {
                 class="input"
                 type="text"
                 placeholder="输入用户名"
+                data-testid="login-username"
                 @keyup.enter="handleLogin"
                 @focus="onInputFocus"
               />
@@ -484,7 +485,7 @@ function handleForgotPassword() {
                 </button>
               </div>
             </div>
-            <button class="btn-primary" :disabled="loading" @click="handleLogin">
+            <button class="btn-primary" data-testid="login-submit" :disabled="loading" @click="handleLogin">
               <span v-if="!loading">登 录</span>
               <span v-else class="loading-dot">···</span>
             </button>
