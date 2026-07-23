@@ -249,7 +249,8 @@ defineExpose({ open })
       <div class="drawer-divider"></div>
 
       <!-- 管理者：用户/角色权限管理 -->
-      <template v-if="canViewUsers || canViewRoles || isAdmin">
+      <!-- 版本发布入口已隐藏：Electron 已停止支持，功能冻结，见 handoff/2026-07-21-electron-support-end-decision.md -->
+      <template v-if="canViewUsers || canViewRoles">
         <div class="section-group-label">管理员</div>
 
         <div class="section" v-if="canViewUsers">
@@ -267,17 +268,6 @@ defineExpose({ open })
             <div class="nav-icon-wrap">
               <span class="nav-icon">🔑</span>
               <span>权限管理</span>
-            </div>
-            <span class="section-arrow">›</span>
-          </div>
-        </div>
-
-        <!-- 版本发布：Electron 已停止支持的冻结功能，后端仍是唯一保留的 admin 角色鉴权，未纳入本次权限重做 -->
-        <div class="section" v-if="isAdmin">
-          <div class="section-title nav" @click="handleNav('/admin/version-release')">
-            <div class="nav-icon-wrap">
-              <span class="nav-icon">🚀</span>
-              <span>版本发布</span>
             </div>
             <span class="section-arrow">›</span>
           </div>
