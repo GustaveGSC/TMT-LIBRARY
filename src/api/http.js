@@ -50,7 +50,7 @@ http.interceptors.response.use(
       window.location.hash = '#/login'
       return Promise.reject(err)
     }
-    if (err.response?.status === 400) {
+    if (err.response?.status === 400 || err.response?.status === 429) {
       return Promise.resolve(err.response.data)
     }
     const msg = err.response?.data?.message ?? err.message
