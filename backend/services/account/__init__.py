@@ -175,9 +175,9 @@ class AccountService:
         role = RoleRepository.get_by_id(role_id)
         if not user: return Result.fail(f"用户 {user_id} 不存在")
         if not role: return Result.fail(f"角色 {role_id} 不存在")
-        if role.name == 'admin' and 'admin' not in (operator or {}).get('roles', []):
+        if role.name == 'admin':
             return Result.fail(
-                "只有超级管理员可以分配 admin 角色",
+                "admin 角色已停止分配，仅保留现有持有者",
                 data={"error_code": ADMIN_ROLE_GUARD_ERROR},
             )
         UserRepository.assign_role(user, role)

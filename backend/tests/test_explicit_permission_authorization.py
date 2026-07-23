@@ -281,9 +281,15 @@ def test_admin_can_reset_protected_account_password(account_client, monkeypatch)
     assert updates[0][1]['invalidate_tokens'] is True
 
 
-@pytest.mark.parametrize('method', ['post', 'delete'])
-def test_admin_can_assign_or_remove_admin_role(
-    account_client, monkeypatch, method
+@pytest.mark.parametrize(
+    ('username', 'roles'),
+    [
+        ('admin', ['admin']),
+        ('author', ['admin', 'developer']),
+    ],
+)
+def test_existing_admin_holders_cannot_assign_admin_role(
+    account_client, monkeypatch, username, roles
 ):
     monkeypatch.setattr(
         UserRepository, 'get_by_id',
@@ -298,9 +304,33 @@ def test_admin_can_assign_or_remove_admin_role(
         UserRepository, 'assign_role',
         lambda *_args: mutated.append('assigned'),
     )
+    _set_user(
+        account_client,
+        username=username,
+        roles=roles,
+        permissions=['account:users:edit'],
+    )
+
+    response = account_client.post('/api/account/users/9/roles/1')
+
+    assert response.status_code == 403
+    assert response.get_json()['message'] == 'admin 角色已停止分配，仅保留现有持有者'
+    assert mutated == []
+
+
+def test_admin_can_still_remove_admin_role(account_client, monkeypatch):
+    monkeypatch.setattr(
+        UserRepository, 'get_by_id',
+        lambda _user_id: SimpleNamespace(id=9, roles=[], token_version=0),
+    )
+    monkeypatch.setattr(
+        RoleRepository, 'get_by_id',
+        lambda _role_id: SimpleNamespace(id=1, name='admin'),
+    )
+    removed = []
     monkeypatch.setattr(
         UserRepository, 'remove_role',
-        lambda *_args: mutated.append('removed'),
+        lambda *_args: removed.append(True),
     )
     _set_user(
         account_client,
@@ -309,10 +339,10 @@ def test_admin_can_assign_or_remove_admin_role(
         permissions=['account:users:edit'],
     )
 
-    response = getattr(account_client, method)('/api/account/users/9/roles/1')
+    response = account_client.delete('/api/account/users/9/roles/1')
 
     assert response.status_code == 200
-    assert mutated == ['assigned' if method == 'post' else 'removed']
+    assert removed == [True]
 
 
 def test_author_username_without_developer_permission_is_denied(account_client):

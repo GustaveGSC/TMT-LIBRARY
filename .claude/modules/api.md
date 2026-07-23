@@ -60,7 +60,7 @@ DELETE /api/account/users/:id                         # account:users:edit
 PUT    /api/account/users/:id/password                # 本人，或 account:users:edit
 PUT    /api/account/users/:id/status                  # account:users:edit
 POST   /api/account/users/:id/reset-password          # account:users:edit；admin/author 受保护账号仅 admin 角色操作者可重置
-POST   /api/account/users/:id/roles/:id               # account:users:edit；分配 admin 角色额外要求操作者已是 admin
+POST   /api/account/users/:id/roles/:id               # account:users:edit；admin 为冻结存量角色，任何操作者均不可再分配
 DELETE /api/account/users/:id/roles/:id               # account:users:edit；撤销 admin 角色额外要求操作者已是 admin
 GET    /api/account/roles                             # account:roles:view
 POST   /api/account/roles                             # account:roles:edit
