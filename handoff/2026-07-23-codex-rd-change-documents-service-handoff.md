@@ -33,6 +33,7 @@ service 包含：
 ## 提交
 
 - `94abac6 refactor(rd): extract change document service`
+- `656f952 fix(rd): import BOM error reporter`
 
 分支：`codex/rd-change-documents-service`
 
@@ -47,10 +48,16 @@ service 包含：
 
 该一次性脚本已删除，没有进入提交。
 
+### 审查后修正
+
+Claude 在合并前发现 AST 函数体对比未覆盖模块级依赖：`validate_bom()` 的文件打开失败分支使用 `report_internal_error()`，但初次抽取时 service 漏掉了对应 import。这会在 openpyxl 无法打开文件时产生 `NameError`。
+
+`656f952` 已补充 `from error_handling import report_internal_error`，并新增直接命中打开失败分支的测试，确认内部错误上下文和对外友好错误编号消息均正确。该问题说明函数体等价不代表模块依赖完整，后续大模块搬移需要同时检查全局名称来源。
+
 ## 自动化验证
 
-- Excel fixture + 上传安全 + 路由护栏：20 passed
-- `python -m pytest backend/tests -q`：135 passed
+- Excel fixture + 上传安全 + 路由护栏：21 passed
+- `python -m pytest backend/tests -q`：136 passed
 - `python -m compileall -q backend`：通过
 - `python -m alembic -c alembic.ini heads`：`20260721_04 (head)`
 - `git diff --check`：通过
