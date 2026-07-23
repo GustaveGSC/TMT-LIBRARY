@@ -15,7 +15,7 @@ import WindowControls from '@/components/common/WindowControls.vue'
 import { usePermission } from '@/composables/usePermission'
 
 // ── 权限 ──────────────────────────────────
-const { canEditUsers, isAdmin } = usePermission()
+const { canEditUsers } = usePermission()
 
 // ── 路由 ──────────────────────────────────
 const router = useRouter()
@@ -60,10 +60,8 @@ const allRoles      = ref([])
 const selectedRoles = ref([])
 const currentRoles  = ref([])
 
-// 非 admin 操作者看不到、不能勾选 admin 角色，避免越权提权（后端同样会拒绝，这里是前端纵深防御）
-const assignableRoles = computed(() =>
-  isAdmin ? allRoles.value : allRoles.value.filter(r => r.name !== 'admin')
-)
+// admin 角色已冻结分配（后端无条件拒绝，仅保留现有持有者），弹窗里对所有操作者都不展示可勾选的 admin 选项
+const assignableRoles = computed(() => allRoles.value.filter(r => r.name !== 'admin'))
 
 // ── 当前登录用户 ──────────────────────────
 const currentUser = JSON.parse(localStorage.getItem('user') || '{}')
