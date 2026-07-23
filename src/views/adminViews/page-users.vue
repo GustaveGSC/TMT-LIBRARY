@@ -59,9 +59,26 @@ const roleTargetId  = ref(null)
 const allRoles      = ref([])
 const selectedRoles = ref([])
 const currentRoles  = ref([])
+const roleSearch    = ref('')
 
 // admin 角色已冻结分配（后端无条件拒绝，仅保留现有持有者），弹窗里对所有操作者都不展示可勾选的 admin 选项
 const assignableRoles = computed(() => allRoles.value.filter(r => r.name !== 'admin'))
+
+// 系统角色（预置的开发者/管理者/运维）单独分组，方便和业务自定义角色区分
+const SYSTEM_ROLE_NAMES = ['developer', 'manager', 'ops']
+
+const filteredAssignableRoles = computed(() => {
+  const kw = roleSearch.value.trim().toLowerCase()
+  if (!kw) return assignableRoles.value
+  return assignableRoles.value.filter(r =>
+    r.name?.toLowerCase().includes(kw) ||
+    r.description?.toLowerCase().includes(kw) ||
+    r.permissions?.some(p => p.toLowerCase().includes(kw))
+  )
+})
+
+const systemRoles   = computed(() => filteredAssignableRoles.value.filter(r => SYSTEM_ROLE_NAMES.includes(r.name)))
+const businessRoles = computed(() => filteredAssignableRoles.value.filter(r => !SYSTEM_ROLE_NAMES.includes(r.name)))
 
 // ── 当前登录用户 ──────────────────────────
 const currentUser = JSON.parse(localStorage.getItem('user') || '{}')
@@ -180,6 +197,7 @@ async function handleResetSubmit() {
 // ── 分配角色弹窗（admin 用户不显示此操作） ─
 async function handleAssignRole(row) {
   roleTargetId.value = row.id
+  roleSearch.value   = ''
   await loadRoles()
   // roles 是字符串数组，通过 name 匹配到 allRoles 里的 id
   currentRoles.value  = allRoles.value.filter(r => row.roles?.includes(r.name)).map(r => r.id)
@@ -371,17 +389,54 @@ onMounted(() => {
     </el-dialog>
 
     <!-- 分配角色弹窗 -->
-    <el-dialog v-model="roleVisible" title="分配角色" width="360" align-center>
-      <div class="role-list">
-        <el-checkbox-group v-model="selectedRoles">
-          <div v-for="role in assignableRoles" :key="role.id" class="role-item">
-            <el-checkbox :value="role.id">
-              <span class="role-name">{{ role.name }}</span>
-              <span v-if="role.description" class="role-desc">{{ role.description }}</span>
-            </el-checkbox>
-          </div>
-        </el-checkbox-group>
-      </div>
+    <el-dialog v-model="roleVisible" title="分配角色" width="520" align-center>
+      <el-input
+        v-model="roleSearch"
+        placeholder="搜索角色名称、描述或权限码"
+        :prefix-icon="Search"
+        clearable
+        class="role-search"
+      />
+      <el-checkbox-group v-model="selectedRoles">
+        <div class="role-list">
+          <template v-if="systemRoles.length">
+            <div class="role-group-label">系统角色</div>
+            <div v-for="role in systemRoles" :key="role.id" class="role-item">
+              <el-checkbox :value="role.id">
+                <div class="role-row">
+                  <div class="role-row-head">
+                    <span class="role-name">{{ role.name }}</span>
+                    <span v-if="role.description" class="role-desc">{{ role.description }}</span>
+                  </div>
+                  <div v-if="role.permissions?.length" class="role-perm-tags">
+                    <el-tag v-for="perm in role.permissions" :key="perm" size="small" type="info">{{ perm }}</el-tag>
+                  </div>
+                </div>
+              </el-checkbox>
+            </div>
+          </template>
+
+          <template v-if="businessRoles.length">
+            <div class="role-group-label">业务角色</div>
+            <div v-for="role in businessRoles" :key="role.id" class="role-item">
+              <el-checkbox :value="role.id">
+                <div class="role-row">
+                  <div class="role-row-head">
+                    <span class="role-name">{{ role.name }}</span>
+                    <span v-if="role.description" class="role-desc">{{ role.description }}</span>
+                  </div>
+                  <div v-if="role.permissions?.length" class="role-perm-tags">
+                    <el-tag v-for="perm in role.permissions" :key="perm" size="small" type="info">{{ perm }}</el-tag>
+                  </div>
+                  <div v-else class="role-perm-empty">未绑定权限</div>
+                </div>
+              </el-checkbox>
+            </div>
+          </template>
+
+          <div v-if="!filteredAssignableRoles.length" class="role-empty-tip">没有匹配的角色</div>
+        </div>
+      </el-checkbox-group>
       <template #footer>
         <el-button @click="roleVisible = false">取消</el-button>
         <el-button type="primary" :loading="roleLoading" @click="handleRoleSubmit">确认</el-button>
@@ -518,16 +573,49 @@ onMounted(() => {
 .required { color: var(--accent); }
 
 /* ── 角色列表 ─────────────────────────────── */
-.role-list { padding: 4px 0; }
+.role-search { margin-bottom: 12px; }
+.role-list {
+  padding: 4px 0;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.role-group-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 8px 0 4px;
+}
 .role-item {
   padding: 10px 0;
   border-bottom: 1px solid var(--border);
 }
+.role-item :deep(.el-checkbox) {
+  align-items: flex-start;
+  height: auto;
+  white-space: normal;
+}
+.role-item :deep(.el-checkbox__label) { width: 100%; }
 .role-item:last-child { border-bottom: none; }
-.role-name { font-size: 14px; color: var(--text-primary); }
+.role-row-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; }
+.role-name { font-size: 14px; color: var(--text-primary); font-weight: 500; }
 .role-desc {
   font-size: 12px;
   color: var(--text-muted);
-  margin-left: 8px;
+}
+.role-perm-tags {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.role-perm-empty {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.role-empty-tip {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 24px 0;
 }
 </style>

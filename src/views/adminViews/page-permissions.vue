@@ -6,9 +6,10 @@
 ───────────────────────────────────────── -->
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Search } from '@element-plus/icons-vue'
 import http from '@/api/http'
 import WindowControls from '@/components/common/WindowControls.vue'
 import { usePermission } from '@/composables/usePermission'
@@ -22,6 +23,19 @@ const router = useRouter()
 // ── 角色列表 ──────────────────────────────
 const rolesLoading = ref(false)
 const roles        = ref([])
+const roleSearch   = ref('')
+const permSearch   = ref('')
+
+// 按名称/描述/已绑定权限码过滤；搜索时禁用拖拽排序（过滤后位置和真实数组下标不一致）
+const filteredRoles = computed(() => {
+  const kw = roleSearch.value.trim().toLowerCase()
+  if (!kw) return roles.value
+  return roles.value.filter(r =>
+    r.name?.toLowerCase().includes(kw) ||
+    r.description?.toLowerCase().includes(kw) ||
+    r.permissions?.some(p => p.toLowerCase().includes(kw))
+  )
+})
 
 // ── 角色拖拽排序 ──────────────────────────
 const ROLE_ORDER_KEY = 'role_sort_order'
@@ -45,12 +59,13 @@ function saveOrder() {
   localStorage.setItem(ROLE_ORDER_KEY, JSON.stringify(roles.value.map(r => r.id)))
 }
 
-function onDragStart(index) {
-  dragSrcIndex.value = index
+function onDragStart(roleId) {
+  dragSrcIndex.value = roles.value.findIndex(r => r.id === roleId)
 }
 
-function onDragOver(e, index) {
+function onDragOver(e, roleId) {
   e.preventDefault()
+  const index = roles.value.findIndex(r => r.id === roleId)
   if (dragSrcIndex.value === null || dragSrcIndex.value === index) return
   const list = [...roles.value]
   const [moved] = list.splice(dragSrcIndex.value, 1)
@@ -67,6 +82,15 @@ function onDragEnd() {
 // ── 权限项列表 ────────────────────────────
 const permsLoading = ref(false)
 const permissions  = ref([])
+
+const filteredPermissions = computed(() => {
+  const kw = permSearch.value.trim().toLowerCase()
+  if (!kw) return permissions.value
+  return permissions.value.filter(p =>
+    p.code?.toLowerCase().includes(kw) ||
+    p.description?.toLowerCase().includes(kw)
+  )
+})
 
 // ── 新增角色弹窗 ──────────────────────────
 const roleFormVisible = ref(false)
@@ -271,16 +295,25 @@ onMounted(() => {
           <el-button v-if="canEditRoles" size="small" type="primary" @click="handleAddRole">+ 新增角色</el-button>
         </div>
 
+        <el-input
+          v-model="roleSearch"
+          placeholder="搜索角色名称、描述或权限码"
+          :prefix-icon="Search"
+          clearable
+          class="role-search-input"
+        />
+
         <div v-loading="rolesLoading" class="card-body">
           <div v-if="roles.length === 0 && !rolesLoading" class="empty-tip">暂无角色</div>
+          <div v-else-if="filteredRoles.length === 0" class="empty-tip">没有匹配的角色</div>
 
           <div
-            v-for="(role, index) in roles"
+            v-for="role in filteredRoles"
             :key="role.id"
             class="role-item"
-            draggable="true"
-            @dragstart="onDragStart(index)"
-            @dragover="onDragOver($event, index)"
+            :draggable="!roleSearch"
+            @dragstart="onDragStart(role.id)"
+            @dragover="onDragOver($event, role.id)"
             @dragend="onDragEnd"
           >
             <div class="drag-handle" title="拖拽排序">⠿</div>
@@ -337,9 +370,18 @@ onMounted(() => {
           <el-button v-if="canEditRoles" size="small" type="primary" @click="handleAddPerm">+ 新增权限</el-button>
         </div>
 
+        <el-input
+          v-model="permSearch"
+          placeholder="搜索权限码或描述"
+          :prefix-icon="Search"
+          clearable
+          class="role-search-input"
+        />
+
         <div v-loading="permsLoading" class="card-body">
           <div v-if="permissions.length === 0 && !permsLoading" class="empty-tip">暂无权限项</div>
-          <div v-for="perm in permissions" :key="perm.code" class="perm-item">
+          <div v-else-if="filteredPermissions.length === 0" class="empty-tip">没有匹配的权限项</div>
+          <div v-for="perm in filteredPermissions" :key="perm.code" class="perm-item">
             <div class="perm-item-main">
               <div class="perm-code">{{ perm.code }}</div>
               <div v-if="perm.description" class="perm-desc">{{ perm.description }}</div>
@@ -493,10 +535,15 @@ onMounted(() => {
   color: var(--text-primary);
 }
 
+.role-search-input {
+  margin: 12px 20px 0;
+  width: calc(100% - 40px);
+}
+
 .card-body {
   padding: 8px 0;
   min-height: 200px;
-  max-height: calc(100vh - 240px);
+  max-height: calc(100vh - 290px);
   overflow-y: auto;
 }
 
