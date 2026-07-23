@@ -141,6 +141,11 @@ function onMouseMove(e) {
   })
 }
 
+function onResize() {
+  refreshRects()
+  updateAllPoses(lastMx, lastMy)
+}
+
 // 随机眨眼（自调度，避免 setInterval 漂移）
 function scheduleBlink(pose) {
   const id = setTimeout(() => {
@@ -216,7 +221,7 @@ onMounted(async () => {
 
   // 角色动画初始化
   window.addEventListener('mousemove', onMouseMove)
-  window.addEventListener('resize', () => { refreshRects(); updateAllPoses(lastMx, lastMy) })
+  window.addEventListener('resize', onResize)
   await nextTick()
   refreshRects()
   scheduleBlink(purplePose)
@@ -238,7 +243,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('mousemove', onMouseMove)
-  window.removeEventListener('resize', refreshRects)
+  window.removeEventListener('resize', onResize)
   if (rafId) cancelAnimationFrame(rafId)
   blinkTimers.forEach(clearTimeout)
   if (lookTimer)  clearTimeout(lookTimer)
@@ -291,6 +296,10 @@ async function handleLogin() {
 }
 
 async function handleRegister() {
+  if (!registerValid.value) {
+    Object.assign(registerTouched, { username: true, password: true, confirmPassword: true })
+    return
+  }
   loading.value = true
   try {
     const res = await http.post('/api/account/register', {
