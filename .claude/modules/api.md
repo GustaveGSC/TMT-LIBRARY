@@ -17,6 +17,17 @@
 | aftersale | `aftersale:view` + `aftersale:edit`；导出需 `aftersale:export` |
 | rd | `rd:view`（读）+ `rd:edit`（写）；reminders 管理另需 `rd:admin` |
 
+权限体系切换计划（第一批数据准备已落库，运行时切换在后续批次）：
+
+| 权限域 | 权限码 | 目标接口范围 |
+|---|---|---|
+| 开发者 | `developer:analytics:view` | 登录日志、DAU、用户登录统计 |
+| 管理者 | `account:users:view/edit` | 用户查看与管理 |
+| 管理者 | `account:roles:view/edit` | 角色、权限查看与管理 |
+| 运维 | `ops:login-config:edit` | 登录页轮播文案修改 |
+
+`developer`、`manager`、`ops` 是标准权限包。`admin` 在迁移中显式绑定全部标准权限；admin 角色用户和 author 的旧 token 会失效一次，重新登录后取得新权限集合。后续批次移除前后端基于角色名/用户名的功能授权绕过。Electron 版本发布功能已冻结，本轮不新增运维权限码，也不修改 version 蓝图。
+
 环境变量：
 - `JWT_SECRET`：JWT 签名密钥，生产必须设置强随机值
 - `APP_ENV`：默认为 `production`；仅 `development` / `dev` / `local` / `test` / `testing` 跳过生产密钥校验

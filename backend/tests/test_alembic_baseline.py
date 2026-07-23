@@ -15,7 +15,8 @@ PERMISSION_REVISION = '20260721_01'
 CUSTOMER_MAPPING_REVISION = '20260721_02'
 ORDER_ALIAS_REVISION = '20260721_03'
 MAPPING_STATUS_REVISION = '20260721_04'
-HEAD_REVISION = '20260723_01'
+GUEST_REMOVAL_REVISION = '20260723_01'
+HEAD_REVISION = '20260723_02'
 CRITICAL_INDEXES = {
     'shipping_order_finished': {
         'ix_sof_source',
@@ -47,7 +48,8 @@ def test_baseline_has_linear_history_and_permission_cleanup_is_the_only_head():
     assert scripts.get_revision(CUSTOMER_MAPPING_REVISION).down_revision == PERMISSION_REVISION
     assert scripts.get_revision(ORDER_ALIAS_REVISION).down_revision == CUSTOMER_MAPPING_REVISION
     assert scripts.get_revision(MAPPING_STATUS_REVISION).down_revision == ORDER_ALIAS_REVISION
-    assert scripts.get_revision(HEAD_REVISION).down_revision == MAPPING_STATUS_REVISION
+    assert scripts.get_revision(GUEST_REMOVAL_REVISION).down_revision == MAPPING_STATUS_REVISION
+    assert scripts.get_revision(HEAD_REVISION).down_revision == GUEST_REMOVAL_REVISION
 
 
 def test_performance_critical_production_indexes_are_declared_in_metadata():
@@ -186,7 +188,7 @@ def test_guest_role_migration_removes_role_and_associations(tmp_path, monkeypatc
     monkeypatch.setenv('DATABASE_URL', database_url)
     config = _config(database_url)
     command.stamp(config, MAPPING_STATUS_REVISION)
-    command.upgrade(config, 'head')
+    command.upgrade(config, GUEST_REMOVAL_REVISION)
 
     with engine.connect() as connection:
         assert connection.execute(
@@ -201,3 +203,96 @@ def test_guest_role_migration_removes_role_and_associations(tmp_path, monkeypatc
         assert connection.execute(
             sa.text("SELECT COUNT(*) FROM roles WHERE name = 'admin'")
         ).scalar_one() == 1
+
+
+def test_permission_domain_migration_prepares_roles_and_compatibility_mappings(
+    tmp_path, monkeypatch
+):
+    database_path = tmp_path / 'permission-domains.db'
+    database_url = f'sqlite:///{database_path.as_posix()}'
+    engine = sa.create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            'CREATE TABLE users (id INTEGER PRIMARY KEY, username VARCHAR(64), '
+            'token_version INTEGER NOT NULL DEFAULT 0)'
+        ))
+        connection.execute(sa.text(
+            'CREATE TABLE roles (id INTEGER PRIMARY KEY, name VARCHAR(64), description VARCHAR(255))'
+        ))
+        connection.execute(sa.text(
+            'CREATE TABLE permissions (id INTEGER PRIMARY KEY, code VARCHAR(64), '
+            'name VARCHAR(255), description VARCHAR(255))'
+        ))
+        connection.execute(sa.text(
+            'CREATE TABLE user_roles (user_id INTEGER, role_id INTEGER, '
+            'PRIMARY KEY (user_id, role_id))'
+        ))
+        connection.execute(sa.text(
+            'CREATE TABLE role_permissions (role_id INTEGER, permission_id INTEGER, '
+            'PRIMARY KEY (role_id, permission_id))'
+        ))
+        connection.execute(sa.text(
+            "INSERT INTO users (id, username) VALUES (1, 'author'), (2, 'staff')"
+        ))
+        connection.execute(sa.text(
+            "INSERT INTO roles (id, name) VALUES (1, 'admin'), (2, 'existing-role')"
+        ))
+        connection.execute(sa.text(
+            "INSERT INTO permissions (id, code) VALUES (1, 'product:view')"
+        ))
+        connection.execute(sa.text(
+            'INSERT INTO user_roles (user_id, role_id) VALUES (1, 1), (2, 2)'
+        ))
+        connection.execute(sa.text(
+            'INSERT INTO role_permissions (role_id, permission_id) VALUES (1, 1), (2, 1)'
+        ))
+
+    monkeypatch.setenv('DATABASE_URL', database_url)
+    config = _config(database_url)
+    command.stamp(config, GUEST_REMOVAL_REVISION)
+    command.upgrade(config, 'head')
+
+    expected = {
+        'developer': {'developer:analytics:view'},
+        'manager': {
+            'account:users:view',
+            'account:users:edit',
+            'account:roles:view',
+            'account:roles:edit',
+        },
+        'ops': {'ops:login-config:edit'},
+    }
+    with engine.connect() as connection:
+        rows = connection.execute(sa.text(
+            'SELECT r.name, p.code FROM roles r '
+            'JOIN role_permissions rp ON rp.role_id = r.id '
+            'JOIN permissions p ON p.id = rp.permission_id'
+        )).fetchall()
+        actual = {}
+        for role_name, permission_code in rows:
+            actual.setdefault(role_name, set()).add(permission_code)
+
+        for role_name, permission_codes in expected.items():
+            assert actual[role_name] == permission_codes
+        all_codes = {
+            row[0] for row in connection.execute(
+                sa.text('SELECT code FROM permissions')
+            ).fetchall()
+        }
+        assert actual['admin'] == all_codes
+        assert 'ops:release:edit' not in all_codes
+
+        author_roles = {
+            row[0] for row in connection.execute(sa.text(
+                "SELECT r.name FROM roles r JOIN user_roles ur ON ur.role_id = r.id "
+                "JOIN users u ON u.id = ur.user_id WHERE u.username = 'author'"
+            )).fetchall()
+        }
+        assert author_roles == {'admin', 'developer'}
+        assert connection.execute(sa.text(
+            'SELECT COUNT(*) FROM user_roles WHERE user_id = 2 AND role_id = 2'
+        )).scalar_one() == 1
+        versions = dict(connection.execute(sa.text(
+            'SELECT username, token_version FROM users'
+        )).fetchall())
+        assert versions == {'author': 1, 'staff': 0}

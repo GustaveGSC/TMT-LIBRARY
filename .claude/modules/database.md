@@ -8,7 +8,9 @@
 - `20260721_01` 清理不受支持的 `product:delete` 权限及既有角色关联
 - `20260721_02` 增加财务客户简称字段、人工映射表，并规范财务行内部唯一键
 - `20260721_03` 将客户简称带入成品组合结果，并增加 `(source, customer_alias)` 聚合索引
-- `20260721_04` 将财务客户映射从布尔值改为四态审核状态，是当前代码 head
+- `20260721_04` 将财务客户映射从布尔值改为四态审核状态
+- `20260723_01` 删除已取消的 guest 角色及其关联
+- `20260723_02` 准备开发者/管理者/运维权限域、标准角色和兼容映射，是当前代码 head
 - 生产已完成 `stamp 20260720_01`，模型差异检查为 0
 - `app.py` 启动时只校验数据库 revision，不执行隐式 DDL 或自动 upgrade
 - 后续结构变更必须使用经人工审查的 Alembic revision，部署前单独 `upgrade head`
@@ -20,6 +22,23 @@ roles             id, name, description
 permissions       id, code, name, description
 user_roles        user_id, role_id
 role_permissions  role_id, permission_id
+
+标准权限域（20260723_02 起）
+  developer:analytics:view
+  account:users:view / account:users:edit
+  account:roles:view / account:roles:edit
+  ops:login-config:edit
+
+标准角色权限包
+  developer -> developer:analytics:view
+  manager   -> 四个 account:* 权限
+  ops       -> ops:login-config:edit
+
+兼容映射
+  # legacy admin 显式绑定迁移当时的全部标准权限，为后续移除代码级绕过做准备
+  # author 追加 developer 角色，不撤销任何既有角色；生产现状核实后再决定是否撤销其他角色
+  # admin 角色用户和 author 的 token_version 递增一次，重新登录后取得最新显式权限
+  # 本 revision 不切换鉴权规则；普通业务账号不受影响
 
 token_version
   # JWT 主动失效版本；禁用/启用账号、改密、重置密码、用户角色或角色权限变化时递增
