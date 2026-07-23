@@ -30,6 +30,22 @@ export async function assertResponsiveLayoutHealthy(page, { keySelectors = [] } 
     // 但不允许横向滚动、不允许被遮挡/裁切到不可达
     await locator.scrollIntoViewIfNeeded()
     await expect(locator, `关键元素 ${selector} 滚动后仍不在可视区域内，可能被裁切`).toBeInViewport()
+
+    // toBeInViewport() 只比较元素自身的 bounding rect 和浏览器视口，不会发现"元素被祖先的
+    // overflow:hidden 裁掉、但自身仍有几何坐标"这类假阳性——flex/grid 布局下子元素超出容器
+    // 时依然会算出一个 boundingBox，即使视觉上完全不可见。用 elementFromPoint 在元素中心点
+    // 做一次真实命中测试，命中不到自己（或自己的后代）就说明被裁切/遮挡。
+    const isActuallyPainted = await locator.evaluate((el) => {
+      const rect = el.getBoundingClientRect()
+      const cx = rect.left + rect.width / 2
+      const cy = rect.top + rect.height / 2
+      const hit = document.elementFromPoint(cx, cy)
+      return !!hit && el.contains(hit)
+    })
+    expect(
+      isActuallyPainted,
+      `关键元素 ${selector} 中心点命中测试失败：几何坐标存在但实际不可见，很可能被祖先的 overflow:hidden 裁切或被其他元素遮挡`
+    ).toBe(true)
   }
 }
 

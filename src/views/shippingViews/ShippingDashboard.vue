@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import { ArrowDown, Delete, Setting, Close, PriceTag } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import http from '@/api/http'
+import { useResponsiveLayout } from '@/composables/useResponsiveLayout'
 import iconBar from '@/assets/icons/btn_bar.png'
 import iconLine from '@/assets/icons/btn_line.png'
 import iconPie from '@/assets/icons/btn_pie.png'
@@ -1345,9 +1346,14 @@ onUnmounted(() => {
   try { document.fullscreenElement && document.exitFullscreen?.() } catch {}
 })
 
-// 移动端适配
+// 移动端适配（触屏专属行为：长按提示、遮罩滚动优化等，仍以 768px 为界，不受下方 compact 影响）
 const isMobile       = ref(window.innerWidth <= 768)
 const filterPanelOpen = ref(false)
+
+// 窄桌面/平板紧凑布局（<1200px，含 compact/tablet/mobile 三档）：
+// 筛选栏变抽屉、工具栏换行、Top10 移到图表下方。比 isMobile 覆盖更宽，
+// 专门解决笔记本分辨率+系统缩放场景，见 handoff/2026-07-23-codex-responsive-ui-redesign-proposal.md
+const { isCompactOrBelow: isCompactLayout } = useResponsiveLayout()
 
 function onWindowResize() {
   isMobile.value = window.innerWidth <= 768
@@ -2767,15 +2773,15 @@ watch(groupBy, () => {
 <template>
   <div class="dashboard-root">
 
-    <!-- 移动端遮罩：点击关闭筛选面板 -->
+    <!-- 紧凑布局遮罩：点击关闭筛选面板（<1200px 时筛选栏变抽屉，含手机端） -->
     <transition name="fade">
-      <div v-if="isMobile && filterPanelOpen" class="filter-backdrop" @click="filterPanelOpen = false" />
+      <div v-if="isCompactLayout && filterPanelOpen" class="filter-backdrop" @click="filterPanelOpen = false" />
     </transition>
 
     <!-- ── 左侧筛选面板 ──────────────────────────── -->
-    <aside class="filter-panel" :class="{ 'is-open': filterPanelOpen }">
-      <!-- 移动端关闭按钮 -->
-      <button v-if="isMobile" class="filter-close-btn" @click="filterPanelOpen = false">
+    <aside class="filter-panel" data-testid="shipping-filter-panel" :class="{ 'is-open': filterPanelOpen }">
+      <!-- 紧凑布局关闭按钮 -->
+      <button v-if="isCompactLayout" class="filter-close-btn" @click="filterPanelOpen = false">
         <el-icon><Close /></el-icon>
         关闭筛选
       </button>
@@ -3044,9 +3050,9 @@ watch(groupBy, () => {
       <div class="chart-toolbar">
         <!-- 左侧：面包屑（有下钻时显示），无下钻时占位保证中间居中 -->
         <div class="ct-left">
-          <!-- 移动端：筛选按钮 + 维度选择 + 城市模式 -->
-          <template v-if="isMobile">
-            <button class="ct-filter-btn" @click="filterPanelOpen = true">
+          <!-- 紧凑布局（含移动端）：筛选按钮 + 维度选择 + 城市模式 -->
+          <template v-if="isCompactLayout">
+            <button class="ct-filter-btn" data-testid="shipping-filter-toggle" @click="filterPanelOpen = true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15">
                 <path d="M3 6h18M6 12h12M9 18h6"/>
               </svg>
@@ -3128,13 +3134,13 @@ watch(groupBy, () => {
           <el-select
             v-if="dataSource === 'finance'"
             v-model="tradeType"
-            :size="isMobile ? 'small' : 'default'"
+            :size="isCompactLayout ? 'small' : 'default'"
             class="trade-type-select"
             @change="loadChartData()"
           >
             <el-option v-for="t in TRADE_TYPE_OPTIONS" :key="t.value" :label="t.label" :value="t.value" />
           </el-select>
-          <el-select v-model="dataMetric" :size="isMobile ? 'small' : 'default'" class="metric-select">
+          <el-select v-model="dataMetric" :size="isCompactLayout ? 'small' : 'default'" class="metric-select">
             <el-option v-for="m in METRIC_OPTIONS" :key="m.value" :label="m.label" :value="m.value" />
           </el-select>
           <button class="ct-btn ct-fs-btn" :title="isFullscreen ? '退出全屏' : '全屏查看'" @click="isFullscreen ? closeFullscreen() : openFullscreen()">
@@ -3151,7 +3157,7 @@ watch(groupBy, () => {
       </div>
 
       <!-- 中间：图表 -->
-      <div ref="chartWrapEl" v-loading="loadingChart" class="chart-wrap" :class="{ 'chart-wrap--with-table': showMapTable }" @contextmenu.prevent>
+      <div ref="chartWrapEl" v-loading="loadingChart" class="chart-wrap" data-testid="shipping-chart" :class="{ 'chart-wrap--with-table': showMapTable }" @contextmenu.prevent>
         <div ref="chartEl" class="chart-canvas"></div>
 
         <!-- 已参展国家：红点标记（临时需求，名单见 EXHIBITED_COUNTRIES） -->
@@ -3192,8 +3198,8 @@ watch(groupBy, () => {
           </div>
         </div>
 
-        <!-- 地域维度地图：右侧 Top10 排行表 -->
-        <div v-if="showMapTable" class="map-rank-panel">
+        <!-- 地域维度地图：Top10 排行表（宽屏在右侧，紧凑布局移到图表下方，见 @media 1199px 块） -->
+        <div v-if="showMapTable" class="map-rank-panel" data-testid="shipping-rank-panel">
           <div class="map-rank-title">{{ METRIC_MAP[dataMetric].label }} Top 10</div>
           <div class="map-rank-list">
             <div v-for="(item, idx) in mapTopItems" :key="item.label" class="map-rank-row">
@@ -3206,8 +3212,8 @@ watch(groupBy, () => {
         </div>
       </div>
 
-      <!-- 底部：类别选择（移动端已移入 toolbar，桌面端保留） -->
-      <div v-if="!isMobile" class="chart-footer">
+      <!-- 底部：类别选择（紧凑布局已移入 toolbar，宽屏/标准桌面保留） -->
+      <div v-if="!isCompactLayout" class="chart-footer">
         <div class="footer-placeholder">
           <div v-if="groupBy === 'province'" class="footer-city-mode">
             <el-switch v-model="cityMode" size="small" active-text="城市模式" active-color="#c4883a" @change="loadChartData()" />
@@ -3244,7 +3250,7 @@ watch(groupBy, () => {
             </template>
           </el-dropdown>
         </div>
-        <div v-if="!isMobile" class="footer-date-range">{{ dateRangeText }}</div>
+        <div class="footer-date-range">{{ dateRangeText }}</div>
       </div>
 
     </div>
@@ -3760,7 +3766,37 @@ watch(groupBy, () => {
 .btn-save-group:hover { background: var(--accent-hover); }
 
 /* ── 移动端适配（≤768px） ─────────────────────── */
-@media (max-width: 768px) {
+/* 紧凑布局：compact(900~1199) + tablet(600~899) + mobile(<600) 共用同一套抽屉/换行/堆叠规则，
+   断点数值须与 src/utils/responsiveBreakpoints.js 的 BREAKPOINTS.standard(1200) 保持一致 */
+@media (max-width: 1199px) {
+
+  /* ── 内容区兜底：正常情况下 chart-wrap 拿 flex:1 剩余空间不需要滚动；
+     极端窄高视口（如手机横屏 844×390）工具栏两行+底部维度栏叠加后可能超出可用高度，
+     此时允许纵向滚动到达被压缩的部分，而不是被全局 overflow:hidden 直接裁掉 ── */
+  .content-panel { overflow-y: auto; overflow-x: hidden; }
+  .chart-wrap { min-height: 220px; }
+
+  /* ── Top10 排行：空间不足时移到图表下方，不再横向挤占图表宽度 ──
+     地图和榜单堆叠后总高度可能超过 chart-wrap 实际可用高度（尤其 844×390 这类矮视口），
+     chart-wrap 原来的 overflow:hidden 会把超出部分直接裁掉；这里改成 overflow-y:auto，
+     并把 chart-canvas 从 flex:1（抢占剩余空间）改成固定 min-height，保证地图和榜单
+     都有确定的最小可用尺寸，宁可整体滚动也不裁切内容 */
+  .chart-wrap--with-table {
+    flex-direction: column;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+  .chart-wrap--with-table .chart-canvas {
+    flex: 0 0 auto;
+    width: 100%;
+    min-height: 200px;
+  }
+  .map-rank-panel {
+    flex-shrink: 0;
+    width: 100%; max-height: 160px;
+    border-left: none; border-top: 1px solid var(--border);
+    padding: 8px 0;
+  }
 
   /* ── 筛选遮罩 ── */
   .filter-backdrop {
