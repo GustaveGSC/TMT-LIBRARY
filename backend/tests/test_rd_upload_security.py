@@ -127,9 +127,9 @@ def test_rd_multipart_success_paths_cleanup_temp_files(rd_client, monkeypatch):
         real_unlink(path)
 
     monkeypatch.setattr(rd_routes.os, 'unlink', tracked_unlink)
-    monkeypatch.setattr(rd_routes, '_validate_bom', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(rd_routes, 'validate_bom', lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
-        rd_routes, '_compare_bom',
+        rd_routes, 'compare_bom_files',
         lambda *_args: {'changes': [], 'stats': {}},
     )
     generic_xlsx = _xlsx_bytes([['层次', '图号'], ['1', 'A']])

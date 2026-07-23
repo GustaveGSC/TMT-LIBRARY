@@ -5,11 +5,11 @@ import io
 from openpyxl import Workbook, load_workbook
 
 import routes.rd as rd_routes
-from routes.rd import (
-    _build_ecr_xlsx,
-    _build_ecn_xlsx,
-    _compare_bom,
-    _parse_ecr_rows_xlsx,
+from services.rd.change_documents import (
+    build_ecr_xlsx,
+    build_ecn_xlsx,
+    compare_bom,
+    parse_ecr_rows_xlsx,
 )
 from services.rd.pdm_to_bom import build_bom_data, build_erp_data
 
@@ -24,6 +24,9 @@ def _write_bom(path, rows):
 
 
 def test_compare_bom_characterizes_version_change(tmp_path):
+    assert not hasattr(rd_routes, '_compare_bom')
+    assert not hasattr(rd_routes, '_validate_bom')
+
     before_path = tmp_path / 'before.xlsx'
     after_path = tmp_path / 'after.xlsx'
     root = ['1', 'ROOT-A01', '整机', 'ROOT_A01', 1, 'PCS', '已发布']
@@ -36,7 +39,7 @@ def test_compare_bom_characterizes_version_change(tmp_path):
         ['1.1', 'PART-A01', '零件', 'PART_A01', 2, 'PCS', '通用变更审核中'],
     ])
 
-    result = _compare_bom(before_path, after_path)
+    result = compare_bom(before_path, after_path)
 
     assert result['stats'] == {'version': 1, 'added': 0, 'deleted': 0, 'total': 2}
     assert result['changes'] == [
@@ -54,6 +57,10 @@ def test_compare_bom_characterizes_version_change(tmp_path):
 
 
 def test_ecr_xlsx_round_trip_preserves_key_fields_and_detail():
+    assert not hasattr(rd_routes, '_build_ecr_xlsx')
+    assert not hasattr(rd_routes, '_parse_ecr_rows_xlsx')
+    assert not hasattr(rd_routes, '_parse_ecr_rows_xls')
+
     fields = {
         'issuing_unit': '研发',
         'date': '2026-07-23',
@@ -78,8 +85,8 @@ def test_ecr_xlsx_round_trip_preserves_key_fields_and_detail():
         'qty_desc': '1→2 PCS',
     }]
 
-    workbook = load_workbook(io.BytesIO(_build_ecr_xlsx(fields, changes)))
-    parsed_fields, parsed_changes = _parse_ecr_rows_xlsx(workbook.active)
+    workbook = load_workbook(io.BytesIO(build_ecr_xlsx(fields, changes)))
+    parsed_fields, parsed_changes = parse_ecr_rows_xlsx(workbook.active)
     workbook.close()
 
     assert parsed_fields == fields
@@ -100,6 +107,8 @@ def test_ecr_xlsx_round_trip_preserves_key_fields_and_detail():
 
 
 def test_ecn_xlsx_preserves_document_and_detail_layout():
+    assert not hasattr(rd_routes, '_build_ecn_xlsx')
+
     fields = {
         'issuing_unit': '研发',
         'product': 'TMT-01',
@@ -126,7 +135,7 @@ def test_ecn_xlsx_preserves_document_and_detail_layout():
         'responsible_person': 'tester',
     }]
 
-    workbook = load_workbook(io.BytesIO(_build_ecn_xlsx(fields, changes)))
+    workbook = load_workbook(io.BytesIO(build_ecn_xlsx(fields, changes)))
     sheet = workbook.active
 
     assert sheet.title == '变更通知单'
