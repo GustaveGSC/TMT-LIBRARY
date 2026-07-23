@@ -107,6 +107,9 @@ ssh tmt "mkdir -p /tmp/dist-web-new && tar xzf /tmp/dist-web-deploy.tar.gz -C /t
   && rm -rf /tmp/dist-web-new /tmp/dist-web-deploy.tar.gz"
 # 验证线上首页 index.html 里的 assets/index-*.js hash 和本地构建一致后，再删 /var/www/tmt-library.old
 # ⚠️ 必须传完整 dist 目录，不能只传部分文件（Vite 每次构建所有 hash 都会变，只传部分会导致页面白屏）
+# ⚠️ nginx 已配置 index.html 强制 no-cache、/assets/ 长期 immutable 缓存（见 ops/nginx-tmt-library.conf，
+#    2026-07-23 修复：之前无 Cache-Control 头，浏览器可能启发式缓存旧 index.html，
+#    引用已被新部署整体覆盖删除的旧 hash 文件名，导致 "Failed to fetch dynamically imported module"）
 
 # 后端部署（按需上传修改的文件，然后 reload）
 scp e:/Project/tmt-library/backend/路径/__init__.py tmt:/opt/tmt-library/backend/路径/__init__.py
