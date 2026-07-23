@@ -39,7 +39,7 @@ PUT    /api/config/login-mottos                       # author/admin；body {mot
 
 POST   /api/account/login                             # 公开；登录时自动写入 user_login_log（成功/失败均记录）；失败受账号+IP双维度限流
 GET    /api/account/guest                             # 公开；游客登录并下发 Cookie 会话（仅 product:view 权限）
-POST   /api/account/register                          # 公开但默认关闭（通过 ALLOW_REGISTER=true 开启）；注册后默认 guest 角色；同IP每小时最多5次
+POST   /api/account/register                          # 公开但默认关闭（通过 ALLOW_REGISTER=true 开启）；注册后无角色/业务权限，仅可使用无需权限码的通用工具；同IP每小时最多5次
 POST   /api/account/logout                            # 清除会话/CSRF Cookie；幂等；有效会话请求需通过 CSRF
 GET    /api/account/login-logs                        # 登录记录原始列表（author 专用）?page&per_page&username
 GET    /api/account/login-stats/dau                   # 日活统计（author 专用）?days=30 → [{date,count}]

@@ -83,6 +83,20 @@ def test_create_user_converts_unique_constraint_race_to_business_error(monkeypat
     assert rolled_back == [True]
 
 
+def test_registered_user_has_no_role_or_business_permission_by_default(monkeypatch):
+    created = _user()
+    monkeypatch.setattr(UserRepository, "get_by_username", lambda _username: None)
+    monkeypatch.setattr(UserRepository, "create", lambda *_args: created)
+    monkeypatch.setattr("services.account.bcrypt.hashpw", lambda *_args: b"hash")
+    monkeypatch.setattr("services.account.bcrypt.gensalt", lambda: b"salt")
+
+    result = account_service.create_user("tester", "123456")
+
+    assert result.success
+    assert result.data["roles"] == []
+    assert result.data["permissions"] == []
+
+
 def test_missing_and_existing_user_both_execute_bcrypt(monkeypatch):
     calls = []
     monkeypatch.setattr(
