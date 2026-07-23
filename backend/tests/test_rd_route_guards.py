@@ -4,6 +4,7 @@ import pytest
 from auth import generate_token
 from database.base import db
 from database.models.rd import EcrNote, EcrReminder
+from database.models.rd.cost import CostSnapshot, CostSnapshotSku
 from database.repository.account import UserRepository
 from routes.rd import rd_bp
 from routes.rd.cost import cost_bp
@@ -116,7 +117,32 @@ def rd_app_client(monkeypatch):
     with app.app_context():
         EcrReminder.__table__.create(db.engine)
         EcrNote.__table__.create(db.engine)
+        CostSnapshot.__table__.create(db.engine)
+        CostSnapshotSku.__table__.create(db.engine)
     return app, app.test_client()
+
+
+def test_rd_cost_requires_domain_permissions(rd_app_client):
+    _app_obj, client = rd_app_client
+    _set_user(client, username='other-user', permissions=['product:view'])
+    assert client.get('/api/rd/cost/snapshots').status_code == 403
+
+    _set_user(client, username='rd-viewer', permissions=['rd:view'])
+    readable = client.get('/api/rd/cost/snapshots')
+    assert readable.status_code == 200
+    assert readable.get_json()['data'] == {'total': 0, 'items': []}
+    assert client.post(
+        '/api/rd/cost/preview',
+        headers={'X-CSRF-Token': 'csrf'},
+    ).status_code == 403
+
+    _set_user(client, username='rd-editor', permissions=['rd:view', 'rd:edit'])
+    editable = client.post(
+        '/api/rd/cost/preview',
+        headers={'X-CSRF-Token': 'csrf'},
+    )
+    assert editable.status_code == 400
+    assert editable.get_json()['message'] == '请上传 Excel 文件'
 
 
 def test_reminders_require_rd_admin_for_management(rd_app_client):

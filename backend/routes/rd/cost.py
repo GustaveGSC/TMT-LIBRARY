@@ -6,7 +6,7 @@ import os
 import tempfile
 from datetime import date
 from flask import Blueprint, request, g
-from auth import require_auth
+from auth import make_blueprint_guard, require_auth
 from result import Result
 from database.base import db
 from database.models.rd.cost import (
@@ -17,6 +17,7 @@ from upload_validation import read_spreadsheet_upload, UploadValidationError
 from error_handling import internal_error_response
 
 cost_bp = Blueprint('rd_cost', __name__)
+cost_bp.before_request(make_blueprint_guard('rd:view', 'rd:edit'))
 
 
 def _require_edit():
