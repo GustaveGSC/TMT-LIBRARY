@@ -35,7 +35,7 @@ def test_motto_service_normalizes_and_persists_json(monkeypatch):
     assert json.loads(saved['value']) == result
 
 
-def test_motto_routes_preserve_public_read_and_admin_write_contract(monkeypatch):
+def test_motto_routes_preserve_public_read_and_ops_write_contract(monkeypatch):
     app = Flask(__name__)
     app.register_blueprint(config_bp, url_prefix='/api/config')
     monkeypatch.setattr(UserRepository, 'get_auth_state', lambda _id: (True, 0))
@@ -61,7 +61,12 @@ def test_motto_routes_preserve_public_read_and_admin_write_contract(monkeypatch)
     )
     assert response.status_code == 403
 
-    admin = {**viewer, 'username': 'admin', 'roles': ['admin']}
+    admin = {
+        **viewer,
+        'username': 'operator',
+        'roles': ['ops'],
+        'permissions': ['ops:login-config:edit'],
+    }
     client.set_cookie('tmt_session', generate_token(admin, csrf_token='csrf'))
     response = client.put(
         '/api/config/login-mottos', json={'mottos': ['新语句']},

@@ -229,7 +229,7 @@ def test_self_password_change_clears_current_session(monkeypatch):
     assert len(response.headers.getlist('Set-Cookie')) == 2
 
 
-def test_admin_password_change_for_other_user_keeps_admin_session(monkeypatch):
+def test_user_manager_password_change_for_other_user_keeps_manager_session(monkeypatch):
     app = Flask(__name__)
     app.before_request(validate_csrf_request)
     app.register_blueprint(account_bp, url_prefix='/api/account')
@@ -239,7 +239,8 @@ def test_admin_password_change_for_other_user_keeps_admin_session(monkeypatch):
         lambda *_args: Result.ok(message='密码已修改'),
     )
     admin = _user(user_id=1)
-    admin['roles'] = ['admin']
+    admin['roles'] = ['manager']
+    admin['permissions'] = ['account:users:edit']
     client = app.test_client()
     client.set_cookie('tmt_session', generate_token(admin, csrf_token='admin-csrf'))
     client.set_cookie('tmt_csrf', 'admin-csrf')

@@ -2,7 +2,7 @@
 
 from flask import Blueprint, request, g
 
-from auth import require_auth
+from auth import has_permission, require_auth
 from result import Result
 from services.config import config_service
 
@@ -19,9 +19,9 @@ def get_login_mottos():
 @config_bp.put('/login-mottos')
 @require_auth
 def update_login_mottos():
-    """需登录（author/admin）：更新登录页轮播语句列表。"""
+    """需 ops:login-config:edit：更新登录页轮播语句列表。"""
     user = g.current_user
-    if 'admin' not in user.get('roles', []) and user.get('username') != 'author':
+    if not has_permission(user, 'ops:login-config:edit'):
         return Result.fail('无权限').to_response(403)
     try:
         mottos = config_service.update_login_mottos(request.get_json(silent=True) or {})

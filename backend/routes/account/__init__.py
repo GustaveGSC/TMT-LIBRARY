@@ -2,7 +2,7 @@ import os
 import socket
 from flask import Blueprint, request, g, make_response
 from services.account import account_service
-from auth import get_request_user, set_auth_cookies, clear_auth_cookies
+from auth import get_request_user, has_permission, set_auth_cookies, clear_auth_cookies
 from result import Result
 from rate_limit import (
     LOGIN_ACCOUNT_LIMIT,
@@ -29,14 +29,34 @@ def _machine_name():
 
 account_bp = Blueprint('account', __name__)
 
-# login/register 公开；change_password 任意登录用户；其余仅 admin
+# login/register/logout 公开；本人改密需登录；其余按端点权限矩阵。
 _ACCOUNT_PUBLIC       = frozenset({
     'account.login', 'account.register', 'account.logout',
 })
 _ACCOUNT_SELF_ALLOWED = frozenset({'account.change_password'})
+_ACCOUNT_ENDPOINT_PERMISSIONS = {
+    'account.get_users': 'account:users:view',
+    'account.create_user': 'account:users:edit',
+    'account.update_user': 'account:users:edit',
+    'account.delete_user': 'account:users:edit',
+    'account.set_user_status': 'account:users:edit',
+    'account.reset_password': 'account:users:edit',
+    'account.assign_role': 'account:users:edit',
+    'account.remove_role': 'account:users:edit',
+    'account.get_roles': 'account:roles:view',
+    'account.get_permissions': 'account:roles:view',
+    'account.create_role': 'account:roles:edit',
+    'account.delete_role': 'account:roles:edit',
+    'account.assign_permission': 'account:roles:edit',
+    'account.create_permission': 'account:roles:edit',
+    'account.update_permission': 'account:roles:edit',
+    'account.get_login_logs': 'developer:analytics:view',
+    'account.get_login_dau': 'developer:analytics:view',
+    'account.get_login_user_stats': 'developer:analytics:view',
+}
 
 def _require_account_auth():
-    """蓝图级鉴权：login/register 公开；修改密码需登录；其余仅 admin 可操作。"""
+    """蓝图级鉴权：认证后按端点映射检查显式权限码。"""
     if request.endpoint in _ACCOUNT_PUBLIC:
         return None
     if request.method == 'OPTIONS':
@@ -47,8 +67,9 @@ def _require_account_auth():
     g.current_user = user
     if request.endpoint in _ACCOUNT_SELF_ALLOWED:
         return None
-    if 'admin' not in user.get('roles', []):
-        return Result.fail('权限不足，需要管理员权限').to_response(403)
+    required_permission = _ACCOUNT_ENDPOINT_PERMISSIONS.get(request.endpoint)
+    if not required_permission or not has_permission(user, required_permission):
+        return Result.fail('权限不足').to_response(403)
 
 account_bp.before_request(_require_account_auth)
 
@@ -122,9 +143,12 @@ def change_password(user_id):
     new_password = body.get("new_password", "")
     if not old_password or not new_password:
         return Result.fail("原密码和新密码不能为空").to_response()
-    # 非 admin 只能修改自己的密码
+    # 本人可改自己的密码；管理者可操作他人账号。
     current = g.current_user
-    if 'admin' not in current.get('roles', []) and current.get('id') != user_id:
+    if (
+        current.get('id') != user_id
+        and not has_permission(current, 'account:users:edit')
+    ):
         return Result.fail("无权修改他人密码").to_response(403)
     result = account_service.change_password(user_id, old_password, new_password)
     response = make_response(result.to_response())
@@ -188,7 +212,7 @@ def assign_permission(role_id, code):
     return account_service.assign_permission_to_role(role_id, code).to_response()
 
 
-# ── 登录记录与统计（author 专用）──────────────────
+# ── 登录记录与统计（developer:analytics:view）──────
 @account_bp.get("/login-logs")
 def get_login_logs():
     page     = request.args.get("page",     1,  type=int)

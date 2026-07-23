@@ -126,9 +126,7 @@ def validate_csrf_request():
 
 
 def has_permission(user: dict, perm: str) -> bool:
-    """检查用户是否有指定权限；admin 角色直接通过。"""
-    if 'admin' in user.get('roles', []):
-        return True
+    """只根据显式权限码授权；角色名和用户名不构成功能授权。"""
     return perm in user.get('permissions', [])
 
 
@@ -183,4 +181,4 @@ def require_auth(f):
 def is_rd_admin() -> bool:
     """在 @require_auth 之后调用，从 g.current_user 判断是否具备研发管理员权限。"""
     user = getattr(g, 'current_user', {})
-    return 'admin' in user.get('roles', []) or 'rd:admin' in user.get('permissions', [])
+    return has_permission(user, 'rd:admin')

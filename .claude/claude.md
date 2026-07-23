@@ -153,16 +153,22 @@ window.electronAPI = {
 ```
 
 ## 权限设计
-权限码：`product:view/edit`、`shipping:view/edit/export`、`aftersale:view/edit/export`、`rd:view/edit`
+权限码：
+- 开发者：`developer:analytics:view`
+- 管理者：`account:users:view/edit`、`account:roles:view/edit`
+- 运维：`ops:login-config:edit`
+- 业务：`product:view/edit`、`shipping:view/edit/export`、`aftersale:view/edit/export`、`rd:view/edit/admin`
+
+- `developer`、`manager`、`ops` 是标准角色权限包；功能授权只认显式权限码，不因 `admin` 角色名或 `author` 用户名直接放行。
+- legacy `admin` 通过数据库角色关联显式拥有全部标准权限；`admin`/`author` 不可删除禁用属于账号保护，不是授权绕过。
 - rd 路由对应研发工具页（`/rd-tools`），权限码 `rd:view/edit`
-- admin 角色后端直接放行；isAdmin 判断：`userInfo.roles?.includes('admin')`
 - username==='admin' 或 'author'：不可删除/禁用，不显示分配角色按钮（后端拦截）
-- author 账号：开发者专用，admin 权限，用户列表仅 author 登录时可见
+- author 账号：显式分配 `developer`；其他既有角色由生产权限审计决定，不靠用户名获得功能权限
 
 ```javascript
 // usePermission composable
 import { usePermission } from '@/composables/usePermission'
-const { isAdmin, can, canEditProduct, canViewProduct } = usePermission()
+const { can, canEditProduct, canViewProduct } = usePermission()
 ```
 
 ## 版本规则

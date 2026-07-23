@@ -10,14 +10,14 @@
 
 | 蓝图 | 策略 |
 |------|------|
-| account | login / register 公开；改密需登录（仅限本人或 admin）；其余仅 admin |
+| account | login / register 公开；本人改密需登录；用户、角色和分析端点按下方显式权限矩阵 |
 | version | GET 公开；POST 仅 admin |
 | product / category / lifecycle 等 | `product:view`（读）+ `product:edit`（写） |
 | shipping | `shipping:view` + `shipping:edit`；导出需 `shipping:export` |
 | aftersale | `aftersale:view` + `aftersale:edit`；导出需 `aftersale:export` |
 | rd | `rd:view`（读）+ `rd:edit`（写）；reminders 管理另需 `rd:admin` |
 
-权限体系切换计划（第一批数据准备已落库，运行时切换在后续批次）：
+权限体系已切换为显式权限码授权：
 
 | 权限域 | 权限码 | 目标接口范围 |
 |---|---|---|
@@ -26,7 +26,7 @@
 | 管理者 | `account:roles:view/edit` | 角色、权限查看与管理 |
 | 运维 | `ops:login-config:edit` | 登录页轮播文案修改 |
 
-`developer`、`manager`、`ops` 是标准权限包。`admin` 在迁移中显式绑定全部标准权限；admin 角色用户和 author 的旧 token 会失效一次，重新登录后取得新权限集合。后续批次移除前后端基于角色名/用户名的功能授权绕过。Electron 版本发布功能已冻结，本轮不新增运维权限码，也不修改 version 蓝图。
+`developer`、`manager`、`ops` 是标准权限包。功能授权只检查 JWT 中的显式权限码，不因 `admin` 角色名或 `author` 用户名直接放行；admin 已通过数据库角色权限关联获得全部标准权限，author 已显式获得 developer 角色。`admin`/`author` 不可删除禁用仍是账号保护规则，不是功能授权。Electron 版本发布功能已冻结，本轮不修改 version 蓝图，version 写接口暂时保留 legacy admin 角色检查，等待死功能清理。
 
 环境变量：
 - `JWT_SECRET`：JWT 签名密钥，生产必须设置强随机值
@@ -45,29 +45,32 @@ GET    /health
 GET    /ready                                         # 公开；数据库可查询时 200 {status:"ready"}，否则 503 {status:"not_ready"}
 
 GET    /api/config/login-mottos                       # 公开；返回登录页轮播语句字符串数组，配置缺失/损坏时返回内置默认值
-PUT    /api/config/login-mottos                       # author/admin；body {mottos:string[]}，去除空白项后至少保留一条；成功返回保存后的数组
+PUT    /api/config/login-mottos                       # ops:login-config:edit；body {mottos:string[]}，去除空白项后至少保留一条；成功返回保存后的数组
 
 POST   /api/account/login                             # 公开；登录时自动写入 user_login_log（成功/失败均记录）；失败受账号+IP双维度限流
 POST   /api/account/register                          # 公开但默认关闭（通过 ALLOW_REGISTER=true 开启）；注册后无角色/业务权限，仅可使用无需权限码的通用工具；同IP每小时最多5次
 POST   /api/account/logout                            # 清除会话/CSRF Cookie；幂等；有效会话请求需通过 CSRF
-GET    /api/account/login-logs                        # 登录记录原始列表（author 专用）?page&per_page&username
-GET    /api/account/login-stats/dau                   # 日活统计（author 专用）?days=30 → [{date,count}]
-GET    /api/account/login-stats/users                 # 账号登录统计（author 专用）→ [{username,display_name,total,success_count,failed_count,last_login_at,identity_type}]
-GET    /api/account/users
-POST   /api/account/users
-PUT    /api/account/users/:id
-DELETE /api/account/users/:id
-POST   /api/account/users/:id/roles/:id
-DELETE /api/account/users/:id/roles/:id
-GET    /api/account/roles
-POST   /api/account/roles
-DELETE /api/account/roles/:id
-POST   /api/account/roles/:id/permissions/:code
-GET    /api/account/permissions
-POST   /api/account/permissions
-PUT    /api/account/permissions/:id
+GET    /api/account/login-logs                        # developer:analytics:view；?page&per_page&username
+GET    /api/account/login-stats/dau                   # developer:analytics:view；?days=30 → [{date,count}]
+GET    /api/account/login-stats/users                 # developer:analytics:view → [{username,display_name,total,success_count,failed_count,last_login_at,identity_type}]
+GET    /api/account/users                             # account:users:view
+POST   /api/account/users                             # account:users:edit
+PUT    /api/account/users/:id                         # account:users:edit
+DELETE /api/account/users/:id                         # account:users:edit
+PUT    /api/account/users/:id/password                # 本人，或 account:users:edit
+PUT    /api/account/users/:id/status                  # account:users:edit
+POST   /api/account/users/:id/reset-password          # account:users:edit
+POST   /api/account/users/:id/roles/:id               # account:users:edit
+DELETE /api/account/users/:id/roles/:id               # account:users:edit
+GET    /api/account/roles                             # account:roles:view
+POST   /api/account/roles                             # account:roles:edit
+DELETE /api/account/roles/:id                         # account:roles:edit
+POST   /api/account/roles/:id/permissions/:code       # account:roles:edit
+GET    /api/account/permissions                       # account:roles:view
+POST   /api/account/permissions                       # account:roles:edit
+PUT    /api/account/permissions/:id                   # account:roles:edit
 
-本人成功修改密码后，响应为 200，同时清除当前会话与 CSRF Cookie；前端应在显示成功提示后清理本地展示状态并跳转登录页。管理员修改其他用户密码时不清管理员会话。
+本人成功修改密码后，响应为 200，同时清除当前会话与 CSRF Cookie；前端应在显示成功提示后清理本地展示状态并跳转登录页。具备 `account:users:edit` 的管理者操作其他用户时不清管理者会话。
 
 GET    /api/version/latest
 GET    /api/version/list

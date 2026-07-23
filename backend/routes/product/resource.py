@@ -5,7 +5,7 @@ import hmac
 import hashlib
 from datetime import datetime
 
-from flask import Blueprint, request, g, Response
+from flask import Blueprint, request, Response
 from services.product.resource import resource_service
 from storage.client import get_bucket
 from auth import make_blueprint_guard
@@ -68,14 +68,6 @@ def _preview_content_type(resource: dict) -> str | None:
     return None
 
 
-def _require_admin():
-    """在路由内检查 admin 角色，非 admin 返回 403 Response，admin 返回 None。"""
-    user = getattr(g, 'current_user', {})
-    if 'admin' not in user.get('roles', []):
-        return Result.fail('仅管理员可操作').to_response(403)
-    return None
-
-
 # ── 资料类型 ──────────────────────────────────────────────────────────────
 
 @resource_bp.get('/types')
@@ -85,8 +77,6 @@ def list_types():
 
 @resource_bp.post('/types')
 def create_type():
-    err = _require_admin()
-    if err: return err
     body       = request.get_json() or {}
     name       = (body.get('name') or '').strip()
     sort_order = int(body.get('sort_order', 0))
@@ -95,8 +85,6 @@ def create_type():
 
 @resource_bp.put('/types/<int:type_id>')
 def update_type(type_id: int):
-    err = _require_admin()
-    if err: return err
     body = request.get_json() or {}
     kwargs = {}
     if 'name'       in body: kwargs['name']       = (body['name'] or '').strip()
@@ -106,8 +94,6 @@ def update_type(type_id: int):
 
 @resource_bp.delete('/types/<int:type_id>')
 def delete_type(type_id: int):
-    err = _require_admin()
-    if err: return err
     return resource_service.delete_type(type_id).to_response()
 
 
