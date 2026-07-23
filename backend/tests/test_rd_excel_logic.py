@@ -5,6 +5,7 @@ import io
 from openpyxl import Workbook, load_workbook
 
 import routes.rd as rd_routes
+import services.rd.change_documents as change_documents
 from services.rd.change_documents import (
     build_ecr_xlsx,
     build_ecn_xlsx,
@@ -21,6 +22,17 @@ def _write_bom(path, rows):
     for row in rows:
         sheet.append(row)
     workbook.save(path)
+
+
+def test_validate_bom_reports_open_failure(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        change_documents, 'report_internal_error',
+        lambda context: 'fixed-error-id' if context == '变更前文件读取失败' else None,
+    )
+
+    message = change_documents.validate_bom(tmp_path / 'missing.xlsx', role='before')
+
+    assert message == '变更前文件无法读取（错误编号：fixed-error-id）'
 
 
 def test_compare_bom_characterizes_version_change(tmp_path):
