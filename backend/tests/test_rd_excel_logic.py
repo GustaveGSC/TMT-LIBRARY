@@ -4,14 +4,14 @@ import io
 
 from openpyxl import Workbook, load_workbook
 
+import routes.rd as rd_routes
 from routes.rd import (
     _build_ecr_xlsx,
     _build_ecn_xlsx,
     _compare_bom,
     _parse_ecr_rows_xlsx,
-    _ptb_build_bom_data,
-    _ptb_build_erp_data,
 )
+from services.rd.pdm_to_bom import build_bom_data, build_erp_data
 
 
 def _write_bom(path, rows):
@@ -143,6 +143,9 @@ def test_ecn_xlsx_preserves_document_and_detail_layout():
 
 
 def test_pdm_builders_preserve_constants_and_parent_child_relations():
+    assert not hasattr(rd_routes, '_ptb_build_erp_data')
+    assert not hasattr(rd_routes, '_ptb_build_bom_data')
+
     columns = ['品号', '层次', '数量', '品名', '工作中心']
     table_data = [
         ['ROOT', '1', '1', '整机', '源工作中心'],
@@ -151,7 +154,7 @@ def test_pdm_builders_preserve_constants_and_parent_child_relations():
         ['SIBLING', '1.2', '无效数量', '并列子件', ''],
     ]
 
-    erp_rows = _ptb_build_erp_data(columns, table_data)
+    erp_rows = build_erp_data(columns, table_data)
     assert len(erp_rows) == 4
     assert len(erp_rows[0]) == 46
     assert erp_rows[0][1:3] == ['ROOT', '整机']
@@ -159,7 +162,7 @@ def test_pdm_builders_preserve_constants_and_parent_child_relations():
     assert erp_rows[0][22] == 5101
     assert erp_rows[0][23] == 3101
 
-    bom_rows = _ptb_build_bom_data(columns, table_data, total_level=3)
+    bom_rows = build_bom_data(columns, table_data, total_level=3)
     assert bom_rows == [
         [100, 'ROOT', 1, 'CHILD', 2, 1, '', '', '', '', '', 1, ''],
         [100, 'ROOT', 1, 'SIBLING', 1, 1, '', '', '', '', '', 1, ''],
