@@ -154,7 +154,7 @@ onMounted(async () => {
 const { isAdmin, canViewProduct, canViewShipping, canEditShipping, canViewAftersale, canViewRd } = usePermission()
 
 const userInfo    = JSON.parse(localStorage.getItem('user') || '{}')
-const userName    = computed(() => userInfo.display_name || userInfo.username || '游客')
+const userName    = computed(() => userInfo.display_name || userInfo.username || '用户')
 const userInitial = computed(() => (userName.value?.[0] ?? '?').toUpperCase())
 const isAuthor    = userInfo.username === 'author'
 

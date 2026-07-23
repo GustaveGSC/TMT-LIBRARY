@@ -53,7 +53,6 @@ const username    = computed(() => userInfo.value.username || '')
 const displayName = computed(() => userInfo.value.display_name || '')
 const isAdmin     = computed(() => userInfo.value.roles?.includes('admin') ?? false)
 const isAuthor    = computed(() => userInfo.value.username === 'author')
-const isGuest     = computed(() => userInfo.value.username === '游客')
 const userInitial = computed(() => (displayName.value || username.value || '?')[0].toUpperCase())
 
 // ── 展开分区控制 ──────────────────────────
@@ -173,47 +172,45 @@ defineExpose({ open })
         <div class="user-avatar">{{ userInitial }}</div>
         <div class="user-info">
           <div class="user-name">{{ displayName || username }}</div>
-          <div class="user-role">{{ isAdmin ? '管理员' : isGuest ? '游客' : '普通用户' }}</div>
+          <div class="user-role">{{ isAdmin ? '管理员' : '普通用户' }}</div>
         </div>
       </div>
 
       <div class="drawer-divider"></div>
 
-      <!-- 修改密码（游客不显示） -->
-      <template v-if="!isGuest">
-        <div class="section">
-          <div class="section-title" @click="toggleSection('password')">
-            <span>修改密码</span>
-            <span class="section-arrow" :class="{ open: openSection === 'password' }">›</span>
-          </div>
-          <transition name="expand">
-            <div v-if="openSection === 'password'" class="section-body">
-              <div class="field">
-                <div class="field-label">原密码</div>
-                <el-input v-model="passwordForm.old" type="password" placeholder="输入原密码" show-password />
-              </div>
-              <div class="field">
-                <div class="field-label">新密码</div>
-                <el-input v-model="passwordForm.new" type="password" placeholder="至少 6 位" show-password />
-              </div>
-              <div class="field">
-                <div class="field-label">确认新密码</div>
-                <el-input v-model="passwordForm.confirm" type="password" placeholder="再次输入新密码" show-password />
-              </div>
-              <el-button
-                type="primary"
-                :loading="pwdLoading"
-                :disabled="!passwordValid"
-                style="width:100%;margin-top:4px;"
-                @click="handleChangePassword"
-              >
-                确认修改
-              </el-button>
-            </div>
-          </transition>
+      <!-- 修改密码 -->
+      <div class="section">
+        <div class="section-title" @click="toggleSection('password')">
+          <span>修改密码</span>
+          <span class="section-arrow" :class="{ open: openSection === 'password' }">›</span>
         </div>
-        <div class="drawer-divider"></div>
-      </template>
+        <transition name="expand">
+          <div v-if="openSection === 'password'" class="section-body">
+            <div class="field">
+              <div class="field-label">原密码</div>
+              <el-input v-model="passwordForm.old" type="password" placeholder="输入原密码" show-password />
+            </div>
+            <div class="field">
+              <div class="field-label">新密码</div>
+              <el-input v-model="passwordForm.new" type="password" placeholder="至少 6 位" show-password />
+            </div>
+            <div class="field">
+              <div class="field-label">确认新密码</div>
+              <el-input v-model="passwordForm.confirm" type="password" placeholder="再次输入新密码" show-password />
+            </div>
+            <el-button
+              type="primary"
+              :loading="pwdLoading"
+              :disabled="!passwordValid"
+              style="width:100%;margin-top:4px;"
+              @click="handleChangePassword"
+            >
+              确认修改
+            </el-button>
+          </div>
+        </transition>
+      </div>
+      <div class="drawer-divider"></div>
 
       <!-- 切换主题 -->
       <div class="section">

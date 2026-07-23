@@ -141,7 +141,7 @@ async function handleRoleFormSubmit() {
 }
 
 // 内置角色不可删除
-const BUILTIN_ROLES = ['admin', 'guest']
+const BUILTIN_ROLES = ['admin']
 
 // ── 删除角色（内置角色不可删除） ──────────
 async function handleDeleteRole(row) {
