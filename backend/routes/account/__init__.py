@@ -4,6 +4,17 @@ from flask import Blueprint, request, g, make_response
 from services.account import account_service
 from auth import get_request_user, set_auth_cookies, clear_auth_cookies
 from result import Result
+from rate_limit import (
+    LOGIN_ACCOUNT_LIMIT,
+    LOGIN_ACCOUNT_SCOPE,
+    LOGIN_IP_LIMIT,
+    REGISTER_IP_LIMIT,
+    clear_login_account_failures,
+    deduct_failed_login,
+    get_client_ip,
+    get_login_username,
+    limiter,
+)
 
 def _registration_enabled() -> bool:
     """公开注册默认关闭，仅在环境变量明确允许时开启。"""
@@ -44,6 +55,17 @@ account_bp.before_request(_require_account_auth)
 
 # ── 登录 ──────────────────────────────────────────
 @account_bp.post("/login")
+@limiter.limit(
+    LOGIN_IP_LIMIT,
+    key_func=get_client_ip,
+    deduct_when=deduct_failed_login,
+)
+@limiter.shared_limit(
+    LOGIN_ACCOUNT_LIMIT,
+    scope=LOGIN_ACCOUNT_SCOPE,
+    key_func=get_login_username,
+    deduct_when=deduct_failed_login,
+)
 def login():
     body     = request.get_json() or {}
     username = body.get("username", "").strip()
@@ -52,6 +74,7 @@ def login():
         return Result.fail("用户名和密码不能为空").to_response()
     result = account_service.verify_password(username, password, machine_name=_machine_name())
     if result.success and result.data:
+        clear_login_account_failures(username)
         return set_auth_cookies(result.to_response(), result.data)
     return result.to_response()
 
@@ -217,6 +240,11 @@ def update_permission(perm_id):
 
 # ── 自助注册（公开，默认关闭）─────────────────────────
 @account_bp.post("/register")
+@limiter.limit(
+    REGISTER_IP_LIMIT,
+    key_func=get_client_ip,
+    exempt_when=lambda: not _registration_enabled(),
+)
 def register():
     if not _registration_enabled():
         return Result.fail("注册功能已关闭，请联系管理员").to_response(403)

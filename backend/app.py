@@ -16,6 +16,7 @@ from sqlalchemy import text
 from security_config import validate_security_config
 from result import Result
 from upload_validation import GLOBAL_REQUEST_LIMIT
+from rate_limit import limiter
 
 # ── 环境变量加载（兼容打包后路径）────────────────────
 if getattr(sys, 'frozen', False):
@@ -62,6 +63,7 @@ def create_app() -> Flask:
 
     # ── 初始化扩展 ────────────────────────────────────
     db.init_app(app)
+    limiter.init_app(app)
     with app.app_context():
         _validate_database_revision(db)
 

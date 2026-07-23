@@ -22,6 +22,10 @@
 - `APP_ENV`：默认为 `production`；仅 `development` / `dev` / `local` / `test` / `testing` 跳过生产密钥校验
 - `JWT_SECRET`、`SHARE_SECRET`：生产环境必须设置为非默认强密钥，否则应用拒绝启动
 - `ALLOW_REGISTER`：公开注册默认关闭；仅 `true` / `1` / `yes` 明确开启
+- 密码统一要求至少 6 个字符且 UTF-8 编码不超过 72 字节；注册、管理员创建/更新、本人改密和管理员重置均执行相同服务层校验
+- 登录失败限流：同一账号 5 分钟 5 次、同一客户端 IP 5 分钟 20 次；登录成功清除该账号失败计数
+- 注册限流：公开注册开启时，同一客户端 IP 每小时最多 5 次；超限统一返回 HTTP 429 `{success:false,message:"尝试次数过多，请稍后重试"}`
+- 客户端 IP 读取 nginx 设置的 `X-Real-IP`，本地未经过代理时回退到 `request.remote_addr`
 - 注册用户 JWT 包含 `ver`；账号被禁用、删除、改密、重置密码或权限变化后，旧 token 立即失效
 - 游客 JWT 每次请求使用数据库中的当前 guest 角色权限，不长期信任 token 内嵌权限
 - 过期、伪造、旧版本、已禁用或已删除账号的 token 均返回标准 HTTP 401，前端沿用现有统一登出处理
@@ -33,9 +37,9 @@ GET    /ready                                         # 公开；数据库可查
 GET    /api/config/login-mottos                       # 公开；返回登录页轮播语句字符串数组，配置缺失/损坏时返回内置默认值
 PUT    /api/config/login-mottos                       # author/admin；body {mottos:string[]}，去除空白项后至少保留一条；成功返回保存后的数组
 
-POST   /api/account/login                             # 公开；登录时自动写入 user_login_log（成功/失败均记录）
+POST   /api/account/login                             # 公开；登录时自动写入 user_login_log（成功/失败均记录）；失败受账号+IP双维度限流
 GET    /api/account/guest                             # 公开；游客登录并下发 Cookie 会话（仅 product:view 权限）
-POST   /api/account/register                          # 公开但默认关闭（通过 ALLOW_REGISTER=true 开启）；注册后默认 guest 角色
+POST   /api/account/register                          # 公开但默认关闭（通过 ALLOW_REGISTER=true 开启）；注册后默认 guest 角色；同IP每小时最多5次
 POST   /api/account/logout                            # 清除会话/CSRF Cookie；幂等；有效会话请求需通过 CSRF
 GET    /api/account/login-logs                        # 登录记录原始列表（author 专用）?page&per_page&username
 GET    /api/account/login-stats/dau                   # 日活统计（author 专用）?days=30 → [{date,count}]
