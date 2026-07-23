@@ -20,6 +20,7 @@ const router = createRouter({
       component: () => import('@/views/indexViews/page-index.vue')
     },
     {
+      // Electron 已停止支持的冻结功能，后端仍是唯一保留的 admin 角色鉴权，未纳入权限重做
       path: '/admin/version-release',
       component: () => import('@/views/adminViews/page-version-release.vue'),
       meta: { adminOnly: true }
@@ -27,17 +28,17 @@ const router = createRouter({
     {
       path: '/admin/users',
       component: () => import('@/views/adminViews/page-users.vue'),
-      meta: { adminOnly: true }
+      meta: { permission: 'account:users:view' }
     },
     {
       path: '/admin/permissions',
       component: () => import('@/views/adminViews/page-permissions.vue'),
-      meta: { adminOnly: true }
+      meta: { permission: 'account:roles:view' }
     },
     {
       path: '/admin/login-logs',
       component: () => import('@/views/adminViews/page-login-logs.vue'),
-      meta: { authorOnly: true }
+      meta: { permission: 'developer:analytics:view' }
     },
     {
       path: '/product',
@@ -102,18 +103,15 @@ router.beforeEach((to) => {
   const user = JSON.parse(localStorage.getItem('user') || '{}')
   const roles = user.roles || []
   const perms = user.permissions || []
-  const isAdmin = roles.includes('admin')
 
-  if (to.meta?.authorOnly) {
-    return user.username === 'author' ? true : '/index'
-  }
+  // 冻结的 version-release 页面：Electron 停止支持后未纳入权限重做，后端仍按 admin 角色名鉴权
   if (to.meta?.adminOnly) {
-    return isAdmin ? true : '/index'
+    return roles.includes('admin') ? true : '/index'
   }
 
   const required = to.meta?.permission
   if (!required) return true
-  if (isAdmin || perms.includes(required)) return true
+  if (perms.includes(required)) return true
   return '/index'
 })
 

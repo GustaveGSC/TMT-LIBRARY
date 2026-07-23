@@ -1,7 +1,8 @@
 <!-- ─────────────────────────────────────────
   组件：UserSettingsDrawer
   功能：用户设置抽屉，包含修改密码、切换主题、
-        管理员专属（用户管理、权限管理、版本发布）、退出登录
+        按权限码显示的管理者（用户/权限管理）、开发者（用户分析）、
+        运维（登录页配置）入口、退出登录
 ───────────────────────────────────────── -->
 
 <script setup>
@@ -9,6 +10,13 @@ import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '@/api/http'
+import { usePermission } from '@/composables/usePermission'
+
+const {
+  isAdmin,
+  canViewUsers, canViewRoles,
+  canViewAnalytics, canEditOpsLoginConfig,
+} = usePermission()
 
 // ── 登录页轮播语句管理 ────────────────────────
 const mottoDialogVisible = ref(false)
@@ -51,8 +59,6 @@ const visible = ref(false)
 const userInfo    = ref(JSON.parse(localStorage.getItem('user') || '{}'))
 const username    = computed(() => userInfo.value.username || '')
 const displayName = computed(() => userInfo.value.display_name || '')
-const isAdmin     = computed(() => userInfo.value.roles?.includes('admin') ?? false)
-const isAuthor    = computed(() => userInfo.value.username === 'author')
 const userInitial = computed(() => (displayName.value || username.value || '?')[0].toUpperCase())
 
 // ── 展开分区控制 ──────────────────────────
@@ -242,11 +248,11 @@ defineExpose({ open })
 
       <div class="drawer-divider"></div>
 
-      <!-- 管理员专属区域 -->
-      <template v-if="isAdmin">
+      <!-- 管理者：用户/角色权限管理 -->
+      <template v-if="canViewUsers || canViewRoles || isAdmin">
         <div class="section-group-label">管理员</div>
 
-        <div class="section">
+        <div class="section" v-if="canViewUsers">
           <div class="section-title nav" @click="handleNav('/admin/users')">
             <div class="nav-icon-wrap">
               <span class="nav-icon">👥</span>
@@ -256,7 +262,7 @@ defineExpose({ open })
           </div>
         </div>
 
-        <div class="section">
+        <div class="section" v-if="canViewRoles">
           <div class="section-title nav" @click="handleNav('/admin/permissions')">
             <div class="nav-icon-wrap">
               <span class="nav-icon">🔑</span>
@@ -266,7 +272,8 @@ defineExpose({ open })
           </div>
         </div>
 
-        <div class="section">
+        <!-- 版本发布：Electron 已停止支持的冻结功能，后端仍是唯一保留的 admin 角色鉴权，未纳入本次权限重做 -->
+        <div class="section" v-if="isAdmin">
           <div class="section-title nav" @click="handleNav('/admin/version-release')">
             <div class="nav-icon-wrap">
               <span class="nav-icon">🚀</span>
@@ -279,8 +286,8 @@ defineExpose({ open })
         <div class="drawer-divider"></div>
       </template>
 
-      <!-- author 专属 -->
-      <template v-if="isAuthor">
+      <!-- 开发者：用户分析 -->
+      <template v-if="canViewAnalytics">
         <div class="section-group-label">开发者</div>
 
         <div class="section">
@@ -292,6 +299,13 @@ defineExpose({ open })
             <span class="section-arrow">›</span>
           </div>
         </div>
+
+        <div class="drawer-divider"></div>
+      </template>
+
+      <!-- 运维：登录页配置 -->
+      <template v-if="canEditOpsLoginConfig">
+        <div class="section-group-label">运维</div>
 
         <div class="section">
           <div class="section-title nav" @click="openMottoManager">

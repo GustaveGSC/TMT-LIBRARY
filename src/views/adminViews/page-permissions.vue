@@ -11,6 +11,10 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '@/api/http'
 import WindowControls from '@/components/common/WindowControls.vue'
+import { usePermission } from '@/composables/usePermission'
+
+// ── 权限 ──────────────────────────────────────────
+const { canEditRoles } = usePermission()
 
 // ── 路由 ──────────────────────────────────
 const router = useRouter()
@@ -264,7 +268,7 @@ onMounted(() => {
       <div class="card">
         <div class="card-header">
           <div class="card-title">角色列表</div>
-          <el-button size="small" type="primary" @click="handleAddRole">+ 新增角色</el-button>
+          <el-button v-if="canEditRoles" size="small" type="primary" @click="handleAddRole">+ 新增角色</el-button>
         </div>
 
         <div v-loading="rolesLoading" class="card-body">
@@ -310,7 +314,7 @@ onMounted(() => {
             </div>
 
             <!-- 操作按钮 -->
-            <div class="role-actions">
+            <div class="role-actions" v-if="canEditRoles">
               <el-button size="small" text type="primary" @click="handleBindPermissions(role)">
                 绑定权限
               </el-button>
@@ -330,7 +334,7 @@ onMounted(() => {
       <div class="card">
         <div class="card-header">
           <div class="card-title">权限项</div>
-          <el-button size="small" type="primary" @click="handleAddPerm">+ 新增权限</el-button>
+          <el-button v-if="canEditRoles" size="small" type="primary" @click="handleAddPerm">+ 新增权限</el-button>
         </div>
 
         <div v-loading="permsLoading" class="card-body">
@@ -340,7 +344,7 @@ onMounted(() => {
               <div class="perm-code">{{ perm.code }}</div>
               <div v-if="perm.description" class="perm-desc">{{ perm.description }}</div>
             </div>
-            <el-button size="small" text type="primary" @click="handleEditPerm(perm)">编辑</el-button>
+            <el-button v-if="canEditRoles" size="small" text type="primary" @click="handleEditPerm(perm)">编辑</el-button>
           </div>
         </div>
       </div>

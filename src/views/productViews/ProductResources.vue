@@ -9,7 +9,7 @@ import {
 import { ElMessage } from 'element-plus'
 
 // ── 权限 ──────────────────────────────────────────
-const { isAdmin, canEditProduct } = usePermission()
+const { canEditProduct } = usePermission()
 
 // ── composable（无参：资料库页面模式）────────────
 const {
@@ -699,7 +699,7 @@ onBeforeUnmount(() => {
         />
       </div>
       <div class="toolbar-right">
-        <el-button v-if="isAdmin" :icon="Setting" @click="typeManageVisible = true">管理类型</el-button>
+        <el-button v-if="canEditProduct" :icon="Setting" @click="typeManageVisible = true">管理类型</el-button>
         <el-button v-if="canEditProduct" type="primary" :icon="Plus" @click="openResourceCreate">新建资料</el-button>
       </div>
     </div>

@@ -56,7 +56,7 @@
         <img src="@/assets/logo-banner.png" class="bar-logo-banner" alt="logo" />
       </div>
 
-      <!-- 右：开发者工具（仅 author） + 版本徽章 + 用户 -->
+      <!-- 右：版本徽章 + 用户（管理者/开发者/运维入口在用户设置抽屉里，按权限码显示） -->
       <div class="bar-right">
 
         <!-- 版本徽章：点击检查/查看更新（桌面端） -->
@@ -151,12 +151,11 @@ onMounted(async () => {
   } catch { }
 })
 
-const { isAdmin, canViewProduct, canViewShipping, canEditShipping, canViewAftersale, canViewRd } = usePermission()
+const { canViewProduct, canViewShipping, canEditShipping, canViewAftersale, canViewRd } = usePermission()
 
 const userInfo    = JSON.parse(localStorage.getItem('user') || '{}')
 const userName    = computed(() => userInfo.display_name || userInfo.username || '用户')
 const userInitial = computed(() => (userName.value?.[0] ?? '?').toUpperCase())
-const isAuthor    = userInfo.username === 'author'
 
 // 模块分组，各组独立渲染
 // noPermission=true：无权限时禁用并显示"无权限"标签

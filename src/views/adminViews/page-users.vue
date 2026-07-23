@@ -12,6 +12,10 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import http from '@/api/http'
 import WindowControls from '@/components/common/WindowControls.vue'
+import { usePermission } from '@/composables/usePermission'
+
+// ── 权限 ──────────────────────────────────
+const { canEditUsers } = usePermission()
 
 // ── 路由 ──────────────────────────────────
 const router = useRouter()
@@ -279,8 +283,8 @@ onMounted(() => {
           </template>
         </el-table-column>
 
-        <!-- 操作栏：admin 用户只显示编辑和重置密码 -->
-        <el-table-column label="操作" width="220" fixed="right">
+        <!-- 操作栏：admin 用户只显示编辑和重置密码；无 account:users:edit 权限时全部隐藏 -->
+        <el-table-column v-if="canEditUsers" label="操作" width="220" fixed="right">
           <template #default="{ row }">
             <div class="action-row">
               <el-button size="small" text type="primary" @click="handleEdit(row)">编辑</el-button>
@@ -298,7 +302,7 @@ onMounted(() => {
       </el-table>
 
       <!-- 底栏：新增按钮 -->
-      <div class="table-footer">
+      <div v-if="canEditUsers" class="table-footer">
         <el-button type="primary" @click="handleAdd">+ 新增用户</el-button>
       </div>
     </div>
