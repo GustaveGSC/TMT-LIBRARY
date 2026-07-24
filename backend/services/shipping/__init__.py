@@ -284,6 +284,100 @@ def _finance_row_changed(row: Dict, snapshot: Dict, fields) -> bool:
     return False
 
 
+def _available_packaged_quantity(code, remaining, equiv_map):
+    """Match existing exact-code-first availability semantics."""
+    exact = remaining.get(code, 0)
+    if exact > 0:
+        return exact
+    return sum(remaining.get(candidate, 0) for candidate in equiv_map.get(code, {code}))
+
+
+def _consume_packaged_quantity(code, quantity, remaining, equiv_map):
+    """Consume exact code first, then equivalent codes in lexical order."""
+    left = quantity
+    for candidate in sorted(
+        equiv_map.get(code, {code}),
+        key=lambda value: (value != code, value),
+    ):
+        if left <= 0:
+            break
+        available = remaining.get(candidate, 0)
+        if available <= 0:
+            continue
+        take = min(available, left)
+        remaining[candidate] -= take
+        left -= take
+        if remaining[candidate] <= 0:
+            del remaining[candidate]
+
+
+def _build_finished_candidate_index(sorted_finished, equiv_map):
+    """
+    Index each finished product by supplies that can satisfy one required anchor.
+
+    Every valid match must satisfy its anchor, so this removes only impossible
+    products. Candidate indexes are later sorted to preserve greedy order.
+    """
+    from collections import Counter
+
+    requirement_frequency = Counter(
+        required_code
+        for _code, _name, required_codes in sorted_finished
+        for required_code in required_codes
+    )
+    candidate_indexes = {}
+    for index, (_code, _name, required_codes) in enumerate(sorted_finished):
+        anchor = min(
+            required_codes,
+            key=lambda code: (
+                requirement_frequency[code],
+                len(equiv_map.get(code, {code})),
+                code,
+            ),
+        )
+        supply_codes = set(equiv_map.get(anchor, ()))
+        supply_codes.add(anchor)
+        for supply_code in supply_codes:
+            candidate_indexes.setdefault(supply_code, set()).add(index)
+    return candidate_indexes
+
+
+def _get_finished_candidates(remaining, sorted_finished, candidate_index=None):
+    if candidate_index is None:
+        return sorted_finished
+    indexes = set()
+    for supply_code, quantity in remaining.items():
+        if quantity > 0:
+            indexes.update(candidate_index.get(supply_code, ()))
+    return [sorted_finished[index] for index in sorted(indexes)]
+
+
+def _greedy_match_finished(product_quantities, sorted_finished, equiv_map,
+                           candidate_index=None):
+    """Return ({finished_code: qty}, remaining products) with legacy semantics."""
+    remaining = dict(product_quantities)
+    matched = {}
+    candidates = _get_finished_candidates(
+        remaining, sorted_finished, candidate_index,
+    )
+    for finished_code, _finished_name, required_codes in candidates:
+        if not all(
+            _available_packaged_quantity(code, remaining, equiv_map) > 0
+            for code in required_codes
+        ):
+            continue
+        quantity = min(
+            _available_packaged_quantity(code, remaining, equiv_map)
+            for code in required_codes
+        )
+        if quantity <= 0:
+            continue
+        for code in required_codes:
+            _consume_packaged_quantity(code, quantity, remaining, equiv_map)
+        matched[finished_code] = matched.get(finished_code, 0) + quantity
+    return matched, remaining
+
+
 def _serialize_finance_skipped_row(r: Dict) -> Dict:
     """财务导入跳过行序列化"""
     shipped = r.get('shipped_date')
@@ -413,27 +507,11 @@ def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=
         equiv_map[ep.code_a].update([ep.code_a, ep.code_b])
         equiv_map[ep.code_b].update([ep.code_a, ep.code_b])
 
-    def _avail(code, remaining):
-        """该槽位可用数量：有精确码则只算精确码，缺货才回退到等效码之和"""
-        exact = remaining.get(code, 0)
-        if exact > 0:
-            return exact
-        return sum(remaining.get(c, 0) for c in equiv_map.get(code, {code}))
-
-    def _consume(code, qty, remaining):
-        """消耗产成品：优先消耗 code 自身，再消耗等效码（字典序）"""
-        left = qty
-        for c in sorted(equiv_map.get(code, {code}), key=lambda x: (x != code, x)):
-            if left <= 0:
-                break
-            avail = remaining.get(c, 0)
-            if avail <= 0:
-                continue
-            take = min(avail, left)
-            remaining[c] -= take
-            left -= take
-            if remaining[c] <= 0:
-                del remaining[c]
+    candidate_index = _build_finished_candidate_index(sorted_finished, equiv_map)
+    finished_name_by_code = {
+        finished_code: finished_name
+        for finished_code, finished_name, _required_codes in sorted_finished
+    }
 
     # 分批加载发货数据，每批推送一次进度
     CHUNK = 2000
@@ -457,17 +535,9 @@ def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=
     # 对每个订单预先跑一次贪心匹配，得到 {order_no: {finished_code: return_qty}}
     return_resolved: Dict[str, Dict] = {}
     for order_no, return_products in return_data.items():
-        remaining_ret = dict(return_products)  # {product_code: abs_qty}
-        order_ret = {}
-        for f_code, f_name, required_codes in sorted_finished:
-            if not all(_avail(code, remaining_ret) > 0 for code in required_codes):
-                continue
-            min_qty = min(_avail(code, remaining_ret) for code in required_codes)
-            if min_qty <= 0:
-                continue
-            for code in required_codes:
-                _consume(code, min_qty, remaining_ret)
-            order_ret[f_code] = order_ret.get(f_code, 0) + min_qty
+        order_ret, _remaining_ret = _greedy_match_finished(
+            return_products, sorted_finished, equiv_map, candidate_index,
+        )
         return_resolved[order_no] = order_ret
 
     # 清除旧结果（只清除同一 source 的记录）
@@ -483,28 +553,19 @@ def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=
         # 每处理 100 个订单推送一次进度
         if progress_cb and idx % 100 == 0:
             progress_cb('resolving', current=idx, total=total_orders)
-        remaining = dict(data['product_codes'])  # {product_code: qty}
+        matched_finished, remaining = _greedy_match_finished(
+            data['product_codes'], sorted_finished, equiv_map, candidate_index,
+        )
         meta = data['meta']
         order_ret = return_resolved.get(order_no, {})
-        matched_any = False
 
-        for f_code, f_name, required_codes in sorted_finished:
-            # 检查订单中是否有该成品所需的全部产成品（含等效码）
-            if not all(_avail(code, remaining) > 0 for code in required_codes):
-                continue
-            # 可组合的数量 = 各槽位可用数量（含等效码）中最小的那个
-            min_qty = min(_avail(code, remaining) for code in required_codes)
-            if min_qty <= 0:
-                continue
-            # 扣减已使用的产成品数量（优先消耗原码，再消耗等效码）
-            for code in required_codes:
-                _consume(code, min_qty, remaining)
+        for f_code, matched_quantity in matched_finished.items():
             rq = Decimal(str(order_ret.get(f_code, 0)))
-            sq = Decimal(str(min_qty))
+            sq = Decimal(str(matched_quantity))
             to_insert.append({
                 'ecommerce_order_no': order_no,
                 'finished_code':      f_code,
-                'finished_name':      f_name,
+                'finished_name':      finished_name_by_code[f_code],
                 'quantity':           sq,
                 'return_quantity':    rq,
                 'actual_quantity':    sq - rq,
@@ -520,7 +581,6 @@ def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=
                 'source':             source,
                 'resolved_at':        resolved_at,
             })
-            matched_any = True
 
         # 剩余未匹配的产成品：写一行 finished_code=None 的记录，方便追踪
         for code, qty in remaining.items():
