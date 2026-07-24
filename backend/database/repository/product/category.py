@@ -13,6 +13,43 @@ class CategoryRepository:
         return ProductCategory.query.order_by(ProductCategory.sort_order, ProductCategory.id).all()
 
     @staticmethod
+    def get_all_tree_data() -> List[dict]:
+        """Build the complete three-level tree with a fixed three queries."""
+        categories = ProductCategory.query.order_by(
+            ProductCategory.sort_order, ProductCategory.id,
+        ).all()
+        series = ProductSeries.query.order_by(
+            ProductSeries.sort_order, ProductSeries.id,
+        ).all()
+        models = ProductModel.query.order_by(
+            ProductModel.sort_order, ProductModel.id,
+        ).all()
+
+        category_data = []
+        category_by_id = {}
+        for category in categories:
+            item = category.to_dict()
+            item['series'] = []
+            category_data.append(item)
+            category_by_id[category.id] = item
+
+        series_by_id = {}
+        for product_series in series:
+            item = product_series.to_dict()
+            item['models'] = []
+            series_by_id[product_series.id] = item
+            parent = category_by_id.get(product_series.category_id)
+            if parent is not None:
+                parent['series'].append(item)
+
+        for model in models:
+            parent = series_by_id.get(model.series_id)
+            if parent is not None:
+                parent['models'].append(model.to_dict())
+
+        return category_data
+
+    @staticmethod
     def get_category(category_id: int) -> Optional[ProductCategory]:
         return db.session.get(ProductCategory, category_id)
 

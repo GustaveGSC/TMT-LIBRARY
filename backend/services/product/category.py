@@ -8,8 +8,7 @@ class CategoryService:
 
     def get_tree(self) -> Result:
         """返回完整三级树"""
-        categories = CategoryRepository.get_all_tree()
-        return Result.ok(data=[c.to_dict(with_children=True) for c in categories])
+        return Result.ok(data=CategoryRepository.get_all_tree_data())
 
     def get_model_lifecycles(self) -> Result:
         """
