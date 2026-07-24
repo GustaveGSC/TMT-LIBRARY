@@ -104,7 +104,7 @@ PUT    /api/category/series/:id
 DELETE /api/category/series/:id
 POST   /api/category/models
 PUT    /api/category/models/:id
-DELETE /api/category/models/:id
+DELETE /api/category/models/:id                       # 被成品或售后工单引用时返回 400，需先迁移关联数据
 
 GET    /api/product/tags/categories/                  # 标签分类列表（含旗下 tags[]）
 POST   /api/product/tags/categories/                  # 新增分类 {name,color?,sort_order?}
@@ -196,6 +196,7 @@ POST   /api/shipping/chart-data                       # 图表聚合数据，bod
                                                       #   其他来源/分类忽略 tag_names，仍只支持 tag_ids，以保持产品标签筛选语义
 
 GET    /api/aftersale/pending                         # 待处理订单列表（动态查询，尚未建工单的售后操作人订单）
+                                                      #   page>=1，page_size 1..200；非法值返回 400
 GET    /api/aftersale/pending/count                   # 待处理订单数量
 POST   /api/aftersale/suggest-product                 # 型号/物料等推荐；body 含 product_codes、seller_remark 等
                                                       #   返回 data 中可含 suggestions：
@@ -204,11 +205,12 @@ POST   /api/aftersale/suggest-product                 # 型号/物料等推荐�
                                                       #   suggested_return_alias_score（仅 library 匹配时有值）,
                                                       #   suggested_reason_id, suggested_reason_category_id
 GET    /api/aftersale/cases                           # 工单列表（分页+服务端排序）
-                                                      #   params: page/size/status/date_start/date_end/order_no/
+                                                      #   params: page/page_size/status/date_start/date_end/order_no/
                                                       #           channel_name/province/city/district/
                                                       #           reason_category/reason_name/
                                                       #           shipping_alias/return_alias/model_code/
                                                       #           sort_by/sort_order(asc|desc)
+                                                      #   page>=1，page_size 1..200；各批量 ID 筛选最多 200 个正整数
                                                       #   返回：{total, items[]} items 不含 reasons（两阶段加载）
 POST   /api/aftersale/cases/export/start              # 启动异步导出（后台线程），立即返回 task_id
                                                       #   body: 与 GET /cases query params 同字段（JSON）
@@ -221,10 +223,12 @@ GET    /api/aftersale/cases/export/download/<task_id># 下载已生成的 xlsx�
                                                       #   产品型号/产品名称/一级原因/二级原因/发货物料简称/渠道/
                                                       #   省份/城市/县区/商家备注/买家留言
 GET    /api/aftersale/cases/reasons                   # 批量获取指定工单的原因详情（selectinload，无N+1）
-                                                      #   params: ids（逗号分隔的 case id 列表）
+                                                      #   params: ids（逗号分隔，最多 200 个正整数）
                                                       #   返回：{ "case_id": [reason...] } 字典
 GET    /api/aftersale/cases/:id                       # 单条工单详情（含 reasons）
 POST   /api/aftersale/cases                           # 确认/创建工单（body: {order_no, products, remarks, reasons[]}）
+                                                      #   同一订单已 confirmed 时幂等返回原工单且不重复学习；
+                                                      #   修改已确认工单必须使用 PUT /cases/:id
 PUT    /api/aftersale/cases/:id                       # 更新工单 reasons
 POST   /api/aftersale/cases/:order_no/ignore          # 标记为忽略
 GET    /api/aftersale/filter-options                  # 表格筛选选项（raw SQL DISTINCT，懒加载）

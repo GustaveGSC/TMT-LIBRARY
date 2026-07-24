@@ -15,6 +15,33 @@ aftersale_bp.before_request(make_blueprint_guard(
     view_post_paths=('/chart-data', '/chart-filter-options', '/suggest-product', '/filter-options'),
 ))
 
+_MAX_PAGE_SIZE = 200
+_MAX_BATCH_IDS = 200
+
+
+def _parse_pagination():
+    try:
+        page = int(request.args.get('page', 1))
+        page_size = int(request.args.get('page_size', 50))
+    except (TypeError, ValueError):
+        return None, Result.fail('page 和 page_size 必须是整数').to_response()
+    if page < 1:
+        return None, Result.fail('page 必须大于等于 1').to_response()
+    if not 1 <= page_size <= _MAX_PAGE_SIZE:
+        return None, Result.fail(
+            f'page_size 必须在 1 到 {_MAX_PAGE_SIZE} 之间'
+        ).to_response()
+    return (page, page_size), None
+
+
+def _parse_id_list(raw):
+    parts = [part.strip() for part in (raw or '').split(',') if part.strip()]
+    if len(parts) > _MAX_BATCH_IDS:
+        raise ValueError(f'ID 数量不能超过 {_MAX_BATCH_IDS}')
+    if any(not part.isdigit() or int(part) < 1 for part in parts):
+        raise ValueError('ID 必须是正整数')
+    return [int(part) for part in parts]
+
 
 
 # ── 发货物料简称库 ─────────────────────────────────────────────────────────
@@ -120,8 +147,10 @@ def suggest_product():
 
 @aftersale_bp.get('/pending')
 def get_pending():
-    page       = int(request.args.get('page', 1))
-    page_size  = int(request.args.get('page_size', 50))
+    pagination, error = _parse_pagination()
+    if error:
+        return error
+    page, page_size = pagination
     search     = request.args.get('search')
     date_start = request.args.get('date_start')
     date_end   = request.args.get('date_end')
@@ -138,14 +167,15 @@ def get_pending_count():
 @aftersale_bp.get('/cases')
 def get_cases():
     def _ints(key):
-        raw = request.args.get(key, '')
-        return [int(x) for x in raw.split(',') if x.strip().lstrip('-').isdigit()]
+        return _parse_id_list(request.args.get(key, ''))
     def _strs(key):
         raw = request.args.get(key, '')
         return [x for x in raw.split(',') if x.strip()]
 
-    page       = int(request.args.get('page', 1))
-    page_size  = int(request.args.get('page_size', 50))
+    pagination, error = _parse_pagination()
+    if error:
+        return error
+    page, page_size = pagination
     status     = request.args.get('status')
     date_start = request.args.get('date_start')
     date_end   = request.args.get('date_end')
@@ -163,18 +193,24 @@ def get_cases():
     sort_order      = request.args.get('sort_order', 'desc')
     max_days        = request.args.get('max_days_since_purchase', type=int)
     exclude_no_sales = request.args.get('exclude_no_sales_series', '').lower() == 'true'
+    try:
+        id_filters = {
+            'model_ids': _ints('model_ids'),
+            'series_ids': _ints('series_ids'),
+            'category_ids': _ints('category_ids'),
+            'reason_ids': _ints('reason_ids'),
+            'reason_category_ids': _ints('reason_category_ids'),
+            'shipping_alias_ids': _ints('shipping_alias_ids'),
+        }
+    except ValueError as exc:
+        return Result.fail(str(exc)).to_response()
     return _svc.get_cases(
         page, page_size, status, date_start, date_end,
         reason_id, channel, province, city, district,
         reason_category, reason_name, shipping_alias,
         model_code, search, sort_by=sort_by, sort_order=sort_order,
         max_days_since_purchase=max_days,
-        model_ids=_ints('model_ids'),
-        series_ids=_ints('series_ids'),
-        category_ids=_ints('category_ids'),
-        reason_ids=_ints('reason_ids'),
-        reason_category_ids=_ints('reason_category_ids'),
-        shipping_alias_ids=_ints('shipping_alias_ids'),
+        **id_filters,
         channel_names=_strs('channel_names'),
         provinces=_strs('provinces'),
         cities=_strs('cities'),
@@ -284,11 +320,10 @@ def export_cases_download(task_id):
 
 @aftersale_bp.get('/cases/reasons')
 def get_cases_reasons():
-    ids_str = request.args.get('ids', '')
     try:
-        case_ids = [int(i) for i in ids_str.split(',') if i.strip()]
-    except ValueError:
-        case_ids = []
+        case_ids = _parse_id_list(request.args.get('ids', ''))
+    except ValueError as exc:
+        return Result.fail(str(exc)).to_response()
     return _svc.get_cases_reasons(case_ids).to_response()
 
 
@@ -441,7 +476,16 @@ def get_alias_affinity():
     alias_ids = body.get('alias_ids', [])
     if not reason_id or not alias_ids:
         return _svc.get_alias_affinity(None, []).to_response()
-    return _svc.get_alias_affinity(int(reason_id), [int(i) for i in alias_ids]).to_response()
+    if not isinstance(alias_ids, list) or len(alias_ids) > _MAX_BATCH_IDS:
+        return Result.fail(f'alias_ids 必须是数组且不能超过 {_MAX_BATCH_IDS} 个').to_response()
+    try:
+        parsed_reason_id = int(reason_id)
+        parsed_alias_ids = [int(item) for item in alias_ids]
+    except (TypeError, ValueError):
+        return Result.fail('reason_id 和 alias_ids 必须是正整数').to_response()
+    if parsed_reason_id < 1 or any(item < 1 for item in parsed_alias_ids):
+        return Result.fail('reason_id 和 alias_ids 必须是正整数').to_response()
+    return _svc.get_alias_affinity(parsed_reason_id, parsed_alias_ids).to_response()
 
 
 # ── 管理工具 ─────────────────────────────────────────────────────────────────

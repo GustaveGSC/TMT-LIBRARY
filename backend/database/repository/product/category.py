@@ -131,6 +131,21 @@ class CategoryRepository:
         return ProductModel.query.filter_by(model_code=model_code).first()
 
     @staticmethod
+    def get_model_reference_counts(model_id: int) -> dict:
+        """Return business references that would be orphaned by model deletion."""
+        from database.models.aftersale import AftersaleCaseReason
+        from database.models.product.finished import ProductFinished
+
+        return {
+            'finished_products': ProductFinished.query.filter_by(
+                model_id=model_id,
+            ).count(),
+            'aftersale_reasons': AftersaleCaseReason.query.filter_by(
+                model_id=model_id,
+            ).count(),
+        }
+
+    @staticmethod
     def create_model(series_id: int, code: str, name: str,
                      model_code: str = '', name_en: str = None,
                      sort_order: int = 0) -> ProductModel:

@@ -199,6 +199,11 @@ class CategoryService:
         obj = CategoryRepository.get_model(model_id)
         if not obj:
             return Result.fail('型号不存在')
+        references = CategoryRepository.get_model_reference_counts(model_id)
+        if references['finished_products'] or references['aftersale_reasons']:
+            return Result.fail(
+                '型号仍被成品或售后工单引用，不能删除；请先迁移关联数据'
+            )
         CategoryRepository.delete_model(obj)
         return Result.ok(message='删除成功')
 

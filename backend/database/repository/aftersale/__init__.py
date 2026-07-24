@@ -944,13 +944,19 @@ class AftersaleRepository:
         创建或更新工单（status→confirmed），批量写入 reasons。
         reasons_data: [{reason_id?, custom_reason?, model_id?, shipping_material_alias?, aftersale_material_alias?}]
         """
+        case = AftersaleCase.query.filter_by(ecommerce_order_no=order_no).first()
+        if case is not None and case.status == 'confirmed':
+            # POST /cases 是“确认待处理订单”。网络重试或重复点击必须直接
+            # 返回第一次确认的结果，不能再次累计关键词、简称和亲和度学习数据。
+            # 已确认工单的显式修改使用 PUT /cases/<id>。
+            return case
+
         # ── 初始化日志上下文 ──────────────────────────────
         import time as _time
         _t0 = _time.perf_counter()
         def _lap(label):
             print(f'[confirm_case] {label}: {(_time.perf_counter() - _t0)*1000:.1f}ms', flush=True)
 
-        self._active_log_ctx = None   # 先清空，confirm_case 执行完前通过 _upsert_dict_suggestion 填充
         log_ctx = {
             'timestamp':       now_cst().strftime('%Y-%m-%d %H:%M:%S'),
             'order_no':        order_no,
@@ -975,9 +981,6 @@ class AftersaleRepository:
             'keyword_learning': [],   # 每个原因的关键词晋升/抑制详情
             'dict_suggestions': [],   # 本次触发的词典建议
         }
-        self._active_log_ctx = log_ctx   # 供 _upsert_dict_suggestion 写入
-
-        case = AftersaleCase.query.filter_by(ecommerce_order_no=order_no).first()
         _lap('查询工单')
         is_new = case is None
         log_ctx['saved']['is_new'] = is_new
@@ -1115,7 +1118,7 @@ class AftersaleRepository:
         _lap('简称关键词学习(upsert_shipping_alias)')
         # 词典自动建议：检测过滤词候选（_upsert_dict_suggestion 内自动追加到 log_ctx）
         if products:
-            self._check_ignore_term_candidates(products)
+            self._check_ignore_term_candidates(products, log_ctx=log_ctx)
 
         _lap('过滤词候选检测(_check_ignore_term_candidates)')
         # 原因-简称亲和度：累积 reason_id + shipping_alias_id 共现次数
@@ -1125,7 +1128,6 @@ class AftersaleRepository:
         db.session.commit()
         _lap('db.commit')
 
-        self._active_log_ctx = None   # 清除，避免后续调用误用
         self._invalidate_case_vec_cache()  # 新工单录入后使历史向量缓存失效，下次匹配重建
         write_confirm_log(log_ctx)
         _lap('写日志文件(总耗时)')
@@ -1699,7 +1701,8 @@ class AftersaleRepository:
                     # 跨多个原因高频出现，疑似泛化词，建议加入停用词
                     self._upsert_dict_suggestion(
                         'stopword', kw,
-                        f'跨 {spread} 个原因候选池高频出现，疑似泛化词'
+                        f'跨 {spread} 个原因候选池高频出现，疑似泛化词',
+                        log_ctx=log_ctx,
                     )
                     if _log_reason is not None:
                         _log_reason['suppressed'].append({'keyword': kw, 'spread': spread})
@@ -1711,6 +1714,7 @@ class AftersaleRepository:
                         'promoted_keyword', kw,
                         f'已自动晋升至原因「{reason.name}」，可酌情归类为故障词或部件词',
                         meta={'reason_id': rid},
+                        log_ctx=log_ctx,
                     )
                     if _log_reason is not None:
                         _log_reason['promoted'].append(kw)
@@ -3604,12 +3608,13 @@ class AftersaleRepository:
         '半成品', '成品', '包材', '耗材', '工具',
     }
 
-    def _upsert_dict_suggestion(self, sug_type, value, reason_text, meta=None):
+    def _upsert_dict_suggestion(self, sug_type, value, reason_text, meta=None,
+                                log_ctx=None):
         """
         插入或更新词典建议记录（count+1）。
         已拒绝的建议不再重复触发；在调用方的 session 内执行，不独立 commit。
         meta: 附加 JSON 数据（synonym_candidate 存涉及的 reason_ids 等）。
-        若当前处于 confirm_case 流程中（_active_log_ctx 非空），同步写入日志上下文。
+        log_ctx 由当前确认流程显式传入；仓储单例不保存请求级可变状态。
         """
         existing = AftersaleDictSuggestion.query.filter_by(
             type=sug_type, value=value
@@ -3632,17 +3637,15 @@ class AftersaleRepository:
             ))
             action = 'new'
 
-        # 写入日志上下文（如果在 confirm_case 流程中）
-        ctx = getattr(self, '_active_log_ctx', None)
-        if ctx is not None:
-            ctx['dict_suggestions'].append({
+        if log_ctx is not None:
+            log_ctx['dict_suggestions'].append({
                 'type':   sug_type,
                 'value':  value,
                 'reason': reason_text,
                 'action': action,
             })
 
-    def _check_ignore_term_candidates(self, products):
+    def _check_ignore_term_candidates(self, products, log_ctx=None):
         """
         分析工单物料 token，对已知通用前缀词或极短词（≤2字）生成过滤词建议。
         随着工单积累，count 升高的建议自然浮出水面供用户审核。
@@ -3657,7 +3660,8 @@ class AftersaleRepository:
             if token in self._KNOWN_GENERIC_PREFIXES or len(token) <= 2:
                 self._upsert_dict_suggestion(
                     'ignore_term', token,
-                    '物料名中的通用前缀词，建议加入过滤词以提升简称匹配精度'
+                    '物料名中的通用前缀词，建议加入过滤词以提升简称匹配精度',
+                    log_ctx=log_ctx,
                 )
 
     def _upsert_reason_alias_affinity(self, reasons_data):
