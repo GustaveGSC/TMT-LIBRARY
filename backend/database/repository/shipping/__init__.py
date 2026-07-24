@@ -25,6 +25,9 @@ class ShippingTaskLeaseConflict(Exception):
         self.task_id = task_id
 
 
+CANCELLABLE_TASK_TYPES = frozenset({'import_shipping', 'import_finance'})
+
+
 def _get_ftp_finished_codes() -> set:
     """返回所有属于 FTP 系列（code LIKE '%-FTP'）的 finished_code 集合，带缓存。"""
     global _ftp_codes_cache, _ftp_codes_cache_at
@@ -189,6 +192,93 @@ class ShippingRepository:
             )
 
     @staticmethod
+    def request_task_cancel(task_id: str, requested_by: int):
+        """
+        原子登记取消请求。
+
+        返回 (outcome, task_snapshot)，outcome 为：
+        requested/already_requested/not_found/unsupported/committing/finished。
+        """
+        now = now_cst()
+        table = ShippingTask.__table__
+        with db.engine.begin() as connection:
+            result = connection.execute(
+                db.update(table)
+                .where(
+                    table.c.id == task_id,
+                    table.c.task_type.in_(CANCELLABLE_TASK_TYPES),
+                    table.c.status.in_(('pending', 'running')),
+                    table.c.cancel_requested_at.is_(None),
+                )
+                .values(
+                    cancel_requested_at=now,
+                    cancel_requested_by=requested_by,
+                    updated_at=now,
+                )
+            )
+            row = connection.execute(
+                db.select(
+                    table.c.id,
+                    table.c.task_type,
+                    table.c.status,
+                    table.c.cancel_requested_at,
+                ).where(table.c.id == task_id)
+            ).mappings().one_or_none()
+
+        if row is None:
+            return 'not_found', None
+        snapshot = {
+            'task_id': row['id'],
+            'task_type': row['task_type'],
+            'status': row['status'],
+            'cancel_requested': row['cancel_requested_at'] is not None,
+            'cancellable': (
+                row['task_type'] in CANCELLABLE_TASK_TYPES
+                and row['status'] in ('pending', 'running')
+                and row['cancel_requested_at'] is None
+            ),
+        }
+        if result.rowcount == 1:
+            return 'requested', snapshot
+        if row['task_type'] not in CANCELLABLE_TASK_TYPES:
+            return 'unsupported', snapshot
+        if row['status'] == 'committing':
+            return 'committing', snapshot
+        if row['status'] not in ('pending', 'running'):
+            return 'finished', snapshot
+        return 'already_requested', snapshot
+
+    @staticmethod
+    def is_cancel_requested(task_id: str) -> bool:
+        """独立短事务读取取消请求，供 A2 的业务长事务检查。"""
+        table = ShippingTask.__table__
+        with db.engine.connect() as connection:
+            value = connection.execute(
+                db.select(table.c.cancel_requested_at).where(table.c.id == task_id)
+            ).scalar_one_or_none()
+        return value is not None
+
+    @staticmethod
+    def try_begin_commit(task_id: str) -> bool:
+        """
+        与取消请求竞争最终提交权。
+
+        仅当任务仍活跃且尚未请求取消时，原子切换到 committing。
+        """
+        table = ShippingTask.__table__
+        with db.engine.begin() as connection:
+            result = connection.execute(
+                db.update(table)
+                .where(
+                    table.c.id == task_id,
+                    table.c.status.in_(('pending', 'running')),
+                    table.c.cancel_requested_at.is_(None),
+                )
+                .values(status='committing', updated_at=now_cst())
+            )
+        return result.rowcount == 1
+
+    @staticmethod
     def get_task(task_id: str):
         # SSE 轮询必须每次开启新事务，否则 MySQL REPEATABLE READ 会看不到终态。
         db.session.remove()
@@ -205,10 +295,10 @@ class ShippingRepository:
         with db.engine.begin() as connection:
             result = connection.execute(
                 db.update(ShippingTask)
-                .where(ShippingTask.status.in_(('pending', 'running')))
+                .where(ShippingTask.status.in_(('pending', 'running', 'committing')))
                 .values(
                     status='interrupted',
-                    message='任务因服务重启或重载中断；导入业务数据已由事务回滚',
+                    message='任务因服务重启或重载中断',
                     updated_at=now,
                     finished_at=now,
                     lease_key=None,

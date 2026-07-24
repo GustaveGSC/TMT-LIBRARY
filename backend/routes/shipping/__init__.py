@@ -182,14 +182,37 @@ def import_finance():
 
 @shipping_bp.post('/import/cancel/<task_id>')
 def cancel_import(task_id):
-    """设置取消标志，后台线程将在下一个 progress_cb 时中止"""
-    task = shipping_repository.get_task(task_id)
-    if not task:
+    """旧客户端兼容入口，转发到统一持久化取消协议。"""
+    return _cancel_task_response(task_id)
+
+
+@shipping_bp.post('/tasks/<task_id>/cancel')
+def cancel_task(task_id):
+    """原子登记持久化取消请求；worker 在安全检查点进入 cancelled。"""
+    return _cancel_task_response(task_id)
+
+
+def _cancel_task_response(task_id):
+    outcome, task = shipping_repository.request_task_cancel(
+        task_id,
+        requested_by=g.current_user.get('id'),
+    )
+    if outcome == 'not_found':
         return Result.fail('任务不存在').to_response(404)
-    if task.status not in ('pending', 'running'):
-        return Result.fail('任务已经结束，无法取消').to_response()
+    if outcome == 'unsupported':
+        return Result.fail('该任务暂不支持取消', data=task).to_response()
+    if outcome == 'committing':
+        return Result.fail(
+            '任务正在提交最终结果，已无法取消',
+            data=task,
+        ).to_response(409)
+    if outcome == 'finished':
+        return Result.fail('任务已经结束，无法取消', data=task).to_response()
+
+    # A1/A2 过渡兼容：旧 worker 仍读取内存标志；持久化字段是唯一对外事实来源。
     _cancel_flags[task_id] = True
-    return Result.ok(message='已发送中止信号').to_response()
+    message = '已发送取消请求'
+    return Result.ok(data=task, message=message).to_response()
 
 
 @shipping_bp.get('/import/progress/<task_id>')

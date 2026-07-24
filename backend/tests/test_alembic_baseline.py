@@ -19,7 +19,8 @@ GUEST_REMOVAL_REVISION = '20260723_01'
 PERMISSION_DOMAIN_REVISION = '20260723_02'
 SHIPPING_TASK_LEASE_REVISION = '20260724_01'
 LIFECYCLE_TASK_REVISION = '20260724_02'
-HEAD_REVISION = LIFECYCLE_TASK_REVISION
+SHIPPING_CANCEL_REVISION = '20260724_03'
+HEAD_REVISION = SHIPPING_CANCEL_REVISION
 CRITICAL_INDEXES = {
     'shipping_order_finished': {
         'ix_sof_source',
@@ -60,6 +61,10 @@ def test_baseline_has_linear_history_and_task_lease_is_the_only_head():
     assert (
         scripts.get_revision(LIFECYCLE_TASK_REVISION).down_revision
         == SHIPPING_TASK_LEASE_REVISION
+    )
+    assert (
+        scripts.get_revision(SHIPPING_CANCEL_REVISION).down_revision
+        == LIFECYCLE_TASK_REVISION
     )
 
 
@@ -179,6 +184,8 @@ def test_baseline_upgrade_adds_only_task_schemas(tmp_path, monkeypatch):
         for constraint in inspector.get_unique_constraints('shipping_task')
     }
     assert 'lease_key' in shipping_task_columns
+    assert 'cancel_requested_at' in shipping_task_columns
+    assert 'cancel_requested_by' in shipping_task_columns
     assert ('lease_key',) in shipping_task_uniques
     lifecycle_task_columns = {
         column['name']
