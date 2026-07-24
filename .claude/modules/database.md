@@ -388,13 +388,17 @@ cost_column_alias                          # Excel 列名映射（key → aliase
 
 - 主键 `id` 为接口返回的 UUID task_id。
 - `task_type`: `import_shipping | import_finance | resolve_all | resolve_stale`。
-- `status`: `pending | running | done | error | cancelled | interrupted`。
+- `status`: `pending | running | committing | done | error | cancelled | interrupted`。
 - `progress`、`result` 为 JSON；不保存上传文件内容。
 - 终态保留 7 天，由创建新任务时顺带清理。
-- 新 worker 启动时把上一进程遗留的 pending/running 标记为 interrupted。
+- 新 worker 启动时把上一进程遗留的 pending/running/committing 标记为 interrupted。
 - 导入业务数据使用单一事务；任务状态通过独立连接提交，不能提交业务 session。
 - `lease_key` 为空或固定为 `shipping_data_mutation`；唯一约束保证发货导入、财务导入、
   全量重算和旧数据重算任一时刻只能运行一个。任务进入终态或启动恢复将其清空。
+- `cancel_requested_at`/`cancel_requested_by` 持久化记录取消请求；取消请求本身不释放租约。
+- 当前只有 `import_shipping`/`import_finance` 支持取消；重算任务在 staging/cutover 上线前明确拒绝。
+- worker 最终提交前用 CAS 从 running 切到 committing，且要求 `cancel_requested_at IS NULL`；
+  取消和提交只有一个能成功，committing 后接口返回409。
 
 `product_lifecycle_task` 独立保存产品生命周期更新任务，不与发货任务表混用：
 

@@ -169,9 +169,13 @@ POST   /api/shipping/import/finance                   # 上传财务清单（财
                                                       #   独立销退清单接口已废弃，销退数据统一通过财务清单负数量行导入
                                                       #   Excel/CSV 单文件 20MB、解压后 100MB、最多 50 sheet/100000 行
 GET    /api/shipping/tasks/:task_id                   # 后台任务统一短轮询入口（需 shipping 权限，建议 1-2 秒间隔，Cache-Control:no-store）
+POST   /api/shipping/tasks/:task_id/cancel            # shipping:edit；持久化、幂等地请求取消
+                                                      # 仅 import_shipping/import_finance 支持；成功 data 含
+                                                      # task_id/task_type/status/cancel_requested/cancellable
+                                                      # 不存在404；不支持/已结束400；committing阶段409
 GET    /api/shipping/import/status/:task_id           # 兼容旧客户端，响应同 /tasks/:task_id
 GET    /api/shipping/import/progress/:task_id         # 已废弃 SSE 兼容入口；新客户端禁止使用，单 sync worker 会被长连接占用
-POST   /api/shipping/import/cancel/:task_id           # 发送中止信号，后台完成当前 chunk 后 rollback
+POST   /api/shipping/import/cancel/:task_id           # 旧取消入口，转发到 /tasks/:task_id/cancel
 GET    /api/shipping/operators                        # 获取所有最近操作人及其分类
 POST   /api/shipping/operators/classify               # 批量保存操作人分类 [{operator, type}]
 GET    /api/shipping/stats                            # 统计摘要

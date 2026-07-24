@@ -41,6 +41,8 @@ class ShippingTask(db.Model):
     result      = db.Column(db.JSON,        nullable=True)
     message     = db.Column(db.Text,        nullable=True)
     lease_key   = db.Column(db.String(64),  nullable=True)
+    cancel_requested_at = db.Column(db.DateTime, nullable=True)
+    cancel_requested_by = db.Column(db.Integer,  nullable=True)
     created_at  = db.Column(db.DateTime,    nullable=False, default=now_cst)
     updated_at  = db.Column(db.DateTime,    nullable=False, default=now_cst, onupdate=now_cst)
     finished_at = db.Column(db.DateTime,    nullable=True)
@@ -54,6 +56,16 @@ class ShippingTask(db.Model):
             'progress': self.progress or {},
             'result': self.result,
             'message': self.message or '',
+            'cancel_requested': self.cancel_requested_at is not None,
+            'cancel_requested_at': (
+                self.cancel_requested_at.strftime('%Y-%m-%d %H:%M:%S')
+                if self.cancel_requested_at else None
+            ),
+            'cancellable': (
+                self.task_type in ('import_shipping', 'import_finance')
+                and self.status in ('pending', 'running')
+                and self.cancel_requested_at is None
+            ),
             'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
             'updated_at': self.updated_at.strftime('%Y-%m-%d %H:%M:%S') if self.updated_at else None,
             'finished_at': self.finished_at.strftime('%Y-%m-%d %H:%M:%S') if self.finished_at else None,
