@@ -17,7 +17,9 @@ ORDER_ALIAS_REVISION = '20260721_03'
 MAPPING_STATUS_REVISION = '20260721_04'
 GUEST_REMOVAL_REVISION = '20260723_01'
 PERMISSION_DOMAIN_REVISION = '20260723_02'
-HEAD_REVISION = '20260724_01'
+SHIPPING_TASK_LEASE_REVISION = '20260724_01'
+LIFECYCLE_TASK_REVISION = '20260724_02'
+HEAD_REVISION = LIFECYCLE_TASK_REVISION
 CRITICAL_INDEXES = {
     'shipping_order_finished': {
         'ix_sof_source',
@@ -51,7 +53,14 @@ def test_baseline_has_linear_history_and_task_lease_is_the_only_head():
     assert scripts.get_revision(MAPPING_STATUS_REVISION).down_revision == ORDER_ALIAS_REVISION
     assert scripts.get_revision(GUEST_REMOVAL_REVISION).down_revision == MAPPING_STATUS_REVISION
     assert scripts.get_revision(PERMISSION_DOMAIN_REVISION).down_revision == GUEST_REMOVAL_REVISION
-    assert scripts.get_revision(HEAD_REVISION).down_revision == PERMISSION_DOMAIN_REVISION
+    assert (
+        scripts.get_revision(SHIPPING_TASK_LEASE_REVISION).down_revision
+        == PERMISSION_DOMAIN_REVISION
+    )
+    assert (
+        scripts.get_revision(LIFECYCLE_TASK_REVISION).down_revision
+        == SHIPPING_TASK_LEASE_REVISION
+    )
 
 
 def test_performance_critical_production_indexes_are_declared_in_metadata():
@@ -141,7 +150,7 @@ def test_alembic_comment_plugin_is_disabled_but_structure_plugins_remain_enabled
     assert {'types', 'indexes', 'foreignkeys', 'nullable'} <= comparator_labels
 
 
-def test_baseline_upgrade_adds_only_shipping_task_schema(tmp_path, monkeypatch):
+def test_baseline_upgrade_adds_only_task_schemas(tmp_path, monkeypatch):
     database_path = tmp_path / 'existing.db'
     database_url = f'sqlite:///{database_path.as_posix()}'
     engine = sa.create_engine(database_url)
@@ -157,7 +166,10 @@ def test_baseline_upgrade_adds_only_shipping_task_schema(tmp_path, monkeypatch):
     after_upgrade = set(sa.inspect(engine).get_table_names())
 
     assert before_upgrade == {'alembic_version', 'existing_business_data'}
-    assert after_upgrade == before_upgrade | {'shipping_task'}
+    assert after_upgrade == before_upgrade | {
+        'shipping_task',
+        'product_lifecycle_task',
+    }
     inspector = sa.inspect(engine)
     shipping_task_columns = {
         column['name'] for column in inspector.get_columns('shipping_task')
@@ -168,6 +180,16 @@ def test_baseline_upgrade_adds_only_shipping_task_schema(tmp_path, monkeypatch):
     }
     assert 'lease_key' in shipping_task_columns
     assert ('lease_key',) in shipping_task_uniques
+    lifecycle_task_columns = {
+        column['name']
+        for column in inspector.get_columns('product_lifecycle_task')
+    }
+    lifecycle_task_uniques = {
+        tuple(constraint['column_names'])
+        for constraint in inspector.get_unique_constraints('product_lifecycle_task')
+    }
+    assert 'lease_key' in lifecycle_task_columns
+    assert ('lease_key',) in lifecycle_task_uniques
     with engine.connect() as connection:
         current = MigrationContext.configure(connection).get_current_revision()
     assert current == HEAD_REVISION

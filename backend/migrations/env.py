@@ -44,6 +44,7 @@ import database.models.product.category  # noqa: E402,F401
 import database.models.product.erp_code_rules  # noqa: E402,F401
 import database.models.product.finished  # noqa: E402,F401
 import database.models.product.import_raw  # noqa: E402,F401
+import database.models.product.lifecycle  # noqa: E402,F401
 import database.models.product.param  # noqa: E402,F401
 import database.models.product.resource  # noqa: E402,F401
 

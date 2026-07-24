@@ -100,11 +100,20 @@ def create_app() -> Flask:
     from routes.product.resource import resource_bp
     from routes.config import config_bp
     from database.repository.shipping import shipping_repository
+    from database.repository.product.lifecycle import product_lifecycle_task_repository
 
     with app.app_context():
         interrupted_tasks = shipping_repository.interrupt_running_tasks()
         if interrupted_tasks:
             print(f'[task] 已标记 {interrupted_tasks} 个上次进程遗留任务为 interrupted', flush=True)
+        interrupted_lifecycle_tasks = (
+            product_lifecycle_task_repository.interrupt_running_tasks()
+        )
+        if interrupted_lifecycle_tasks:
+            print(
+                f'[task] 已标记 {interrupted_lifecycle_tasks} 个生命周期任务为 interrupted',
+                flush=True,
+            )
 
     app.register_blueprint(account_bp,        url_prefix="/api/account")
     app.register_blueprint(version_bp,        url_prefix="/api/version")

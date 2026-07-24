@@ -133,6 +133,11 @@ def test_global_request_limit_returns_standard_413(monkeypatch):
         'database.repository.shipping.shipping_repository.interrupt_running_tasks',
         lambda: recovery_contexts.append(has_app_context()) or 0,
     )
+    monkeypatch.setattr(
+        'database.repository.product.lifecycle.'
+        'product_lifecycle_task_repository.interrupt_running_tasks',
+        lambda: recovery_contexts.append(has_app_context()) or 0,
+    )
     monkeypatch.setattr('threading.Thread.start', lambda _thread: None)
     application = app_module.create_app()
 
@@ -153,4 +158,4 @@ def test_global_request_limit_returns_standard_413(monkeypatch):
         'success': False,
         'message': '请求体不能超过 1MB',
     }
-    assert recovery_contexts == [True]
+    assert recovery_contexts == [True, True]

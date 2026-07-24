@@ -131,57 +131,8 @@ def update_lifecycle(progress_cb=None) -> dict:
     aftersale_rows = db.session.query(ShippingOperatorType.operator).filter_by(type='aftersale').all()
     aftersale_set = {row[0] for row in aftersale_rows}
 
-    # ── Step 2a: 按 model_id 取发货数据首尾月份 ───────────────────────────
-    agg_query = (
-        db.session.query(
-            ProductFinished.model_id,
-            func.min(func.date_format(ShippingOrderFinished.shipped_date, '%Y-%m')).label('first_month'),
-            func.max(func.date_format(ShippingOrderFinished.shipped_date, '%Y-%m')).label('last_month'),
-        )
-        .join(ShippingOrderFinished,
-              ShippingOrderFinished.finished_code == ProductFinished.code)
-        .filter(
-            ProductFinished.status == 'recorded',
-            ProductFinished.model_id.isnot(None),
-            ShippingOrderFinished.shipped_date.isnot(None),
-        )
-    )
-    # 仅当存在售后操作人时才加过滤，避免 NOT IN () 的边界问题
-    if aftersale_set:
-        agg_query = agg_query.filter(
-            ShippingOrderFinished.operator.notin_(aftersale_set)
-        )
-    agg_query = agg_query.group_by(ProductFinished.model_id)
-
-    shipping_by_model = {row.model_id: (row.first_month, row.last_month) for row in agg_query.all()}
-
-    # ── Step 2b: 取每个 model_id 的全部发货月份（用于孤立尾部检测）─────────
-    months_query = (
-        db.session.query(
-            ProductFinished.model_id,
-            func.date_format(ShippingOrderFinished.shipped_date, '%Y-%m').label('month'),
-        )
-        .join(ShippingOrderFinished,
-              ShippingOrderFinished.finished_code == ProductFinished.code)
-        .filter(
-            ProductFinished.status == 'recorded',
-            ProductFinished.model_id.isnot(None),
-            ShippingOrderFinished.shipped_date.isnot(None),
-        )
-    )
-    if aftersale_set:
-        months_query = months_query.filter(
-            ShippingOrderFinished.operator.notin_(aftersale_set)
-        )
-    months_query = months_query.distinct()
-
-    months_by_model: dict[int, list[str]] = {}
-    for row in months_query.all():
-        months_by_model.setdefault(row.model_id, []).append(row.month)
-    for mid in months_by_model:
-        months_by_model[mid].sort()
-
-    # ── Step 2c: 按 model_id 和月份汇总发货数量（用于重新上市判断）──────────
+    # ── Step 2: 一次查询取得每个型号的月度数量 ─────────────────────────────
+    # 首尾月份和月份集合均可从这份结果推导，避免对 66 万行派生表重复 JOIN/聚合。
     qty_query = (
         db.session.query(
             ProductFinished.model_id,
@@ -190,11 +141,15 @@ def update_lifecycle(progress_cb=None) -> dict:
         )
         .join(ShippingOrderFinished,
               ShippingOrderFinished.finished_code == ProductFinished.code)
+        .with_hint(
+            ShippingOrderFinished,
+            'USE INDEX (ix_sof_finished_code_date)',
+            dialect_name='mysql',
+        )
         .filter(
             ProductFinished.status == 'recorded',
             ProductFinished.model_id.isnot(None),
             ShippingOrderFinished.shipped_date.isnot(None),
-            ShippingOrderFinished.quantity.isnot(None),
         )
     )
     if aftersale_set:
@@ -204,14 +159,19 @@ def update_lifecycle(progress_cb=None) -> dict:
     qty_query = qty_query.group_by(ProductFinished.model_id,
                                    func.date_format(ShippingOrderFinished.shipped_date, '%Y-%m'))
 
-    # qty_by_model[model_id][month] = total_qty
+    shipping_by_model: dict[int, tuple[str, str]] = {}
+    months_by_model: dict[int, list[str]] = {}
     qty_by_model: dict[int, dict[str, float]] = {}
     for row in qty_query.all():
         qty_by_model.setdefault(row.model_id, {})[row.month] = float(row.total_qty or 0)
+    for model_id, qty_by_month in qty_by_model.items():
+        months = sorted(qty_by_month)
+        months_by_model[model_id] = months
+        shipping_by_model[model_id] = (months[0], months[-1])
 
     # ── Step 3: 一次性加载所有需要处理的成品，按 model_id 分组（避免 N+1）──
     all_finished = (
-        ProductFinished.query
+        db.session.query(ProductFinished)
         .filter(ProductFinished.status == 'recorded', ProductFinished.model_id.isnot(None))
         .all()
     )
@@ -229,7 +189,9 @@ def update_lifecycle(progress_cb=None) -> dict:
 
     # ── Step 5: 按型号逐一处理 ────────────────────────────────────────────
     for idx, model_id in enumerate(all_model_ids):
-        if progress_cb:
+        if progress_cb and (
+            idx == 0 or idx + 1 == total_models or (idx + 1) % 10 == 0
+        ):
             progress_cb('processing', current=idx + 1, total=total_models)
 
         finished_list = finished_by_model.get(model_id, [])
@@ -294,7 +256,7 @@ def update_lifecycle(progress_cb=None) -> dict:
                 pf.updated_at = _now_cst()
                 updated_count += 1
 
-        # 每个型号提交一次，避免单事务过大超时
-        db.session.commit()
+    # 型号元数据规模远小于订单明细，一次提交保证失败时不留下半更新状态。
+    db.session.commit()
 
     return {'updated': updated_count, 'total_models': total_models}
