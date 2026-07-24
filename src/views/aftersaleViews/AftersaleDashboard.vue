@@ -1,9 +1,10 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue' // nextTick 仍用于 drillDown/drillBack
-import { ArrowDown, ArrowLeft, ArrowRight, Setting } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowLeft, ArrowRight, Setting, Close } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import http from '@/api/http.js'
+import { useResponsiveLayout } from '@/composables/useResponsiveLayout'
 import iconProduct  from '@/assets/icons/btn_product.png'
 import iconReason   from '@/assets/icons/btn_reason.png'
 import iconMaterial from '@/assets/icons/btn_material.png'
@@ -77,7 +78,13 @@ const available = ref({
 })
 
 const loadingOpts         = ref(false)
-const filterCollapsed     = ref(false)
+const filterCollapsed     = ref(false) // 宽屏/标准桌面：收起筛选栏为窄条（保留原有行为）
+const filterDrawerOpen    = ref(false) // 紧凑布局（<1200px）：筛选栏改为抽屉，独立于上面的收起状态
+
+// 窄桌面/平板/手机紧凑布局：筛选栏改抽屉、工具栏换行。
+// 与 filterCollapsed（宽屏下的"收起为窄条"功能）是两套不同的 UI 语义，不复用同一个 ref，
+// 详见 handoff/2026-07-24-codex-shipping-responsive-rereview.md 对"不要机械复制"的要求。
+const { isCompactOrBelow: isCompactLayout } = useResponsiveLayout()
 // 无同期发货数据处理模式：all=全显示 | hide=隐藏但不影响占比计算 | exclude=从所有计算中剔除
 const noSalesMode         = ref('all')
 // 原因维度跳过分类级别，直接进入具体原因视图
@@ -1126,12 +1133,26 @@ defineExpose({ refresh })
 <template>
   <div class="dashboard-root">
 
+    <!-- 紧凑布局遮罩：点击关闭筛选抽屉（<1200px 时筛选栏是抽屉，含手机端） -->
+    <transition name="fade">
+      <div v-if="isCompactLayout && filterDrawerOpen" class="filter-backdrop" @click="filterDrawerOpen = false" />
+    </transition>
+
     <!-- ── 左侧筛选面板 ──────────────────────────── -->
-    <aside class="filter-panel" :class="{ 'is-collapsed': filterCollapsed }">
+    <aside
+      class="filter-panel"
+      data-testid="aftersale-filter-panel"
+      :class="{ 'is-collapsed': filterCollapsed && !isCompactLayout, 'is-open': filterDrawerOpen }"
+    >
+      <!-- 紧凑布局关闭按钮 -->
+      <button v-if="isCompactLayout" class="filter-close-btn" @click="filterDrawerOpen = false">
+        <el-icon><Close /></el-icon>
+        关闭筛选
+      </button>
 
       <!-- 查询 + 设置 -->
       <div class="panel-top-btns">
-        <button class="btn-query" :disabled="loadingChart" @click="handleQuery">
+        <button class="btn-query" :disabled="loadingChart" @click="handleQuery(); filterDrawerOpen = false">
           {{ loadingChart ? '查询中…' : '查询' }}
         </button>
         <button class="btn-settings" title="分组">
@@ -1333,7 +1354,19 @@ defineExpose({ refresh })
       <!-- 顶部工具栏：左=面包屑 / 中=空 / 右=空 -->
       <div class="chart-toolbar">
         <div class="ct-left">
-          <button class="btn-collapse" :title="filterCollapsed ? '展开筛选' : '收起筛选'" @click="filterCollapsed = !filterCollapsed">
+          <!-- 紧凑布局：抽屉触发按钮；宽屏/标准桌面：收起为窄条的折叠按钮 -->
+          <button
+            v-if="isCompactLayout"
+            class="ct-filter-btn"
+            data-testid="aftersale-filter-toggle"
+            @click="filterDrawerOpen = true"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15">
+              <path d="M3 6h18M6 12h12M9 18h6"/>
+            </svg>
+            筛选
+          </button>
+          <button v-else class="btn-collapse" :title="filterCollapsed ? '展开筛选' : '收起筛选'" @click="filterCollapsed = !filterCollapsed">
             <el-icon><ArrowLeft v-if="!filterCollapsed" /><ArrowRight v-else /></el-icon>
           </button>
           <div class="drill-breadcrumb">
@@ -1368,7 +1401,7 @@ defineExpose({ refresh })
       </div>
 
       <!-- 图表 -->
-      <div v-loading="loadingChart" class="chart-wrap">
+      <div v-loading="loadingChart" class="chart-wrap" data-testid="aftersale-chart">
         <div v-if="!loadingChart && !chartData?.items?.length" class="chart-empty">暂无数据</div>
         <div ref="chartEl" class="chart-canvas"></div>
       </div>
@@ -1490,6 +1523,32 @@ defineExpose({ refresh })
 }
 .btn-reset:hover { border-color: var(--accent); color: var(--accent); }
 
+/* ── 紧凑布局筛选抽屉（<1200px，与宽屏 filterCollapsed 收起为窄条是两套独立机制）── */
+.ct-filter-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 30px; padding: 0 10px;
+  border: 1px solid var(--border); border-radius: 7px;
+  background: var(--bg-card); color: var(--text-muted);
+  font-size: 12px; font-family: inherit; cursor: pointer;
+  transition: all 0.15s; white-space: nowrap; flex-shrink: 0; margin-right: 6px;
+}
+.ct-filter-btn:hover { border-color: var(--accent); color: var(--accent); }
+.filter-close-btn {
+  display: none;
+  width: 100%; align-items: center; gap: 6px;
+  padding: 14px 16px 10px;
+  border: none; background: transparent;
+  color: var(--text-muted); font-size: 13px; font-family: inherit;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 5px;
+}
+.filter-backdrop {
+  display: none;
+}
+.fade-enter-active, .fade-leave-active { transition: opacity 0.22s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+
 /* ── 右侧内容区 ───────────────────────────────── */
 .content-panel { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 5px; overflow: hidden; padding-top: 5px; }
 
@@ -1587,4 +1646,66 @@ defineExpose({ refresh })
 .gb-btn:hover .gb-label { color: #000; }
 .gb-btn.active .gb-label { color: #c4883a; font-weight: 500; }
 
+/* 紧凑布局：compact(900~1199) + tablet(600~899) + mobile(<600) 共用同一套抽屉/换行规则，
+   断点数值须与 src/utils/responsiveBreakpoints.js 的 BREAKPOINTS.standard(1200) 保持一致。
+   content-panel/chart-wrap 只在这一处声明，不要在本 @media 块内重复写第二处——
+   ShippingDashboard 试点第一次返工就是因为同一块内两处声明互相覆盖，
+   见 handoff/2026-07-24-codex-shipping-responsive-review.md */
+@media (max-width: 1199px) {
+  .filter-backdrop {
+    display: block;
+    position: fixed; inset: 0; z-index: 199;
+    background: rgba(0,0,0,0.35);
+  }
+
+  .filter-panel {
+    position: fixed; z-index: 200;
+    left: 0; top: 0; bottom: 0;
+    width: 82%; max-width: 320px;
+    transform: translateX(-100%);
+    transition: transform 0.28s ease;
+    background: var(--bg);
+    box-shadow: 4px 0 24px rgba(0,0,0,0.14);
+    overflow-y: auto; overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    padding: 0 10px 24px;
+  }
+  .filter-panel.is-open { transform: translateX(0); }
+
+  .filter-close-btn {
+    display: flex;
+    margin: 0 -10px 5px;
+    width: calc(100% + 20px);
+  }
+
+  /* content-panel：toolbar(auto) + chart(minmax(220px,1fr)) + bottom-bar(auto)，
+     超出可用高度时整体纵向滚动，不依赖全局 overflow:hidden 裁切 */
+  .content-panel {
+    display: grid;
+    grid-template-rows: auto minmax(220px, 1fr) auto;
+    grid-template-columns: 1fr;
+    gap: 6px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    min-height: 0;
+    padding-top: 0;
+  }
+  .chart-wrap { min-height: 220px; }
+
+  /* 工具栏换行：筛选按钮+面包屑独占一行，维度按钮横向滚动，查看数据按钮换到第二行 */
+  .chart-toolbar {
+    height: auto;
+    flex-wrap: wrap;
+    row-gap: 6px; column-gap: 4px;
+    padding: 2px 0 4px;
+  }
+  .ct-left   { order: 1; flex: 1 0 auto; min-width: 0; }
+  .ct-center { order: 3; flex: 0 0 100%; overflow-x: auto; }
+  .ct-right  { order: 2; flex: 0 0 auto; }
+  .footer-dims { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; }
+
+  /* 图表底部控制栏：两组控件换行，避免挤在一行导致文字重叠 */
+  .chart-bottom-bar { flex-wrap: wrap; gap: 6px; }
+}
 </style>
