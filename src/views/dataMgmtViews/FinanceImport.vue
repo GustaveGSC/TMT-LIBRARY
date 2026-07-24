@@ -1,9 +1,9 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
-import { ref } from 'vue'
+import { ref, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import http, { getBaseURL } from '@/api/http'
-import { recoverShippingTaskAfterSseError } from '@/utils/shippingTaskRecovery'
+import http from '@/api/http'
+import { pollShippingTask } from '@/utils/shippingTaskPoll'
 import { getConflictTaskId } from '@/utils/taskConflict'
 
 // ── 响应式状态 ────────────────────────────────────
@@ -100,8 +100,15 @@ function handleEvent(data) {
   }
 }
 
+let activePoller = null
+onUnmounted(() => {
+  activePoller?.stop()
+})
+
 async function doImport() {
   if (!file.value) { ElMessage.warning('请先选择文件'); return }
+  activePoller?.stop()
+  activePoller = null
   loading.value       = true
   isCancelling.value  = false
   currentTaskId.value = ''
@@ -128,31 +135,23 @@ async function doImport() {
     progress.value = conflictTaskId ? progress.value : 5
 
     await new Promise((resolve, reject) => {
-      let es
-      function handleData(data) {
-        handleEvent(data)
-        if (data.step === 'done') {
-          result.value = data.data
-          es?.close()
-          resolve()
-        } else if (data.step === 'cancelled') {
-          wasCancelled = true
-          es?.close()
-          resolve()
-        } else if (data.step === 'error') {
-          es?.close()
-          reject(new Error(data.message || '导入失败'))
-        }
-      }
-      function connect() {
-        es = new EventSource(`${getBaseURL()}/api/shipping/import/progress/${currentTaskId.value}`)
-        es.onmessage = (event) => handleData(JSON.parse(event.data))
-        es.onerror = () => {
-          es.close()
-          recoverShippingTaskAfterSseError(currentTaskId.value, { onEvent: handleData, retry: connect })
-        }
-      }
-      connect()
+      activePoller = pollShippingTask(currentTaskId.value, {
+        onEvent(data) {
+          handleEvent(data)
+          if (data.step === 'done') {
+            result.value = data.data
+            activePoller?.stop()
+            resolve()
+          } else if (data.step === 'cancelled') {
+            wasCancelled = true
+            activePoller?.stop()
+            resolve()
+          } else if (data.step === 'error') {
+            activePoller?.stop()
+            reject(new Error(data.message || '导入失败'))
+          }
+        },
+      })
     })
 
     if (wasCancelled) {
@@ -164,6 +163,8 @@ async function doImport() {
   } catch (e) {
     showError(e.message)
   } finally {
+    activePoller?.stop()
+    activePoller = null
     loading.value       = false
     isCancelling.value  = false
     currentTaskId.value = ''

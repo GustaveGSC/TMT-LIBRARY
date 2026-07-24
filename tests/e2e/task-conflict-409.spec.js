@@ -8,6 +8,7 @@ import { mockDataMgmtPage } from './fixtures/dataMgmt.js'
 // handoff/2026-07-24-claude-handoff-26.md 前端协作项第3条）。
 // "刷新全局数据"已在财务导入工作流A批改名为"重建全部成品组合"，并从顶部常驻
 // 按钮移到"数据配置→高级操作"tab，见 handoff/2026-07-24-claude-handoff-30.md。
+// D批(handoff-33)把进度查看从 SSE 改成对 /api/shipping/tasks/<id> 的短轮询。
 
 const RUNNING_TASK_ID = 'existing-task-id-123'
 
@@ -25,15 +26,23 @@ test('resolve-all 遇到 409 时展示后端文案并接入已有任务的进度
     })
   )
 
-  let progressTaskId = null
-  await page.route('**/api/shipping/import/progress/*', async (route) => {
+  let polledTaskId = null
+  await page.route('**/api/shipping/tasks/*', async (route) => {
     const url = new URL(route.request().url())
-    progressTaskId = url.pathname.split('/').pop()
-    // SSE 响应：直接推一条 done 事件后结束流
+    polledTaskId = url.pathname.split('/').pop()
     await route.fulfill({
-      status: 200,
-      contentType: 'text/event-stream',
-      body: `data: ${JSON.stringify({ step: 'done', data: { resolved: 42 } })}\n\n`,
+      json: {
+        success: true,
+        message: '',
+        data: {
+          task_id: polledTaskId,
+          task_type: 'resolve_all',
+          status: 'done',
+          progress: { step: 'done' },
+          result: { resolved: 42 },
+          message: '',
+        },
+      },
     })
   })
 
@@ -49,5 +58,5 @@ test('resolve-all 遇到 409 时展示后端文案并接入已有任务的进度
   await expect(page.getByText('已有发货数据任务（导入发货清单）正在运行，请稍后再试')).toBeVisible()
 
   // 接入的是冲突响应里指向的那个已存在任务，而不是发起一个新任务
-  await expect.poll(() => progressTaskId).toBe(RUNNING_TASK_ID)
+  await expect.poll(() => polledTaskId).toBe(RUNNING_TASK_ID)
 })

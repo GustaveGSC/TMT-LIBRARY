@@ -1,9 +1,9 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import http, { getBaseURL } from '@/api/http'
-import { recoverShippingTaskAfterSseError } from '@/utils/shippingTaskRecovery'
+import http from '@/api/http'
+import { pollShippingTask } from '@/utils/shippingTaskPoll'
 import { getConflictTaskId } from '@/utils/taskConflict'
 
 // ── 响应式状态 ────────────────────────────────────
@@ -123,6 +123,11 @@ onMounted(async () => {
   await refreshDateInfo()
 })
 
+let activePoller = null
+onUnmounted(() => {
+  activePoller?.stop()
+})
+
 // ── 方法 ──────────────────────────────────────────
 
 // 刷新最新发货日期与已有日期列表
@@ -150,7 +155,7 @@ async function cancelImport() {
   try {
     await http.post(`/api/shipping/import/cancel/${currentTaskId.value}`)
   } catch {}
-  // 后台线程收到信号后会推送 cancelled 事件，SSE 回调里处理后续重置
+  // 后台线程收到信号后会把任务状态改为 cancelled，轮询下一轮会读到并处理后续重置
 }
 
 function onFileChange(e) {
@@ -213,6 +218,8 @@ function handleEvent(data) {
 
 async function doImport() {
   if (!file.value) { ElMessage.warning('请先选择文件'); return }
+  activePoller?.stop()
+  activePoller = null
   loading.value      = true
   isCancelling.value = false
   currentTaskId.value = ''
@@ -240,33 +247,25 @@ async function doImport() {
     currentTaskId.value = conflictTaskId || res.data.task_id
     progress.value = conflictTaskId ? progress.value : 5
 
-    // Step 2：订阅 SSE 进度流；连接异常断开时改查持久化任务状态，而不是直接判失败
+    // Step 2：短轮询任务状态，替代旧 SSE 订阅
     await new Promise((resolve, reject) => {
-      let es
-      function handleData(data) {
-        handleEvent(data)
-        if (data.step === 'done') {
-          result.value = data.data
-          es?.close()
-          resolve()
-        } else if (data.step === 'cancelled') {
-          wasCancelled = true
-          es?.close()
-          resolve()
-        } else if (data.step === 'error') {
-          es?.close()
-          reject(new Error(data.message || '导入失败'))
-        }
-      }
-      function connect() {
-        es = new EventSource(`${getBaseURL()}/api/shipping/import/progress/${currentTaskId.value}`)
-        es.onmessage = (event) => handleData(JSON.parse(event.data))
-        es.onerror = () => {
-          es.close()
-          recoverShippingTaskAfterSseError(currentTaskId.value, { onEvent: handleData, retry: connect })
-        }
-      }
-      connect()
+      activePoller = pollShippingTask(currentTaskId.value, {
+        onEvent(data) {
+          handleEvent(data)
+          if (data.step === 'done') {
+            result.value = data.data
+            activePoller?.stop()
+            resolve()
+          } else if (data.step === 'cancelled') {
+            wasCancelled = true
+            activePoller?.stop()
+            resolve()
+          } else if (data.step === 'error') {
+            activePoller?.stop()
+            reject(new Error(data.message || '导入失败'))
+          }
+        },
+      })
     })
 
     if (wasCancelled) {
@@ -284,6 +283,8 @@ async function doImport() {
   } catch (e) {
     showError(e.message || '导入失败')
   } finally {
+    activePoller?.stop()
+    activePoller = null
     loading.value       = false
     isCancelling.value  = false
     currentTaskId.value = ''

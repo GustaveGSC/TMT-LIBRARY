@@ -1,9 +1,10 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import http from '@/api/http'
 import { getConflictTaskId } from '@/utils/taskConflict'
+import { pollShippingTask } from '@/utils/shippingTaskPoll'
 
 // ── 响应式状态 ────────────────────────────────────
 const operators  = ref([])   // [{ operator, type }]
@@ -23,6 +24,11 @@ const TYPE_OPTIONS = [
 onMounted(async () => {
   await loadOperators()
   await loadStats()
+})
+
+let activePoller = null
+onUnmounted(() => {
+  activePoller?.stop()
 })
 
 // ── 方法 ──────────────────────────────────────────
@@ -65,6 +71,8 @@ async function saveClassify() {
 
 async function resolveStale() {
   resolving.value = true
+  activePoller?.stop()
+  activePoller = null
   try {
     // 1. 启动后台任务
     const res = await http.post('/api/shipping/resolve')
@@ -75,28 +83,27 @@ async function resolveStale() {
     }
     const taskId = conflictTaskId || res.data.task_id
 
-    // 2. 轮询直到完成（最多 15 分钟 = 1125 次 × 800ms）
-    const MAX_POLLS = 1125
-    let done = false
-    for (let i = 0; i < MAX_POLLS; i++) {
-      await new Promise(r => setTimeout(r, 800))
-      const statusRes = await http.get(`/api/shipping/task-status/${taskId}`)
-      if (statusRes.success && statusRes.data.status === 'done') {
-        ElMessage.success(`已刷新 ${statusRes.data.data.resolved} 个订单的成品组合`)
-        staleCount.value = 0
-        done = true
-        break
-      }
-      if (statusRes.success && statusRes.data.status === 'error') {
-        ElMessage.error(statusRes.data.message || '刷新失败')
-        done = true
-        break
-      }
-    }
-    if (!done) ElMessage.error('刷新超时，请重试')
-  } catch {
-    ElMessage.error('刷新失败')
+    // 2. 短轮询直到完成
+    await new Promise((resolve, reject) => {
+      activePoller = pollShippingTask(taskId, {
+        onEvent(data) {
+          if (data.step === 'done') {
+            activePoller?.stop()
+            ElMessage.success(`已刷新 ${data.data?.resolved ?? 0} 个订单的成品组合`)
+            staleCount.value = 0
+            resolve()
+          } else if (data.step === 'error' || data.step === 'cancelled') {
+            activePoller?.stop()
+            reject(new Error(data.message || '刷新失败'))
+          }
+        },
+      })
+    })
+  } catch (e) {
+    ElMessage.error(e.message || '刷新失败')
   } finally {
+    activePoller?.stop()
+    activePoller = null
     resolving.value = false
   }
 }

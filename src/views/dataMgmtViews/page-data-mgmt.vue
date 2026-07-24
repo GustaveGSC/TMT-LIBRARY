@@ -1,11 +1,11 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import http, { getBaseURL } from '@/api/http'
-import { recoverShippingTaskAfterSseError } from '@/utils/shippingTaskRecovery'
+import http from '@/api/http'
+import { pollShippingTask } from '@/utils/shippingTaskPoll'
 import { getConflictTaskId } from '@/utils/taskConflict'
 import WindowControls  from '@/components/common/WindowControls.vue'
 import DataImport        from './DataImport.vue'
@@ -63,6 +63,11 @@ onMounted(() => {
   window.electronAPI?.maximizeApp?.()
 })
 
+let activePoller = null
+onUnmounted(() => {
+  activePoller?.stop()
+})
+
 // ── 方法 ──────────────────────────────────────────
 function handleBack() {
   window.electronAPI?.unmaximizeApp?.()
@@ -71,6 +76,8 @@ function handleBack() {
 
 async function handleResolveAll() {
   if (resolving.value) return
+  activePoller?.stop()
+  activePoller = null
   showResolveConfirm.value  = false
   resolving.value           = true
   resolveCurrentOrder.value = 0
@@ -92,46 +99,40 @@ async function handleResolveAll() {
     const taskId = conflictTaskId || res.data.task_id
 
     await new Promise((resolve, reject) => {
-      let es
-      function handleData(data) {
-        if (data.step === 'preparing') {
-          resolvePrepareMsg.value   = data.message  ?? '正在准备数据…'
-          resolveTotalOrders.value  = data.total    ?? 0
-          resolvePrepareCount.value = data.current  ?? 0
-        } else if (data.step === 'resolving') {
-          resolvePrepareMsg.value   = ''
-          resolveSaving.value       = false
-          resolveCurrentOrder.value = data.current ?? 0
-          resolveTotalOrders.value  = data.total   ?? 0
-        } else if (data.step === 'saving') {
-          resolveSaving.value      = true
-          resolveSaveCurrent.value = data.current ?? 0
-          resolveSaveTotal.value   = data.total   ?? 0
-        } else if (data.step === 'done') {
-          es?.close()
-          resolveCurrentOrder.value = data.data.resolved
-          resolveTotalOrders.value  = data.data.resolved
-          resolve()
-        } else if (data.step === 'error') {
-          es?.close()
-          ElMessage.error(data.message || '计算失败')
-          reject()
-        }
-      }
-      function connect() {
-        es = new EventSource(`${getBaseURL()}/api/shipping/import/progress/${taskId}`)
-        es.onmessage = (event) => handleData(JSON.parse(event.data))
-        es.onerror = () => {
-          es.close()
-          recoverShippingTaskAfterSseError(taskId, { onEvent: handleData, retry: connect })
-        }
-      }
-      connect()
+      activePoller = pollShippingTask(taskId, {
+        onEvent(data) {
+          if (data.step === 'preparing') {
+            resolvePrepareMsg.value   = data.message  ?? '正在准备数据…'
+            resolveTotalOrders.value  = data.total    ?? 0
+            resolvePrepareCount.value = data.current  ?? 0
+          } else if (data.step === 'resolving') {
+            resolvePrepareMsg.value   = ''
+            resolveSaving.value       = false
+            resolveCurrentOrder.value = data.current ?? 0
+            resolveTotalOrders.value  = data.total   ?? 0
+          } else if (data.step === 'saving') {
+            resolveSaving.value      = true
+            resolveSaveCurrent.value = data.current ?? 0
+            resolveSaveTotal.value   = data.total   ?? 0
+          } else if (data.step === 'done') {
+            activePoller?.stop()
+            resolveCurrentOrder.value = data.data.resolved
+            resolveTotalOrders.value  = data.data.resolved
+            resolve()
+          } else if (data.step === 'error') {
+            activePoller?.stop()
+            ElMessage.error(data.message || '计算失败')
+            reject()
+          }
+        },
+      })
     })
     ElMessage.success(`刷新完成，共处理 ${resolveCurrentOrder.value.toLocaleString()} 条订单`)
   } catch {
     // ElMessage 已在内部处理
   } finally {
+    activePoller?.stop()
+    activePoller = null
     resolving.value           = false
     showResolveProgress.value = false
   }
