@@ -409,6 +409,7 @@ def get_finance_customer_aliases():
 def save_finance_customer_mapping():
     try:
         data = shipping_service.save_finance_customer_mapping(request.get_json() or {})
+        _invalidate_chart_options_cache()
         return Result.ok(data=data, message='保存成功').to_response()
     except ValueError as exc:
         return Result.fail(str(exc)).to_response()

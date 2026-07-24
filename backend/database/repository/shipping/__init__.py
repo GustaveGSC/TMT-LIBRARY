@@ -42,13 +42,13 @@ def _get_ftp_finished_codes() -> set:
     return _ftp_codes_cache
 
 
-# ── chart_options 缓存（渠道/省份/活跃产品，仅导入新数据时才变）──
+# ── chart_options 缓存（导入、图表维度或客户映射变化时失效）──
 _chart_options_cache: dict = {}
 _CHART_OPTIONS_TTL = 300  # 5 分钟
 
 
 def _invalidate_chart_options_cache():
-    """导入新数据后调用，清空 chart_options 缓存。"""
+    """Clear cached chart filter options after any contributing data changes."""
     _chart_options_cache.clear()
 
 

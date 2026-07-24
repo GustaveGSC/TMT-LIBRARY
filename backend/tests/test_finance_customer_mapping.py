@@ -31,6 +31,7 @@ from auth import generate_token
 from database.repository.account import UserRepository
 from flask import Flask
 from routes.shipping import shipping_bp
+import routes.shipping as shipping_routes
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -339,6 +340,18 @@ def test_finance_chart_uses_manual_mapping_for_trade_country_brand_and_filters()
             'actual_quantity': 15.0,
         }]
 
+        # 修改人工映射后 chart-data 下一次查询实时 JOIN 新状态；
+        # 不需要也不允许借助 resolve-all 刷新派生组合。
+        ShippingRepository.save_finance_customer_mapping(
+            'PENDING', 'export', country='俄罗斯', brand='品牌丁',
+        )
+        foreign_after_mapping = ShippingRepository.get_chart_data({
+            'source': 'finance', 'group_by': 'channel', 'trade_type': 'foreign',
+        })
+        assert {row['label'] for row in foreign_after_mapping['items']} == {
+            '外贸部', '泰国渠道', '未审核部',
+        }
+
 
 def test_finance_customer_mapping_api_contract_and_permissions(monkeypatch):
     app = Flask(__name__)
@@ -354,6 +367,17 @@ def test_finance_customer_mapping_api_contract_and_permissions(monkeypatch):
     monkeypatch.setattr(
         shipping_module.shipping_service, 'save_finance_customer_mapping',
         lambda payload: payload,
+    )
+    invalidations = []
+    monkeypatch.setattr(
+        shipping_routes,
+        '_invalidate_chart_options_cache',
+        lambda: invalidations.append(True),
+    )
+    monkeypatch.setattr(
+        shipping_module.shipping_service,
+        'resolve_all',
+        lambda *_args, **_kwargs: pytest.fail('保存客户映射不应触发成品组合重算'),
     )
     client = app.test_client()
     view_user = {
@@ -382,6 +406,7 @@ def test_finance_customer_mapping_api_contract_and_permissions(monkeypatch):
     )
     assert response.status_code == 200
     assert response.get_json()['data']['customer_alias'] == '客户'
+    assert invalidations == [True]
 
 
 def _migration_config(database_url):
