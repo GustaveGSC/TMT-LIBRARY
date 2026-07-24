@@ -1038,7 +1038,9 @@ class ShippingRepository:
         ) else set()
 
         # 售后操作人子查询（在整个 get_chart_data 调用中复用，仅发货端需要）
-        aftersale_ops_sub = db.session.query(ShippingOperatorType.operator).filter_by(type='aftersale').subquery()
+        aftersale_ops_sub = db.select(ShippingOperatorType.operator).where(
+            ShippingOperatorType.type == 'aftersale',
+        )
 
         def _apply_filters(q):
             """将所有过滤条件应用到查询对象，返回新查询"""
@@ -1250,21 +1252,35 @@ class ShippingRepository:
             for r in rows
         ]
 
-        # ── 汇总查询（同等过滤，不分组）────────────────────────
-        summary_q = db.session.query(
-            func.sum(sof.quantity).label('quantity'),
-            func.sum(sof.return_quantity).label('return_quantity'),
-            func.sum(sof.actual_quantity).label('actual_quantity'),
-        )
-        summary_q = _apply_filters(summary_q)
-        sr = summary_q.one()
-
-        return {
-            'summary': {
-                'quantity':        _f(sr.quantity),
+        # 普通维度互斥且完整覆盖过滤后的行，直接汇总 grouped 原始聚合值，
+        # 避免对 shipping_order_finished 再执行一次相同过滤/JOIN 的全量扫描。
+        # 标签维度可能因多对多 JOIN 扇出，暂时保留独立汇总查询以维持既有口径。
+        ordinary_group_by = {
+            'date', 'category', 'series', 'model',
+            'channel', 'channel_code', 'province', 'city', 'district',
+        }
+        if group_by in ordinary_group_by:
+            summary = {
+                'quantity': _f(sum((row.quantity or 0) for row in rows)),
+                'return_quantity': _f(sum((row.return_quantity or 0) for row in rows)),
+                'actual_quantity': _f(sum((row.actual_quantity or 0) for row in rows)),
+            }
+        else:
+            summary_q = db.session.query(
+                func.sum(sof.quantity).label('quantity'),
+                func.sum(sof.return_quantity).label('return_quantity'),
+                func.sum(sof.actual_quantity).label('actual_quantity'),
+            )
+            summary_q = _apply_filters(summary_q)
+            sr = summary_q.one()
+            summary = {
+                'quantity': _f(sr.quantity),
                 'return_quantity': _f(sr.return_quantity),
                 'actual_quantity': _f(sr.actual_quantity),
-            },
+            }
+
+        return {
+            'summary': summary,
             'items': items,
         }
 
