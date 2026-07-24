@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+  <title>{{ title }}</title>
+  <meta property="og:title" content="{{ title }}">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="{{ share_url }}">
+  {% if og_image %}<meta property="og:image" content="{{ og_image }}">{% endif %}
+  <meta name="twitter:card" content="{{ 'summary_large_image' if og_image else 'summary' }}">
+  <meta name="twitter:title" content="{{ title }}">
+  {% if og_image %}<meta name="twitter:image" content="{{ og_image }}">{% endif %}
+  {% if file_type == 'video' %}
+  <style>
+    body { margin:0; background:#000; display:flex; align-items:center; justify-content:center; min-height:100vh }
+    video { width:100%; max-height:100vh; outline:none }
+  </style>
+  {% elif file_type == 'image' %}
+  <style>
+    body { margin:0; background:#111; display:flex; align-items:center; justify-content:center; min-height:100vh }
+    img { max-width:100%; max-height:100vh; object-fit:contain }
+  </style>
+  {% elif file_type == 'pdf' %}
+  <style>
+    body { margin:0; background:#525659; font-family:sans-serif }
+    #pages { display:flex; flex-direction:column; align-items:center; padding:8px; gap:8px }
+    canvas { max-width:100%; display:block; box-shadow:0 2px 8px rgba(0,0,0,.4) }
+    #msg { color:#fff; text-align:center; padding:50px 20px; font-size:15px; line-height:1.8 }
+    #msg a { color:#f0c060; font-size:14px }
+    #dl { display:none }
+  </style>
+  <script defer src="{{ url_for('static', filename='js/resource-share-pdf.js') }}"></script>
+  {% endif %}
+</head>
+<body>
+  {% if file_type == 'video' %}
+  <video src="{{ media_url }}" controls autoplay playsinline webkit-playsinline preload="auto"></video>
+  {% elif file_type == 'image' %}
+  <img src="{{ media_url }}" alt="{{ title }}">
+  {% elif file_type == 'pdf' %}
+  <div id="pdf-viewer" data-pdf-url="{{ proxy_url }}" data-filename="{{ filename }}">
+    <div id="msg">PDF 加载中…<br><a id="dl" href="{{ proxy_url }}" download="{{ filename }}">加载失败？点此下载 PDF</a></div>
+    <div id="pages"></div>
+  </div>
+  {% else %}
+  <p>暂不支持预览此资料。</p>
+  {% endif %}
+</body>
+</html>

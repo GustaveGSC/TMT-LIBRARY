@@ -4,8 +4,9 @@ import time
 import hmac
 import hashlib
 from datetime import datetime
+from urllib.parse import urlsplit
 
-from flask import Blueprint, request, Response
+from flask import Blueprint, request, Response, redirect, render_template
 from services.product.resource import resource_service
 from storage.client import get_bucket
 from auth import make_blueprint_guard
@@ -55,6 +56,16 @@ PREVIEW_CONTENT_TYPES = {
     'webm': 'video/webm',
 }
 VIDEO_EXTS = {'mp4', 'mov', 'webm'}
+SHARE_PAGE_CSP = (
+    "default-src 'none'; "
+    "img-src 'self' https: data:; "
+    "media-src 'self' https:; "
+    "script-src 'self' https://registry.npmmirror.com; "
+    "worker-src 'self' blob: https://registry.npmmirror.com; "
+    "connect-src 'self'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "base-uri 'none'; object-src 'none'; frame-ancestors 'self'"
+)
 
 
 def _preview_content_type(resource: dict) -> str | None:
@@ -66,6 +77,29 @@ def _preview_content_type(resource: dict) -> str | None:
     if file_type in ('image', 'video'):
         return PREVIEW_CONTENT_TYPES.get(ext)
     return None
+
+
+def _safe_external_url(url: str) -> str | None:
+    """Public share redirects only support absolute HTTP(S) links."""
+    try:
+        parsed = urlsplit(str(url or '').strip())
+    except (TypeError, ValueError):
+        return None
+    if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+        return None
+    return parsed.geturl()
+
+
+def _share_html_response(template: str, *, status: int = 200, **context):
+    response = Response(
+        render_template(template, **context),
+        status=status,
+        mimetype='text/html',
+    )
+    response.headers['Content-Security-Policy'] = SHARE_PAGE_CSP
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    return response
 
 
 # ── 资料类型 ──────────────────────────────────────────────────────────────
@@ -312,8 +346,10 @@ def proxy_content(resource_id: int):
     resource    = r.data
     storage_key = resource.get('storage_key')
     if not storage_key:
-        from flask import redirect
-        return redirect(resource.get('url', ''), code=302)
+        external_url = _safe_external_url(resource.get('url', ''))
+        if not external_url:
+            return Response('资料链接无效', status=400, mimetype='text/plain')
+        return redirect(external_url, code=302)
     try:
         bucket       = get_bucket()
         obj          = bucket.get_object(storage_key)
@@ -348,7 +384,7 @@ def get_share_link(resource_id: int):
 
 @resource_bp.get('/<int:resource_id>/share-page')
 def share_page(resource_id: int):
-    """无需登录的分享页面，校验 token 后返回内嵌播放器的 HTML。"""
+    """无需登录的分享页面；模板自动转义，禁止拼接可执行 HTML/JS。"""
     key = request.args.get('key', '')
     try:
         exp = int(request.args.get('exp', 0))
@@ -361,7 +397,7 @@ def share_page(resource_id: int):
     if not r.success:
         return Response('<h3 style="font-family:sans-serif;text-align:center;margin-top:80px">资料不存在</h3>', status=404, mimetype='text/html')
     resource = r.data
-    title    = resource.get('title', '资料')
+    title = resource.get('title') or '资料'
     file_type = resource.get('file_type', 'link')
     storage_key = resource.get('storage_key')
 
@@ -379,8 +415,15 @@ def share_page(resource_id: int):
     else:
         media_url = resource.get('url', '')
 
-    html_title = title.replace('<', '&lt;').replace('>', '&gt;')
-    media_url_esc = media_url.replace('"', '&quot;')
+    if not storage_key and file_type not in ('image', 'video', 'pdf'):
+        external_url = _safe_external_url(media_url)
+        if not external_url:
+            return _share_html_response(
+                'product/resource_share_error.html',
+                status=400,
+                message='资料链接无效',
+            )
+        return redirect(external_url, code=302)
 
     # Open Graph meta：让聊天软件显示缩略图
     # 用代理接口返回 inline 图片（OSS bucket 强制下载，直接用 OSS URL 爬虫无法预览）
@@ -393,84 +436,16 @@ def share_page(resource_id: int):
     elif file_type == 'video' and resource.get('cover_storage_key'):
         og_image = f'{base_url}/api/resources/{resource_id}/og-image?key={key}&exp={exp}'
 
-    if file_type == 'video':
-        body = f'''
-<style>
-  body{{margin:0;background:#000;display:flex;align-items:center;justify-content:center;min-height:100vh}}
-  video{{width:100%;max-height:100vh;outline:none}}
-</style>
-<video src="{media_url_esc}" controls autoplay playsinline webkit-playsinline preload="auto"></video>'''
-    elif file_type == 'image':
-        body = f'''
-<style>
-  body{{margin:0;background:#111;display:flex;align-items:center;justify-content:center;min-height:100vh}}
-  img{{max-width:100%;max-height:100vh;object-fit:contain}}
-</style>
-<img src="{media_url_esc}" alt="{html_title}">'''
-    elif file_type == 'pdf':
-        proxy_url = f'/api/resources/{resource_id}/proxy-content?key={key}&exp={exp}'
-        filename_esc = (resource.get('original_filename') or title).replace('"', '&quot;')
-        body = f'''
-<style>
-  body{{margin:0;background:#525659;font-family:sans-serif}}
-  #pages{{display:flex;flex-direction:column;align-items:center;padding:8px;gap:8px}}
-  canvas{{max-width:100%;display:block;box-shadow:0 2px 8px rgba(0,0,0,.4)}}
-  #msg{{color:#fff;text-align:center;padding:50px 20px;font-size:15px;line-height:1.8}}
-  #msg a{{color:#f0c060;font-size:14px}}
-</style>
-<div id="msg">PDF 加载中…<br><a id="dl" href="{proxy_url}" download="{filename_esc}" style="display:none">加载失败？点此下载 PDF</a></div>
-<div id="pages"></div>
-<script>
-var PDFJS_CDN='https://registry.npmmirror.com/pdfjs-dist/3.11.174/files/build/';
-var t=setTimeout(function(){{document.getElementById('dl').style.display='inline'}},8000);
-var s=document.createElement('script');
-s.src=PDFJS_CDN+'pdf.min.js';
-s.onerror=function(){{clearTimeout(t);document.getElementById('msg').innerHTML='PDF 加载失败，请<a href="{proxy_url}" download="{filename_esc}">点此下载</a>';}}
-s.onload=function(){{
-  pdfjsLib.GlobalWorkerOptions.workerSrc=PDFJS_CDN+'pdf.worker.min.js';
-  pdfjsLib.getDocument('{proxy_url}').promise.then(function(pdf){{
-    clearTimeout(t);
-    document.getElementById('msg').style.display='none';
-    var pages=document.getElementById('pages');
-    var w=window.innerWidth-16;
-    for(var i=1;i<=pdf.numPages;i++){{
-      (function(n){{pdf.getPage(n).then(function(page){{
-        var vp=page.getViewport({{scale:w/page.getViewport({{scale:1}}).width}});
-        var canvas=document.createElement('canvas');
-        canvas.width=vp.width;canvas.height=vp.height;
-        page.render({{canvasContext:canvas.getContext('2d'),viewport:vp}});
-        pages.appendChild(canvas);
-      }})}})(i);
-    }}
-  }}).catch(function(e){{
-    clearTimeout(t);
-    document.getElementById('msg').innerHTML='加载失败：'+e.message+'<br><a href="{proxy_url}" download="{filename_esc}">点此下载 PDF</a>';
-  }});
-}};
-document.head.appendChild(s);
-</script>'''
-    else:
-        body = f'<script>location.href="{media_url_esc}"</script>'
-
-    og_image_tag = f'<meta property="og:image" content="{og_image.replace(chr(34), "&quot;")}">\n' if og_image else ''
-    html = f'''<!DOCTYPE html>
-<html lang="zh">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>{html_title}</title>
-<meta property="og:title" content="{html_title}">
-<meta property="og:type" content="website">
-<meta property="og:url" content="{share_url.replace(chr(34), '&quot;')}">
-{og_image_tag}<meta name="twitter:card" content="{'summary_large_image' if og_image else 'summary'}">
-<meta name="twitter:title" content="{html_title}">
-{f'<meta name="twitter:image" content="{og_image.replace(chr(34), chr(39))}">' if og_image else ''}
-</head>
-<body>
-{body}
-</body>
-</html>'''
-    return Response(html, mimetype='text/html')
+    return _share_html_response(
+        'product/resource_share.html',
+        title=title,
+        file_type=file_type,
+        media_url=media_url,
+        proxy_url=f'/api/resources/{resource_id}/proxy-content?key={key}&exp={exp}',
+        filename=resource.get('original_filename') or title,
+        og_image=og_image,
+        share_url=share_url,
+    )
 
 
 # ── 产品-资料关联 ─────────────────────────────────────────────────────────
