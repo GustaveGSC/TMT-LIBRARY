@@ -1,3 +1,4 @@
+import io
 from types import SimpleNamespace
 
 import pytest
@@ -163,6 +164,76 @@ def test_status_endpoint_reads_persisted_terminal_state_without_memory_queue(mon
     assert status_code == 200
     assert response.get_json()['data']['status'] == 'done'
     assert response.get_json()['data']['result'] == {'inserted': 3}
+    assert response.headers['Cache-Control'] == 'no-store'
+
+    with app.test_request_context('/api/shipping/tasks/task-1'):
+        canonical_response, canonical_status = (
+            shipping_routes.get_persisted_task_status('task-1')
+        )
+    assert canonical_status == 200
+    assert canonical_response.get_json() == response.get_json()
+    assert canonical_response.headers['Cache-Control'] == 'no-store'
+
+
+def test_new_tasks_do_not_allocate_unconsumed_sse_queues(monkeypatch):
+    app = Flask(__name__)
+    shipping_routes._task_queues.clear()
+    monkeypatch.setattr(
+        shipping_routes, '_check_file', lambda _file, _label: (b'content', None),
+    )
+    monkeypatch.setattr(
+        shipping_routes, '_create_mutation_task',
+        lambda *_args, **_kwargs: None,
+    )
+
+    started = []
+
+    class FakeThread:
+        def __init__(self, *, target, daemon):
+            started.append((target, daemon))
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(shipping_routes.threading, 'Thread', FakeThread)
+    with app.test_request_context(
+        '/api/shipping/import/finance',
+        method='POST',
+        data={'file': (io.BytesIO(b'content'), 'finance.csv')},
+    ):
+        response, status = shipping_routes.import_finance()
+
+    assert status == 200
+    assert response.get_json()['data']['task_id']
+    assert started and started[0][1] is True
+    assert shipping_routes._task_queues == {}
+
+
+def test_persisted_progress_updates_do_not_require_memory_queue(monkeypatch):
+    updates = []
+    monkeypatch.setattr(
+        shipping_routes.shipping_repository,
+        'update_task',
+        lambda task_id, **values: updates.append((task_id, values)),
+    )
+
+    shipping_routes._publish_task_event('task-1', None, 'inserting', current=2)
+    shipping_routes._finish_task(
+        'task-1', None, 'done', data={'inserted': 2},
+    )
+
+    assert updates == [
+        ('task-1', {
+            'status': 'running',
+            'progress': {'step': 'inserting', 'current': 2},
+        }),
+        ('task-1', {
+            'status': 'done',
+            'progress': {'step': 'done', 'data': {'inserted': 2}},
+            'result': {'inserted': 2},
+            'message': '',
+        }),
+    ]
 
 
 def test_sse_can_recover_terminal_state_after_worker_queue_is_lost(monkeypatch):

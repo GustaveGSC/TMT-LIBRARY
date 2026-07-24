@@ -158,16 +158,17 @@ POST   /api/shipping/import/finance                   # 上传财务清单（财
                                                       #   结果 inserted/updated/skipped 与 returns 对应字段分别表示新增/变化/未变化行数
                                                       #   独立销退清单接口已废弃，销退数据统一通过财务清单负数量行导入
                                                       #   Excel/CSV 单文件 20MB、解压后 100MB、最多 50 sheet/100000 行
-GET    /api/shipping/import/progress/:task_id         # SSE 进度流：parsing→parsed→inserting→inserted→resolving→done/error/cancelled
-GET    /api/shipping/import/status/:task_id           # 持久化状态查询（需 shipping 权限），SSE 断开/reload 后用 task_id 回查，不会读取后删除
+GET    /api/shipping/tasks/:task_id                   # 后台任务统一短轮询入口（需 shipping 权限，建议 1-2 秒间隔，Cache-Control:no-store）
+GET    /api/shipping/import/status/:task_id           # 兼容旧客户端，响应同 /tasks/:task_id
+GET    /api/shipping/import/progress/:task_id         # 已废弃 SSE 兼容入口；新客户端禁止使用，单 sync worker 会被长连接占用
 POST   /api/shipping/import/cancel/:task_id           # 发送中止信号，后台完成当前 chunk 后 rollback
 GET    /api/shipping/operators                        # 获取所有最近操作人及其分类
 POST   /api/shipping/operators/classify               # 批量保存操作人分类 [{operator, type}]
 GET    /api/shipping/stats                            # 统计摘要
 GET    /api/shipping/shipped-dates                    # 所有发货记录的 shipped_date（去重升序，不含销退日期）
 POST   /api/shipping/resolve                          # 刷新 is_stale 订单的成品组合；旧 /task-status 轮询入口保留，状态已持久化
-POST   /api/shipping/resolve-all                      # 全量重新计算所有订单成品组合（SSE 进度，task_id 复用 import/progress 流）；两个 source 分开 resolve
-                                                      #   import/shipping、import/finance、resolve-all 均可通过 import/status 回查终态
+POST   /api/shipping/resolve-all                      # 全量重新计算所有订单成品组合；返回 task_id，两个 source 分开 resolve
+                                                      #   import/shipping、import/finance、resolve-all、resolve 均通过 tasks/:task_id 轮询
                                                       #   四类数据写任务（另含 POST /resolve）数据库级互斥；
                                                       #   已有任务运行时返回 409，data.task_id 为当前任务
 GET    /api/shipping/warehouses                       # 所有出现过的仓库名及 is_excluded 状态
@@ -295,7 +296,8 @@ POST   /api/aftersale/chart-data                      # 图表聚合数据，bod
 
 ## 发货后台任务状态
 
-`GET /api/shipping/import/status/:task_id` 需要任一 shipping 权限，无请求参数。成功响应：
+`GET /api/shipping/tasks/:task_id` 需要任一 shipping 权限，无请求参数；建议活动任务每
+1–2 秒轮询，终态立即停止。`/import/status/:task_id` 是相同响应的兼容别名。成功响应：
 
 ```json
 {

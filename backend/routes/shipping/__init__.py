@@ -1,6 +1,5 @@
 import uuid
 import time
-import queue
 import threading
 import json
 from flask import Blueprint, request, Response, stream_with_context, current_app, g
@@ -33,7 +32,7 @@ def _shipping_guard():
 
 shipping_bp.before_request(_shipping_guard)
 
-# 进度队列：task_id → queue.Queue（用于 SSE 流式推送）
+# 旧版 SSE 兼容状态；新任务不再创建内存队列，进度以数据库为唯一来源。
 _task_queues:  dict = {}
 # 取消标志：task_id → bool
 _cancel_flags: dict = {}
@@ -66,7 +65,8 @@ def _check_file(file, label: str):
 
 def _publish_task_event(task_id: str, q, step: str, **kwargs):
     event = {'step': step, **kwargs}
-    q.put(event)
+    if q is not None:
+        q.put(event)
     shipping_repository.update_task(
         task_id,
         status='running',
@@ -81,7 +81,8 @@ def _finish_task(task_id: str, q, status: str, *, data=None, message=''):
         event['data'] = data
     if message:
         event['message'] = message
-    q.put(event)
+    if q is not None:
+        q.put(event)
     shipping_repository.update_task(
         task_id,
         status=status,
@@ -103,8 +104,7 @@ def import_shipping():
     conflict = _create_mutation_task(task_id, 'import_shipping', file.filename)
     if conflict:
         return conflict
-    q        = queue.Queue()
-    _task_queues[task_id]  = q
+    q = None
     _cancel_flags[task_id] = False
     filename = file.filename
     app      = current_app._get_current_object()
@@ -148,8 +148,7 @@ def import_finance():
     conflict = _create_mutation_task(task_id, 'import_finance', file.filename)
     if conflict:
         return conflict
-    q        = queue.Queue()
-    _task_queues[task_id]  = q
+    q = None
     _cancel_flags[task_id] = False
     filename = file.filename
     app      = current_app._get_current_object()
@@ -195,57 +194,35 @@ def cancel_import(task_id):
 
 @shipping_bp.get('/import/progress/<task_id>')
 def import_progress(task_id):
-    """SSE：流式推送导入进度事件直到 done / error"""
-    q = _task_queues.get(task_id)
-    if not q:
-        task = shipping_repository.get_task(task_id)
-        if not task:
-            return Result.fail('任务不存在').to_response(404)
+    """Deprecated SSE compatibility endpoint backed only by persisted state."""
+    task = shipping_repository.get_task(task_id)
+    if not task:
+        return Result.fail('任务不存在').to_response(404)
 
-        def persisted_generate():
-            last_updated_at = None
-            while True:
-                current = shipping_repository.get_task(task_id)
-                if not current:
-                    break
-                updated_at = current.updated_at.isoformat() if current.updated_at else None
-                if updated_at != last_updated_at:
-                    event = dict(current.progress or {})
-                    event.setdefault('step', current.status)
-                    if current.status == 'done':
-                        event['step'] = 'done'
-                        event['data'] = current.result
-                    elif current.status in ('error', 'cancelled', 'interrupted'):
-                        event['step'] = 'cancelled' if current.status == 'cancelled' else 'error'
-                        event['message'] = current.message or '任务因服务重载中断'
-                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                    last_updated_at = updated_at
-                if current.status in ('done', 'error', 'cancelled', 'interrupted'):
-                    break
-                time.sleep(1)
-
-        return Response(
-            stream_with_context(persisted_generate()),
-            mimetype='text/event-stream',
-            headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
-        )
-
-    def generate():
+    def persisted_generate():
+        last_updated_at = None
         while True:
-            try:
-                event = q.get(timeout=300)
-            except queue.Empty:
-                payload = {'step': 'error', 'message': '处理超时'}
-                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                _task_queues.pop(task_id, None)
+            current = shipping_repository.get_task(task_id)
+            if not current:
                 break
-            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-            if event.get('step') in ('done', 'error', 'cancelled'):
-                _task_queues.pop(task_id, None)
+            updated_at = current.updated_at.isoformat() if current.updated_at else None
+            if updated_at != last_updated_at:
+                event = dict(current.progress or {})
+                event.setdefault('step', current.status)
+                if current.status == 'done':
+                    event['step'] = 'done'
+                    event['data'] = current.result
+                elif current.status in ('error', 'cancelled', 'interrupted'):
+                    event['step'] = 'cancelled' if current.status == 'cancelled' else 'error'
+                    event['message'] = current.message or '任务因服务重载中断'
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                last_updated_at = updated_at
+            if current.status in ('done', 'error', 'cancelled', 'interrupted'):
                 break
+            time.sleep(1)
 
     return Response(
-        stream_with_context(generate()),
+        stream_with_context(persisted_generate()),
         mimetype='text/event-stream',
         headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
     )
@@ -280,8 +257,7 @@ def resolve_all():
     conflict = _create_mutation_task(task_id, 'resolve_all')
     if conflict:
         return conflict
-    q       = queue.Queue()
-    _task_queues[task_id] = q
+    q = None
     app = current_app._get_current_object()
 
     def run():
@@ -299,13 +275,25 @@ def resolve_all():
     return Result.ok(data={'task_id': task_id}).to_response()
 
 
-@shipping_bp.get('/import/status/<task_id>')
-def get_import_task_status(task_id):
-    """不依赖 SSE 的持久化任务状态查询，终态读取后不删除。"""
+def _persisted_task_status_response(task_id):
     task = shipping_repository.get_task(task_id)
     if not task:
         return Result.fail('任务不存在').to_response(404)
-    return Result.ok(data=task.to_dict()).to_response()
+    response, status = Result.ok(data=task.to_dict()).to_response()
+    response.headers['Cache-Control'] = 'no-store'
+    return response, status
+
+
+@shipping_bp.get('/tasks/<task_id>')
+def get_persisted_task_status(task_id):
+    """Canonical short-polling endpoint for all shipping background tasks."""
+    return _persisted_task_status_response(task_id)
+
+
+@shipping_bp.get('/import/status/<task_id>')
+def get_import_task_status(task_id):
+    """Compatibility alias for the canonical persisted task endpoint."""
+    return _persisted_task_status_response(task_id)
 
 
 @shipping_bp.post('/resolve')
