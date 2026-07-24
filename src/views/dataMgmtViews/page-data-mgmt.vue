@@ -29,7 +29,8 @@ const configTabs = [
   { key: 'warehouse',  label: '仓库过滤配置' },
   { key: 'equivalent', label: '产成品通用件配置' },
   { key: 'tagDim',     label: '标签分析维度' },
-  { key: 'financeMap', label: '外贸客户匹配' },
+  { key: 'financeMap', label: '客户匹配' },
+  { key: 'advanced',   label: '高级操作' },
 ]
 
 // ── 刷新全局数据 ────────────────────────────────────
@@ -167,36 +168,29 @@ async function handleResolveAll() {
         </button>
       </nav>
 
-      <div class="top-right">
-        <button class="btn-resolve" :class="{ resolving }" :disabled="resolving" @click="showResolveConfirm = true">
-          <svg class="resolve-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
-          </svg>
-          <span>刷新全局数据</span>
-        </button>
-      </div>
     </header>
 
-    <!-- ── 刷新全局数据确认弹窗 ───────────────────── -->
+    <!-- ── 重建全部成品组合确认弹窗 ─────────────────── -->
     <el-dialog
       v-model="showResolveConfirm"
-      title="刷新全局数据"
-      width="400px"
+      title="重建全部成品组合（高级）"
+      width="440px"
       :close-on-click-modal="false"
     >
       <div class="confirm-body">
-        将重新计算所有订单的成品组合（含发货数量、销退数量、实际数量），数据量较大时耗时较长，确认继续？
+        将重新计算全部历史订单的成品组合（含发货数量、销退数量、实际数量），数据量较大时可能耗时较长
+        （数万到数十万订单级别可能需要数分钟），确认继续？
       </div>
       <template #footer>
         <el-button @click="showResolveConfirm = false">取消</el-button>
-        <el-button type="primary" @click="handleResolveAll">确认刷新</el-button>
+        <el-button type="primary" @click="handleResolveAll">确认重建</el-button>
       </template>
     </el-dialog>
 
-    <!-- ── 刷新进度弹窗 ──────────────────────────── -->
+    <!-- ── 重建进度弹窗 ──────────────────────────── -->
     <el-dialog
       v-model="showResolveProgress"
-      title="刷新全局数据"
+      title="重建全部成品组合（高级）"
       width="420px"
       :close-on-click-modal="false"
       :close-on-press-escape="false"
@@ -289,6 +283,23 @@ async function handleResolveAll() {
           <EquivalentConfig v-show="configTab === 'equivalent'" />
           <TagDimensionConfig v-show="configTab === 'tagDim'" />
           <FinanceCustomerMapping v-show="configTab === 'financeMap'" />
+          <div v-show="configTab === 'advanced'" class="advanced-panel">
+            <div class="config-header">
+              <div class="config-title">重建全部成品组合</div>
+              <div class="config-sub">
+                重新计算全部历史订单的成品组合。日常导入和修改客户匹配都不需要用到这个操作——只有在
+                产品组合规则、通用件等效规则发生系统性变化，或者重新导入历史财务数据补全了客户简称
+                （既有订单的派生数据不会自动同步）之后，才需要在这里手动重建一次。数据量大时耗时较长，
+                请在业务低峰期操作。
+              </div>
+            </div>
+            <button class="btn-resolve" :class="{ resolving }" :disabled="resolving" @click="showResolveConfirm = true">
+              <svg class="resolve-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+              </svg>
+              <span>重建全部成品组合</span>
+            </button>
+          </div>
         </div>
       </div>
     </main>
@@ -345,20 +356,21 @@ async function handleResolveAll() {
   background: var(--accent); border-radius: 1px;
 }
 
-.top-right { display: flex; align-items: center; flex-shrink: 0; }
+.advanced-panel { display: flex; flex-direction: column; gap: 18px; }
 
 .btn-resolve {
   display: flex; align-items: center; gap: 6px;
-  padding: 6px 14px;
-  border: 1px solid var(--border); border-radius: 7px;
+  align-self: flex-start;
+  padding: 9px 20px;
+  border: 1px solid var(--border); border-radius: 8px;
   background: transparent; color: var(--text-muted);
-  font-size: 12px; font-family: inherit;
+  font-size: 13px; font-family: inherit;
   cursor: pointer; transition: all 0.18s; white-space: nowrap;
 }
 .btn-resolve:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .btn-resolve:disabled { opacity: 0.6; cursor: not-allowed; }
 .btn-resolve.resolving { border-color: rgba(196,136,58,0.4); color: var(--accent); }
-.resolve-icon { width: 13px; height: 13px; flex-shrink: 0; }
+.resolve-icon { width: 15px; height: 15px; flex-shrink: 0; }
 .resolve-spin { display: inline-block; animation: spin 0.8s linear infinite; font-size: 14px; }
 .resolve-progress { color: var(--text-muted); font-size: 11px; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -439,4 +451,7 @@ async function handleResolveAll() {
 .config-tab-item.active { color: #fff; font-weight: 600; background: var(--accent); }
 
 .config-tab-body { width: 100%; max-width: 1100px; }
+
+.advanced-panel .config-title { font-size: 16px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
+.advanced-panel .config-sub   { font-size: 12px; color: var(--text-muted); line-height: 1.7; max-width: 640px; }
 </style>

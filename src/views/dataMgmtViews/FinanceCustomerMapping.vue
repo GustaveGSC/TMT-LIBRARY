@@ -144,8 +144,8 @@ function handlePageChange(p) {
   <div class="fcm-config" v-loading="loading">
 
     <div class="config-header">
-      <div class="config-title">外贸客户匹配</div>
-      <div class="config-sub">财务原始数据"客户简称"列去重列表，人工审核归类为外贸客户/内销客户/非销售客户，并按需填写国家/品牌（不做自动解析）</div>
+      <div class="config-title">客户匹配</div>
+      <div class="config-sub">财务原始数据"客户简称"列去重列表，人工审核归类为外贸客户/内销客户/非销售客户，并按需填写国家/品牌（不做自动解析）。修改分类/国家/品牌保存后立即生效，无需重建成品组合；但如果是重新导入历史财务数据来补全客户简称，该批历史订单仍需在"数据配置"里执行一次"重建全部成品组合"才能生效。</div>
     </div>
 
     <!-- 筛选栏 -->
