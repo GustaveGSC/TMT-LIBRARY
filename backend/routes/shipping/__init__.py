@@ -1,11 +1,11 @@
 import uuid
-import time
 import threading
 import json
-from flask import Blueprint, request, Response, stream_with_context, current_app, g
+from flask import Blueprint, request, Response, current_app, g
 from services.shipping import shipping_service
 from auth import make_blueprint_guard
 from result import Result
+from database.base import db
 from database.repository.shipping import (
     ShippingTaskLeaseConflict,
     shipping_repository,
@@ -34,8 +34,6 @@ shipping_bp.before_request(_shipping_guard)
 
 # 旧版 SSE 兼容状态；新任务不再创建内存队列，进度以数据库为唯一来源。
 _task_queues:  dict = {}
-# 取消标志：task_id → bool
-_cancel_flags: dict = {}
 _MUTATION_LEASE_KEY = 'shipping_data_mutation'
 
 
@@ -105,7 +103,6 @@ def import_shipping():
     if conflict:
         return conflict
     q = None
-    _cancel_flags[task_id] = False
     filename = file.filename
     app      = current_app._get_current_object()
 
@@ -116,12 +113,16 @@ def import_shipping():
                     _publish_task_event(task_id, q, step, **kwargs)
 
                 def cancel_check():
-                    return _cancel_flags.get(task_id, False)
+                    return shipping_repository.is_cancel_requested(task_id)
+
+                def begin_commit():
+                    return shipping_repository.try_begin_commit(task_id)
 
                 result = shipping_service.import_shipping(
                     filename, file_bytes,
                     progress_cb=progress_cb,
                     cancel_check=cancel_check,
+                    begin_commit=begin_commit,
                 )
                 _invalidate_chart_options_cache()
                 _finish_task(task_id, q, 'done', data=result)
@@ -130,7 +131,7 @@ def import_shipping():
             except Exception:
                 _finish_task(task_id, q, 'error', message=internal_task_error('发货数据导入失败'))
             finally:
-                _cancel_flags.pop(task_id, None)
+                db.session.remove()
 
     threading.Thread(target=run, daemon=True).start()
     return Result.ok(data={'task_id': task_id}).to_response()
@@ -149,7 +150,6 @@ def import_finance():
     if conflict:
         return conflict
     q = None
-    _cancel_flags[task_id] = False
     filename = file.filename
     app      = current_app._get_current_object()
 
@@ -160,12 +160,16 @@ def import_finance():
                     _publish_task_event(task_id, q, step, **kwargs)
 
                 def cancel_check():
-                    return _cancel_flags.get(task_id, False)
+                    return shipping_repository.is_cancel_requested(task_id)
+
+                def begin_commit():
+                    return shipping_repository.try_begin_commit(task_id)
 
                 result = shipping_service.import_finance(
                     filename, file_bytes,
                     progress_cb=progress_cb,
                     cancel_check=cancel_check,
+                    begin_commit=begin_commit,
                 )
                 _invalidate_chart_options_cache()
                 _finish_task(task_id, q, 'done', data=result)
@@ -174,7 +178,7 @@ def import_finance():
             except Exception:
                 _finish_task(task_id, q, 'error', message=internal_task_error('财务数据导入失败'))
             finally:
-                _cancel_flags.pop(task_id, None)
+                db.session.remove()
 
     threading.Thread(target=run, daemon=True).start()
     return Result.ok(data={'task_id': task_id}).to_response()
@@ -209,45 +213,30 @@ def _cancel_task_response(task_id):
     if outcome == 'finished':
         return Result.fail('任务已经结束，无法取消', data=task).to_response()
 
-    # A1/A2 过渡兼容：旧 worker 仍读取内存标志；持久化字段是唯一对外事实来源。
-    _cancel_flags[task_id] = True
     message = '已发送取消请求'
     return Result.ok(data=task, message=message).to_response()
 
 
 @shipping_bp.get('/import/progress/<task_id>')
 def import_progress(task_id):
-    """Deprecated SSE compatibility endpoint backed only by persisted state."""
+    """旧前端兼容：立即返回一次持久化快照，不保持 SSE 长连接。"""
     task = shipping_repository.get_task(task_id)
     if not task:
         return Result.fail('任务不存在').to_response(404)
 
-    def persisted_generate():
-        last_updated_at = None
-        while True:
-            current = shipping_repository.get_task(task_id)
-            if not current:
-                break
-            updated_at = current.updated_at.isoformat() if current.updated_at else None
-            if updated_at != last_updated_at:
-                event = dict(current.progress or {})
-                event.setdefault('step', current.status)
-                if current.status == 'done':
-                    event['step'] = 'done'
-                    event['data'] = current.result
-                elif current.status in ('error', 'cancelled', 'interrupted'):
-                    event['step'] = 'cancelled' if current.status == 'cancelled' else 'error'
-                    event['message'] = current.message or '任务因服务重载中断'
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                last_updated_at = updated_at
-            if current.status in ('done', 'error', 'cancelled', 'interrupted'):
-                break
-            time.sleep(1)
+    event = dict(task.progress or {})
+    event.setdefault('step', task.status)
+    if task.status == 'done':
+        event['step'] = 'done'
+        event['data'] = task.result
+    elif task.status in ('error', 'cancelled', 'interrupted'):
+        event['step'] = 'cancelled' if task.status == 'cancelled' else 'error'
+        event['message'] = task.message or '任务因服务重载中断'
 
     return Response(
-        stream_with_context(persisted_generate()),
+        f"data: {json.dumps(event, ensure_ascii=False)}\n\n",
         mimetype='text/event-stream',
-        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+        headers={'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no'},
     )
 
 

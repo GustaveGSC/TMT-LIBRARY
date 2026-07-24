@@ -14,6 +14,12 @@ from upload_validation import ensure_spreadsheet_row_limit
 # 直辖市省名集合：这些省的 city 字段统一填写为省名本身
 _MUNICIPALITY_PROVINCES = {'北京市', '天津市', '上海市', '重庆市'}
 
+
+def _raise_if_cancelled(cancel_check=None):
+    if cancel_check and cancel_check():
+        raise InterruptedError('用户已请求取消任务')
+
+
 def _normalize_city(province: str, city) -> str:
     """直辖市 city 统一归一到省名（如北京市），避免出现区级名或 null"""
     if province in _MUNICIPALITY_PROVINCES:
@@ -111,14 +117,18 @@ def _extract_row(row, col_map: Dict[str, int]) -> Dict:
     }
 
 
-def _parse_xlsx_rows(file_bytes: bytes) -> List[Dict]:
+def _parse_xlsx_rows(file_bytes: bytes, cancel_check=None) -> List[Dict]:
     """解析 xlsx：按列名匹配提取字段，与列顺序无关"""
+    _raise_if_cancelled(cancel_check)
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+    _raise_if_cancelled(cancel_check)
     ws = wb.active
     rows = []
     col_map = None
     for i, row in enumerate(ws.iter_rows(values_only=True)):
         ensure_spreadsheet_row_limit(i)
+        if i % 500 == 0:
+            _raise_if_cancelled(cancel_check)
         if i == 0:
             col_map = _build_col_map(row)  # 校验必要列是否存在，返回列名→索引映射
             continue
@@ -127,14 +137,18 @@ def _parse_xlsx_rows(file_bytes: bytes) -> List[Dict]:
     return rows
 
 
-def _parse_csv_rows(file_bytes: bytes) -> List[Dict]:
+def _parse_csv_rows(file_bytes: bytes, cancel_check=None) -> List[Dict]:
     """解析 csv：按列名匹配提取字段，与列顺序无关"""
+    _raise_if_cancelled(cancel_check)
     text = file_bytes.decode('utf-8-sig', errors='replace')
+    _raise_if_cancelled(cancel_check)
     reader = csv.reader(io.StringIO(text))
     rows = []
     col_map = None
     for i, row in enumerate(reader):
         ensure_spreadsheet_row_limit(i)
+        if i % 500 == 0:
+            _raise_if_cancelled(cancel_check)
         if i == 0:
             col_map = _build_col_map(row)  # 校验必要列是否存在，返回列名→索引映射
             continue
@@ -187,15 +201,19 @@ def _extract_finance_row(row, col_map: Dict[str, int]) -> Dict:
     }
 
 
-def _parse_xlsx_finance_rows(file_bytes: bytes):
+def _parse_xlsx_finance_rows(file_bytes: bytes, cancel_check=None):
     """解析财务 xlsx，返回 (shipping_rows, return_rows, aftersale_count)"""
+    _raise_if_cancelled(cancel_check)
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+    _raise_if_cancelled(cancel_check)
     ws = wb.active
     shipping_rows, return_rows = [], []
     aftersale_count = 0
     col_map = None
     for i, row in enumerate(ws.iter_rows(values_only=True)):
         ensure_spreadsheet_row_limit(i)
+        if i % 500 == 0:
+            _raise_if_cancelled(cancel_check)
         if i == 0:
             col_map = _build_col_map(row, required=_REQUIRED_FINANCE_COL_NAMES)
             continue
@@ -218,15 +236,19 @@ def _parse_xlsx_finance_rows(file_bytes: bytes):
     return shipping_rows, return_rows, aftersale_count
 
 
-def _parse_csv_finance_rows(file_bytes: bytes):
+def _parse_csv_finance_rows(file_bytes: bytes, cancel_check=None):
     """解析财务 csv，返回 (shipping_rows, return_rows, aftersale_count)"""
+    _raise_if_cancelled(cancel_check)
     text = file_bytes.decode('utf-8-sig', errors='replace')
+    _raise_if_cancelled(cancel_check)
     reader = csv.reader(io.StringIO(text))
     shipping_rows, return_rows = [], []
     aftersale_count = 0
     col_map = None
     for i, row in enumerate(reader):
         ensure_spreadsheet_row_limit(i)
+        if i % 500 == 0:
+            _raise_if_cancelled(cancel_check)
         if i == 0:
             col_map = _build_col_map(row, required=_REQUIRED_FINANCE_COL_NAMES)
             continue
@@ -460,7 +482,7 @@ def _merge_return_rows(rows: List[Dict]):
 
 
 def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=None,
-                    commit_chunks: bool = True):
+                    commit_chunks: bool = True, cancel_check=None):
     """
     对给定订单号列表，执行成品组合匹配，写入 shipping_order_finished。
     source: 'shipping' 或 'finance'，决定从哪个来源的 shipping_record 读取产成品数据。
@@ -469,6 +491,7 @@ def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=
       2. 遍历产品库中所有成品，找出成品的产成品集合是订单产成品集合的子集
       3. 贪心匹配：优先匹配产成品数最多的成品，按最小分量计算成品数量
     """
+    _raise_if_cancelled(cancel_check)
     if not order_nos:
         return
 
@@ -487,6 +510,7 @@ def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=
     finished_list = ProductFinished.query.options(
         selectinload(ProductFinished.packaged_list)
     ).all()
+    _raise_if_cancelled(cancel_check)
     # finished_map: finished_code → (finished_name, frozenset of packaged codes)
     finished_map = {}
     for f in finished_list:
@@ -517,8 +541,10 @@ def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=
     CHUNK = 2000
     order_data: Dict = {}
     for i in range(0, total_orders, CHUNK):
+        _raise_if_cancelled(cancel_check)
         chunk = order_nos[i:i + CHUNK]
         order_data.update(shipping_repository.get_order_products(chunk, source=source))
+        _raise_if_cancelled(cancel_check)
         if progress_cb:
             progress_cb('preparing', message='正在加载发货数据…',
                         current=min(i + CHUNK, total_orders), total=total_orders)
@@ -526,23 +552,29 @@ def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=
     # 分批加载销退数据
     return_data: Dict = {}
     for i in range(0, total_orders, CHUNK):
+        _raise_if_cancelled(cancel_check)
         chunk = order_nos[i:i + CHUNK]
         return_data.update(shipping_repository.get_order_return_products(chunk))
+        _raise_if_cancelled(cancel_check)
         if progress_cb:
             progress_cb('preparing', message='正在加载销退数据…',
                         current=min(i + CHUNK, total_orders), total=total_orders)
 
     # 对每个订单预先跑一次贪心匹配，得到 {order_no: {finished_code: return_qty}}
     return_resolved: Dict[str, Dict] = {}
-    for order_no, return_products in return_data.items():
+    for idx, (order_no, return_products) in enumerate(return_data.items()):
+        if idx % 100 == 0:
+            _raise_if_cancelled(cancel_check)
         order_ret, _remaining_ret = _greedy_match_finished(
             return_products, sorted_finished, equiv_map, candidate_index,
         )
         return_resolved[order_no] = order_ret
 
     # 清除旧结果（只清除同一 source 的记录）
+    _raise_if_cancelled(cancel_check)
     shipping_repository.delete_order_finished(
         order_nos, source=source, commit_chunks=commit_chunks,
+        cancel_check=cancel_check,
     )
 
     resolved_at = now_cst()
@@ -550,6 +582,8 @@ def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=
     total_orders = len(order_data)
 
     for idx, (order_no, data) in enumerate(order_data.items()):
+        if idx % 100 == 0:
+            _raise_if_cancelled(cancel_check)
         # 每处理 100 个订单推送一次进度
         if progress_cb and idx % 100 == 0:
             progress_cb('resolving', current=idx, total=total_orders)
@@ -609,8 +643,10 @@ def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=
     if progress_cb:
         progress_cb('resolving', current=total_orders, total=total_orders)
 
+    _raise_if_cancelled(cancel_check)
     shipping_repository.bulk_insert_order_finished(
         to_insert, progress_cb=progress_cb, commit_chunks=commit_chunks,
+        cancel_check=cancel_check,
     )
 
 
@@ -624,7 +660,8 @@ def _get_finished_name(finished) -> str:
 class ShippingService:
 
     def import_shipping(self, filename: str, file_bytes: bytes,
-                        progress_cb=None, cancel_check=None) -> Dict:
+                        progress_cb=None, cancel_check=None,
+                        begin_commit=None) -> Dict:
         """导入发货清单：文件内合并 → 与库去重 → 插入新行 → 成品组合"""
         def notify(step, **kwargs):
             if progress_cb:
@@ -632,16 +669,24 @@ class ShippingService:
 
         batch = None
         try:
+            _raise_if_cancelled(cancel_check)
             notify('parsing')
             name_lower = filename.lower()
-            rows = _parse_csv_rows(file_bytes) if name_lower.endswith('.csv') else _parse_xlsx_rows(file_bytes)
+            rows = (
+                _parse_csv_rows(file_bytes, cancel_check=cancel_check)
+                if name_lower.endswith('.csv')
+                else _parse_xlsx_rows(file_bytes, cancel_check=cancel_check)
+            )
 
             total = len(rows)
             rows, merged_away_rows = _merge_rows(rows)   # 文件内相同 key 合并
+            _raise_if_cancelled(cancel_check)
 
             # 与数据库比对，分出新行和跳过行
             keys          = [(r.get('ecommerce_order_no'), r.get('line_no'), r.get('product_code')) for r in rows]
-            existing_keys = shipping_repository.get_existing_keys(keys, record_type='shipping')
+            existing_keys = shipping_repository.get_existing_keys(
+                keys, record_type='shipping', cancel_check=cancel_check,
+            )
             new_rows      = [r for r in rows if (r.get('ecommerce_order_no'), r.get('line_no'), r.get('product_code')) not in existing_keys]
             skipped_rows  = [r for r in rows if (r.get('ecommerce_order_no'), r.get('line_no'), r.get('product_code')) in existing_keys]
             notify('parsed', total=total)
@@ -656,7 +701,8 @@ class ShippingService:
                 notify('inserting', current=current, total=total_rows)
 
             inserted = shipping_repository.bulk_insert_shipping(batch.id, new_rows, progress_cb=on_insert_progress,
-                                                                    record_type='shipping', commit_chunks=False)
+                                                                    record_type='shipping', commit_chunks=False,
+                                                                    cancel_check=cancel_check)
             notify('inserted', inserted=inserted, skipped=len(skipped_rows))
 
             # 对本批次新增的订单触发成品组合
@@ -666,8 +712,12 @@ class ShippingService:
                 _resolve_orders(
                     new_order_nos, source='shipping', progress_cb=progress_cb,
                     commit_chunks=False,
+                    cancel_check=cancel_check,
                 )
 
+            _raise_if_cancelled(cancel_check)
+            if begin_commit and not begin_commit():
+                raise InterruptedError('取消请求先于最终提交生效')
             db.session.commit()
 
             return {
@@ -683,7 +733,8 @@ class ShippingService:
             raise
 
     def import_finance(self, filename: str, file_bytes: bytes,
-                       progress_cb=None, cancel_check=None) -> Dict:
+                       progress_cb=None, cancel_check=None,
+                       begin_commit=None) -> Dict:
         """导入财务清单：过滤售后组 → 拆分发货/销退 → 文件内合并 → 与库去重 → 插入 → 成品组合"""
         def notify(step, **kwargs):
             if progress_cb:
@@ -691,22 +742,30 @@ class ShippingService:
 
         batch = None
         try:
+            _raise_if_cancelled(cancel_check)
             notify('parsing')
             name_lower = filename.lower()
             if name_lower.endswith('.csv'):
-                shipping_rows, return_rows, aftersale_count = _parse_csv_finance_rows(file_bytes)
+                shipping_rows, return_rows, aftersale_count = _parse_csv_finance_rows(
+                    file_bytes, cancel_check=cancel_check,
+                )
             else:
-                shipping_rows, return_rows, aftersale_count = _parse_xlsx_finance_rows(file_bytes)
+                shipping_rows, return_rows, aftersale_count = _parse_xlsx_finance_rows(
+                    file_bytes, cancel_check=cancel_check,
+                )
 
             total = len(shipping_rows) + len(return_rows) + aftersale_count
 
             # 文件内合并
             shipping_rows, shipping_merged_away = _merge_finance_shipping_rows(shipping_rows)
             return_rows,   return_merged_away   = _merge_return_rows(return_rows)
+            _raise_if_cancelled(cancel_check)
 
             # DB 去重：发货行按 (order_no, product_code, date, source='finance')
             s_keys          = [(r.get('ecommerce_order_no'), r.get('product_code'), r.get('shipped_date')) for r in shipping_rows]
-            shipping_snapshots = shipping_repository.get_finance_shipping_snapshots(s_keys)
+            shipping_snapshots = shipping_repository.get_finance_shipping_snapshots(
+                s_keys, cancel_check=cancel_check,
+            )
             new_shipping = []
             changed_shipping = []
             unchanged_shipping = []
@@ -728,7 +787,9 @@ class ShippingService:
 
             # DB 去重：销退行（复用 return_record 去重）
             r_keys          = [(r.get('ecommerce_order_no'), r.get('product_code'), r.get('shipped_date')) for r in return_rows]
-            return_snapshots = shipping_repository.get_finance_return_snapshots(r_keys)
+            return_snapshots = shipping_repository.get_finance_return_snapshots(
+                r_keys, cancel_check=cancel_check,
+            )
             new_returns = []
             changed_returns = []
             unchanged_returns = []
@@ -765,11 +826,13 @@ class ShippingService:
                 batch.id, shipping_to_write,
                 progress_cb=on_insert_progress,
                 record_type='shipping', source='finance', commit_chunks=False,
+                cancel_check=cancel_check,
             )
             shipping_repository.bulk_insert_return(
                 batch.id, returns_to_write,
                 progress_cb=on_insert_progress,
                 commit_chunks=False,
+                cancel_check=cancel_check,
             )
             notify('inserted',
                    inserted=len(new_shipping),
@@ -790,8 +853,12 @@ class ShippingService:
                 _resolve_orders(
                     affected_order_nos, source='finance', progress_cb=progress_cb,
                     commit_chunks=False,
+                    cancel_check=cancel_check,
                 )
 
+            _raise_if_cancelled(cancel_check)
+            if begin_commit and not begin_commit():
+                raise InterruptedError('取消请求先于最终提交生效')
             db.session.commit()
 
             return {

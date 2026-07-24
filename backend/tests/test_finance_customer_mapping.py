@@ -144,13 +144,13 @@ def test_finance_reimport_writes_changed_rows_and_incrementally_resolves(monkeyp
     repository = shipping_module.shipping_repository
     monkeypatch.setattr(
         shipping_module, '_parse_csv_finance_rows',
-        lambda _content: ([shipping_row], [return_row], 0),
+        lambda _content, **_kwargs: ([shipping_row], [return_row], 0),
     )
     monkeypatch.setattr(shipping_module, '_merge_finance_shipping_rows', lambda rows: (rows, []))
     monkeypatch.setattr(shipping_module, '_merge_return_rows', lambda rows: (rows, []))
     monkeypatch.setattr(
         repository, 'get_finance_shipping_snapshots',
-        lambda _keys: {
+        lambda _keys, **_kwargs: {
             ('ORDER-1', 'SKU-1', date(2026, 7, 21)): {
                 'channel_name': None, 'product_name': None, 'spec': None,
                 'quantity': None, 'province': None, 'city': None, 'district': None,
@@ -160,7 +160,7 @@ def test_finance_reimport_writes_changed_rows_and_incrementally_resolves(monkeyp
     )
     monkeypatch.setattr(
         repository, 'get_finance_return_snapshots',
-        lambda _keys: {
+        lambda _keys, **_kwargs: {
             ('ORDER-1', 'SKU-1', date(2026, 7, 21)): {
                 'quantity': 1, 'warehouse_name': '退货仓',
                 'customer_alias': '旧简称',
@@ -219,7 +219,7 @@ def test_identical_finance_reimport_skips_writes_and_resolve(monkeypatch):
     calls = {'shipping_rows': None, 'return_rows': None, 'resolved': 0}
     monkeypatch.setattr(
         shipping_module, '_parse_csv_finance_rows',
-        lambda _content: ([row], [], 0),
+        lambda _content, **_kwargs: ([row], [], 0),
     )
     monkeypatch.setattr(
         shipping_module, '_merge_finance_shipping_rows', lambda rows: (rows, []),
@@ -227,14 +227,17 @@ def test_identical_finance_reimport_skips_writes_and_resolve(monkeypatch):
     monkeypatch.setattr(shipping_module, '_merge_return_rows', lambda rows: (rows, []))
     monkeypatch.setattr(
         repository, 'get_finance_shipping_snapshots',
-        lambda _keys: {
+        lambda _keys, **_kwargs: {
             ('ORDER-1', 'SKU-1', date(2026, 7, 21)): {
                 key: row.get(key)
                 for key in shipping_module._FINANCE_SHIPPING_COMPARE_FIELDS
             },
         },
     )
-    monkeypatch.setattr(repository, 'get_finance_return_snapshots', lambda _keys: {})
+    monkeypatch.setattr(
+        repository, 'get_finance_return_snapshots',
+        lambda _keys, **_kwargs: {},
+    )
     monkeypatch.setattr(repository, 'create_batch', lambda *_args: SimpleNamespace(id=10))
     monkeypatch.setattr(
         repository, 'bulk_insert_shipping',
