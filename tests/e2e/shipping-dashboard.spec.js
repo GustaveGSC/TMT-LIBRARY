@@ -149,3 +149,31 @@ test.describe('ShippingDashboard · 筛选抽屉完整交互（打开—可达�
     })
   }
 })
+
+// 2026-07-24 复核发现：紧凑档打开抽屉后，把窗口拖宽跨过 1200px 断点再缩回来，
+// 抽屉会带着上次残留的"打开"状态自动重新出现——因为 filterPanelOpen 只在用户
+// 主动点击时改变，离开紧凑档时没人清空它。这里做真实的"打开→跨断点变宽→
+// 缩回紧凑档"三段式动态视口测试，验证不会自动弹出。
+test.describe('ShippingDashboard · 跨断点动态回归（紧凑↔宽屏切换不残留抽屉状态）', () => {
+  test('紧凑档打开抽屉 → 拖宽过 1200px → 缩回紧凑档，抽屉不应自动重新出现', async ({ page }) => {
+    await page.setViewportSize({ width: 1093, height: 700 })
+    await gotoShippingDashboard(page)
+
+    const panel = page.locator('[data-testid="shipping-filter-panel"]')
+    await page.locator('[data-testid="shipping-filter-toggle"]').click()
+    await expect(panel).toHaveClass(/is-open/)
+    await page.waitForTimeout(350)
+
+    // 跨过 1200px 断点，变宽到标准桌面
+    await page.setViewportSize({ width: 1400, height: 700 })
+    await page.waitForTimeout(100) // matchMedia change 事件 + watch 回调
+
+    // 缩回紧凑档
+    await page.setViewportSize({ width: 1093, height: 700 })
+    await page.waitForTimeout(350)
+
+    await expect(panel, '重新进入紧凑档后抽屉不应带着上次的打开状态自动出现').not.toHaveClass(/is-open/)
+    const box = await panel.boundingBox()
+    expect(box.x, '抽屉应处于关闭状态（视口外）').toBeLessThan(0)
+  })
+})

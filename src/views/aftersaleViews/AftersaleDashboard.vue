@@ -85,6 +85,15 @@ const filterDrawerOpen    = ref(false) // 紧凑布局（<1200px）：筛选栏�
 // 与 filterCollapsed（宽屏下的"收起为窄条"功能）是两套不同的 UI 语义，不复用同一个 ref，
 // 详见 handoff/2026-07-24-codex-shipping-responsive-rereview.md 对"不要机械复制"的要求。
 const { isCompactOrBelow: isCompactLayout } = useResponsiveLayout()
+
+// 离开紧凑档（拖宽窗口/取消系统缩放跨过 1200px）时清空抽屉打开状态，
+// 否则下次窗口再变窄会带着上次残留的"打开"状态突然弹出抽屉。
+// 只清这一个状态，不影响 filterCollapsed 或其他任何逻辑。
+// 见 handoff/2026-07-24-codex-aftersale-responsive-review.md
+watch(isCompactLayout, (compact) => {
+  if (!compact) filterDrawerOpen.value = false
+})
+
 // 无同期发货数据处理模式：all=全显示 | hide=隐藏但不影响占比计算 | exclude=从所有计算中剔除
 const noSalesMode         = ref('all')
 // 原因维度跳过分类级别，直接进入具体原因视图

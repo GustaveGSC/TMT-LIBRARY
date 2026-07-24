@@ -127,3 +127,27 @@ test.describe('AftersaleDashboard · 筛选抽屉完整交互（打开—可达�
     })
   }
 })
+
+// 2026-07-24 复核发现：紧凑档打开抽屉后跨断点变宽再缩回，抽屉会带着残留的
+// "打开"状态自动重新出现。真实的"打开→跨 1200px 变宽→缩回紧凑档"三段式验证。
+test.describe('AftersaleDashboard · 跨断点动态回归（紧凑↔宽屏切换不残留抽屉状态）', () => {
+  test('紧凑档打开抽屉 → 拖宽过 1200px → 缩回紧凑档，抽屉不应自动重新出现', async ({ page }) => {
+    await page.setViewportSize({ width: 1093, height: 700 })
+    await gotoAftersaleDashboard(page)
+
+    const panel = page.locator('[data-testid="aftersale-filter-panel"]')
+    await page.locator('[data-testid="aftersale-filter-toggle"]').click()
+    await expect(panel).toHaveClass(/is-open/)
+    await page.waitForTimeout(350)
+
+    await page.setViewportSize({ width: 1400, height: 700 })
+    await page.waitForTimeout(100)
+
+    await page.setViewportSize({ width: 1093, height: 700 })
+    await page.waitForTimeout(350)
+
+    await expect(panel, '重新进入紧凑档后抽屉不应带着上次的打开状态自动出现').not.toHaveClass(/is-open/)
+    const box = await panel.boundingBox()
+    expect(box.x, '抽屉应处于关闭状态（视口外）').toBeLessThan(0)
+  })
+})

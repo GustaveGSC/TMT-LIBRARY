@@ -1355,6 +1355,14 @@ const filterPanelOpen = ref(false)
 // 专门解决笔记本分辨率+系统缩放场景，见 handoff/2026-07-23-codex-responsive-ui-redesign-proposal.md
 const { isCompactOrBelow: isCompactLayout } = useResponsiveLayout()
 
+// 离开紧凑档（拖宽窗口/取消系统缩放跨过 1200px）时清空抽屉打开状态，
+// 否则下次窗口再变窄会带着上次残留的"打开"状态突然弹出抽屉。
+// 只清这一个状态，不影响 isMobile 或其他任何逻辑。
+// 见 handoff/2026-07-24-codex-aftersale-responsive-review.md
+watch(isCompactLayout, (compact) => {
+  if (!compact) filterPanelOpen.value = false
+})
+
 function onWindowResize() {
   isMobile.value = window.innerWidth <= 768
   // 全屏中实时跟踪朝向，手机转横屏后取消旋转变换
