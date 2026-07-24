@@ -3770,12 +3770,6 @@ watch(groupBy, () => {
    断点数值须与 src/utils/responsiveBreakpoints.js 的 BREAKPOINTS.standard(1200) 保持一致 */
 @media (max-width: 1199px) {
 
-  /* ── 内容区兜底：正常情况下 chart-wrap 拿 flex:1 剩余空间不需要滚动；
-     极端窄高视口（如手机横屏 844×390）工具栏两行+底部维度栏叠加后可能超出可用高度，
-     此时允许纵向滚动到达被压缩的部分，而不是被全局 overflow:hidden 直接裁掉 ── */
-  .content-panel { overflow-y: auto; overflow-x: hidden; }
-  .chart-wrap { min-height: 220px; }
-
   /* ── Top10 排行：空间不足时移到图表下方，不再横向挤占图表宽度 ──
      地图和榜单堆叠后总高度可能超过 chart-wrap 实际可用高度（尤其 844×390 这类矮视口），
      chart-wrap 原来的 overflow:hidden 会把超出部分直接裁掉；这里改成 overflow-y:auto，
@@ -3835,16 +3829,22 @@ watch(groupBy, () => {
     margin-bottom: 5px;
   }
 
-  /* ── content-panel：toolbar(auto) + chart(1fr)，footer 已移除 ── */
+  /* ── content-panel：toolbar(auto) + chart(minmax(220px,1fr))，footer 已移除 ──
+     这是本档位 content-panel/chart-wrap 唯一的声明来源（不要在本 @media 块内再加第二处，
+     CSS 后声明覆盖前面，之前出现过重复声明互相抵消、"允许滚动"实际没生效的问题）。
+     minmax(220px, 1fr)：图表行正常情况下随剩余空间伸缩，但极端矮视口下不会被压到 0，
+     行高触底 220px 时 grid 总高度会超出 content-panel 容器，靠下面的 overflow-y:auto 滚动到达，
+     不再依赖全局 overflow:hidden 裁切 ── */
   .content-panel {
     display: grid;
-    grid-template-rows: auto 1fr;
+    grid-template-rows: auto minmax(220px, 1fr);
     grid-template-columns: 1fr;
     gap: 6px;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
     min-height: 0;
   }
-  .chart-wrap { min-height: 0; }
+  .chart-wrap { min-height: 220px; }
 
   /* ── 工具栏：两行布局（第一行筛选+指标，第二行图表类型） ── */
   .chart-toolbar {

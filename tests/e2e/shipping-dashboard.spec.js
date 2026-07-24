@@ -1,8 +1,13 @@
-import { test } from '@playwright/test'
+import { test, expect } from '@playwright/test'
 import { VIEWPORTS } from './viewports.js'
 import { BREAKPOINTS } from '../../src/utils/responsiveBreakpoints.js'
 import { mockShippingDashboard } from './fixtures/shippingDashboard.js'
-import { assertResponsiveLayoutHealthy, collectConsoleErrors, assertNoConsoleErrors } from './layoutAssertions.js'
+import {
+  assertResponsiveLayoutHealthy,
+  assertContainerScrollsWhenOverflowing,
+  collectConsoleErrors,
+  assertNoConsoleErrors,
+} from './layoutAssertions.js'
 
 // 第1批试点：ShippingDashboard 响应式布局回归。
 // 用 page.route() 拦截接口 + 注入前端路由守卫需要的最小登录态，不依赖真实测试账号——
@@ -83,6 +88,64 @@ test.describe('ShippingDashboard · 地图+Top10榜单视图响应式回归（�
       ]
       await assertResponsiveLayoutHealthy(page, { keySelectors })
       assertNoConsoleErrors(consoleErrors)
+    })
+  }
+})
+
+// 2026-07-24 复核发现：源码里 .content-panel{overflow-y:auto} 被同一 @media 块内后面
+// 声明的 overflow:hidden 覆盖，实际根本没生效，但当时的测试只验证元素可达/不裁切，
+// 测不出"允许滚动的兜底是否真的生效"。这里在一个明确会撑爆可用高度的极端矮视口下，
+// 直接断言最终计算样式 + 真实滚动能力，专门堵住这类"源码看似修了，最终样式被覆盖"的回归。
+test.describe('ShippingDashboard · content-panel 滚动兜底在极端矮视口下真实生效', () => {
+  test('844x260（工具栏 + 图表最小高度之和明显超过视口高度）', async ({ page }) => {
+    await page.setViewportSize({ width: 844, height: 260 })
+    await gotoShippingDashboard(page)
+    await assertContainerScrollsWhenOverflowing(page, '.content-panel')
+  })
+})
+
+// 2026-07-24 复核要求：只验证筛选按钮存在不够，必须覆盖"打开—操作区可达—关闭"完整交互，
+// 才能证明扩大到 <1200px 后复用的既有抽屉机制没有交互回归。
+test.describe('ShippingDashboard · 筛选抽屉完整交互（打开—可达—关闭）', () => {
+  const DRAWER_VIEWPORTS = [
+    { name: '1093x614-compact-desktop', width: 1093, height: 614 },
+    { name: '390x844-mobile-portrait', width: 390, height: 844 },
+  ]
+
+  for (const viewport of DRAWER_VIEWPORTS) {
+    test(viewport.name, async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height })
+      await gotoShippingDashboard(page)
+
+      // 关闭状态：面板在视口外（transform: translateX(-100%)），中心点命中不到自己
+      const closedBox = await page.locator('[data-testid="shipping-filter-panel"]').boundingBox()
+      expect(closedBox.x, '筛选抽屉初始应处于关闭状态（面板应位于视口左侧之外）').toBeLessThan(0)
+
+      // 打开（面板有 0.28s 的 transform 过渡动画，等动画结束再读取几何位置）
+      await page.locator('[data-testid="shipping-filter-toggle"]').click()
+      const panel = page.locator('[data-testid="shipping-filter-panel"]')
+      await expect(panel, '点击筛选按钮后抽屉应可见').toBeVisible()
+      await expect(panel).toHaveClass(/is-open/)
+      await page.waitForTimeout(350)
+      const openBox = await panel.boundingBox()
+      expect(openBox.x, '抽屉打开后面板应进入视口范围内').toBeGreaterThanOrEqual(0)
+
+      // 操作区可达：查询按钮是筛选面板里最核心的操作入口
+      const queryBtn = page.locator('.btn-query')
+      await expect(queryBtn, '抽屉打开后「查询」按钮应可见可达').toBeVisible()
+      const queryHit = await queryBtn.evaluate((el) => {
+        const rect = el.getBoundingClientRect()
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+        return !!hit && el.contains(hit)
+      })
+      expect(queryHit, '「查询」按钮中心点命中测试失败，可能被遮罩或其他元素挡住').toBe(true)
+
+      // 关闭：点击面板内的关闭按钮
+      await page.locator('.filter-close-btn').click()
+      await expect(panel).not.toHaveClass(/is-open/)
+      await page.waitForTimeout(350)
+      const closedAgainBox = await panel.boundingBox()
+      expect(closedAgainBox.x, '点击关闭按钮后面板应回到视口外').toBeLessThan(0)
     })
   }
 })

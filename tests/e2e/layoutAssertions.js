@@ -49,6 +49,49 @@ export async function assertResponsiveLayoutHealthy(page, { keySelectors = [] } 
   }
 }
 
+/**
+ * 验证某个"允许滚动兜底"的容器在真实内容超高时确实可以滚动，而不是源码写了
+ * overflow:auto/scroll 但被同一 @media 块内后声明的 overflow:hidden 覆盖掉
+ * （2026-07-24 ShippingDashboard 试点复核就发现过这类问题：源码看起来有兜底，
+ * 最终计算样式却被覆盖，测试当时没测出来）。
+ *
+ * 用法：在一个明确会造成该容器内容超出可视高度的视口/场景下调用，
+ * 断言最终计算 overflow、真实 scrollHeight>clientHeight、且滚动操作确实生效。
+ */
+export async function assertContainerScrollsWhenOverflowing(page, selector) {
+  const locator = page.locator(selector)
+  await expect(locator, `滚动容器 ${selector} 应当存在`).toBeVisible()
+
+  const info = await locator.evaluate((el) => ({
+    overflowY: getComputedStyle(el).overflowY,
+    scrollHeight: el.scrollHeight,
+    clientHeight: el.clientHeight,
+  }))
+
+  expect(
+    ['auto', 'scroll'],
+    `滚动容器 ${selector} 最终计算 overflow-y 是 "${info.overflowY}"，不是 auto/scroll——` +
+      `可能被同一 @media 块内后面的声明覆盖了`
+  ).toContain(info.overflowY)
+
+  expect(
+    info.scrollHeight,
+    `滚动容器 ${selector} scrollHeight(${info.scrollHeight}) 不大于 clientHeight(${info.clientHeight})，` +
+      `当前测试场景没有真正制造出内容超高，断言本身没有覆盖到"允许滚动"这条路径`
+  ).toBeGreaterThan(info.clientHeight)
+
+  // 真实滚动操作：设置一个超大 scrollTop，确认浏览器真的接受并处理了滚动，
+  // 不是"overflow 属性写对了但因为某些其他原因（如内容被 position:fixed 覆盖）实际滚不动"
+  const scrolledTo = await locator.evaluate((el) => {
+    el.scrollTop = el.scrollHeight
+    return el.scrollTop
+  })
+  expect(
+    scrolledTo,
+    `滚动容器 ${selector} 设置 scrollTop 后仍为 0，容器实际无法滚动`
+  ).toBeGreaterThan(0)
+}
+
 /** 收集页面加载期间的控制台 error 级别日志（Vue/ECharts 布局异常等），配合 assertNoConsoleErrors 使用 */
 export function collectConsoleErrors(page) {
   const errors = []
