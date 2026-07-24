@@ -17,7 +17,7 @@ shipping_bp = Blueprint('shipping', __name__)
 # 用 task_id（UUID）作为访问凭证，从 before_request 中豁免。
 _SSE_ENDPOINTS = frozenset({'shipping.import_progress'})
 
-_VIEW_POST = ('/chart-data', '/chart-options', '/warehouses/filter')
+_VIEW_POST = ('/chart-data',)
 
 def _shipping_guard():
     if request.endpoint in _SSE_ENDPOINTS:
