@@ -24,6 +24,11 @@ src/stores/product/
 - 数据管理区：导入数据 / 编码规则 / 分类管理 / 标签管理 / **参数管理**
 - **数据管理区需要 `product:edit` 权限才显示**（`v-if="canEditProduct"`）
 - **概览分类卡片**：每块显示该分类成品总数 + 待处理数量（`cat.unprocessed > 0` 时红色显示「X 个待处理」）；统计均排除 `ignored` 状态产品
+- **生命周期更新**（`handleLifecycleUpdate`）：`POST /api/product/lifecycle/update` 启动持久化任务
+  （`product_lifecycle_task` 表，2026-07-24 起），进度改用 `pollProductLifecycleTask()` 短轮询
+  `GET /api/product/lifecycle/tasks/:task_id`（1秒间隔，不重叠，终态立即停止），不再创建
+  `EventSource`；遇到 409（已有任务在跑）用 `getConflictTaskId()` 接管返回的 `task_id`，而不是提示
+  失败后中断；组件卸载或发起新任务前会 `stop()` 清理上一个轮询器
 
 ## ProductTable.vue 说明
 - 双表格布局：成品表（上）+ 产成品表（下）

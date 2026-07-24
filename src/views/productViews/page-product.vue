@@ -1,6 +1,6 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
-import { ref, reactive, computed, watch, onMounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import WindowControls from '@/components/common/WindowControls.vue'
 import ProductTable  from './ProductTable.vue'
@@ -8,7 +8,9 @@ import ProductImage  from './ProductImage.vue'
 import ProductChart  from './ProductChart.vue'
 import { ArrowLeft, Upload, Setting, Folder, Collection, Memo, Timer, Tools } from '@element-plus/icons-vue'
 import { usePermission } from '@/composables/usePermission'
-import http, { getBaseURL } from '@/api/http'
+import http from '@/api/http'
+import { pollProductLifecycleTask } from '@/utils/productLifecyclePoll'
+import { getConflictTaskId } from '@/utils/taskConflict'
 
 // ── 权限 ──────────────────────────────────────────
 const { canEditProduct } = usePermission()
@@ -122,8 +124,15 @@ const CAT_COLORS = ['#c4883a', '#4a8fc0', '#6ab47a', '#9c6fba', '#e07070', '#70a
 const categoryStats = ref([])
 
 // ── 生命周期更新 ──────────────────────────────────
+let activeLifecyclePoller = null
+onUnmounted(() => {
+  activeLifecyclePoller?.stop()
+})
+
 async function handleLifecycleUpdate() {
   if (lifecycleRunning.value) return
+  activeLifecyclePoller?.stop()
+  activeLifecyclePoller = null
   showLifecycleDialog.value = true
   lifecycleRunning.value  = true
   lifecycleCurrent.value  = 0
@@ -132,47 +141,45 @@ async function handleLifecycleUpdate() {
   try {
     const { ElMessage } = await import('element-plus')
     const res = await http.post('/api/product/lifecycle/update')
-    if (!res.success) {
+    const conflictTaskId = getConflictTaskId(res)
+    if (!res.success && !conflictTaskId) {
       ElMessage.error(res.message || '启动失败')
       showLifecycleDialog.value = false
       return
     }
-    const taskId = res.data.task_id
+    if (conflictTaskId) {
+      ElMessage.warning(res.message || '已有生命周期更新任务在运行，正在接入该任务的进度')
+    }
+    const taskId = conflictTaskId || res.data.task_id
 
     await new Promise((resolve, reject) => {
-      const es = new EventSource(
-        `${getBaseURL()}/api/product/lifecycle/progress/${taskId}`
-      )
-      es.onmessage = (event) => {
-        const data = JSON.parse(event.data)
-        if (data.step === 'processing') {
-          lifecycleCurrent.value = data.current
-          lifecycleTotal.value   = data.total
-        } else if (data.step === 'done') {
-          es.close()
-          const d = data.data
-          ElMessage.success(
-            `生命周期更新完成，共更新 ${d.updated} 条记录（${d.total_models} 个型号）`
-          )
-          showLifecycleDialog.value = false
-          resolve()
-        } else if (data.step === 'error') {
-          es.close()
-          ElMessage.error(data.message || '更新失败')
-          showLifecycleDialog.value = false
-          reject(new Error(data.message))
-        }
-      }
-      es.onerror = () => {
-        es.close()
-        ElMessage.error('连接中断，请重试')
-        showLifecycleDialog.value = false
-        reject(new Error('SSE 连接中断'))
-      }
+      activeLifecyclePoller = pollProductLifecycleTask(taskId, {
+        onEvent(data) {
+          if (data.step === 'processing') {
+            lifecycleCurrent.value = data.current
+            lifecycleTotal.value   = data.total
+          } else if (data.step === 'done') {
+            activeLifecyclePoller?.stop()
+            const d = data.data
+            ElMessage.success(
+              `生命周期更新完成，共更新 ${d.updated} 条记录（${d.total_models} 个型号）`
+            )
+            showLifecycleDialog.value = false
+            resolve()
+          } else if (data.step === 'error') {
+            activeLifecyclePoller?.stop()
+            ElMessage.error(data.message || '更新失败')
+            showLifecycleDialog.value = false
+            reject(new Error(data.message))
+          }
+        },
+      })
     })
   } catch {
     // ElMessage 已在内部处理
   } finally {
+    activeLifecyclePoller?.stop()
+    activeLifecyclePoller = null
     lifecycleRunning.value = false
   }
 }
