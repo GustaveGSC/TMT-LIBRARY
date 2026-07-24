@@ -153,6 +153,9 @@ POST   /api/product/params/finished/:finished_id      # 全量 Upsert 保存成�
 
 POST   /api/shipping/import/shipping                  # 上传发货清单（发货端），返回 task_id；source='shipping'
 POST   /api/shipping/import/finance                   # 上传财务清单（财务端），返回 task_id；正数量→发货(source='finance')，负数量→销退，售后组过滤
+                                                      #   仅 UPSERT 新增或字段实际变化的行；完全相同行计入 skipped
+                                                      #   新增/变化的发货或销退订单在同一事务内自动增量重算派生组合
+                                                      #   结果 inserted/updated/skipped 与 returns 对应字段分别表示新增/变化/未变化行数
                                                       #   独立销退清单接口已废弃，销退数据统一通过财务清单负数量行导入
                                                       #   Excel/CSV 单文件 20MB、解压后 100MB、最多 50 sheet/100000 行
 GET    /api/shipping/import/progress/:task_id         # SSE 进度流：parsing→parsed→inserting→inserted→resolving→done/error/cancelled

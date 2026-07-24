@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -133,12 +134,12 @@ def test_mapping_service_rejects_invalid_payload(payload):
         shipping_service.save_finance_customer_mapping(payload)
 
 
-def test_finance_reimport_sends_existing_rows_through_upsert(monkeypatch):
+def test_finance_reimport_writes_changed_rows_and_incrementally_resolves(monkeypatch):
     shipping_row = {
         'ecommerce_order_no': 'ORDER-1', 'product_code': 'SKU-1',
         'shipped_date': date(2026, 7, 21), 'customer_alias': '新简称',
     }
-    return_row = dict(shipping_row)
+    return_row = {**shipping_row, 'quantity': 2, 'warehouse_name': '退货仓'}
     captured = {}
     repository = shipping_module.shipping_repository
     monkeypatch.setattr(
@@ -148,12 +149,23 @@ def test_finance_reimport_sends_existing_rows_through_upsert(monkeypatch):
     monkeypatch.setattr(shipping_module, '_merge_finance_shipping_rows', lambda rows: (rows, []))
     monkeypatch.setattr(shipping_module, '_merge_return_rows', lambda rows: (rows, []))
     monkeypatch.setattr(
-        repository, 'get_existing_finance_keys',
-        lambda _keys: {('ORDER-1', 'SKU-1', date(2026, 7, 21))},
+        repository, 'get_finance_shipping_snapshots',
+        lambda _keys: {
+            ('ORDER-1', 'SKU-1', date(2026, 7, 21)): {
+                'channel_name': None, 'product_name': None, 'spec': None,
+                'quantity': None, 'province': None, 'city': None, 'district': None,
+                'customer_alias': '旧简称',
+            },
+        },
     )
     monkeypatch.setattr(
-        repository, 'get_existing_return_keys',
-        lambda _keys: {('ORDER-1', 'SKU-1', date(2026, 7, 21))},
+        repository, 'get_finance_return_snapshots',
+        lambda _keys: {
+            ('ORDER-1', 'SKU-1', date(2026, 7, 21)): {
+                'quantity': 1, 'warehouse_name': '退货仓',
+                'customer_alias': '旧简称',
+            },
+        },
     )
     monkeypatch.setattr(repository, 'create_batch', lambda *_args: SimpleNamespace(id=9))
     monkeypatch.setattr(
@@ -164,17 +176,104 @@ def test_finance_reimport_sends_existing_rows_through_upsert(monkeypatch):
         repository, 'bulk_insert_return',
         lambda _batch, rows, **_kwargs: captured.setdefault('returns', rows) and len(rows),
     )
-    monkeypatch.setattr(repository, 'get_new_order_nos_by_source', lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        shipping_module,
+        '_resolve_orders',
+        lambda order_nos, **kwargs: captured.update(
+            resolved=order_nos,
+            resolve_atomic=not kwargs['commit_chunks'],
+        ),
+    )
     monkeypatch.setattr(shipping_module.db.session, 'commit', lambda: None)
     monkeypatch.setattr(shipping_module.db.session, 'rollback', lambda: None)
 
     result = shipping_service.import_finance('finance.csv', b'content')
 
-    assert captured == {'shipping': [shipping_row], 'returns': [return_row]}
+    assert captured['shipping'] == [shipping_row]
+    assert captured['returns'] == [return_row]
     assert result['inserted'] == 0
     assert result['updated'] == 1
     assert result['inserted_returns'] == 0
     assert result['updated_returns'] == 1
+    assert result['skipped'] == 0
+    assert result['skipped_returns'] == 0
+    assert captured['resolved'] == ['ORDER-1']
+    assert captured['resolve_atomic'] is True
+
+
+def test_identical_finance_reimport_skips_writes_and_resolve(monkeypatch):
+    row = {
+        'ecommerce_order_no': 'ORDER-1',
+        'product_code': 'SKU-1',
+        'shipped_date': date(2026, 7, 21),
+        'channel_name': '渠道',
+        'product_name': '产品',
+        'spec': None,
+        'quantity': Decimal('3'),
+        'province': '浙江省',
+        'city': '杭州市',
+        'district': None,
+        'customer_alias': '客户',
+    }
+    repository = shipping_module.shipping_repository
+    calls = {'shipping_rows': None, 'return_rows': None, 'resolved': 0}
+    monkeypatch.setattr(
+        shipping_module, '_parse_csv_finance_rows',
+        lambda _content: ([row], [], 0),
+    )
+    monkeypatch.setattr(
+        shipping_module, '_merge_finance_shipping_rows', lambda rows: (rows, []),
+    )
+    monkeypatch.setattr(shipping_module, '_merge_return_rows', lambda rows: (rows, []))
+    monkeypatch.setattr(
+        repository, 'get_finance_shipping_snapshots',
+        lambda _keys: {
+            ('ORDER-1', 'SKU-1', date(2026, 7, 21)): {
+                key: row.get(key)
+                for key in shipping_module._FINANCE_SHIPPING_COMPARE_FIELDS
+            },
+        },
+    )
+    monkeypatch.setattr(repository, 'get_finance_return_snapshots', lambda _keys: {})
+    monkeypatch.setattr(repository, 'create_batch', lambda *_args: SimpleNamespace(id=10))
+    monkeypatch.setattr(
+        repository, 'bulk_insert_shipping',
+        lambda _batch, rows, **_kwargs: calls.update(shipping_rows=rows) or 0,
+    )
+    monkeypatch.setattr(
+        repository, 'bulk_insert_return',
+        lambda _batch, rows, **_kwargs: calls.update(return_rows=rows) or 0,
+    )
+    monkeypatch.setattr(
+        shipping_module, '_resolve_orders',
+        lambda *_args, **_kwargs: calls.update(resolved=calls['resolved'] + 1),
+    )
+    monkeypatch.setattr(shipping_module.db.session, 'commit', lambda: None)
+    monkeypatch.setattr(shipping_module.db.session, 'rollback', lambda: None)
+
+    result = shipping_service.import_finance('finance.csv', b'content')
+
+    assert calls == {'shipping_rows': [], 'return_rows': [], 'resolved': 0}
+    assert result['inserted'] == 0
+    assert result['updated'] == 0
+    assert result['skipped'] == 1
+
+
+def test_finance_diff_mirrors_customer_alias_coalesce_and_quantity_changes():
+    snapshot = {
+        'quantity': Decimal('3'),
+        'customer_alias': '保留简称',
+    }
+    assert shipping_module._finance_row_changed(
+        {'quantity': Decimal('3'), 'customer_alias': None},
+        snapshot,
+        ('quantity', 'customer_alias'),
+    ) is False
+    assert shipping_module._finance_row_changed(
+        {'quantity': Decimal('4'), 'customer_alias': None},
+        snapshot,
+        ('quantity', 'customer_alias'),
+    ) is True
 
 
 def test_resolve_input_prefers_first_nonempty_customer_alias(monkeypatch):

@@ -265,6 +265,25 @@ def _merge_finance_shipping_rows(rows: List[Dict]):
     return list(merged.values()), merged_away
 
 
+_FINANCE_SHIPPING_COMPARE_FIELDS = (
+    'channel_name', 'product_name', 'spec', 'quantity',
+    'province', 'city', 'district', 'customer_alias',
+)
+_FINANCE_RETURN_COMPARE_FIELDS = ('quantity', 'warehouse_name', 'customer_alias')
+
+
+def _finance_row_changed(row: Dict, snapshot: Dict, fields) -> bool:
+    """Mirror UPSERT semantics, including COALESCE for a missing customer alias."""
+    for field in fields:
+        incoming = row.get(field)
+        existing = snapshot.get(field)
+        if field == 'customer_alias' and incoming is None:
+            incoming = existing
+        if incoming != existing:
+            return True
+    return False
+
+
 def _serialize_finance_skipped_row(r: Dict) -> Dict:
     """财务导入跳过行序列化"""
     shipped = r.get('shipped_date')
@@ -627,15 +646,47 @@ class ShippingService:
 
             # DB 去重：发货行按 (order_no, product_code, date, source='finance')
             s_keys          = [(r.get('ecommerce_order_no'), r.get('product_code'), r.get('shipped_date')) for r in shipping_rows]
-            existing_s_keys = shipping_repository.get_existing_finance_keys(s_keys)
-            new_shipping    = [r for r in shipping_rows if (r.get('ecommerce_order_no'), r.get('product_code'), r.get('shipped_date')) not in existing_s_keys]
-            skipped_shipping= [r for r in shipping_rows if (r.get('ecommerce_order_no'), r.get('product_code'), r.get('shipped_date')) in existing_s_keys]
+            shipping_snapshots = shipping_repository.get_finance_shipping_snapshots(s_keys)
+            new_shipping = []
+            changed_shipping = []
+            unchanged_shipping = []
+            for row in shipping_rows:
+                key = (
+                    row.get('ecommerce_order_no'),
+                    row.get('product_code'),
+                    row.get('shipped_date'),
+                )
+                snapshot = shipping_snapshots.get(key)
+                if snapshot is None:
+                    new_shipping.append(row)
+                elif _finance_row_changed(
+                    row, snapshot, _FINANCE_SHIPPING_COMPARE_FIELDS,
+                ):
+                    changed_shipping.append(row)
+                else:
+                    unchanged_shipping.append(row)
 
             # DB 去重：销退行（复用 return_record 去重）
             r_keys          = [(r.get('ecommerce_order_no'), r.get('product_code'), r.get('shipped_date')) for r in return_rows]
-            existing_r_keys = shipping_repository.get_existing_return_keys(r_keys)
-            new_returns     = [r for r in return_rows if (r.get('ecommerce_order_no'), r.get('product_code'), r.get('shipped_date')) not in existing_r_keys]
-            skipped_returns = [r for r in return_rows if (r.get('ecommerce_order_no'), r.get('product_code'), r.get('shipped_date')) in existing_r_keys]
+            return_snapshots = shipping_repository.get_finance_return_snapshots(r_keys)
+            new_returns = []
+            changed_returns = []
+            unchanged_returns = []
+            for row in return_rows:
+                key = (
+                    row.get('ecommerce_order_no'),
+                    row.get('product_code'),
+                    row.get('shipped_date'),
+                )
+                snapshot = return_snapshots.get(key)
+                if snapshot is None:
+                    new_returns.append(row)
+                elif _finance_row_changed(
+                    row, snapshot, _FINANCE_RETURN_COMPARE_FIELDS,
+                ):
+                    changed_returns.append(row)
+                else:
+                    unchanged_returns.append(row)
 
             notify('parsed', total=total)
 
@@ -648,30 +699,36 @@ class ShippingService:
                     raise InterruptedError('用户已中止导入')
                 notify('inserting', current=current, total=total_rows)
 
+            shipping_to_write = new_shipping + changed_shipping
+            returns_to_write = new_returns + changed_returns
             shipping_repository.bulk_insert_shipping(
-                batch.id, shipping_rows,
+                batch.id, shipping_to_write,
                 progress_cb=on_insert_progress,
                 record_type='shipping', source='finance', commit_chunks=False,
             )
             shipping_repository.bulk_insert_return(
-                batch.id, return_rows,
+                batch.id, returns_to_write,
                 progress_cb=on_insert_progress,
                 commit_chunks=False,
             )
             notify('inserted',
                    inserted=len(new_shipping),
-                   updated=len(skipped_shipping),
+                   updated=len(changed_shipping),
                    inserted_returns=len(new_returns),
-                   updated_returns=len(skipped_returns),
-                   skipped=len(skipped_shipping),
+                   updated_returns=len(changed_returns),
+                   skipped=len(unchanged_shipping),
                    aftersale_filtered=aftersale_count)
 
-            # 对本批次财务来源新增订单触发成品组合
-            new_order_nos = shipping_repository.get_new_order_nos_by_source(batch.id, source='finance')
-            if new_order_nos:
-                notify('resolving', current=0, total=len(new_order_nos))
+            # 新增或实际变化的发货/销退都会影响派生组合；完全相同行不写库也不重算。
+            affected_order_nos = sorted({
+                row.get('ecommerce_order_no')
+                for row in shipping_to_write + returns_to_write
+                if row.get('ecommerce_order_no')
+            })
+            if affected_order_nos:
+                notify('resolving', current=0, total=len(affected_order_nos))
                 _resolve_orders(
-                    new_order_nos, source='finance', progress_cb=progress_cb,
+                    affected_order_nos, source='finance', progress_cb=progress_cb,
                     commit_chunks=False,
                 )
 
@@ -681,12 +738,15 @@ class ShippingService:
                 'total':              total,
                 'aftersale_filtered': aftersale_count,
                 'inserted':           len(new_shipping),
-                'updated':            len(skipped_shipping),
+                'updated':            len(changed_shipping),
                 'inserted_returns':   len(new_returns),
-                'updated_returns':    len(skipped_returns),
-                'skipped':            len(skipped_shipping),
-                'skipped_returns':    len(skipped_returns),
-                'skipped_rows':       [_serialize_finance_skipped_row(r) for r in skipped_shipping],
+                'updated_returns':    len(changed_returns),
+                'skipped':            len(unchanged_shipping),
+                'skipped_returns':    len(unchanged_returns),
+                'skipped_rows':       [
+                    _serialize_finance_skipped_row(r)
+                    for r in unchanged_shipping
+                ],
             }
         except Exception:
             db.session.rollback()

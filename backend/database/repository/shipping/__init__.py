@@ -315,6 +315,48 @@ class ShippingRepository:
         return existing
 
     @staticmethod
+    def get_finance_shipping_snapshots(keys: List[Tuple]) -> Dict[Tuple, Dict]:
+        """Return fields that determine whether a finance shipping row changed."""
+        if not keys:
+            return {}
+        snapshots = {}
+        columns = (
+            ShippingRecord.ecommerce_order_no,
+            ShippingRecord.product_code,
+            ShippingRecord.shipped_date,
+            ShippingRecord.channel_name,
+            ShippingRecord.product_name,
+            ShippingRecord.spec,
+            ShippingRecord.quantity,
+            ShippingRecord.province,
+            ShippingRecord.city,
+            ShippingRecord.district,
+            ShippingRecord.customer_alias,
+        )
+        for i in range(0, len(keys), 500):
+            rows = db.session.query(*columns).filter(
+                db.tuple_(
+                    ShippingRecord.ecommerce_order_no,
+                    ShippingRecord.product_code,
+                    ShippingRecord.shipped_date,
+                ).in_(keys[i:i + 500]),
+                ShippingRecord.source == 'finance',
+            ).all()
+            for row in rows:
+                key = (row.ecommerce_order_no, row.product_code, row.shipped_date)
+                snapshots[key] = {
+                    'channel_name': row.channel_name,
+                    'product_name': row.product_name,
+                    'spec': row.spec,
+                    'quantity': row.quantity,
+                    'province': row.province,
+                    'city': row.city,
+                    'district': row.district,
+                    'customer_alias': row.customer_alias,
+                }
+        return snapshots
+
+    @staticmethod
     def bulk_insert_shipping(batch_id: int, rows: List[Dict],
                               progress_cb=None, record_type: str = 'shipping',
                               source: str = 'shipping', commit_chunks: bool = True) -> int:
@@ -419,6 +461,37 @@ class ShippingRepository:
             for r in rows:
                 existing.add((r.ecommerce_order_no, r.product_code, r.shipped_date))
         return existing
+
+    @staticmethod
+    def get_finance_return_snapshots(keys: List[Tuple]) -> Dict[Tuple, Dict]:
+        """Return fields that determine whether a finance return row changed."""
+        if not keys:
+            return {}
+        snapshots = {}
+        columns = (
+            ReturnRecord.ecommerce_order_no,
+            ReturnRecord.product_code,
+            ReturnRecord.shipped_date,
+            ReturnRecord.quantity,
+            ReturnRecord.warehouse_name,
+            ReturnRecord.customer_alias,
+        )
+        for i in range(0, len(keys), 500):
+            rows = db.session.query(*columns).filter(
+                db.tuple_(
+                    ReturnRecord.ecommerce_order_no,
+                    ReturnRecord.product_code,
+                    ReturnRecord.shipped_date,
+                ).in_(keys[i:i + 500]),
+            ).all()
+            for row in rows:
+                key = (row.ecommerce_order_no, row.product_code, row.shipped_date)
+                snapshots[key] = {
+                    'quantity': row.quantity,
+                    'warehouse_name': row.warehouse_name,
+                    'customer_alias': row.customer_alias,
+                }
+        return snapshots
 
     @staticmethod
     def bulk_insert_return(batch_id: int, rows: List[Dict], progress_cb=None,
