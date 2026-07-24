@@ -425,7 +425,7 @@ def test_customer_mapping_migration_adds_schema_and_normalizes_finance_key(tmp_p
     config = _migration_config(database_url)
     command.stamp(config, '20260721_01')
 
-    command.upgrade(config, 'head')
+    command.upgrade(config, '20260721_02')
 
     inspector = sa.inspect(engine)
     assert 'shipping_finance_customer_mapping' in inspector.get_table_names()
@@ -446,7 +446,7 @@ def test_customer_mapping_migration_refuses_duplicate_finance_keys(tmp_path, mon
     command.stamp(config, '20260721_01')
 
     with pytest.raises(RuntimeError, match='重复财务发货键'):
-        command.upgrade(config, 'head')
+        command.upgrade(config, '20260721_02')
 
 
 def test_order_finished_alias_migration_adds_column_and_lookup_index(tmp_path, monkeypatch):
@@ -462,7 +462,7 @@ def test_order_finished_alias_migration_adds_column_and_lookup_index(tmp_path, m
     config = _migration_config(database_url)
     command.stamp(config, '20260721_02')
 
-    command.upgrade(config, 'head')
+    command.upgrade(config, '20260721_03')
 
     inspector = sa.inspect(engine)
     assert 'customer_alias' in {
@@ -494,7 +494,7 @@ def test_mapping_status_migration_preserves_review_decisions(tmp_path, monkeypat
     config = _migration_config(database_url)
     command.stamp(config, '20260721_03')
 
-    command.upgrade(config, 'head')
+    command.upgrade(config, '20260721_04')
 
     inspector = sa.inspect(engine)
     columns = {column['name'] for column in inspector.get_columns(

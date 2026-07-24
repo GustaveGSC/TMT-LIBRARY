@@ -16,7 +16,8 @@ CUSTOMER_MAPPING_REVISION = '20260721_02'
 ORDER_ALIAS_REVISION = '20260721_03'
 MAPPING_STATUS_REVISION = '20260721_04'
 GUEST_REMOVAL_REVISION = '20260723_01'
-HEAD_REVISION = '20260723_02'
+PERMISSION_DOMAIN_REVISION = '20260723_02'
+HEAD_REVISION = '20260724_01'
 CRITICAL_INDEXES = {
     'shipping_order_finished': {
         'ix_sof_source',
@@ -38,7 +39,7 @@ def _config(database_url: str) -> Config:
     return config
 
 
-def test_baseline_has_linear_history_and_permission_cleanup_is_the_only_head():
+def test_baseline_has_linear_history_and_task_lease_is_the_only_head():
     scripts = ScriptDirectory.from_config(_config('sqlite://'))
 
     assert scripts.get_heads() == [HEAD_REVISION]
@@ -49,7 +50,8 @@ def test_baseline_has_linear_history_and_permission_cleanup_is_the_only_head():
     assert scripts.get_revision(ORDER_ALIAS_REVISION).down_revision == CUSTOMER_MAPPING_REVISION
     assert scripts.get_revision(MAPPING_STATUS_REVISION).down_revision == ORDER_ALIAS_REVISION
     assert scripts.get_revision(GUEST_REMOVAL_REVISION).down_revision == MAPPING_STATUS_REVISION
-    assert scripts.get_revision(HEAD_REVISION).down_revision == GUEST_REMOVAL_REVISION
+    assert scripts.get_revision(PERMISSION_DOMAIN_REVISION).down_revision == GUEST_REMOVAL_REVISION
+    assert scripts.get_revision(HEAD_REVISION).down_revision == PERMISSION_DOMAIN_REVISION
 
 
 def test_performance_critical_production_indexes_are_declared_in_metadata():
@@ -156,6 +158,16 @@ def test_baseline_upgrade_adds_only_shipping_task_schema(tmp_path, monkeypatch):
 
     assert before_upgrade == {'alembic_version', 'existing_business_data'}
     assert after_upgrade == before_upgrade | {'shipping_task'}
+    inspector = sa.inspect(engine)
+    shipping_task_columns = {
+        column['name'] for column in inspector.get_columns('shipping_task')
+    }
+    shipping_task_uniques = {
+        tuple(constraint['column_names'])
+        for constraint in inspector.get_unique_constraints('shipping_task')
+    }
+    assert 'lease_key' in shipping_task_columns
+    assert ('lease_key',) in shipping_task_uniques
     with engine.connect() as connection:
         current = MigrationContext.configure(connection).get_current_revision()
     assert current == HEAD_REVISION
@@ -250,7 +262,7 @@ def test_permission_domain_migration_prepares_roles_and_compatibility_mappings(
     monkeypatch.setenv('DATABASE_URL', database_url)
     config = _config(database_url)
     command.stamp(config, GUEST_REMOVAL_REVISION)
-    command.upgrade(config, 'head')
+    command.upgrade(config, PERMISSION_DOMAIN_REVISION)
 
     expected = {
         'developer': {'developer:analytics:view'},

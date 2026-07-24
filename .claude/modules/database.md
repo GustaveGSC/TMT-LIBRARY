@@ -5,6 +5,7 @@
 - Alembic 配置：`alembic.ini`，迁移目录：`backend/migrations/`
 - `20260720_01` 是生产现状的空 baseline，不包含业务 DDL
 - `20260720_02` 新增 `shipping_task`
+- `20260724_01` 为 `shipping_task` 新增数据库级互斥租约 `lease_key`
 - `20260721_01` 清理不受支持的 `product:delete` 权限及既有角色关联
 - `20260721_02` 增加财务客户简称字段、人工映射表，并规范财务行内部唯一键
 - `20260721_03` 将客户简称带入成品组合结果，并增加 `(source, customer_alias)` 聚合索引
@@ -392,3 +393,5 @@ cost_column_alias                          # Excel 列名映射（key → aliase
 - 终态保留 7 天，由创建新任务时顺带清理。
 - 新 worker 启动时把上一进程遗留的 pending/running 标记为 interrupted。
 - 导入业务数据使用单一事务；任务状态通过独立连接提交，不能提交业务 session。
+- `lease_key` 为空或固定为 `shipping_data_mutation`；唯一约束保证发货导入、财务导入、
+  全量重算和旧数据重算任一时刻只能运行一个。任务进入终态或启动恢复将其清空。

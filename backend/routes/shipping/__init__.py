@@ -7,7 +7,11 @@ from flask import Blueprint, request, Response, stream_with_context, current_app
 from services.shipping import shipping_service
 from auth import make_blueprint_guard
 from result import Result
-from database.repository.shipping import shipping_repository, _invalidate_chart_options_cache
+from database.repository.shipping import (
+    ShippingTaskLeaseConflict,
+    shipping_repository,
+    _invalidate_chart_options_cache,
+)
 from upload_validation import read_spreadsheet_upload, UploadValidationError
 from error_handling import internal_error_response, internal_task_error
 
@@ -33,6 +37,22 @@ shipping_bp.before_request(_shipping_guard)
 _task_queues:  dict = {}
 # 取消标志：task_id → bool
 _cancel_flags: dict = {}
+_MUTATION_LEASE_KEY = 'shipping_data_mutation'
+
+
+def _create_mutation_task(task_id, task_type, filename=None):
+    try:
+        shipping_repository.create_task(
+            task_id, task_type, filename, lease_key=_MUTATION_LEASE_KEY,
+        )
+    except ShippingTaskLeaseConflict as exc:
+        return Result.fail(
+            '已有发货数据任务正在运行，请等待其结束后重试',
+            data={'task_id': exc.task_id},
+        ).to_response(409)
+    return None
+
+
 def _check_file(file, label: str):
     if not file:
         return None, Result.fail(f'未收到{label}文件').to_response()
@@ -80,12 +100,14 @@ def import_shipping():
         return err
 
     task_id  = str(uuid.uuid4())
+    conflict = _create_mutation_task(task_id, 'import_shipping', file.filename)
+    if conflict:
+        return conflict
     q        = queue.Queue()
     _task_queues[task_id]  = q
     _cancel_flags[task_id] = False
     filename = file.filename
     app      = current_app._get_current_object()
-    shipping_repository.create_task(task_id, 'import_shipping', filename)
 
     def run():
         with app.app_context():
@@ -123,12 +145,14 @@ def import_finance():
         return err
 
     task_id  = str(uuid.uuid4())
+    conflict = _create_mutation_task(task_id, 'import_finance', file.filename)
+    if conflict:
+        return conflict
     q        = queue.Queue()
     _task_queues[task_id]  = q
     _cancel_flags[task_id] = False
     filename = file.filename
     app      = current_app._get_current_object()
-    shipping_repository.create_task(task_id, 'import_finance', filename)
 
     def run():
         with app.app_context():
@@ -253,10 +277,12 @@ def classify_operators():
 def resolve_all():
     """全量重新计算所有订单的成品组合（后台线程 + SSE 进度）"""
     task_id = str(uuid.uuid4())
+    conflict = _create_mutation_task(task_id, 'resolve_all')
+    if conflict:
+        return conflict
     q       = queue.Queue()
     _task_queues[task_id] = q
     app = current_app._get_current_object()
-    shipping_repository.create_task(task_id, 'resolve_all')
 
     def run():
         with app.app_context():
@@ -286,7 +312,9 @@ def get_import_task_status(task_id):
 def resolve_stale():
     """手动刷新所有 is_stale 的成品组合（后台线程，立即返回 task_id）"""
     task_id = str(uuid.uuid4())
-    shipping_repository.create_task(task_id, 'resolve_stale')
+    conflict = _create_mutation_task(task_id, 'resolve_stale')
+    if conflict:
+        return conflict
     app = current_app._get_current_object()
 
     def run():

@@ -30,6 +30,7 @@ class ShippingTask(db.Model):
     __tablename__ = 'shipping_task'
     __table_args__ = (
         db.Index('ix_shipping_task_status_updated', 'status', 'updated_at'),
+        db.UniqueConstraint('lease_key', name='uq_shipping_task_lease_key'),
     )
 
     id          = db.Column(db.String(36),  primary_key=True)
@@ -39,6 +40,7 @@ class ShippingTask(db.Model):
     progress    = db.Column(db.JSON,        nullable=True)
     result      = db.Column(db.JSON,        nullable=True)
     message     = db.Column(db.Text,        nullable=True)
+    lease_key   = db.Column(db.String(64),  nullable=True)
     created_at  = db.Column(db.DateTime,    nullable=False, default=now_cst)
     updated_at  = db.Column(db.DateTime,    nullable=False, default=now_cst, onupdate=now_cst)
     finished_at = db.Column(db.DateTime,    nullable=True)

@@ -165,6 +165,8 @@ GET    /api/shipping/shipped-dates                    # 所有发货记录的 sh
 POST   /api/shipping/resolve                          # 刷新 is_stale 订单的成品组合；旧 /task-status 轮询入口保留，状态已持久化
 POST   /api/shipping/resolve-all                      # 全量重新计算所有订单成品组合（SSE 进度，task_id 复用 import/progress 流）；两个 source 分开 resolve
                                                       #   import/shipping、import/finance、resolve-all 均可通过 import/status 回查终态
+                                                      #   四类数据写任务（另含 POST /resolve）数据库级互斥；
+                                                      #   已有任务运行时返回 409，data.task_id 为当前任务
 GET    /api/shipping/warehouses                       # 所有出现过的仓库名及 is_excluded 状态
 POST   /api/shipping/warehouses/filter                # 批量保存仓库过滤配置 [{warehouse_name, is_excluded}]
 GET    /api/shipping/finance-customer-aliases         # shipping:view；客户简称计数+人工映射，?keyword=&page=1&per_page=100（上限500）

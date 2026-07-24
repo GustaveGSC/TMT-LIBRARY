@@ -2,6 +2,7 @@ import time
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import List, Dict, Set, Tuple
+from sqlalchemy.exc import IntegrityError
 from database.base import db
 from database.models.shipping import (
     ShippingBatch, ShippingRecord, ReturnRecord, ReturnWarehouseFilter,
@@ -14,6 +15,14 @@ from utils import now_cst
 _ftp_codes_cache: set = set()
 _ftp_codes_cache_at: float = 0.0
 _FTP_CACHE_TTL = 300  # 5 分钟
+
+
+class ShippingTaskLeaseConflict(Exception):
+    """A database-backed task lease is already held by another task."""
+
+    def __init__(self, task_id: str):
+        super().__init__(task_id)
+        self.task_id = task_id
 
 
 def _get_ftp_finished_codes() -> set:
@@ -125,23 +134,38 @@ class ShippingRepository:
         return mapping.to_dict()
 
     @staticmethod
-    def create_task(task_id: str, task_type: str, filename: str = None):
+    def create_task(task_id: str, task_type: str, filename: str = None,
+                    lease_key: str = None):
         now = now_cst()
-        with db.engine.begin() as connection:
-            connection.execute(
-                db.delete(ShippingTask).where(
-                    ShippingTask.finished_at < now - timedelta(days=7)
+        try:
+            with db.engine.begin() as connection:
+                connection.execute(
+                    db.delete(ShippingTask).where(
+                        ShippingTask.finished_at < now - timedelta(days=7)
+                    )
                 )
-            )
-            connection.execute(db.insert(ShippingTask).values(
-                id=task_id,
-                task_type=task_type,
-                status='pending',
-                filename=filename,
-                progress={},
-                created_at=now,
-                updated_at=now,
-            ))
+                connection.execute(db.insert(ShippingTask).values(
+                    id=task_id,
+                    task_type=task_type,
+                    status='pending',
+                    filename=filename,
+                    progress={},
+                    lease_key=lease_key,
+                    created_at=now,
+                    updated_at=now,
+                ))
+        except IntegrityError:
+            if lease_key is None:
+                raise
+            with db.engine.connect() as connection:
+                holder = connection.execute(
+                    db.select(ShippingTask.id).where(
+                        ShippingTask.lease_key == lease_key,
+                    )
+                ).scalar_one_or_none()
+            if holder is None:
+                raise
+            raise ShippingTaskLeaseConflict(holder) from None
 
     @staticmethod
     def update_task(task_id: str, *, status=None, progress=None, result=None, message=None):
@@ -156,6 +180,7 @@ class ShippingRepository:
             values['message'] = message
         if status in ('done', 'error', 'cancelled', 'interrupted'):
             values['finished_at'] = values['updated_at']
+            values['lease_key'] = None
         with db.engine.begin() as connection:
             connection.execute(
                 db.update(ShippingTask)
@@ -186,6 +211,7 @@ class ShippingRepository:
                     message='任务因服务重启或重载中断；导入业务数据已由事务回滚',
                     updated_at=now,
                     finished_at=now,
+                    lease_key=None,
                 )
             )
         return result.rowcount
