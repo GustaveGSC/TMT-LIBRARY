@@ -101,7 +101,6 @@ import WindowControls from '@/components/common/WindowControls.vue'
 import iconProduct   from '@/assets/icons/icon_product.png'
 import iconShipping  from '@/assets/icons/icon_shipping.png'
 import iconAftersale from '@/assets/icons/icon_aftersale.png'
-import iconDataMgmt  from '@/assets/icons/icon_data_mgmt.png'
 import iconRdTools      from '@/assets/icons/icon_rd_tools.png'
 import iconGeneralTools from '@/assets/icons/icon_general_tools.png'
 
@@ -151,7 +150,7 @@ onMounted(async () => {
   } catch { }
 })
 
-const { canViewProduct, canViewShipping, canEditShipping, canViewAftersale, canViewRd } = usePermission()
+const { canViewProduct, canViewShipping, canViewAftersale, canViewRd } = usePermission()
 
 const userInfo    = JSON.parse(localStorage.getItem('user') || '{}')
 const userName    = computed(() => userInfo.display_name || userInfo.username || '用户')
@@ -196,15 +195,6 @@ const moduleGroups = computed(() => [
   {
     label: '工具',
     items: [
-      {
-        key: 'data-mgmt',
-        name: '数据管理',
-        desc: '导入数据与操作人配置',
-        icon: iconDataMgmt,
-        route: '/data-mgmt',
-        disabled: false,
-        noPermission: !canEditShipping,
-      },
       // 研发部工具：有 rd:view 权限的用户可见
       {
         key: 'rd-tools',
@@ -228,7 +218,7 @@ const moduleGroups = computed(() => [
   },
 ])
 
-const MOBILE_UNSUPPORTED = ['data-mgmt', 'rd-tools']
+const MOBILE_UNSUPPORTED = ['rd-tools']
 
 function handleEnter(mod) {
   if (mod.disabled || mod.noPermission) return

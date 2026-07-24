@@ -48,12 +48,19 @@ const router = createRouter({
     {
       path: '/shipping',
       component: () => import('@/views/shippingViews/page-shipping.vue'),
-      meta: { permission: 'shipping:view' }
+      meta: { permission: 'shipping:view' },
+      children: [
+        { path: '', component: () => import('@/views/shippingViews/ShippingDashboard.vue') },
+        { path: 'orders', component: () => import('@/views/shippingViews/ShippingTable.vue') },
+        { path: 'imports', component: () => import('@/views/shippingViews/ShippingImportsPage.vue') },
+        { path: 'settings', component: () => import('@/views/shippingViews/ShippingSettingsPage.vue') },
+        { path: 'maintenance', component: () => import('@/views/shippingViews/ShippingMaintenancePage.vue') },
+      ]
     },
     {
+      // 旧数据管理入口迁入发货数据域，兼容跳转保留至少一个发布周期后可移除
       path: '/data-mgmt',
-      component: () => import('@/views/dataMgmtViews/page-data-mgmt.vue'),
-      meta: { permission: 'shipping:view' }
+      redirect: '/shipping/imports'
     },
     {
       path: '/aftersale',

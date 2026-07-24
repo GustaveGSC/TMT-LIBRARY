@@ -5,8 +5,10 @@ import { ElMessage } from 'element-plus'
 import http from '@/api/http'
 import { pollShippingTask } from '@/utils/shippingTaskPoll'
 import { getConflictTaskId } from '@/utils/taskConflict'
+import { usePermission } from '@/composables/usePermission'
 
 // ── 响应式状态 ────────────────────────────────────
+const { canEditShipping } = usePermission()
 const lastShippedDate = ref('')   // 数据库中最新的发货日期
 
 const existingDatesArr = ref([])           // 已有数据的日期列表
@@ -310,8 +312,8 @@ async function doImport() {
     <!-- 文件选择区 -->
     <div
       class="file-zone"
-      :class="{ selected: fileName, disabled: loading }"
-      @click="!loading && fileInput.click()"
+      :class="{ selected: fileName, disabled: loading || !canEditShipping }"
+      @click="!loading && canEditShipping && fileInput.click()"
     >
       <input
         ref="fileInput"
@@ -339,7 +341,7 @@ async function doImport() {
     </div>
 
     <!-- 导入 / 取消 按钮 -->
-    <div class="btn-row">
+    <div v-if="canEditShipping" class="btn-row">
       <button class="import-btn" :disabled="!file || loading" @click="doImport">
         {{ loading ? '导入中…' : '开始导入' }}
       </button>

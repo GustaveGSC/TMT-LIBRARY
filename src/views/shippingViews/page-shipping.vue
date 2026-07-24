@@ -1,20 +1,21 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
-import { ref, reactive, watch, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
-import WindowControls    from '@/components/common/WindowControls.vue'
-import ShippingDashboard from './ShippingDashboard.vue'
-import ShippingTable     from './ShippingTable.vue'
+import WindowControls from '@/components/common/WindowControls.vue'
 
 // ── 路由 ──────────────────────────────────────────
+const route  = useRoute()
 const router = useRouter()
 
-// ── 响应式状态 ────────────────────────────────────
-const activeTab   = ref('chart') // 'chart' | 'data'
-// 懒加载：'data' Tab 首次访问时才挂载 ShippingTable
-const mountedTabs = reactive({ chart: true, data: false })
-watch(activeTab, tab => { mountedTabs[tab] = true })
+const NAV_ITEMS = [
+  { path: '/shipping',             label: '分析看板' },
+  { path: '/shipping/orders',      label: '订单明细' },
+  { path: '/shipping/imports',     label: '数据接入' },
+  { path: '/shipping/settings',    label: '规则设置' },
+  { path: '/shipping/maintenance', label: '数据维护' },
+]
 
 // ── 生命周期 ──────────────────────────────────────
 onMounted(() => {
@@ -24,7 +25,16 @@ onMounted(() => {
 // ── 方法 ──────────────────────────────────────────
 function handleBack() {
   window.electronAPI?.unmaximizeApp?.()
-  router.back()
+  router.push('/index')
+}
+
+function isActive(navPath) {
+  // /shipping 本身是精确匹配（分析看板），其余子路径用前缀匹配保持刷新/深层链接下的高亮
+  return navPath === '/shipping' ? route.path === '/shipping' : route.path.startsWith(navPath)
+}
+
+function goTo(navPath) {
+  if (!isActive(navPath)) router.push(navPath)
 }
 </script>
 
@@ -40,17 +50,23 @@ function handleBack() {
         </button>
         <span class="page-title">发货数据</span>
         <div class="title-divider"></div>
-        <nav class="top-nav">
-          <button class="nav-item" :class="{ active: activeTab === 'chart' }" @click="activeTab = 'chart'">图表</button>
-          <button class="nav-item" :class="{ active: activeTab === 'data' }"  @click="activeTab = 'data'">数据</button>
-        </nav>
       </div>
+      <nav class="top-nav" data-testid="shipping-nav">
+        <button
+          v-for="item in NAV_ITEMS"
+          :key="item.path"
+          class="nav-item"
+          :class="{ active: isActive(item.path) }"
+          @click="goTo(item.path)"
+        >
+          {{ item.label }}
+        </button>
+      </nav>
     </header>
 
-    <!-- ── 主内容区 ────────────────────────────── -->
+    <!-- ── 主内容区（子路由懒加载挂载）─────────────── -->
     <main class="main-content">
-      <ShippingDashboard v-if="mountedTabs.chart" v-show="activeTab === 'chart'" />
-      <ShippingTable     v-if="mountedTabs.data"  v-show="activeTab === 'data'" />
+      <router-view />
     </main>
 
   </div>
@@ -65,7 +81,7 @@ function handleBack() {
   overflow: hidden;
 }
 
-/* 顶部栏（与 page-product.vue 保持一致） */
+/* 顶部栏 */
 .top-bar {
   height: 50px; display: flex; align-items: center;
   padding: 0 14px;
@@ -73,8 +89,9 @@ function handleBack() {
   border-bottom: 1px solid var(--border);
   backdrop-filter: blur(12px);
   flex-shrink: 0; z-index: 10;
+  overflow: hidden;
 }
-.top-left { display: flex; align-items: center; gap: 8px; }
+.top-left { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .btn-back {
   width: 30px; height: 30px;
   border: 1px solid var(--border); border-radius: 7px;
@@ -83,11 +100,17 @@ function handleBack() {
   transition: all 0.2s;
 }
 .btn-back:hover { background: var(--bg-card); color: var(--text-primary); }
-.page-title { font-size: 14px; font-weight: 600; color: var(--text-primary); letter-spacing: 0.05em; }
-.title-divider { width: 1px; height: 16px; background: var(--border); margin-left: 8px; }
+.page-title { font-size: 14px; font-weight: 600; color: var(--text-primary); letter-spacing: 0.05em; white-space: nowrap; }
+.title-divider { width: 1px; height: 16px; background: var(--border); margin-left: 8px; flex-shrink: 0; }
 
-/* 顶部 Tab 导航（与 page-product.vue 风格一致） */
-.top-nav { display: flex; align-items: center; gap: 2px; margin-left: 8px; }
+/* 顶部导航：窄屏下允许横向滚动，不挤压标题/返回按钮 */
+.top-nav {
+  display: flex; align-items: center; gap: 2px;
+  margin-left: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
 .nav-item {
   height: 32px; padding: 0 14px;
   border: none; border-radius: 7px;
@@ -95,6 +118,7 @@ function handleBack() {
   font-size: 13px; font-family: var(--font-family);
   cursor: pointer; transition: all 0.15s;
   position: relative;
+  white-space: nowrap; flex-shrink: 0;
 }
 .nav-item:hover { color: var(--text-primary); background: var(--bg); }
 .nav-item.active {
@@ -118,5 +142,6 @@ function handleBack() {
 @media (max-width: 768px) {
   .top-bar { height: 44px; padding: 0 10px; }
   .page-title { font-size: 13px; }
+  .nav-item { padding: 0 10px; font-size: 12px; }
 }
 </style>

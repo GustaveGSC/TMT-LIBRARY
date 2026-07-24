@@ -5,8 +5,10 @@ import { ElMessage } from 'element-plus'
 import http from '@/api/http'
 import { getConflictTaskId } from '@/utils/taskConflict'
 import { pollShippingTask } from '@/utils/shippingTaskPoll'
+import { usePermission } from '@/composables/usePermission'
 
 // ── 响应式状态 ────────────────────────────────────
+const { canEditShipping } = usePermission()
 const operators  = ref([])   // [{ operator, type }]
 const loading    = ref(false)
 const saving     = ref(false)
@@ -124,7 +126,7 @@ function typeColor(type) {
         <div class="config-title">操作人分类</div>
         <div class="config-sub">对发货清单「最近操作人」列的人员进行分类，用于过滤各模块的数据</div>
       </div>
-      <div class="header-right">
+      <div v-if="canEditShipping" class="header-right">
         <!-- 刷新成品组合提示 -->
         <button
           v-if="staleCount > 0"
@@ -167,7 +169,8 @@ function typeColor(type) {
             class="type-btn"
             :class="{ active: item.type === opt.value }"
             :style="item.type === opt.value ? { background: opt.color, borderColor: opt.color, color: '#fff' } : {}"
-            @click="item.type = opt.value"
+            :disabled="!canEditShipping"
+            @click="canEditShipping && (item.type = opt.value)"
           >{{ opt.label }}</button>
         </div>
       </div>
@@ -256,4 +259,5 @@ function typeColor(type) {
   cursor: pointer; transition: all 0.15s;
 }
 .type-btn:hover:not(.active) { border-color: var(--accent); color: var(--accent); }
+.type-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 </style>

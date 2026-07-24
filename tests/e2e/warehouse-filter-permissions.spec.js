@@ -4,11 +4,11 @@ import { mockDataMgmtPage, WAREHOUSE_LIST_RESPONSE } from './fixtures/dataMgmt.j
 // 仓库过滤配置：shipping:view 用户应看到只读状态（开关禁用、无保存按钮），
 // shipping:edit 用户应能正常编辑并保存。
 // 见 handoff/2026-07-24-claude-handoff-26.md 前端协作项第1条。
+// 数据管理入口已迁移到 /shipping/settings，见 handoff/2026-07-24-claude-data-management-migration-plan.md。
 
 async function gotoWarehouseConfig(page) {
-  await page.goto('/#/data-mgmt')
+  await page.goto('/#/shipping/settings')
   await page.waitForLoadState('networkidle')
-  await page.getByRole('button', { name: '数据配置' }).click({ force: true })
   await page.getByRole('button', { name: '仓库过滤配置' }).click({ force: true })
   await expect(page.locator('[data-testid="warehouse-row"]').first()).toBeVisible()
 }

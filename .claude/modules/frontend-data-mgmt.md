@@ -1,13 +1,18 @@
 # 数据管理 & 发货图表前端组件说明
 
-## page-data-mgmt.vue 说明
-- 路由 `/data-mgmt`，`onMounted` 调用 `maximizeApp()`，返回按钮先 `unmaximizeApp()` 再 `router.back()`
-- 顶部导航两个 Tab：**导入数据**（DataImport + FinanceImport 左右并排）/ **数据配置**（子 Tab 切换：操作人分类/仓库过滤配置/产成品通用件配置/标签分析维度/外贸客户匹配，一次只显示一个面板，最大宽度 760px，避免五个面板并排拥挤）
-- 右上角「刷新全局数据」按钮：点击先弹二次确认框，确认后调 `POST /api/shipping/resolve-all` → 订阅 SSE 进度（复用 `import/progress/:task_id`），实时显示"xxx / xxx 个订单"；刷新时同时计算发货数量、销退数量、实际数量；SSE 完成后弹 `ElMessage.success` 告知完成数量
+> 2026-07-24：数据管理入口已从独立的 `/data-mgmt` 一级页面迁移进发货数据域，
+> 首页不再有独立"数据管理"卡片。见下方 `page-shipping.vue` 说明和
+> `handoff/2026-07-24-claude-data-management-migration-plan.md`。原 `page-data-mgmt.vue`
+> 已删除；`DataImport.vue`/`FinanceImport.vue`/`OperatorConfig.vue`/`WarehouseConfig.vue`/
+> `EquivalentConfig.vue`/`TagDimensionConfig.vue`/`FinanceCustomerMapping.vue` 组件文件本身仍在
+> `src/views/dataMgmtViews/`（本批未物理搬移目录，只改了路由归属），被新的
+> `src/views/shippingViews/ShippingImportsPage.vue`/`ShippingSettingsPage.vue`/
+> `ShippingMaintenancePage.vue` 引用组装。
 
 ## DataImport.vue 说明
 - 导入发货清单（xlsx/xls/csv），固定 100px 文件拖放区，选中后显示 Excel SVG 图标
-- 导入流程：上传文件获取 task_id → 订阅 SSE → 展示进度条（parsing→parsed→inserting→inserted→resolving→done）
+- 导入流程：上传文件获取 task_id → `pollShippingTask` 短轮询 `GET /api/shipping/tasks/:task_id`（1秒间隔，不重叠，终态立即停止）→ 展示进度条（parsing→parsed→inserting→inserted→resolving→done）。SSE 已废弃，不再创建 `EventSource`
+- 遇到 409（已有发货数据任务在跑）：`getConflictTaskId()` 解析冲突响应里的 `task_id`，直接接入该任务的轮询，而非提示失败后中断
 - **文件内合并**：同 `(ecommerce_order_no, line_no, product_code)` 的行 quantity 累加，被合并行记录在 `merged_away_rows`
 - **DB 去重**：与库中已有记录比对，跳过的记录返回在 `skipped_rows`
 - **中止导入**：中止后 rollback 已写入的 batch 数据
@@ -19,54 +24,70 @@
   - `missingDates = ref([])` 数组，`calCells` computed 按年月生成 `{ d, missing }` 单元格
   - 缺失日期显示红色 32×32 圆圈（`.cal-inner--missing`）
   - 导航：年份 el-select + 月份 el-select + 上/下月按钮
+- 权限：`shipping:edit` 才显示文件选择区和"开始导入"按钮，`shipping:view` 只读（不依赖后端 403 兜底）
 
-## ReturnImport.vue 说明（财务数据导入）
-- 已重构为**财务清单导入**，调用 `POST /api/shipping/import/finance`
+## FinanceImport.vue 说明（财务数据导入）
+- 调用 `POST /api/shipping/import/finance`
 - 标题「导入财务清单」，支持 xlsx/xls/csv，同 DataImport.vue 文件选择区风格
-- 导入流程：上传→ task_id → SSE 进度（parsing→parsed→inserting→inserted→resolving→done）
+- 导入流程：上传→ task_id → `pollShippingTask` 短轮询（同 DataImport.vue，SSE 已废弃）
 - **正数量行 → 发货记录（source='finance'）**；**负数量行 → 销退记录**；**部门名称='售后组' → 跳过**
 - `ecommerce_order_no` 补全：优先「平台订单」列，其次取「订单单号」中 `-` 后的部分，均空则跳过
+- **增量正确性**（财务导入工作流 B 批）：重导时先批量比对既有行快照，只对新增/实际变化的行 UPSERT；完全相同的行不写库、不触发 resolve；受影响订单（含仅补充 `customer_alias` 的历史订单）在同一事务内自动增量 `_resolve_orders()`，不再需要手动执行"重建全部成品组合"
 - 文件内合并：shipping 按 (order_no, product_code) 合并，return 按 (order_no, product_code, date) 合并
-- **结果卡片**（3列网格）：文件总行数 / 新增发货记录（accent）/ 新增销退记录（accent）/ 跳过重复（可点击）/ 售后组过滤
+- **结果卡片**（3列网格）：文件总行数 / 新增发货记录（accent）/ 新增销退记录（accent）/ 跳过重复（可点击）/ 售后组过滤。`updated`/`skipped` 现在精确区分"实际变化"和"内容完全相同"
 - **跳过重复弹窗**：4列（平台订单号/品号/日期/数量）
+- 权限同 DataImport.vue
 
 ## OperatorConfig.vue 说明
 - 展示所有「最近操作人」列出现过的人员，可设置类型：发货 / 售后 / 未分类
 - 类型颜色：shipping=#c4883a，aftersale=#4a8fc0，unknown=#8a7a6a
-- 右上角「刷新成品组合」按钮（`stale_count > 0` 时显示），调 `POST /api/shipping/resolve`
+- 右上角「刷新成品组合」按钮（`stale_count > 0` 时显示），调 `POST /api/shipping/resolve`（`resolve_stale`，只处理 `is_stale` 订单，与"重建全部成品组合"是不同范围的操作）；短轮询 `GET /api/shipping/tasks/:task_id`（原先是手写 800ms×1125次循环，已改用共享 `pollShippingTask`）
+- 权限：`shipping:edit` 才显示保存/刷新按钮和分类点击交互，`shipping:view` 只读
 
 ## WarehouseConfig.vue 说明
 - 展示所有在 return_record 中出现过的仓库名，可配置 is_excluded（排除/正常导入）
 - 排除状态：橙红标签 + 橙红边框背景；正常状态：绿色标签
 - 调 `GET /api/shipping/warehouses` 加载，`POST /api/shipping/warehouses/filter` 保存
+- 权限：`shipping:edit` 才显示开关可交互和保存按钮，`shipping:view` 开关禁用、无保存按钮
 
 ## TagDimensionConfig.vue 说明
 - 配置哪些标签分类可作为发货图表聚合维度（`product_tag_category.is_shipping_dim`），及分类下具体哪些标签参与统计（`product_tag.shipping_dim_enabled`）
 - `onMounted` 拉取 `GET /api/product/tags/categories/`（已含每个分类的 tags[]），本地打快照用于保存时 diff
 - 每个分类一行：`el-switch` 控制是否作为发货维度；分类下标签用 `el-checkbox` 勾选是否纳入统计（分类开关关闭时标签行置灰禁用，但状态仍保留）
 - 「保存」仅对比初始快照后变化的行调用 `PUT /api/product/tags/categories/:id` / `PUT /api/product/tags/:id`（`Promise.all` 并发），无变化时提示"没有变更"
-- 权限同其余数据配置面板，随「数据管理」页面权限走（不单独设权限码）
+- 权限：`shipping:edit` 才显示保存按钮、开关/勾选框可交互，`shipping:view` 只读
 
 ## EquivalentConfig.vue 说明
 - 配置产成品通用件（等效互换对），用于发货匹配时允许 A01↔B01 混用
-- 列表：code_a / code_b / 备注 / 删除按钮（el-popconfirm 二次确认）
-- 新增区：两个产成品 code 选择框（el-select 可搜索已有产成品）+ 备注 + 新增按钮
+- 列表：code_a / code_b / 备注 / 删除按钮
+- 新增区：两个产成品编码输入框 + 备注 + 新增按钮
 - 调 `GET /api/shipping/equivalents` 加载，`POST /api/shipping/equivalents` 新增，`DELETE /api/shipping/equivalents/<id>` 删除
-- 权限：`shipping:edit`（canEditShipping）
-- 新增/删除后提示用户前往全量刷新更新历史数据
+- 权限：`shipping:edit` 才显示新增表单和删除按钮，`shipping:view` 只读
+- 新增/删除后提示用户前往"数据维护"页执行"重建全部成品组合"更新历史数据（原文案"刷新全局数据"已随 A 批改名同步更新）
 
-## FinanceCustomerMapping.vue 说明
+## FinanceCustomerMapping.vue 说明（页面标题「客户匹配」，原「外贸客户匹配」已改名）
 - 财务原始数据"客户简称"去重列表（合并 shipping_record 与 return_record 出现次数），人工审核归类四态 + 填写国家/品牌/备注，**完全人工，不做自动解析**
 - 四态：`pending`未审核（默认）/ `export`外贸客户 / `domestic`内销客户 / `non_sales`非销售客户（已审核但既不算外贸也不算内销的终态，如赠品样品，不会再被"仅看未审核"筛出来提醒处理）
-- 顶部筛选：关键字输入框（默认空，400ms 防抖，不再默认只看含"外贸"的简称——四态上线后所有简称都需要审核）+「仅看未审核」勾选（直接请求后端 `status=pending`，该值同时包含尚未创建映射记录的简称和显式 pending，不在前端二次过滤）
-- 每行草稿态存于 `drafts[customer_alias]`（status/country/brand/note/dirty），状态用 `el-select` 四选一（不再是"确认外贸"勾选框），编辑后标记 dirty，「保存」按钮仅在 dirty 时可点，保存成功后用响应覆盖该行 `mapping` 并清 dirty
-- 调 `GET /api/shipping/finance-customer-aliases`（`?keyword=&status=&page=&per_page=`，`shipping:view`）加载，`POST /api/shipping/finance-customer-aliases/mapping`（`shipping:edit`，请求体 `status` 字段，旧 `is_export` 字段已废弃）保存单条
+- 顶部筛选：关键字输入框（默认空，400ms 防抖）+「仅看未审核」勾选（直接请求后端 `status=pending`）
+- 每行草稿态存于 `drafts[customer_alias]`（status/country/brand/note/dirty），状态用 `el-select` 四选一，编辑后标记 dirty，「保存」按钮仅在 dirty 时可点，保存成功后用响应覆盖该行 `mapping` 并清 dirty
+- 调 `GET /api/shipping/finance-customer-aliases`（`?keyword=&status=&page=&per_page=`，`shipping:view`）加载，`POST /api/shipping/finance-customer-aliases/mapping`（`shipping:edit`）保存单条，保存成功后后端立即失效 `chart-options` 缓存（财务导入工作流 A 批）
 - 无 `shipping:edit` 权限时所有输入框/下拉/保存按钮禁用（只读展示）
-- 应用到 `shipping_order_finished` 聚合表/图表分析已上线：`export`进外贸统计+国家/品牌维度，`domestic`进内销统计，`pending`/`non_sales`/未映射均只在"全部"里出现
+- 应用到 `shipping_order_finished` 聚合表/图表分析：`export`进外贸统计+国家/品牌维度，`domestic`进内销统计，`pending`/`non_sales`/未映射均只在"全部"里出现。修改分类/国家/品牌**保存后立即生效**（`chart-data` 实时 JOIN 映射表，不经过 resolve）；财务导入工作流 B 批上线后，重导历史数据补充客户简称也会自动增量同步派生表，不再需要额外操作
 
-## page-shipping.vue 说明
-- 路由 `/shipping`，`onMounted` 调用 `maximizeApp()`，返回按钮先 `unmaximizeApp()`
-- 内嵌 ShippingDashboard（左右两栏布局：筛选面板 + 图表区）
+## page-shipping.vue 说明（发货数据业务壳，2026-07-24 起带 5 个子路由）
+- 路由 `/shipping`，`onMounted` 调用 `maximizeApp()`，返回按钮先 `unmaximizeApp()` 再 `router.push('/index')`（不用 `router.back()`，避免在子页间来回切换后被困在历史栈里）
+- 顶部导航 5 项，`router.push` 明确导航（非 tab 内部状态），`<router-view>` 承载内容区，各子路由组件独立懒加载（`import()` 动态导入），切换页面不会预先加载其他页面的接口：
+  | 路径 | 页面 | 内容 |
+  |---|---|---|
+  | `/shipping` | 分析看板 | `ShippingDashboard.vue` |
+  | `/shipping/orders` | 订单明细 | `ShippingTable.vue` |
+  | `/shipping/imports` | 数据接入 | `ShippingImportsPage.vue`（组装 DataImport + FinanceImport） |
+  | `/shipping/settings` | 规则设置 | `ShippingSettingsPage.vue`（组装 OperatorConfig/WarehouseConfig/FinanceCustomerMapping/EquivalentConfig/TagDimensionConfig，侧边栏 Tab 分三组：来源与口径/匹配规则/分析设置） |
+  | `/shipping/maintenance` | 数据维护 | `ShippingMaintenancePage.vue`（"重建全部成品组合（高级）"，即原 resolve-all，独立页面，不在日常导入/设置流程里出现） |
+- 旧 `/data-mgmt` 路由改为 `redirect: '/shipping/imports'`，保留兼容跳转（计划至少保留一个发布周期）
+- 子路由权限统一继承父路由 `meta.permission: 'shipping:view'`（vue-router 的 `to.meta` 会合并父子路由 meta）；各页面内部写操作再各自按 `shipping:edit` 做二次门禁（不依赖后端 403 兜底，见各组件小节）
+- `ShippingSettingsPage.vue` 用 `route.query.tab` 持久化当前 Tab，刷新页面后保持在同一个 Tab（不回到默认的"操作人分类"）
+- 首页 `page-index.vue` 已移除独立"数据管理"卡片，`icon_data_mgmt.png` 资源文件未删除（未使用，留作后续清理）
 
 ## ShippingDashboard.vue 说明
 - 左侧筛选面板（230px）：**数据来源 segmented（发货端/财务端）**、日期范围 + 时间粒度 segmented（月/季度/半年/年）、品类/系列/型号级联选择、渠道多选、省份多选、重置按钮

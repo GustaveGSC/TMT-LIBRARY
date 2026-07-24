@@ -3,8 +3,10 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '@/api/http'
+import { usePermission } from '@/composables/usePermission'
 
 // ── 响应式状态 ────────────────────────────────────
+const { canEditShipping } = usePermission()
 const pairs     = ref([])    // [{id, code_a, name_a, code_b, name_b, note, created_at}]
 const loading   = ref(false)
 const adding    = ref(false)
@@ -47,7 +49,7 @@ async function addPair() {
     if (res.success) {
       pairs.value.unshift(res.data)
       form.value = { code_a: '', code_b: '', note: '' }
-      ElMessage.success('已新增通用件对，配置保存后如需更新历史数据请点击"刷新全局数据"')
+      ElMessage.success('已新增通用件对，配置保存后如需更新历史数据请前往"数据维护"执行"重建全部成品组合"')
     } else {
       formError.value = res.message || '新增失败'
     }
@@ -72,7 +74,7 @@ async function deletePair(pair) {
     const res = await http.delete(`/api/shipping/equivalents/${pair.id}`)
     if (res.success) {
       pairs.value = pairs.value.filter(p => p.id !== pair.id)
-      ElMessage.success('已删除，如需更新历史数据请点击"刷新全局数据"')
+      ElMessage.success('已删除，如需更新历史数据请前往"数据维护"执行"重建全部成品组合"')
     } else {
       ElMessage.error(res.message || '删除失败')
     }
@@ -91,7 +93,7 @@ async function deletePair(pair) {
     </div>
 
     <!-- 新增表单 -->
-    <div class="add-form">
+    <div v-if="canEditShipping" class="add-form">
       <div class="add-inputs">
         <el-input
           v-model="form.code_a"
@@ -142,7 +144,7 @@ async function deletePair(pair) {
         </div>
         <div class="pair-right">
           <span v-if="pair.note" class="pair-note">{{ pair.note }}</span>
-          <button class="del-btn" @click="deletePair(pair)">删除</button>
+          <button v-if="canEditShipping" class="del-btn" @click="deletePair(pair)">删除</button>
         </div>
       </div>
     </div>

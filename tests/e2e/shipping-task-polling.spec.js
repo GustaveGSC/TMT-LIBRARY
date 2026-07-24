@@ -50,11 +50,9 @@ test('resolve-all 进度改为短轮询，不再使用 SSE，终态后停止', a
     if (req.url().includes('/import/progress/')) sseRequests.push(req.url())
   })
 
-  await page.goto('/#/data-mgmt')
+  await page.goto('/#/shipping/maintenance')
   await page.waitForLoadState('networkidle')
 
-  await page.getByRole('button', { name: '数据配置' }).click({ force: true })
-  await page.getByRole('button', { name: '高级操作' }).click({ force: true })
   await page.getByRole('button', { name: '重建全部成品组合' }).click({ force: true })
   await page.getByRole('button', { name: '确认重建' }).click()
 
@@ -106,17 +104,15 @@ test('离开页面（组件卸载）后停止轮询', async ({ page }) => {
     })
   })
 
-  await page.goto('/#/data-mgmt')
+  await page.goto('/#/shipping/maintenance')
   await page.waitForLoadState('networkidle')
 
-  await page.getByRole('button', { name: '数据配置' }).click({ force: true })
-  await page.getByRole('button', { name: '高级操作' }).click({ force: true })
   await page.getByRole('button', { name: '重建全部成品组合' }).click({ force: true })
   await page.getByRole('button', { name: '确认重建' }).click()
 
   await expect.poll(() => pollCount).toBeGreaterThanOrEqual(1)
 
-  // 离开页面，卸载 page-data-mgmt.vue
+  // 离开页面，卸载 ShippingMaintenancePage
   await page.goto('/#/index')
   await page.waitForLoadState('networkidle')
 

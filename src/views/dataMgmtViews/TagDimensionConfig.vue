@@ -3,8 +3,10 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import http from '@/api/http'
+import { usePermission } from '@/composables/usePermission'
 
 // ── 响应式状态 ────────────────────────────────────
+const { canEditShipping } = usePermission()
 const categories = ref([])   // [{ id, name, color, is_shipping_dim, tags: [{id, name, shipping_dim_enabled}] }]
 const loading     = ref(false)
 const saving      = ref(false)
@@ -89,7 +91,7 @@ async function saveConfig() {
         <div class="config-title">标签分析维度</div>
         <div class="config-sub">配置哪些标签分类可用于发货图表按标签聚合分析，及分类下具体参与统计的标签</div>
       </div>
-      <div class="header-right">
+      <div v-if="canEditShipping" class="header-right">
         <button class="btn-save" :disabled="saving" @click="saveConfig">
           {{ saving ? '保存中…' : '保存' }}
         </button>
@@ -118,6 +120,7 @@ async function saveConfig() {
             v-model="cat.is_shipping_dim"
             size="small"
             active-color="#c4883a"
+            :disabled="!canEditShipping"
           />
           <span class="cat-switch-label">作为发货分析维度</span>
         </div>
@@ -125,7 +128,7 @@ async function saveConfig() {
           <label v-for="tag in cat.tags" :key="tag.id" class="tag-item">
             <el-checkbox
               v-model="tag.shipping_dim_enabled"
-              :disabled="!cat.is_shipping_dim"
+              :disabled="!cat.is_shipping_dim || !canEditShipping"
             />
             <span>{{ tag.name }}</span>
           </label>
