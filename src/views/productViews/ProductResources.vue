@@ -19,14 +19,13 @@ const {
   uploading, uploadPercent, uploadFile, cancelUpload, resetUploadState,
 } = useProductResources()
 
-// ── 品类/系列/型号级联（el-cascader）────────────
+// ── 品类/系列/型号级联（el-cascader，跨组件共享缓存）───
 import http from '@/api/http'
-const categoryTree = ref([])
+import { useCategoryTree } from '@/composables/useCategoryTree'
+const { categoryTree, loadCategoryTreeOnce } = useCategoryTree()
 
 async function loadCategoryTree() {
-  if (categoryTree.value.length) return
-  const res = await http.get('/api/category/tree')
-  if (res.success) categoryTree.value = res.data || []
+  await loadCategoryTreeOnce()
 }
 
 // el-cascader options 格式

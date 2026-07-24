@@ -3,6 +3,7 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import http from '@/api/http'
+import { getConflictTaskId } from '@/utils/taskConflict'
 
 // ── 响应式状态 ────────────────────────────────────
 const operators  = ref([])   // [{ operator, type }]
@@ -67,8 +68,12 @@ async function resolveStale() {
   try {
     // 1. 启动后台任务
     const res = await http.post('/api/shipping/resolve')
-    if (!res.success) { ElMessage.error(res.message); return }
-    const taskId = res.data.task_id
+    const conflictTaskId = getConflictTaskId(res)
+    if (!res.success && !conflictTaskId) { ElMessage.error(res.message); return }
+    if (conflictTaskId) {
+      ElMessage.warning(res.message || '已有发货数据任务在运行，正在接入该任务的进度')
+    }
+    const taskId = conflictTaskId || res.data.task_id
 
     // 2. 轮询直到完成（最多 15 分钟 = 1125 次 × 800ms）
     const MAX_POLLS = 1125

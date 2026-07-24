@@ -4,6 +4,9 @@ import { ref, onMounted, computed, watch } from 'vue'
 import { ElMessageBox } from 'element-plus'
 import { Plus, Delete, Edit, ArrowRight, Search, Refresh } from '@element-plus/icons-vue'
 import http from '@/api/http'
+import { useCategoryTree } from '@/composables/useCategoryTree'
+
+const { invalidateCategoryTree } = useCategoryTree()
 
 // ── 树形数据 ──────────────────────────────────────
 const tree      = ref([])   // [ { id, name, series: [ { id, name, models: [...] } ] } ]
@@ -213,6 +216,7 @@ async function handleSubmit() {
         : null
       formMode.value = ''
       createContext.value = null
+      invalidateCategoryTree()
       await loadTree()
       if (prevSelected) restoreSelection(prevSelected.type, prevSelected.id)
     } else {
@@ -254,6 +258,7 @@ async function handleDelete(type, data) {
         selected.value = null
         formMode.value = ''
       }
+      invalidateCategoryTree()
       await loadTree()
     } else {
       treeError.value = res.message || '删除失败'

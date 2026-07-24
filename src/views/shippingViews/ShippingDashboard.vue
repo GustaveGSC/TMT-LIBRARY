@@ -6,6 +6,7 @@ import { ArrowDown, Delete, Setting, Close, PriceTag } from '@element-plus/icons
 import * as echarts from 'echarts'
 import http from '@/api/http'
 import { useResponsiveLayout } from '@/composables/useResponsiveLayout'
+import { useCategoryTree } from '@/composables/useCategoryTree'
 import iconBar from '@/assets/icons/btn_bar.png'
 import iconLine from '@/assets/icons/btn_line.png'
 import iconPie from '@/assets/icons/btn_pie.png'
@@ -1272,7 +1273,7 @@ function groupLevelLabel(group) {
 // ── 下拉源数据 ────────────────────────────────────
 const channelOptions  = ref([])
 const provinceOptions = ref([])
-const categoryTree    = ref([])
+const { categoryTree, loadCategoryTreeOnce } = useCategoryTree()
 // 当前日期范围内有数据的产品 ID 集合（null=未加载，{}=已加载可能为空）
 const activeProductIds = ref(null)
 // 数据库中实际的发货日期范围
@@ -1586,9 +1587,9 @@ async function loadOptions() {
     if (start) params.date_start = formatDate(start)
     if (end)   params.date_end   = formatDate(end)
     params.source = dataSource.value
-    const [optRes, treeRes] = await Promise.all([
+    const [optRes] = await Promise.all([
       http.get('/api/shipping/chart-options', { params }),
-      http.get('/api/category/tree'),
+      loadCategoryTreeOnce(),
     ])
     if (optRes.success) {
       channelOptions.value  = optRes.data.channels
@@ -1602,7 +1603,6 @@ async function loadOptions() {
       if (optRes.data.data_date_max) dataDateMax.value = optRes.data.data_date_max
       tagDimensions.value = optRes.data.tag_dimensions || []
     }
-    if (treeRes.success) { categoryTree.value = treeRes.data }
   } catch { ElMessage.error('加载筛选数据失败') }
   finally  { loadingOptions.value = false }
 }
