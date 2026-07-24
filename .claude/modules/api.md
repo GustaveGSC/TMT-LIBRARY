@@ -151,6 +151,16 @@ DELETE /api/product/params/keys/:key_id               # 删除键名（返回 us
 GET    /api/product/params/finished/:finished_id      # 获取成品参数，按分组聚合
 POST   /api/product/params/finished/:finished_id      # 全量 Upsert 保存成品参数
 
+POST   /api/product/lifecycle/update                  # 启动产品生命周期更新；product:edit
+                                                      # 成功 200: data={task_id}
+                                                      # 已有任务时 409: data={task_id}，前端接管该任务
+GET    /api/product/lifecycle/tasks/:task_id          # 查询持久化任务；product:view；建议每秒短轮询
+                                                      # 200: data={task_id,task_type,status,progress,result,message,
+                                                      #            created_at,updated_at,finished_at}
+                                                      # 不存在时 404；响应 Cache-Control:no-store
+GET    /api/product/lifecycle/progress/:task_id       # 旧前端兼容；立即返回单次 SSE 快照后关闭，
+                                                      # 不再等待队列/占用 sync worker；新前端禁止使用
+
 POST   /api/shipping/import/shipping                  # 上传发货清单（发货端），返回 task_id；source='shipping'
 POST   /api/shipping/import/finance                   # 上传财务清单（财务端），返回 task_id；正数量→发货(source='finance')，负数量→销退，售后组过滤
                                                       #   仅 UPSERT 新增或字段实际变化的行；完全相同行计入 skipped

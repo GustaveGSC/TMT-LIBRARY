@@ -395,3 +395,12 @@ cost_column_alias                          # Excel 列名映射（key → aliase
 - 导入业务数据使用单一事务；任务状态通过独立连接提交，不能提交业务 session。
 - `lease_key` 为空或固定为 `shipping_data_mutation`；唯一约束保证发货导入、财务导入、
   全量重算和旧数据重算任一时刻只能运行一个。任务进入终态或启动恢复将其清空。
+
+`product_lifecycle_task` 独立保存产品生命周期更新任务，不与发货任务表混用：
+
+- 主键 `id` 为 UUID task_id，状态、进度、结果及时间字段与 `shipping_task` 的通用部分一致。
+- `task_type` 不落库，接口固定返回 `product_lifecycle`。
+- 固定 `lease_key=product_lifecycle_update`，唯一约束保证同一时刻只有一个生命周期更新。
+- 重复启动返回 409 和当前持有租约的 task_id；终态释放租约。
+- 新 worker 启动时把遗留 pending/running 标记为 interrupted；终态保留 7 天。
+- 生命周期业务更新使用单一事务，任务进度通过独立连接提交。
