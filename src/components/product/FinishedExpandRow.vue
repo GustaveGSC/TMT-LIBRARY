@@ -3,6 +3,7 @@
 import { ref, reactive, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import * as echarts from 'echarts'
 import http from '@/api/http'
+import { useCategoryTree } from '@/composables/useCategoryTree'
 import { usePermission } from '@/composables/usePermission'
 import { ZoomIn, EditPen, Plus, Delete, Document, VideoPlay, Link, Picture } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -731,15 +732,10 @@ const editVolume      = computed(() => sumPackaged('volume'))
 const editGrossWeight = computed(() => sumPackaged('gross_weight'))
 const editNetWeight   = computed(() => sumPackaged('net_weight'))
 
-// ── 分类树（编辑时懒加载）────────────────────────
-const categoryTree = ref([])
-const treeLoaded   = ref(false)
+// ── 分类树（编辑时懒加载，跨组件共享缓存）────────
+const { categoryTree, loadCategoryTreeOnce } = useCategoryTree()
 async function ensureTreeLoaded() {
-  if (treeLoaded.value) return
-  try {
-    const res = await http.get('/api/category/tree')
-    if (res.success) { categoryTree.value = res.data || []; treeLoaded.value = true }
-  } catch {}
+  await loadCategoryTreeOnce()
 }
 
 // 当前选中的品类/系列对象（用于过滤下级候选）

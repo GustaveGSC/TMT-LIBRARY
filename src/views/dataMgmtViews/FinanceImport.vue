@@ -4,6 +4,7 @@ import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import http, { getBaseURL } from '@/api/http'
 import { recoverShippingTaskAfterSseError } from '@/utils/shippingTaskRecovery'
+import { getConflictTaskId } from '@/utils/taskConflict'
 
 // ── 响应式状态 ────────────────────────────────────
 const file      = ref(null)
@@ -116,10 +117,15 @@ async function doImport() {
     const res = await http.post('/api/shipping/import/finance', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
-    if (!res.success) { showError(res.message || '上传失败'); return }
+    const conflictTaskId = getConflictTaskId(res)
+    if (!res.success && !conflictTaskId) { showError(res.message || '上传失败'); return }
+    if (conflictTaskId) {
+      ElMessage.warning(res.message || '已有发货数据任务在运行，正在接入该任务的进度')
+      phaseLabel.value = '正在接入当前运行任务...'
+    }
 
-    currentTaskId.value = res.data.task_id
-    progress.value = 5
+    currentTaskId.value = conflictTaskId || res.data.task_id
+    progress.value = conflictTaskId ? progress.value : 5
 
     await new Promise((resolve, reject) => {
       let es

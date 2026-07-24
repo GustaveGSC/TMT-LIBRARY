@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Delete, Setting, ArrowDown, Refresh, Loading } from '@element-plus/icons-vue'
 import http from '@/api/http.js'
 import { usePermission } from '@/composables/usePermission.js'
+import { useCategoryTree } from '@/composables/useCategoryTree'
 import { isElectron } from '@/utils/platform'
 import AftersaleReasonLib from './AftersaleReasonLib.vue'
 
@@ -76,7 +77,7 @@ const ambiguousTerms        = ref([])   // string[] 歧义词列表
 const shippingIgnoreTerms  = ref([])   // [{id, term}]
 
 // 品类树（三级联动，缓存）
-const categoryTree = ref([])
+const { categoryTree, loadCategoryTreeOnce } = useCategoryTree()
 
 // 型号生命周期范围 { model_id: { listed_yymm, delisted_yymm } }
 const modelLifecycles = ref({})
@@ -228,12 +229,10 @@ function refreshQueue() {
 
 // 加载品类树 + 型号生命周期（并发）
 async function loadCategoryTree() {
-  const [treeRes, lcRes] = await Promise.allSettled([
-    http.get('/api/category/tree'),
+  const [, lcRes] = await Promise.allSettled([
+    loadCategoryTreeOnce(),
     http.get('/api/category/model-lifecycles'),
   ])
-  if (treeRes.status === 'fulfilled' && treeRes.value?.success)
-    categoryTree.value    = treeRes.value.data
   if (lcRes.status === 'fulfilled' && lcRes.value?.success)
     modelLifecycles.value = lcRes.value.data
 }

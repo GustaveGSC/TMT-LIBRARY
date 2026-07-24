@@ -5,6 +5,7 @@ import { ArrowDown, ArrowLeft, ArrowRight, Setting, Close } from '@element-plus/
 import * as echarts from 'echarts'
 import http from '@/api/http.js'
 import { useResponsiveLayout } from '@/composables/useResponsiveLayout'
+import { useCategoryTree } from '@/composables/useCategoryTree'
 import iconProduct  from '@/assets/icons/btn_product.png'
 import iconReason   from '@/assets/icons/btn_reason.png'
 import iconMaterial from '@/assets/icons/btn_material.png'
@@ -63,7 +64,7 @@ const filters = ref({
 })
 
 // 静态候选数据（初始加载一次）
-const categoryTree       = ref([])
+const { categoryTree, loadCategoryTreeOnce } = useCategoryTree()
 const allReasonGroups    = ref([])
 const allShippingAliases = ref([])
 
@@ -307,12 +308,11 @@ watch(effectiveProductLevel, (newLevel) => {
 // ── 方法 ──────────────────────────────────────────
 
 async function loadStaticOptions() {
-  const [treeRes, reasonRes, shippingRes] = await Promise.all([
-    http.get('/api/category/tree'),
+  const [, reasonRes, shippingRes] = await Promise.all([
+    loadCategoryTreeOnce(),
     http.get('/api/aftersale/reasons'),
     http.get('/api/aftersale/shipping-aliases'),
   ])
-  if (treeRes.success)     categoryTree.value       = treeRes.data
   if (reasonRes.success)   allReasonGroups.value    = reasonRes.data
   if (shippingRes.success) allShippingAliases.value = shippingRes.data
 }

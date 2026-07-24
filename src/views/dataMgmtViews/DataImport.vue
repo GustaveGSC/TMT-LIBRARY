@@ -4,6 +4,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import http, { getBaseURL } from '@/api/http'
 import { recoverShippingTaskAfterSseError } from '@/utils/shippingTaskRecovery'
+import { getConflictTaskId } from '@/utils/taskConflict'
 
 // ── 响应式状态 ────────────────────────────────────
 const lastShippedDate = ref('')   // 数据库中最新的发货日期
@@ -228,10 +229,16 @@ async function doImport() {
     const res = await http.post('/api/shipping/import/shipping', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
-    if (!res.success) { showError(res.message || '上传失败'); return }
+    const conflictTaskId = getConflictTaskId(res)
+    if (!res.success && !conflictTaskId) { showError(res.message || '上传失败'); return }
+    if (conflictTaskId) {
+      // 409：已有导入/重算任务在跑，接入它现有的进度而不是提示失败后中断
+      ElMessage.warning(res.message || '已有发货数据任务在运行，正在接入该任务的进度')
+      phaseLabel.value = '正在接入当前运行任务...'
+    }
 
-    currentTaskId.value = res.data.task_id
-    progress.value = 5
+    currentTaskId.value = conflictTaskId || res.data.task_id
+    progress.value = conflictTaskId ? progress.value : 5
 
     // Step 2：订阅 SSE 进度流；连接异常断开时改查持久化任务状态，而不是直接判失败
     await new Promise((resolve, reject) => {

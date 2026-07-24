@@ -3,8 +3,10 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import http from '@/api/http'
+import { usePermission } from '@/composables/usePermission'
 
 // ── 响应式状态 ────────────────────────────────────
+const { canEditShipping } = usePermission()
 const warehouses = ref([])   // [{ warehouse_name, is_excluded }]
 const loading    = ref(false)
 const saving     = ref(false)
@@ -63,6 +65,7 @@ async function saveFilters() {
         :key="item.warehouse_name"
         class="warehouse-row"
         :class="{ excluded: item.is_excluded }"
+        data-testid="warehouse-row"
       >
         <span class="wh-name">{{ item.warehouse_name }}</span>
         <div class="wh-toggle">
@@ -75,14 +78,16 @@ async function saveFilters() {
             inactive-color="#4a9a5a"
             :active-text="''"
             :inactive-text="''"
+            :disabled="!canEditShipping"
+            data-testid="warehouse-toggle"
           />
         </div>
       </div>
     </div>
 
     <!-- 保存按钮 -->
-    <div v-if="warehouses.length > 0" class="save-row">
-      <button class="save-btn" :disabled="saving" @click="saveFilters">
+    <div v-if="warehouses.length > 0 && canEditShipping" class="save-row">
+      <button class="save-btn" data-testid="warehouse-save-btn" :disabled="saving" @click="saveFilters">
         {{ saving ? '保存中…' : '保存配置' }}
       </button>
     </div>

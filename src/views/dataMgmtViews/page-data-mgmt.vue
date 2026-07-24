@@ -6,6 +6,7 @@ import { ArrowLeft } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import http, { getBaseURL } from '@/api/http'
 import { recoverShippingTaskAfterSseError } from '@/utils/shippingTaskRecovery'
+import { getConflictTaskId } from '@/utils/taskConflict'
 import WindowControls  from '@/components/common/WindowControls.vue'
 import DataImport        from './DataImport.vue'
 import FinanceImport     from './FinanceImport.vue'
@@ -77,12 +78,17 @@ async function handleResolveAll() {
   showResolveProgress.value = true
   try {
     const res = await http.post('/api/shipping/resolve-all')
-    if (!res.success) {
+    const conflictTaskId = getConflictTaskId(res)
+    if (!res.success && !conflictTaskId) {
       showResolveProgress.value = false
       ElMessage.error(res.message || '启动失败')
       return
     }
-    const taskId = res.data.task_id
+    if (conflictTaskId) {
+      ElMessage.warning(res.message || '已有发货数据任务在运行，正在接入该任务的进度')
+      resolvePrepareMsg.value = '正在接入当前运行任务...'
+    }
+    const taskId = conflictTaskId || res.data.task_id
 
     await new Promise((resolve, reject) => {
       let es
