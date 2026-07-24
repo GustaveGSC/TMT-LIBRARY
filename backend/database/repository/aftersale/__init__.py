@@ -26,6 +26,25 @@ from utils import now_cst
 
 class AftersaleRepository:
 
+    @staticmethod
+    def _scope_shipping_denominator_query(query, sof, filters):
+        """Apply the canonical aftersale sales-denominator source and index scope."""
+        if filters.get('date_start') or filters.get('date_end'):
+            query = query.with_hint(
+                sof, 'USE INDEX (ix_sof_source_date)', dialect_name='mysql',
+            )
+        else:
+            query = query.with_hint(
+                sof, 'USE INDEX (ix_sof_source_finished_code)', dialect_name='mysql',
+            )
+        aftersale_ops = db.select(ShippingOperatorType.operator).where(
+            ShippingOperatorType.type == 'aftersale',
+        )
+        return query.filter(
+            sof.source == 'shipping',
+            db.or_(sof.operator.is_(None), ~sof.operator.in_(aftersale_ops)),
+        )
+
     # ── 一级分类 ───────────────────────────────────────────────────────────────
 
     def get_all_categories(self):
@@ -533,6 +552,9 @@ class AftersaleRepository:
                 .join(ProductModel, ProductModel.series_id == ProductSeries.id)
                 .join(ProductFinished, ProductFinished.model_id == ProductModel.id)
                 .join(_SOF, _SOF.finished_code == ProductFinished.code)
+            )
+            _series_q = self._scope_shipping_denominator_query(
+                _series_q, _SOF, filters,
             )
             if date_start:
                 _series_q = _series_q.filter(_SOF.shipped_date >= date_start)
@@ -2306,9 +2328,14 @@ class AftersaleRepository:
                  sorted(agg.items(), key=lambda x: x[1], reverse=True)]
 
         # ── 销售占比：售后件数 / 同期发货量 ───────────────
+        shared_total_shipped = None
         if group_by in ('reason', 'reason_category'):
             # 原因维度：所有原因共享同一分母（同期产品组总发货量）
-            total_shipped = self._get_shipping_agg(filters, group_by, {}, None, total_only=True)
+            total_shipped = self._get_shipping_agg(
+                filters, group_by, {}, None, total_only=True,
+                restrict_series_sub=_excl_series_sub,
+            )
+            shared_total_shipped = total_shipped
             for item in items:
                 item['shipped'] = total_shipped
                 if total_shipped > 0:
@@ -2331,13 +2358,15 @@ class AftersaleRepository:
         # ── 整体占比（上一级参考线）：不依赖 group_by，始终用全局发货量计算 ──
         # exclude_no_sales_series 模式：分子已限制为活跃系列工单数，分母也对应限制，保持口径一致
         total_aftersale = sum(v['value'] for v in items)
-        overall_ship = self._get_shipping_agg(
-            filters, group_by,
-            model_info if group_by == 'product' else {},
-            level      if group_by == 'product' else None,
-            total_only=True,
-            restrict_series_sub=_excl_series_sub,   # None 时不限制（所有数据/隐藏模式）
-        )
+        overall_ship = shared_total_shipped
+        if overall_ship is None:
+            overall_ship = self._get_shipping_agg(
+                filters, group_by,
+                model_info if group_by == 'product' else {},
+                level      if group_by == 'product' else None,
+                total_only=True,
+                restrict_series_sub=_excl_series_sub,
+            )
         overall_ratio = round(total_aftersale / overall_ship * 100, 4) if overall_ship > 0 else None
 
         return {
@@ -2373,6 +2402,7 @@ class AftersaleRepository:
                 or restrict_series_sub is not None
             )
             q = db.session.query(func.sum(sof.actual_quantity)).filter(sof.finished_code.isnot(None))
+            q = self._scope_shipping_denominator_query(q, sof, filters)
             if need_product_join:
                 q = (q.join(ProductFinished,
                              sof.finished_code == ProductFinished.code)
@@ -2419,6 +2449,7 @@ class AftersaleRepository:
             label_expr.label('label'),
             func.sum(sof.actual_quantity).label('qty'),
         ).filter(sof.finished_code.isnot(None))
+        q = self._scope_shipping_denominator_query(q, sof, filters)
 
         # ── 产品 JOIN（只有 product 维度或有产品过滤时才 JOIN）───
         if need_product_join:
@@ -3858,7 +3889,13 @@ class AftersaleRepository:
                     func.date_format(sof.shipped_date, '%Y-%m').label('month'),
                     func.sum(sof.actual_quantity).label('actual'),
                 )
+                .with_hint(
+                    sof,
+                    'USE INDEX (ix_sof_source_finished_code)',
+                    dialect_name='mysql',
+                )
                 .filter(
+                    sof.source == 'shipping',
                     sof.finished_code.in_(series_finished_codes),
                     sof.shipped_date.isnot(None),
                     db.or_(sof.operator.is_(None), ~sof.operator.in_(aftersale_ops)),
