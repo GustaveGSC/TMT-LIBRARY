@@ -277,11 +277,32 @@ def resolve_all():
             try:
                 def progress_cb(step, **kwargs):
                     _publish_task_event(task_id, q, step, **kwargs)
-                result = shipping_service.resolve_all(progress_cb=progress_cb)
-                _invalidate_chart_options_cache()
-                _finish_task(task_id, q, 'done', data=result)
+
+                def cancel_check():
+                    return shipping_repository.is_cancel_requested(task_id)
+
+                def begin_commit():
+                    return shipping_repository.try_begin_commit(task_id)
+
+                shipping_service.resolve_all(
+                    task_id,
+                    progress_cb=progress_cb,
+                    cancel_check=cancel_check,
+                    begin_commit=begin_commit,
+                )
+            except InterruptedError:
+                _finish_task(
+                    task_id, q, 'cancelled',
+                    message='重算已取消，线上数据保持不变',
+                )
             except Exception:
                 _finish_task(task_id, q, 'error', message=internal_task_error('发货数据重算失败'))
+            else:
+                # Publication and task completion were committed atomically.
+                # Cache maintenance must not overwrite that terminal state.
+                _invalidate_chart_options_cache()
+            finally:
+                db.session.remove()
 
     threading.Thread(target=run, daemon=True).start()
     return Result.ok(data={'task_id': task_id}).to_response()
@@ -320,19 +341,35 @@ def resolve_stale():
     def run():
         with app.app_context():
             try:
-                shipping_repository.update_task(
-                    task_id, status='running', progress={'step': 'resolving'},
+                def progress_cb(step, **kwargs):
+                    _publish_task_event(task_id, None, step, **kwargs)
+
+                def cancel_check():
+                    return shipping_repository.is_cancel_requested(task_id)
+
+                def begin_commit():
+                    return shipping_repository.try_begin_commit(task_id)
+
+                shipping_service.resolve_stale(
+                    task_id,
+                    progress_cb=progress_cb,
+                    cancel_check=cancel_check,
+                    begin_commit=begin_commit,
                 )
-                result = shipping_service.resolve_stale()
-                _invalidate_chart_options_cache()
-                shipping_repository.update_task(
-                    task_id, status='done', progress={'step': 'done'}, result=result,
+            except InterruptedError:
+                _finish_task(
+                    task_id, None, 'cancelled',
+                    message='重算已取消，线上数据保持不变',
                 )
             except Exception:
-                shipping_repository.update_task(
-                    task_id, status='error', progress={'step': 'error'},
+                _finish_task(
+                    task_id, None, 'error',
                     message=internal_task_error('旧数据迁移失败'),
                 )
+            else:
+                _invalidate_chart_options_cache()
+            finally:
+                db.session.remove()
 
     threading.Thread(target=run, daemon=True).start()
     return Result.ok(data={'task_id': task_id}).to_response()

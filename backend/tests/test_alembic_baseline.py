@@ -20,7 +20,8 @@ PERMISSION_DOMAIN_REVISION = '20260723_02'
 SHIPPING_TASK_LEASE_REVISION = '20260724_01'
 LIFECYCLE_TASK_REVISION = '20260724_02'
 SHIPPING_CANCEL_REVISION = '20260724_03'
-HEAD_REVISION = SHIPPING_CANCEL_REVISION
+SHIPPING_RESOLVE_STAGING_REVISION = '20260725_01'
+HEAD_REVISION = SHIPPING_RESOLVE_STAGING_REVISION
 CRITICAL_INDEXES = {
     'shipping_order_finished': {
         'ix_sof_source',
@@ -65,6 +66,10 @@ def test_baseline_has_linear_history_and_task_lease_is_the_only_head():
     assert (
         scripts.get_revision(SHIPPING_CANCEL_REVISION).down_revision
         == LIFECYCLE_TASK_REVISION
+    )
+    assert (
+        scripts.get_revision(SHIPPING_RESOLVE_STAGING_REVISION).down_revision
+        == SHIPPING_CANCEL_REVISION
     )
 
 
@@ -174,6 +179,8 @@ def test_baseline_upgrade_adds_only_task_schemas(tmp_path, monkeypatch):
     assert after_upgrade == before_upgrade | {
         'shipping_task',
         'product_lifecycle_task',
+        'shipping_resolve_target',
+        'shipping_order_finished_staging',
     }
     inspector = sa.inspect(engine)
     shipping_task_columns = {

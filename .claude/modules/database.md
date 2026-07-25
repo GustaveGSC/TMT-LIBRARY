@@ -6,6 +6,8 @@
 - `20260720_01` 是生产现状的空 baseline，不包含业务 DDL
 - `20260720_02` 新增 `shipping_task`
 - `20260724_01` 为 `shipping_task` 新增数据库级互斥租约 `lease_key`
+- `20260725_01` 新增成品组合安全重算暂存表 `shipping_resolve_target` /
+  `shipping_order_finished_staging`
 - `20260721_01` 清理不受支持的 `product:delete` 权限及既有角色关联
 - `20260721_02` 增加财务客户简称字段、人工映射表，并规范财务行内部唯一键
 - `20260721_03` 将客户简称带入成品组合结果，并增加 `(source, customer_alias)` 聚合索引
@@ -397,9 +399,17 @@ cost_column_alias                          # Excel 列名映射（key → aliase
 - `lease_key` 为空或固定为 `shipping_data_mutation`；唯一约束保证发货导入、财务导入、
   全量重算和旧数据重算任一时刻只能运行一个。任务进入终态或启动恢复将其清空。
 - `cancel_requested_at`/`cancel_requested_by` 持久化记录取消请求；取消请求本身不释放租约。
-- 当前只有 `import_shipping`/`import_finance` 支持取消；重算任务在 staging/cutover 上线前明确拒绝。
+- 四类任务均支持取消。导入任务在原业务事务中回滚；重算任务只分块提交 task_id 隔离的
+  staging，取消/失败不会修改 `shipping_order_finished`。
 - worker 最终提交前用 CAS 从 running 切到 committing，且要求 `cancel_requested_at IS NULL`；
   取消和提交只有一个能成功，committing 后接口返回409。
+- 重算任务的正式表 cutover 与 `shipping_task=done` 在同一个事务内提交；全量重算必须先完成
+  shipping、finance 两个 source 的完整暂存代，再统一替换正式表。
+
+`shipping_resolve_target` 保存某个重算 task 的订单范围，复合主键为
+`(task_id, source, ecommerce_order_no)`。`shipping_order_finished_staging` 保存该 task 的完整
+派生结果，业务列与 `shipping_order_finished` 对齐，并以 task_id 隔离。暂存表不与任务表建立
+外键，避免 cutover/清理引入级联锁；终态超过一小时的遗留暂存数据会在下一次重算开始时清理。
 
 `product_lifecycle_task` 独立保存产品生命周期更新任务，不与发货任务表混用：
 

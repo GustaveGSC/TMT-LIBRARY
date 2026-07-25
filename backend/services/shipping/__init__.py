@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 from typing import List, Dict
 from database.base import db
 from database.repository.shipping import shipping_repository
+from error_handling import report_internal_error
 from result import Result
 
 from utils import now_cst
@@ -500,8 +501,41 @@ def _merge_return_rows(rows: List[Dict]):
     return list(merged.values()), merged_away
 
 
+def _load_resolver_context(cancel_check=None):
+    """Load immutable product/equivalent rules once for a staged task."""
+    from database.models.product.finished import ProductFinished, PackagedEquivalent
+    from sqlalchemy.orm import selectinload
+    from collections import defaultdict
+
+    finished_list = ProductFinished.query.options(
+        selectinload(ProductFinished.packaged_list)
+    ).all()
+    _raise_if_cancelled(cancel_check)
+    sorted_finished = _build_sorted_finished_rules(finished_list)
+    equiv_map: Dict = defaultdict(set)
+    for equivalent in PackagedEquivalent.query.all():
+        equiv_map[equivalent.code_a].update([
+            equivalent.code_a, equivalent.code_b,
+        ])
+        equiv_map[equivalent.code_b].update([
+            equivalent.code_a, equivalent.code_b,
+        ])
+    return {
+        'sorted_finished': sorted_finished,
+        'equiv_map': equiv_map,
+        'candidate_index': _build_finished_candidate_index(
+            sorted_finished, equiv_map,
+        ),
+        'finished_name_by_code': {
+            finished_code: finished_name
+            for finished_code, finished_name, _required in sorted_finished
+        },
+    }
+
+
 def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=None,
-                    commit_chunks: bool = True, cancel_check=None):
+                    commit_chunks: bool = True, cancel_check=None,
+                    resolver_context=None, staging_task_id=None):
     """
     对给定订单号列表，执行成品组合匹配，写入 shipping_order_finished。
     source: 'shipping' 或 'finance'，决定从哪个来源的 shipping_record 读取产成品数据。
@@ -514,36 +548,15 @@ def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=
     if not order_nos:
         return
 
-    from database.models.product.finished import ProductFinished, ProductPackaged
-    from database.base import db
-
     total_orders = len(order_nos)
 
-    if progress_cb:
+    if progress_cb and resolver_context is None:
         progress_cb('preparing', message='正在加载产品库…', total=total_orders)
-
-    # 加载所有成品及其产成品关联（selectinload 避免 N+1）
-    from sqlalchemy.orm import selectinload
-    from database.models.product.finished import PackagedEquivalent
-    from collections import defaultdict
-    finished_list = ProductFinished.query.options(
-        selectinload(ProductFinished.packaged_list)
-    ).all()
-    _raise_if_cancelled(cancel_check)
-    # 贪心顺序固定为组件数降序、成品编码升序；要求组件也固定为排序 tuple。
-    sorted_finished = _build_sorted_finished_rules(finished_list)
-
-    # 加载通用件等效映射：{code: set(含自身及所有等效码)}
-    equiv_map: Dict = defaultdict(set)
-    for ep in PackagedEquivalent.query.all():
-        equiv_map[ep.code_a].update([ep.code_a, ep.code_b])
-        equiv_map[ep.code_b].update([ep.code_a, ep.code_b])
-
-    candidate_index = _build_finished_candidate_index(sorted_finished, equiv_map)
-    finished_name_by_code = {
-        finished_code: finished_name
-        for finished_code, finished_name, _required_codes in sorted_finished
-    }
+    context = resolver_context or _load_resolver_context(cancel_check)
+    sorted_finished = context['sorted_finished']
+    equiv_map = context['equiv_map']
+    candidate_index = context['candidate_index']
+    finished_name_by_code = context['finished_name_by_code']
 
     # 分批加载发货数据，每批推送一次进度
     CHUNK = 2000
@@ -578,12 +591,13 @@ def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=
         )
         return_resolved[order_no] = order_ret
 
-    # 清除旧结果（只清除同一 source 的记录）
-    _raise_if_cancelled(cancel_check)
-    shipping_repository.delete_order_finished(
-        order_nos, source=source, commit_chunks=commit_chunks,
-        cancel_check=cancel_check,
-    )
+    if staging_task_id is None:
+        # 导入增量路径仍在自己的原子业务事务中直接替换正式结果。
+        _raise_if_cancelled(cancel_check)
+        shipping_repository.delete_order_finished(
+            order_nos, source=source, commit_chunks=commit_chunks,
+            cancel_check=cancel_check,
+        )
 
     resolved_at = now_cst()
     to_insert = []
@@ -652,10 +666,18 @@ def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=
         progress_cb('resolving', current=total_orders, total=total_orders)
 
     _raise_if_cancelled(cancel_check)
-    shipping_repository.bulk_insert_order_finished(
-        to_insert, progress_cb=progress_cb, commit_chunks=commit_chunks,
-        cancel_check=cancel_check,
-    )
+    if staging_task_id is None:
+        shipping_repository.bulk_insert_order_finished(
+            to_insert, progress_cb=progress_cb, commit_chunks=commit_chunks,
+            cancel_check=cancel_check,
+        )
+    else:
+        shipping_repository.bulk_insert_order_finished_staging(
+            staging_task_id,
+            to_insert,
+            progress_cb=progress_cb,
+            cancel_check=cancel_check,
+        )
 
 
 def _get_finished_name(finished) -> str:
@@ -913,31 +935,139 @@ class ShippingService:
         count = shipping_repository.classify_operators(items)
         return {'updated': count}
 
-    def resolve_stale(self) -> Dict:
-        """刷新所有 is_stale 的订单组合（按 source 分别处理）"""
-        stale_pairs = shipping_repository.get_stale_order_nos()  # [(order_no, source), ...]
-        # 按 source 分组
+    def _run_staged_resolve(self, task_id: str, pairs, *, full_rebuild: bool,
+                            progress_cb=None, cancel_check=None,
+                            begin_commit=None) -> Dict:
+        """Build a committed private generation, then atomically cut it over."""
         from collections import defaultdict
-        by_source = defaultdict(list)
-        for order_no, src in stale_pairs:
-            by_source[src].append(order_no)
-        for src, order_nos in by_source.items():
-            _resolve_orders(order_nos, source=src)
-        return {'resolved': len(stale_pairs)}
+
+        unique_pairs = sorted({
+            (order_no, source)
+            for order_no, source in pairs
+            if order_no and source in ('shipping', 'finance')
+        }, key=lambda pair: (pair[1], pair[0]))
+        try:
+            shipping_repository.cleanup_abandoned_resolve_staging()
+            shipping_repository.cleanup_resolve_staging(task_id)
+            target_count = shipping_repository.create_resolve_targets(
+                task_id, unique_pairs, cancel_check=cancel_check,
+            )
+            _raise_if_cancelled(cancel_check)
+            context = _load_resolver_context(cancel_check)
+            by_source = defaultdict(list)
+            for order_no, source in unique_pairs:
+                by_source[source].append(order_no)
+
+            processed = 0
+            chunk_size = 2000
+            for source in ('shipping', 'finance'):
+                order_nos = by_source.get(source, [])
+                for index in range(0, len(order_nos), chunk_size):
+                    _raise_if_cancelled(cancel_check)
+                    chunk = order_nos[index:index + chunk_size]
+                    _resolve_orders(
+                        chunk,
+                        source=source,
+                        progress_cb=None,
+                        cancel_check=cancel_check,
+                        resolver_context=context,
+                        staging_task_id=task_id,
+                    )
+                    processed += len(chunk)
+                    if progress_cb:
+                        progress_cb(
+                            'resolving',
+                            current=processed,
+                            total=target_count,
+                        )
+
+            stats = shipping_repository.get_resolve_staging_stats(task_id)
+            if stats['target_count'] != target_count:
+                raise RuntimeError('重算目标数量校验失败')
+            if stats['orphan_count'] != 0:
+                raise RuntimeError('重算暂存结果存在范围外订单')
+            _raise_if_cancelled(cancel_check)
+            if begin_commit and not begin_commit():
+                raise InterruptedError('取消请求先于最终切换生效')
+
+            # Drop the ORM transaction/connection before the short engine-level cutover.
+            db.session.remove()
+            cutover = shipping_repository.cutover_resolve_staging(
+                task_id,
+                full_rebuild=full_rebuild,
+                resolved_count=target_count,
+                staged_rows=stats['staging_count'],
+            )
+            try:
+                shipping_repository.cleanup_resolve_staging(task_id)
+                cleanup_pending = False
+            except Exception as exc:
+                cleanup_pending = True
+                report_internal_error(
+                    exc,
+                    context=f'清理重算暂存数据失败 task_id={task_id}',
+                )
+            if cleanup_pending:
+                cutover['cleanup_pending'] = True
+                try:
+                    shipping_repository.update_task(
+                        task_id,
+                        result=cutover,
+                        progress={'step': 'done', 'data': cutover},
+                    )
+                except Exception as exc:
+                    # The live cutover and terminal task state are already
+                    # committed. A diagnostic update must never turn that
+                    # successful publication into a reported task failure.
+                    report_internal_error(
+                        exc,
+                        context=f'更新重算暂存清理状态失败 task_id={task_id}',
+                    )
+            return cutover
+        except Exception:
+            db.session.rollback()
+            try:
+                shipping_repository.cleanup_resolve_staging(task_id)
+            except Exception as cleanup_exc:
+                report_internal_error(
+                    cleanup_exc,
+                    context=f'异常后清理重算暂存数据失败 task_id={task_id}',
+                )
+            raise
+
+    def resolve_stale(self, task_id: str, progress_cb=None,
+                      cancel_check=None, begin_commit=None) -> Dict:
+        """Safely rebuild stale orders through task-isolated staging."""
+        stale_pairs = shipping_repository.get_stale_order_nos()
+        return self._run_staged_resolve(
+            task_id,
+            stale_pairs,
+            full_rebuild=False,
+            progress_cb=progress_cb,
+            cancel_check=cancel_check,
+            begin_commit=begin_commit,
+        )
 
     def get_stats(self) -> Dict:
         return shipping_repository.get_stats()
 
-    def resolve_all(self, progress_cb=None) -> Dict:
-        """全量重新计算所有订单的成品组合（发货端 + 财务端分别 resolve）"""
+    def resolve_all(self, task_id: str, progress_cb=None,
+                    cancel_check=None, begin_commit=None) -> Dict:
+        """Safely rebuild both sources and cut over one complete generation."""
         shipping_nos = shipping_repository.get_all_order_nos_by_source('shipping')
         finance_nos  = shipping_repository.get_all_order_nos_by_source('finance')
-        total = len(shipping_nos) + len(finance_nos)
-        if shipping_nos:
-            _resolve_orders(shipping_nos, source='shipping', progress_cb=progress_cb)
-        if finance_nos:
-            _resolve_orders(finance_nos, source='finance', progress_cb=progress_cb)
-        return {'resolved': total}
+        pairs = (
+            [(order_no, 'shipping') for order_no in shipping_nos]
+            + [(order_no, 'finance') for order_no in finance_nos]
+        )
+        return self._run_staged_resolve(
+            task_id,
+            pairs,
+            full_rebuild=True,
+            progress_cb=progress_cb,
+            cancel_check=cancel_check,
+            begin_commit=begin_commit,
+        )
 
     def get_shipped_dates(self) -> List[str]:
         return shipping_repository.get_distinct_shipped_dates()
