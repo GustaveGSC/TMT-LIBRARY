@@ -7,7 +7,11 @@ import { mockDataMgmtPage } from './fixtures/dataMgmt.js'
 
 const TASK_ID = 'resolve-cancel-task-1'
 
-test.describe('ShippingMaintenancePage：重建全部成品组合取消', () => {
+// "重建全部成品组合"入口已临时禁用（FULL_RESOLVE_TEMPORARILY_DISABLED，见
+// ShippingMaintenancePage.vue）：生产门禁实测发现全表 DELETE 超过 read_timeout 导致任务失败，
+// 见 handoff/2026-07-25-claude-staging-cutover-gate-test-report.md。这里整体 skip，
+// 保留用例不删，等后端改为 RENAME TABLE 型 cutover、前端恢复入口后再取消 skip。
+test.describe.skip('ShippingMaintenancePage：重建全部成品组合取消', () => {
   async function gotoMaintenance(page) {
     await mockDataMgmtPage(page)
     await page.goto('/#/shipping/maintenance')
@@ -195,4 +199,19 @@ test.describe('OperatorConfig：旧数据重算取消', () => {
 
     await expect(page.getByText('重算已取消，线上数据保持不变')).toBeVisible({ timeout: 10000 })
   })
+})
+
+test('重建全部成品组合入口临时禁用，按钮不可点击并展示说明', async ({ page }) => {
+  await mockDataMgmtPage(page)
+  await page.goto('/#/shipping/maintenance')
+  await page.waitForLoadState('networkidle')
+
+  const resolveBtn = page.getByRole('button', { name: '重建全部成品组合' })
+  await expect(resolveBtn).toBeVisible()
+  await expect(resolveBtn).toBeDisabled()
+  await expect(page.getByText('当前正在优化，暂不可用')).toBeVisible()
+
+  // 禁用态下点击不应打开确认弹窗
+  await resolveBtn.click({ force: true })
+  await expect(page.getByRole('button', { name: '确认重建' })).toHaveCount(0)
 })

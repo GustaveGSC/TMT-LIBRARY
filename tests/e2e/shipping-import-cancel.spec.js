@@ -156,30 +156,13 @@ test('取消与 committing 竞争：提交方胜出时展示后端文案，不�
   await expect(page.getByText('导入成功')).toBeVisible({ timeout: 10000 })
 })
 
-test('resolve_all / resolve_stale 不显示取消入口', async ({ page }) => {
+test('resolve_stale 在 cancellable:false 时不显示取消入口', async ({ page }) => {
   await mockDataMgmtPage(page)
 
-  // resolve_all（数据维护页）
-  await page.route('**/api/shipping/resolve-all', (route) =>
-    route.fulfill({ json: { success: true, message: '', data: { task_id: 'resolve-all-task' } } })
-  )
-  await page.route('**/api/shipping/tasks/resolve-all-task', (route) =>
-    route.fulfill({
-      json: {
-        success: true, message: '',
-        data: {
-          task_id: 'resolve-all-task', task_type: 'resolve_all', status: 'running',
-          progress: { step: 'resolving', current: 1, total: 10 }, result: null, message: '',
-          cancellable: false, cancel_requested: false,
-        },
-      },
-    })
-  )
-  await page.goto('/#/shipping/maintenance')
-  await page.waitForLoadState('networkidle')
-  await page.getByRole('button', { name: '重建全部成品组合' }).click({ force: true })
-  await page.getByRole('button', { name: '确认重建' }).click()
-  await expect(page.locator('[data-testid="task-cancel-btn"]')).toHaveCount(0)
+  // resolve_all（数据维护页）"重建全部成品组合"入口已临时禁用，见
+  // handoff/2026-07-25-claude-staging-cutover-gate-test-report.md（全表 DELETE 超时门禁未通过）。
+  // 对应交互测试挪到 tests/e2e/shipping-resolve-cancel.spec.js 并整体 skip，等后端重新设计
+  // cutover、前端恢复入口后再取消 skip。这里只保留 resolve_stale 场景。
 
   // resolve_stale（规则设置 → 操作人分类）
   await page.route('**/api/shipping/resolve', (route) =>

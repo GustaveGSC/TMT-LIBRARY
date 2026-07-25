@@ -15,6 +15,10 @@ const taskCancel = useShippingTaskCancel()
 const currentTaskId = ref('')
 
 // ── 重建全部成品组合 ──────────────────────────────
+// 生产门禁实测（2026-07-25）：全量 cutover 的无 WHERE DELETE 超过 read_timeout 导致任务失败，
+// 见 handoff/2026-07-25-claude-staging-cutover-gate-test-report.md。后端正在改造为 RENAME TABLE
+// 型 cutover，期间前端临时禁用入口；等后端 fail-fast 补丁和新 cutover 一起上线后再放开。
+const FULL_RESOLVE_TEMPORARILY_DISABLED = true
 const resolving           = ref(false)
 const showResolveConfirm  = ref(false)
 const showResolveProgress = ref(false)
@@ -129,18 +133,22 @@ async function handleResolveAll() {
         请在业务低峰期操作。
       </div>
     </div>
-    <button
-      v-if="canEditShipping"
-      class="btn-resolve"
-      :class="{ resolving }"
-      :disabled="resolving"
-      @click="showResolveConfirm = true"
-    >
-      <svg class="resolve-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
-      </svg>
-      <span>重建全部成品组合</span>
-    </button>
+    <div v-if="canEditShipping" class="resolve-action-row">
+      <button
+        class="btn-resolve"
+        :class="{ resolving }"
+        :disabled="resolving || FULL_RESOLVE_TEMPORARILY_DISABLED"
+        @click="showResolveConfirm = true"
+      >
+        <svg class="resolve-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+        </svg>
+        <span>重建全部成品组合</span>
+      </button>
+      <span v-if="FULL_RESOLVE_TEMPORARILY_DISABLED" class="resolve-disabled-hint">
+        当前正在优化，暂不可用
+      </span>
+    </div>
 
     <!-- ── 重建全部成品组合确认弹窗 ─────────────────── -->
     <el-dialog
@@ -250,6 +258,8 @@ async function handleResolveAll() {
 .config-title { font-size: 16px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
 .config-sub   { font-size: 12px; color: var(--text-muted); line-height: 1.7; }
 
+.resolve-action-row { display: flex; align-items: center; gap: 10px; }
+
 .btn-resolve {
   display: flex; align-items: center; gap: 6px;
   align-self: flex-start;
@@ -263,6 +273,7 @@ async function handleResolveAll() {
 .btn-resolve:disabled { opacity: 0.6; cursor: not-allowed; }
 .btn-resolve.resolving { border-color: rgba(196,136,58,0.4); color: var(--accent); }
 .resolve-icon { width: 15px; height: 15px; flex-shrink: 0; }
+.resolve-disabled-hint { font-size: 12px; color: #d05a3c; }
 
 .confirm-body { font-size: 13px; color: var(--text-primary); line-height: 1.7; }
 
