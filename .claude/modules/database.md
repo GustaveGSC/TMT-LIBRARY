@@ -92,7 +92,8 @@ shipping_order_finished
   is_stale, resolved_at,
   source ENUM('shipping','finance') DEFAULT 'shipping'
   # source 与 shipping_record 对应；两个来源独立 resolve，互不干扰
-  # 财务端 resolve 时从订单原始行取首个非空 customer_alias；全量重算可补齐历史结果
+  # resolve 元数据采用“完成发货”代表行：shipped_date DESC, id DESC 的首行；
+  # customer_alias 若代表行为空，再按同一确定性顺序回退首个非空值；全量重算可修正历史结果
   # INDEX(source)；INDEX(source, customer_alias)；图表查询必须带 source 过滤
 
 return_warehouse_filter

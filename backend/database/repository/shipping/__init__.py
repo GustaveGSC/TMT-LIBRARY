@@ -2,6 +2,7 @@ import time
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import List, Dict, Set, Tuple
+from sqlalchemy import distinct as sql_distinct, func as sql_func
 from sqlalchemy.exc import IntegrityError
 from database.base import db
 from database.models.shipping import (
@@ -604,6 +605,56 @@ class ShippingRepository:
         return snapshots
 
     @staticmethod
+    def get_finance_customer_alias_conflicts(order_nos: List[str], *,
+                                             limit: int = 100,
+                                             cancel_check=None) -> Tuple[int, List[str]]:
+        """
+        返回指定财务订单中存在多个非空客户简称的订单总数及前 limit 个订单号。
+
+        查询运行在导入业务事务内，因此能看到本批尚未提交的 UPSERT 结果。
+        """
+        normalized_order_nos = sorted({
+            order_no for order_no in order_nos if order_no
+        })
+        if not normalized_order_nos:
+            return 0, []
+
+        total = 0
+        samples = []
+        # 与 resolve 的订单加载分块一致，控制 IN 参数规模同时避免大文件产生数百次往返。
+        chunk_size = 2000
+        for index in range(0, len(normalized_order_nos), chunk_size):
+            if cancel_check and cancel_check():
+                raise InterruptedError('用户已请求取消任务')
+            chunk = normalized_order_nos[index:index + chunk_size]
+            rows = db.session.query(
+                ShippingRecord.ecommerce_order_no,
+            ).filter(
+                ShippingRecord.ecommerce_order_no.in_(chunk),
+                ShippingRecord.record_type == 'shipping',
+                ShippingRecord.source == 'finance',
+                ShippingRecord.customer_alias.isnot(None),
+                sql_func.trim(ShippingRecord.customer_alias) != '',
+            ).group_by(
+                ShippingRecord.ecommerce_order_no,
+            ).having(
+                sql_func.count(
+                    sql_distinct(sql_func.trim(ShippingRecord.customer_alias))
+                ) > 1
+            ).order_by(
+                ShippingRecord.ecommerce_order_no,
+            ).all()
+            total += len(rows)
+            if len(samples) < limit:
+                samples.extend(
+                    row.ecommerce_order_no
+                    for row in rows[:limit - len(samples)]
+                )
+            if cancel_check and cancel_check():
+                raise InterruptedError('用户已请求取消任务')
+        return total, samples
+
+    @staticmethod
     def bulk_insert_return(batch_id: int, rows: List[Dict], progress_cb=None,
                            commit_chunks: bool = True, cancel_check=None) -> int:
         """分块 UPSERT 写入 return_record，返回处理行数。"""
@@ -836,7 +887,8 @@ class ShippingRepository:
     def get_order_products(order_nos: List[str], source: str = 'shipping') -> Dict[str, Dict]:
         """
         返回 {order_no: {'product_codes': {code: qty}, 'meta': {...}}}
-        meta 取该订单第一行的基础字段；customer_alias 取首个非空值。
+        meta 取完成发货代表行（日期降序、同日 id 降序）；
+        customer_alias 若代表行为空，则按相同确定性顺序回退首个非空值。
         """
         records = ShippingRecord.query.filter(
             ShippingRecord.ecommerce_order_no.in_(order_nos),
@@ -849,25 +901,49 @@ class ShippingRepository:
             if on not in result:
                 result[on] = {
                     'product_codes': {},
-                    'meta': {
-                        'shipped_date':     r.shipped_date,
-                        'operator':         r.operator,
-                        'channel_name':     r.channel_name,
-                        'channel_code':     r.channel_code,
-                        'channel_org_name': r.channel_org_name,
-                        'province':         r.province,
-                        'city':             r.city,
-                        'district':         r.district,
-                        'customer_alias':   r.customer_alias,
-                    },
+                    'meta': None,
+                    '_meta_key': None,
+                    '_alias_key': None,
+                    '_fallback_alias': None,
                 }
-            elif not result[on]['meta'].get('customer_alias') and r.customer_alias:
-                result[on]['meta']['customer_alias'] = r.customer_alias
+            row_key = (
+                r.shipped_date is not None,
+                r.shipped_date,
+                r.id or 0,
+            )
+            if result[on]['_meta_key'] is None or row_key > result[on]['_meta_key']:
+                result[on]['_meta_key'] = row_key
+                result[on]['meta'] = {
+                    'shipped_date':     r.shipped_date,
+                    'operator':         r.operator,
+                    'channel_name':     r.channel_name,
+                    'channel_code':     r.channel_code,
+                    'channel_org_name': r.channel_org_name,
+                    'province':         r.province,
+                    'city':             r.city,
+                    'district':         r.district,
+                    'customer_alias':   r.customer_alias,
+                }
+            if (
+                r.customer_alias
+                and (
+                    result[on]['_alias_key'] is None
+                    or row_key > result[on]['_alias_key']
+                )
+            ):
+                result[on]['_alias_key'] = row_key
+                result[on]['_fallback_alias'] = r.customer_alias
             qty = float(r.quantity) if r.quantity else 0
             if r.product_code and qty > 0:
                 result[on]['product_codes'][r.product_code] = (
                     result[on]['product_codes'].get(r.product_code, 0) + qty
                 )
+        for data in result.values():
+            if not data['meta'].get('customer_alias'):
+                data['meta']['customer_alias'] = data['_fallback_alias']
+            del data['_meta_key']
+            del data['_alias_key']
+            del data['_fallback_alias']
         return result
 
     @staticmethod
