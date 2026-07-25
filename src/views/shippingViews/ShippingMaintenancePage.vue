@@ -6,9 +6,13 @@ import http from '@/api/http'
 import { pollShippingTask } from '@/utils/shippingTaskPoll'
 import { getConflictTaskId } from '@/utils/taskConflict'
 import { usePermission } from '@/composables/usePermission'
+import { useShippingTaskCancel } from '@/composables/useShippingTaskCancel'
+import ShippingTaskCancelButton from '@/components/shipping/ShippingTaskCancelButton.vue'
 
 // ── 权限 ──────────────────────────────────────────
 const { canEditShipping } = usePermission()
+const taskCancel = useShippingTaskCancel()
+const currentTaskId = ref('')
 
 // ── 重建全部成品组合 ──────────────────────────────
 const resolving           = ref(false)
@@ -21,22 +25,31 @@ const resolvePrepareCount = ref(0)
 const resolveSaving       = ref(false)
 const resolveSaveCurrent  = ref(0)
 const resolveSaveTotal    = ref(0)
+const resolveCommitting   = ref(false)
 
 let activePoller = null
 onUnmounted(() => {
   activePoller?.stop()
 })
 
+function cancelResolve() {
+  taskCancel.requestCancel(currentTaskId.value)
+}
+
 async function handleResolveAll() {
   if (resolving.value) return
   activePoller?.stop()
   activePoller = null
+  taskCancel.reset()
+  currentTaskId.value        = ''
   showResolveConfirm.value  = false
   resolving.value           = true
   resolveCurrentOrder.value = 0
   resolveTotalOrders.value  = 0
   resolvePrepareMsg.value   = '正在初始化…'
+  resolveCommitting.value   = false
   showResolveProgress.value = true
+  let wasCancelled = false
   try {
     const res = await http.post('/api/shipping/resolve-all')
     const conflictTaskId = getConflictTaskId(res)
@@ -50,10 +63,12 @@ async function handleResolveAll() {
       resolvePrepareMsg.value = '正在接入当前运行任务...'
     }
     const taskId = conflictTaskId || res.data.task_id
+    currentTaskId.value = taskId
 
     await new Promise((resolve, reject) => {
       activePoller = pollShippingTask(taskId, {
         onEvent(data) {
+          taskCancel.handlePollEvent(data)
           if (data.step === 'preparing') {
             resolvePrepareMsg.value   = data.message  ?? '正在准备数据…'
             resolveTotalOrders.value  = data.total    ?? 0
@@ -67,10 +82,16 @@ async function handleResolveAll() {
             resolveSaving.value      = true
             resolveSaveCurrent.value = data.current ?? 0
             resolveSaveTotal.value   = data.total   ?? 0
+          } else if (data.step === 'committing') {
+            resolveCommitting.value = true
           } else if (data.step === 'done') {
             activePoller?.stop()
             resolveCurrentOrder.value = data.data.resolved
             resolveTotalOrders.value  = data.data.resolved
+            resolve()
+          } else if (data.step === 'cancelled') {
+            activePoller?.stop()
+            wasCancelled = true
             resolve()
           } else if (data.step === 'error') {
             activePoller?.stop()
@@ -80,12 +101,17 @@ async function handleResolveAll() {
         },
       })
     })
-    ElMessage.success(`刷新完成，共处理 ${resolveCurrentOrder.value.toLocaleString()} 条订单`)
+    if (wasCancelled) {
+      ElMessage.info('重算已取消，线上数据保持不变')
+    } else {
+      ElMessage.success(`刷新完成，共处理 ${resolveCurrentOrder.value.toLocaleString()} 条订单`)
+    }
   } catch {
     // ElMessage 已在内部处理
   } finally {
     activePoller?.stop()
     activePoller = null
+    taskCancel.reset()
     resolving.value           = false
     showResolveProgress.value = false
   }
@@ -143,7 +169,13 @@ async function handleResolveAll() {
       :show-close="false"
     >
       <div class="progress-body">
-        <template v-if="resolvePrepareMsg">
+        <template v-if="resolveCommitting">
+          <div class="progress-label">
+            <span>正在提交最终结果，此阶段已无法取消…</span>
+          </div>
+          <el-progress :percentage="100" :stroke-width="10" :color="'#c4883a'" status="" />
+        </template>
+        <template v-else-if="resolvePrepareMsg">
           <div class="progress-label">
             <span class="progress-prepare-msg">{{ resolvePrepareMsg }}</span>
             <span class="progress-count">
@@ -192,6 +224,14 @@ async function handleResolveAll() {
           />
         </template>
         <div class="progress-hint">请勿关闭窗口，计算完成后将自动关闭</div>
+        <ShippingTaskCancelButton
+          class="progress-cancel-btn"
+          :cancellable="taskCancel.cancellable.value"
+          :cancel-requested="taskCancel.cancelRequested.value"
+          :cancel-submitting="taskCancel.cancelSubmitting.value"
+          :committing="taskCancel.committing.value"
+          @cancel="cancelResolve"
+        />
       </div>
     </el-dialog>
   </div>
@@ -232,4 +272,5 @@ async function handleResolveAll() {
 .progress-count { font-variant-numeric: tabular-nums; color: var(--text-muted); font-size: 12px; }
 .progress-sep { margin: 0 3px; }
 .progress-hint { font-size: 12px; color: var(--text-muted); text-align: center; }
+.progress-cancel-btn { align-self: center; margin-top: 4px; }
 </style>

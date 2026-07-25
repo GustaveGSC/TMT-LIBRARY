@@ -6,9 +6,13 @@ import http from '@/api/http'
 import { getConflictTaskId } from '@/utils/taskConflict'
 import { pollShippingTask } from '@/utils/shippingTaskPoll'
 import { usePermission } from '@/composables/usePermission'
+import { useShippingTaskCancel } from '@/composables/useShippingTaskCancel'
+import ShippingTaskCancelButton from '@/components/shipping/ShippingTaskCancelButton.vue'
 
 // ── 响应式状态 ────────────────────────────────────
 const { canEditShipping } = usePermission()
+const taskCancel = useShippingTaskCancel()
+const currentTaskId = ref('')
 const operators  = ref([])   // [{ operator, type }]
 const loading    = ref(false)
 const saving     = ref(false)
@@ -71,10 +75,16 @@ async function saveClassify() {
   }
 }
 
+function cancelResolveStale() {
+  taskCancel.requestCancel(currentTaskId.value)
+}
+
 async function resolveStale() {
   resolving.value = true
   activePoller?.stop()
   activePoller = null
+  taskCancel.reset()
+  currentTaskId.value = ''
   try {
     // 1. 启动后台任务
     const res = await http.post('/api/shipping/resolve')
@@ -84,17 +94,23 @@ async function resolveStale() {
       ElMessage.warning(res.message || '已有发货数据任务在运行，正在接入该任务的进度')
     }
     const taskId = conflictTaskId || res.data.task_id
+    currentTaskId.value = taskId
 
     // 2. 短轮询直到完成
     await new Promise((resolve, reject) => {
       activePoller = pollShippingTask(taskId, {
         onEvent(data) {
+          taskCancel.handlePollEvent(data)
           if (data.step === 'done') {
             activePoller?.stop()
             ElMessage.success(`已刷新 ${data.data?.resolved ?? 0} 个订单的成品组合`)
             staleCount.value = 0
             resolve()
-          } else if (data.step === 'error' || data.step === 'cancelled') {
+          } else if (data.step === 'cancelled') {
+            activePoller?.stop()
+            ElMessage.info('重算已取消，线上数据保持不变')
+            resolve()
+          } else if (data.step === 'error') {
             activePoller?.stop()
             reject(new Error(data.message || '刷新失败'))
           }
@@ -106,6 +122,7 @@ async function resolveStale() {
   } finally {
     activePoller?.stop()
     activePoller = null
+    taskCancel.reset()
     resolving.value = false
   }
 }
@@ -136,6 +153,14 @@ function typeColor(type) {
         >
           {{ resolving ? '刷新中…' : `刷新成品组合 (${staleCount})` }}
         </button>
+        <ShippingTaskCancelButton
+          v-if="resolving"
+          :cancellable="taskCancel.cancellable.value"
+          :cancel-requested="taskCancel.cancelRequested.value"
+          :cancel-submitting="taskCancel.cancelSubmitting.value"
+          :committing="taskCancel.committing.value"
+          @cancel="cancelResolveStale"
+        />
         <button class="btn-save" :disabled="saving" @click="saveClassify">
           {{ saving ? '保存中…' : '保存' }}
         </button>
