@@ -62,7 +62,10 @@ class ShippingTask(db.Model):
                 if self.cancel_requested_at else None
             ),
             'cancellable': (
-                self.task_type in ('import_shipping', 'import_finance')
+                self.task_type in (
+                    'import_shipping', 'import_finance',
+                    'resolve_all', 'resolve_stale',
+                )
                 and self.status in ('pending', 'running')
                 and self.cancel_requested_at is None
             ),
@@ -250,3 +253,50 @@ class ShippingOrderFinished(db.Model):
             'source':             self.source,
             'is_stale':           self.is_stale,
         }
+
+
+class ShippingResolveTarget(db.Model):
+    """Persisted task scope used by staged resolve cutover."""
+    __tablename__ = 'shipping_resolve_target'
+
+    task_id            = db.Column(db.String(36),  primary_key=True)
+    source             = db.Column(db.Enum('shipping', 'finance'), primary_key=True)
+    ecommerce_order_no = db.Column(db.String(100), primary_key=True)
+
+
+class ShippingOrderFinishedStaging(db.Model):
+    """Task-isolated resolve output; never queried by charts."""
+    __tablename__ = 'shipping_order_finished_staging'
+    __table_args__ = (
+        db.Index(
+            'ix_sofs_task_source_order',
+            'task_id', 'source', 'ecommerce_order_no',
+        ),
+    )
+
+    id                 = db.Column(
+        db.BigInteger().with_variant(db.Integer, 'sqlite'),
+        primary_key=True,
+        autoincrement=True,
+    )
+    task_id            = db.Column(db.String(36),     nullable=False)
+    ecommerce_order_no = db.Column(db.String(100),    nullable=False)
+    finished_code      = db.Column(db.String(100),    nullable=True)
+    finished_name      = db.Column(db.String(255),    nullable=True)
+    quantity           = db.Column(db.Numeric(12, 2), nullable=True)
+    return_quantity    = db.Column(db.Numeric(12, 2), nullable=True, default=0)
+    actual_quantity    = db.Column(db.Numeric(12, 2), nullable=True)
+    shipped_date       = db.Column(db.Date,           nullable=True)
+    operator           = db.Column(db.String(100),    nullable=True)
+    channel_name       = db.Column(db.String(100),    nullable=True)
+    channel_code       = db.Column(db.String(100),    nullable=True)
+    channel_org_name   = db.Column(db.String(100),    nullable=True)
+    province           = db.Column(db.String(50),     nullable=True)
+    city               = db.Column(db.String(100),    nullable=True)
+    district           = db.Column(db.String(100),    nullable=True)
+    customer_alias     = db.Column(db.String(255),    nullable=True)
+    source             = db.Column(
+        db.Enum('shipping', 'finance'), nullable=False,
+    )
+    is_stale           = db.Column(db.Boolean,        nullable=False, default=False)
+    resolved_at        = db.Column(db.DateTime,       nullable=True)

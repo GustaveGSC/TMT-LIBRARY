@@ -61,11 +61,18 @@ def test_cancel_rejects_unsupported_committing_finished_and_missing(tmp_path):
 
     with app.app_context():
         unsupported_id = str(uuid.uuid4())
-        _create(ShippingRepository, unsupported_id, 'resolve_all')
+        _create(ShippingRepository, unsupported_id, 'legacy_unknown')
         assert ShippingRepository.request_task_cancel(
             unsupported_id, 1,
         )[0] == 'unsupported'
         ShippingRepository.update_task(unsupported_id, status='done')
+
+        resolve_id = str(uuid.uuid4())
+        _create(ShippingRepository, resolve_id, 'resolve_all')
+        assert ShippingRepository.request_task_cancel(
+            resolve_id, 1,
+        )[0] == 'requested'
+        ShippingRepository.update_task(resolve_id, status='cancelled')
 
         committing_id = str(uuid.uuid4())
         _create(ShippingRepository, committing_id)

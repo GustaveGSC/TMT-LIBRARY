@@ -9,6 +9,7 @@ from database.models.shipping import (
     ShippingBatch, ShippingRecord, ReturnRecord, ReturnWarehouseFilter,
     ShippingOperatorType, ShippingOrderFinished, ShippingTask,
     ShippingFinanceCustomerMapping,
+    ShippingOrderFinishedStaging, ShippingResolveTarget,
 )
 from utils import now_cst
 
@@ -26,7 +27,9 @@ class ShippingTaskLeaseConflict(Exception):
         self.task_id = task_id
 
 
-CANCELLABLE_TASK_TYPES = frozenset({'import_shipping', 'import_finance'})
+CANCELLABLE_TASK_TYPES = frozenset({
+    'import_shipping', 'import_finance', 'resolve_all', 'resolve_stale',
+})
 
 
 def _get_ftp_finished_codes() -> set:
@@ -1005,6 +1008,218 @@ class ShippingRepository:
                 db.session.commit()
             if progress_cb:
                 progress_cb('saving', current=min(i + chunk_size, total), total=total)
+
+    @staticmethod
+    def create_resolve_targets(task_id: str, pairs: List[Tuple[str, str]],
+                               cancel_check=None):
+        """Persist the complete cutover scope in bounded committed chunks."""
+        unique_pairs = sorted({
+            (source, order_no)
+            for order_no, source in pairs
+            if order_no and source in ('shipping', 'finance')
+        })
+        chunk_size = 1000
+        for index in range(0, len(unique_pairs), chunk_size):
+            if cancel_check and cancel_check():
+                raise InterruptedError('用户已请求取消任务')
+            db.session.bulk_save_objects([
+                ShippingResolveTarget(
+                    task_id=task_id,
+                    source=source,
+                    ecommerce_order_no=order_no,
+                )
+                for source, order_no in unique_pairs[index:index + chunk_size]
+            ])
+            db.session.commit()
+        return len(unique_pairs)
+
+    @staticmethod
+    def bulk_insert_order_finished_staging(task_id: str, rows: List[Dict],
+                                           progress_cb=None,
+                                           cancel_check=None):
+        """Write task-isolated resolve output; committed staging is not live data."""
+        chunk_size = 200
+        total = len(rows)
+        for index in range(0, total, chunk_size):
+            if cancel_check and cancel_check():
+                raise InterruptedError('用户已请求取消任务')
+            chunk = rows[index:index + chunk_size]
+            db.session.bulk_save_objects([
+                ShippingOrderFinishedStaging(
+                    task_id             = task_id,
+                    ecommerce_order_no = row['ecommerce_order_no'],
+                    finished_code      = row.get('finished_code'),
+                    finished_name      = row.get('finished_name'),
+                    quantity           = row.get('quantity'),
+                    return_quantity    = row.get('return_quantity', 0),
+                    actual_quantity    = row.get('actual_quantity'),
+                    shipped_date       = row.get('shipped_date'),
+                    operator           = row.get('operator'),
+                    channel_name       = row.get('channel_name'),
+                    channel_code       = row.get('channel_code'),
+                    channel_org_name   = row.get('channel_org_name'),
+                    province           = row.get('province'),
+                    city               = row.get('city'),
+                    district           = row.get('district'),
+                    customer_alias     = row.get('customer_alias'),
+                    source             = row.get('source', 'shipping'),
+                    is_stale           = False,
+                    resolved_at        = row.get('resolved_at'),
+                )
+                for row in chunk
+            ])
+            db.session.commit()
+            if progress_cb:
+                progress_cb(
+                    'saving',
+                    current=min(index + len(chunk), total),
+                    total=total,
+                )
+
+    @staticmethod
+    def get_resolve_staging_stats(task_id: str) -> Dict:
+        target = ShippingResolveTarget.__table__
+        staging = ShippingOrderFinishedStaging.__table__
+        with db.engine.connect() as connection:
+            target_count = connection.execute(
+                db.select(sql_func.count()).select_from(target).where(
+                    target.c.task_id == task_id,
+                )
+            ).scalar_one()
+            staging_count = connection.execute(
+                db.select(sql_func.count()).select_from(staging).where(
+                    staging.c.task_id == task_id,
+                )
+            ).scalar_one()
+            orphan_count = connection.execute(
+                db.select(sql_func.count()).select_from(staging).where(
+                    staging.c.task_id == task_id,
+                    ~db.exists(
+                        db.select(1).select_from(target).where(
+                            target.c.task_id == task_id,
+                            target.c.source == staging.c.source,
+                            target.c.ecommerce_order_no == staging.c.ecommerce_order_no,
+                        )
+                    ),
+                )
+            ).scalar_one()
+        return {
+            'target_count': int(target_count),
+            'staging_count': int(staging_count),
+            'orphan_count': int(orphan_count),
+        }
+
+    @staticmethod
+    def cutover_resolve_staging(task_id: str, *, full_rebuild: bool,
+                                resolved_count: int,
+                                staged_rows: int) -> Dict:
+        """
+        Atomically publish a fully prepared generation and finish its task.
+
+        Keeping the live-table cutover and the terminal task state in one
+        transaction closes the reload window where new data could be visible
+        while startup recovery still marked the task as interrupted.
+        """
+        live = ShippingOrderFinished.__table__
+        staging = ShippingOrderFinishedStaging.__table__
+        target = ShippingResolveTarget.__table__
+        task = ShippingTask.__table__
+        columns = (
+            'ecommerce_order_no', 'finished_code', 'finished_name', 'quantity',
+            'return_quantity', 'actual_quantity', 'shipped_date', 'operator',
+            'channel_name', 'channel_code', 'channel_org_name', 'province',
+            'city', 'district', 'customer_alias', 'source', 'is_stale',
+            'resolved_at',
+        )
+        with db.engine.begin() as connection:
+            if full_rebuild:
+                deleted = connection.execute(db.delete(live)).rowcount
+            else:
+                in_scope = db.exists(
+                    db.select(1).select_from(target).where(
+                        target.c.task_id == task_id,
+                        target.c.source == live.c.source,
+                        target.c.ecommerce_order_no == live.c.ecommerce_order_no,
+                    )
+                )
+                deleted = connection.execute(
+                    db.delete(live).where(in_scope)
+                ).rowcount
+            source_rows = db.select(
+                *(staging.c[column] for column in columns)
+            ).where(staging.c.task_id == task_id)
+            inserted = connection.execute(
+                db.insert(live).from_select(columns, source_rows)
+            ).rowcount
+            result = {
+                'resolved': resolved_count,
+                'staged_rows': staged_rows,
+                'deleted_rows': max(deleted or 0, 0),
+                'inserted_rows': max(inserted or 0, 0),
+                'cleanup_pending': False,
+            }
+            finished_at = now_cst()
+            task_update = connection.execute(
+                db.update(task)
+                .where(
+                    task.c.id == task_id,
+                    task.c.status == 'committing',
+                )
+                .values(
+                    status='done',
+                    progress={'step': 'done', 'data': result},
+                    result=result,
+                    message='',
+                    finished_at=finished_at,
+                    updated_at=finished_at,
+                    lease_key=None,
+                )
+            )
+            if task_update.rowcount != 1:
+                raise RuntimeError('重算任务状态已变化，拒绝发布暂存结果')
+        return result
+
+    @staticmethod
+    def cleanup_resolve_staging(task_id: str):
+        """Best-effort idempotent cleanup outside the live cutover transaction."""
+        with db.engine.begin() as connection:
+            connection.execute(
+                db.delete(ShippingOrderFinishedStaging).where(
+                    ShippingOrderFinishedStaging.task_id == task_id,
+                )
+            )
+            connection.execute(
+                db.delete(ShippingResolveTarget).where(
+                    ShippingResolveTarget.task_id == task_id,
+                )
+            )
+
+    @staticmethod
+    def cleanup_abandoned_resolve_staging():
+        """
+        Remove private generations left by terminal tasks for over one hour.
+
+        The delay avoids racing a graceful-reload worker that has just been
+        marked interrupted but is still unwinding and writing its final chunk.
+        """
+        cutoff = now_cst() - timedelta(hours=1)
+        terminal_tasks = db.select(ShippingTask.id).where(
+            ShippingTask.status.in_(
+                ('done', 'error', 'cancelled', 'interrupted')
+            ),
+            ShippingTask.updated_at < cutoff,
+        )
+        with db.engine.begin() as connection:
+            connection.execute(
+                db.delete(ShippingOrderFinishedStaging).where(
+                    ShippingOrderFinishedStaging.task_id.in_(terminal_tasks),
+                )
+            )
+            connection.execute(
+                db.delete(ShippingResolveTarget).where(
+                    ShippingResolveTarget.task_id.in_(terminal_tasks),
+                )
+            )
 
     # ── 统计 ─────────────────────────────────────────
 

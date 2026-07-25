@@ -175,7 +175,7 @@ POST   /api/shipping/import/finance                   # 上传财务清单（财
                                                       #   Excel/CSV 单文件 20MB、解压后 100MB、最多 50 sheet/100000 行
 GET    /api/shipping/tasks/:task_id                   # 后台任务统一短轮询入口（需 shipping 权限，建议 1-2 秒间隔，Cache-Control:no-store）
 POST   /api/shipping/tasks/:task_id/cancel            # shipping:edit；持久化、幂等地请求取消
-                                                      # 仅 import_shipping/import_finance 支持；成功 data 含
+                                                      # 四类数据写任务均支持；成功 data 含
                                                       # task_id/task_type/status/cancel_requested/cancellable
                                                       # 不存在404；不支持/已结束400；committing阶段409
 GET    /api/shipping/import/status/:task_id           # 兼容旧客户端，响应同 /tasks/:task_id
@@ -187,10 +187,12 @@ POST   /api/shipping/operators/classify               # 批量保存操作人分
 GET    /api/shipping/stats                            # 统计摘要
 GET    /api/shipping/shipped-dates                    # 所有发货记录的 shipped_date（去重升序，不含销退日期）
 POST   /api/shipping/resolve                          # 刷新 is_stale 订单的成品组合；旧 /task-status 轮询入口保留，状态已持久化
-POST   /api/shipping/resolve-all                      # 全量重新计算所有订单成品组合；返回 task_id，两个 source 分开 resolve
+POST   /api/shipping/resolve-all                      # 全量重新计算所有订单成品组合；返回 task_id
                                                       #   import/shipping、import/finance、resolve-all、resolve 均通过 tasks/:task_id 轮询
                                                       #   四类数据写任务（另含 POST /resolve）数据库级互斥；
                                                       #   已有任务运行时返回 409，data.task_id 为当前任务
+                                                      #   resolve/resolve-all 先写任务隔离的 staging；
+                                                      #   shipping+finance 全部完成后才用一个短事务原子切换
 GET    /api/shipping/warehouses                       # 所有出现过的仓库名及 is_excluded 状态
 POST   /api/shipping/warehouses/filter                # 批量保存仓库过滤配置 [{warehouse_name, is_excluded}]
 GET    /api/shipping/finance-customer-aliases         # shipping:view；客户简称计数+人工映射，?keyword=&page=1&per_page=100（上限500）
@@ -344,10 +346,12 @@ POST   /api/aftersale/chart-data                      # 图表聚合数据，bod
 - 不存在的 task_id 返回 HTTP 404；终态查询不会删除记录。
 - 新前端只使用本接口短轮询；旧 SSE 入口仅返回调用时的一次快照，不等待状态变化。
 
-`POST /api/shipping/tasks/:task_id/cancel` 只对 `import_shipping`、`import_finance`
-生效。取消请求持久化后，worker 会在文件解析、数据库分块比对/写入、增量成品组合解析及
-最终提交前检查；命中取消会回滚整个导入事务并进入 `cancelled`。最终提交通过
-`running → committing` 的原子 CAS 与取消请求竞争，避免“接口返回取消成功但业务数据仍提交”。
+`POST /api/shipping/tasks/:task_id/cancel` 对四类任务均生效。导入任务在文件解析、数据库
+分块比对/写入、增量成品组合解析及最终提交前检查；命中取消会回滚整个导入事务。
+`resolve_all`/`resolve_stale` 分块提交的仅是 task_id 隔离的暂存代，不会改变正式结果；
+取消或失败会清理暂存代。重算成功通过 `running → committing` CAS 后，在同一个短事务中
+切换正式结果并把任务写为 `done`，避免 reload 产生“数据已切换、任务却中断”的矛盾状态。
+所有任务的最终提交均用 CAS 与取消请求竞争，committing 后取消返回 409。
 
 ## 上传安全限制
 
