@@ -10,6 +10,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import mysql
 
 from database.models.shipping import (
+    ShippingBatch,
     ShippingFinanceCustomerMapping,
     ShippingOperatorType,
     ShippingOrderFinished,
@@ -177,6 +178,11 @@ def test_finance_reimport_writes_changed_rows_and_incrementally_resolves(monkeyp
         lambda _batch, rows, **_kwargs: captured.setdefault('returns', rows) and len(rows),
     )
     monkeypatch.setattr(
+        repository,
+        'get_finance_customer_alias_conflicts',
+        lambda order_nos, **_kwargs: (1, order_nos),
+    )
+    monkeypatch.setattr(
         shipping_module,
         '_resolve_orders',
         lambda order_nos, **kwargs: captured.update(
@@ -197,6 +203,9 @@ def test_finance_reimport_writes_changed_rows_and_incrementally_resolves(monkeyp
     assert result['updated_returns'] == 1
     assert result['skipped'] == 0
     assert result['skipped_returns'] == 0
+    assert result['customer_alias_conflicts_count'] == 1
+    assert result['customer_alias_conflicts_order_nos'] == ['ORDER-1']
+    assert result['customer_alias_conflicts_truncated'] is False
     assert captured['resolved'] == ['ORDER-1']
     assert captured['resolve_atomic'] is True
 
@@ -248,6 +257,11 @@ def test_identical_finance_reimport_skips_writes_and_resolve(monkeypatch):
         lambda _batch, rows, **_kwargs: calls.update(return_rows=rows) or 0,
     )
     monkeypatch.setattr(
+        repository,
+        'get_finance_customer_alias_conflicts',
+        lambda *_args, **_kwargs: (0, []),
+    )
+    monkeypatch.setattr(
         shipping_module, '_resolve_orders',
         lambda *_args, **_kwargs: calls.update(resolved=calls['resolved'] + 1),
     )
@@ -279,7 +293,7 @@ def test_finance_diff_mirrors_customer_alias_coalesce_and_quantity_changes():
     ) is True
 
 
-def test_resolve_input_prefers_first_nonempty_customer_alias(monkeypatch):
+def test_resolve_input_uses_completion_row_and_deterministic_alias_fallback(monkeypatch):
     app = Flask(__name__)
     app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite://'
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -288,21 +302,24 @@ def test_resolve_input_prefers_first_nonempty_customer_alias(monkeypatch):
     records = [
         SimpleNamespace(
             ecommerce_order_no='ORDER-1', record_type='shipping', source='finance',
-            shipped_date=date(2026, 7, 21), operator=None, channel_name=None,
+            id=10, shipped_date=date(2026, 7, 21),
+            operator='较早操作人', channel_name='较早渠道',
+            channel_code=None, channel_org_name=None, province=None, city=None,
+            district=None, customer_alias='较早客户', product_code='SKU-3', quantity=1,
+        ),
+        SimpleNamespace(
+            ecommerce_order_no='ORDER-1', record_type='shipping', source='finance',
+            id=20, shipped_date=date(2026, 7, 22),
+            operator='同日较早', channel_name='同日渠道',
+            channel_code=None, channel_org_name=None, province=None, city=None,
+            district=None, customer_alias='完成日客户', product_code='SKU-2', quantity=1,
+        ),
+        SimpleNamespace(
+            ecommerce_order_no='ORDER-1', record_type='shipping', source='finance',
+            id=30, shipped_date=date(2026, 7, 22),
+            operator='完成操作人', channel_name='完成渠道',
             channel_code=None, channel_org_name=None, province=None, city=None,
             district=None, customer_alias=None, product_code='SKU-1', quantity=1,
-        ),
-        SimpleNamespace(
-            ecommerce_order_no='ORDER-1', record_type='shipping', source='finance',
-            shipped_date=date(2026, 7, 21), operator=None, channel_name=None,
-            channel_code=None, channel_org_name=None, province=None, city=None,
-            district=None, customer_alias='人工客户', product_code='SKU-2', quantity=1,
-        ),
-        SimpleNamespace(
-            ecommerce_order_no='ORDER-1', record_type='shipping', source='finance',
-            shipped_date=date(2026, 7, 21), operator=None, channel_name=None,
-            channel_code=None, channel_org_name=None, province=None, city=None,
-            district=None, customer_alias='不同简称', product_code='SKU-3', quantity=1,
         ),
     ]
 
@@ -317,7 +334,62 @@ def test_resolve_input_prefers_first_nonempty_customer_alias(monkeypatch):
         monkeypatch.setattr(ShippingRecord, 'query', FakeQuery())
         result = ShippingRepository.get_order_products(['ORDER-1'], source='finance')
 
-    assert result['ORDER-1']['meta']['customer_alias'] == '人工客户'
+    assert result['ORDER-1']['meta']['shipped_date'] == date(2026, 7, 22)
+    assert result['ORDER-1']['meta']['operator'] == '完成操作人'
+    assert result['ORDER-1']['meta']['channel_name'] == '完成渠道'
+    assert result['ORDER-1']['meta']['customer_alias'] == '完成日客户'
+
+
+def test_finance_customer_alias_conflicts_are_counted_and_bounded():
+    app = Flask(__name__)
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite://'
+    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+    from database.base import db
+    db.init_app(app)
+
+    with app.app_context():
+        ShippingBatch.__table__.create(db.engine)
+        ShippingRecord.__table__.create(db.engine)
+        batch = ShippingBatch(
+            type='finance', filename='finance.csv', row_count=205,
+            imported_at=date(2026, 7, 25),
+        )
+        db.session.add(batch)
+        db.session.flush()
+        records = []
+        order_nos = []
+        for index in range(102):
+            order_no = f'ORDER-{index:03d}'
+            order_nos.append(order_no)
+            records.extend([
+                ShippingRecord(
+                    batch_id=batch.id, record_type='shipping', source='finance',
+                    ecommerce_order_no=order_no, line_no='1',
+                    product_code=f'SKU-{index}-A', quantity=1,
+                    customer_alias='客户甲',
+                ),
+                ShippingRecord(
+                    batch_id=batch.id, record_type='shipping', source='finance',
+                    ecommerce_order_no=order_no, line_no='2',
+                    product_code=f'SKU-{index}-B', quantity=1,
+                    customer_alias=' 客户乙 ',
+                ),
+            ])
+        records.append(ShippingRecord(
+            batch_id=batch.id, record_type='shipping', source='finance',
+            ecommerce_order_no='NO-CONFLICT', line_no='1',
+            product_code='SKU-SINGLE', quantity=1, customer_alias='客户甲',
+        ))
+        db.session.add_all(records)
+        db.session.commit()
+
+        total, samples = ShippingRepository.get_finance_customer_alias_conflicts(
+            order_nos + ['NO-CONFLICT'], limit=100,
+        )
+
+    assert total == 102
+    assert len(samples) == 100
+    assert samples == order_nos[:100]
 
 
 def test_resolved_rows_persist_customer_alias(monkeypatch):

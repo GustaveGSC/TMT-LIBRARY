@@ -323,6 +323,7 @@ def _simulation(connection, finished, equivalents):
     candidate_order_samples = []
     current_to_stable_samples = []
     requirement_order_samples = []
+    stable_output_hasher = hashlib.sha256()
     current_key = None
     products = {}
 
@@ -336,6 +337,9 @@ def _simulation(connection, finished, equivalents):
         )
         stable = _match(
             order_products, ascending, equivalents, ascending_index,
+        )
+        stable_output_hasher.update(
+            repr((source, order_no, stable)).encode("utf-8")
         )
         candidate_reversed = _match(
             order_products, descending, equivalents, descending_index,
@@ -383,16 +387,135 @@ def _simulation(connection, finished, equivalents):
     query.close()
     return {
         "counts": dict(totals),
+        "stable_output_sha256": stable_output_hasher.hexdigest(),
         "current_to_code_ascending_samples": current_to_stable_samples,
         "candidate_order_samples": candidate_order_samples,
         "requirement_order_samples": requirement_order_samples,
     }
 
 
+def _metadata_simulation(connection):
+    fields = METADATA_FIELDS
+    query = connection.execution_options(stream_results=True).execute(text(f"""
+        SELECT id, source, ecommerce_order_no, {", ".join(fields)}
+        FROM shipping_record
+        WHERE record_type = 'shipping'
+          AND ecommerce_order_no IS NOT NULL
+          AND ecommerce_order_no != ''
+        ORDER BY source, ecommerce_order_no, id
+    """)).mappings()
+    totals = Counter()
+    samples = []
+    current_key = None
+    rows = []
+
+    def normalized(value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+    def compare(key, order_rows):
+        if key is None:
+            return
+        source, order_no = key
+        totals[f"{source}_orders"] += 1
+        old_meta = {
+            field: normalized(order_rows[0][field])
+            for field in fields
+        }
+        for row in order_rows:
+            alias = normalized(row["customer_alias"])
+            if alias:
+                old_meta["customer_alias"] = alias
+                break
+
+        completion_rows = sorted(
+            order_rows,
+            key=lambda row: (
+                row["shipped_date"] is not None,
+                row["shipped_date"],
+                row["id"],
+            ),
+            reverse=True,
+        )
+        representative = completion_rows[0]
+        new_meta = {
+            field: normalized(representative[field])
+            for field in fields
+        }
+        if not new_meta["customer_alias"]:
+            new_meta["customer_alias"] = next(
+                (
+                    normalized(row["customer_alias"])
+                    for row in completion_rows
+                    if normalized(row["customer_alias"])
+                ),
+                None,
+            )
+
+        distinct_values = {
+            field: {
+                value
+                for row in order_rows
+                if (value := normalized(row[field])) is not None
+            }
+            for field in fields
+        }
+        ambiguous = any(
+            len(values) > 1 for values in distinct_values.values()
+        )
+        changed_fields = [
+            field for field in fields if old_meta[field] != new_meta[field]
+        ]
+        if not changed_fields:
+            return
+        totals[f"{source}_changed_orders"] += 1
+        if ambiguous:
+            totals[f"{source}_ambiguous_changed_orders"] += 1
+        else:
+            totals[f"{source}_nonambiguous_changed_orders"] += 1
+        for field in changed_fields:
+            totals[f"{source}_{field}_changes"] += 1
+        if len(samples) < 20:
+            samples.append({
+                "order_hash": _hash(f"{source}:{order_no}"),
+                "source": source,
+                "ambiguous": ambiguous,
+                "row_count": len(order_rows),
+                "changed_fields": changed_fields,
+                "old_value_hashes": {
+                    field: _hash(old_meta[field]) for field in changed_fields
+                },
+                "new_value_hashes": {
+                    field: _hash(new_meta[field]) for field in changed_fields
+                },
+            })
+
+    for row in query:
+        key = (row["source"], row["ecommerce_order_no"])
+        if key != current_key:
+            compare(current_key, rows)
+            current_key = key
+            rows = []
+        rows.append(row)
+    compare(current_key, rows)
+    query.close()
+    return {"counts": dict(totals), "samples": samples}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--phase", choices=("aggregate", "simulation"), default="aggregate",
+        "--phase",
+        choices=("aggregate", "simulation", "metadata-simulation"),
+        default="aggregate",
+    )
+    parser.add_argument(
+        "--compact", action="store_true",
+        help="For simulation, print only counts and the stable output digest.",
     )
     args = parser.parse_args()
     engine = create_engine(
@@ -412,15 +535,25 @@ def main():
                     ),
                     "metadata": _metadata_ambiguity(connection),
                 }
-            else:
+            elif args.phase == "simulation":
                 report = {
                     "simulation": _simulation(
                         connection, finished, equivalents,
                     ),
                 }
+            else:
+                report = {
+                    "metadata_simulation": _metadata_simulation(connection),
+                }
             connection.rollback()
     finally:
         engine.dispose()
+    if args.compact and args.phase == "simulation":
+        simulation = report["simulation"]
+        report = {
+            "counts": simulation["counts"],
+            "stable_output_sha256": simulation["stable_output_sha256"],
+        }
     print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
 
 

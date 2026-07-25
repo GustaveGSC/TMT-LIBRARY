@@ -364,6 +364,25 @@ def _build_finished_candidate_index(sorted_finished, equiv_map):
     return candidate_indexes
 
 
+def _build_sorted_finished_rules(finished_list):
+    """Build stable resolver rules: complex products first, then code ascending."""
+    finished_rules = []
+    for finished in finished_list:
+        required_codes = tuple(sorted(
+            packaged.code for packaged in finished.packaged_list
+        ))
+        if required_codes:
+            finished_rules.append((
+                finished.code,
+                _get_finished_name(finished),
+                required_codes,
+            ))
+    return sorted(
+        finished_rules,
+        key=lambda item: (-len(item[2]), item[0]),
+    )
+
+
 def _get_finished_candidates(remaining, sorted_finished, candidate_index=None):
     if candidate_index is None:
         return sorted_finished
@@ -511,19 +530,8 @@ def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=
         selectinload(ProductFinished.packaged_list)
     ).all()
     _raise_if_cancelled(cancel_check)
-    # finished_map: finished_code → (finished_name, frozenset of packaged codes)
-    finished_map = {}
-    for f in finished_list:
-        packaged_codes = frozenset(p.code for p in f.packaged_list)
-        if packaged_codes:
-            finished_map[f.code] = (f.code, _get_finished_name(f), packaged_codes)
-
-    # 按产成品数量从多到少排序（贪心：优先匹配更复杂的成品）
-    sorted_finished = sorted(
-        finished_map.values(),
-        key=lambda x: len(x[2]),
-        reverse=True,
-    )
+    # 贪心顺序固定为组件数降序、成品编码升序；要求组件也固定为排序 tuple。
+    sorted_finished = _build_sorted_finished_rules(finished_list)
 
     # 加载通用件等效映射：{code: set(含自身及所有等效码)}
     equiv_map: Dict = defaultdict(set)
@@ -834,6 +842,19 @@ class ShippingService:
                 commit_chunks=False,
                 cancel_check=cancel_check,
             )
+            imported_shipping_order_nos = sorted({
+                row.get('ecommerce_order_no')
+                for row in shipping_rows
+                if row.get('ecommerce_order_no')
+            })
+            (
+                customer_alias_conflicts_count,
+                customer_alias_conflicts_order_nos,
+            ) = shipping_repository.get_finance_customer_alias_conflicts(
+                imported_shipping_order_nos,
+                limit=100,
+                cancel_check=cancel_check,
+            )
             notify('inserted',
                    inserted=len(new_shipping),
                    updated=len(changed_shipping),
@@ -870,6 +891,12 @@ class ShippingService:
                 'updated_returns':    len(changed_returns),
                 'skipped':            len(unchanged_shipping),
                 'skipped_returns':    len(unchanged_returns),
+                'customer_alias_conflicts_count': customer_alias_conflicts_count,
+                'customer_alias_conflicts_order_nos': customer_alias_conflicts_order_nos,
+                'customer_alias_conflicts_truncated': (
+                    customer_alias_conflicts_count
+                    > len(customer_alias_conflicts_order_nos)
+                ),
                 'skipped_rows':       [
                     _serialize_finance_skipped_row(r)
                     for r in unchanged_shipping

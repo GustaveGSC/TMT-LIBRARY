@@ -1,7 +1,13 @@
+import os
 import random
+import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
 
 from services.shipping import (
     _build_finished_candidate_index,
+    _build_sorted_finished_rules,
     _get_finished_candidates,
     _greedy_match_finished,
 )
@@ -79,3 +85,117 @@ def test_sparse_order_visits_only_anchor_compatible_candidates():
 
     assert candidates == [finished[17]]
     assert len(candidates) < len(finished) / 100
+
+
+def test_finished_rules_use_component_count_then_code_and_sorted_tuple():
+    finished = [
+        SimpleNamespace(
+            code='Z-FINISHED',
+            model=SimpleNamespace(name='Z'),
+            packaged_list=[
+                SimpleNamespace(code='PART-B'),
+                SimpleNamespace(code='PART-A'),
+            ],
+        ),
+        SimpleNamespace(
+            code='A-FINISHED',
+            model=SimpleNamespace(name='A'),
+            packaged_list=[
+                SimpleNamespace(code='PART-C'),
+                SimpleNamespace(code='PART-A'),
+            ],
+        ),
+        SimpleNamespace(
+            code='SINGLE',
+            model=SimpleNamespace(name='S'),
+            packaged_list=[SimpleNamespace(code='PART-Z')],
+        ),
+    ]
+
+    rules = _build_sorted_finished_rules(finished)
+
+    assert [rule[0] for rule in rules] == [
+        'A-FINISHED', 'Z-FINISHED', 'SINGLE',
+    ]
+    assert rules[1][2] == ('PART-A', 'PART-B')
+    assert isinstance(rules[1][2], tuple)
+
+
+def test_overlapping_equivalent_requirements_have_stable_consumption_order():
+    # PART-A/PART-B can both consume SHARED. The sorted requirement tuple makes
+    # this otherwise ambiguous allocation reproducible across hash seeds.
+    finished = [
+        ('FINISHED', '成品', ('PART-A', 'PART-B')),
+    ]
+    equivalents = {
+        'PART-A': {'PART-A', 'SHARED', 'SUPPLY-A'},
+        'PART-B': {'PART-B', 'SHARED', 'SUPPLY-B'},
+    }
+    products = {'SHARED': 1, 'SUPPLY-A': 2, 'SUPPLY-B': 1}
+    candidate_index = _build_finished_candidate_index(finished, equivalents)
+
+    first = _greedy_match_finished(
+        products, finished, equivalents, candidate_index,
+    )
+    second = _greedy_match_finished(
+        products, finished, equivalents, candidate_index,
+    )
+
+    assert first == second
+    assert first == ({'FINISHED': 2}, {'SUPPLY-A': 1})
+
+
+def test_resolver_output_is_identical_across_python_hash_seeds():
+    backend_dir = Path(__file__).resolve().parents[1]
+    script = r"""
+import hashlib
+from types import SimpleNamespace
+from services.shipping import (
+    _build_finished_candidate_index,
+    _build_sorted_finished_rules,
+    _greedy_match_finished,
+)
+
+finished = [
+    SimpleNamespace(
+        code=code,
+        model=SimpleNamespace(name=code),
+        packaged_list=[
+            SimpleNamespace(code=part)
+            for part in set(parts)
+        ],
+    )
+    for code, parts in [
+        ('Z-FINISHED', ('PART-B', 'PART-A')),
+        ('A-FINISHED', ('PART-C', 'PART-A')),
+    ]
+]
+rules = _build_sorted_finished_rules(finished)
+equivalents = {
+    'PART-A': set(('PART-A', 'SHARED', 'SUPPLY-A')),
+    'PART-B': set(('PART-B', 'SHARED', 'SUPPLY-B')),
+}
+index = _build_finished_candidate_index(rules, equivalents)
+result = _greedy_match_finished(
+    {'SHARED': 1, 'SUPPLY-A': 2, 'SUPPLY-B': 1, 'PART-C': 1},
+    rules,
+    equivalents,
+    index,
+)
+print(hashlib.sha256(repr((rules, result)).encode()).hexdigest())
+"""
+    hashes = []
+    for seed in ('1', '20260725', 'random'):
+        env = os.environ.copy()
+        env['PYTHONHASHSEED'] = seed
+        env['PYTHONPATH'] = str(backend_dir)
+        completed = subprocess.run(
+            [sys.executable, '-c', script],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        hashes.append(completed.stdout.strip())
+
+    assert len(set(hashes)) == 1

@@ -166,6 +166,11 @@ POST   /api/shipping/import/finance                   # 上传财务清单（财
                                                       #   仅 UPSERT 新增或字段实际变化的行；完全相同行计入 skipped
                                                       #   新增/变化的发货或销退订单在同一事务内自动增量重算派生组合
                                                       #   结果 inserted/updated/skipped 与 returns 对应字段分别表示新增/变化/未变化行数
+                                                      #   done.result 另含：
+                                                      #   customer_alias_conflicts_count: 本文件订单中存在多个非空客户简称的订单总数
+                                                      #   customer_alias_conflicts_order_nos: string[]，按订单号升序、最多100项
+                                                      #   customer_alias_conflicts_truncated: boolean，总数超过返回清单长度时为true
+                                                      #   客户简称冲突只提示、不阻断导入
                                                       #   独立销退清单接口已废弃，销退数据统一通过财务清单负数量行导入
                                                       #   Excel/CSV 单文件 20MB、解压后 100MB、最多 50 sheet/100000 行
 GET    /api/shipping/tasks/:task_id                   # 后台任务统一短轮询入口（需 shipping 权限，建议 1-2 秒间隔，Cache-Control:no-store）
