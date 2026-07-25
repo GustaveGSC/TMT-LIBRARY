@@ -1,3 +1,4 @@
+import os
 import uuid
 import threading
 import json
@@ -21,6 +22,13 @@ shipping_bp = Blueprint('shipping', __name__)
 _SSE_ENDPOINTS = frozenset({'shipping.import_progress'})
 
 _VIEW_POST = ('/chart-data',)
+
+
+def _is_full_resolve_enabled():
+    return os.getenv('ALLOW_FULL_RESOLVE', '').strip().lower() in {
+        '1', 'true', 'yes', 'on',
+    }
+
 
 def _shipping_guard():
     if request.endpoint in _SSE_ENDPOINTS:
@@ -265,6 +273,11 @@ def classify_operators():
 @shipping_bp.post('/resolve-all')
 def resolve_all():
     """全量重新计算所有订单的成品组合（后台线程 + SSE 进度）"""
+    if not _is_full_resolve_enabled():
+        return Result.fail(
+            '全量重建正在维护优化，当前暂不可用'
+        ).to_response(503)
+
     task_id = str(uuid.uuid4())
     conflict = _create_mutation_task(task_id, 'resolve_all')
     if conflict:

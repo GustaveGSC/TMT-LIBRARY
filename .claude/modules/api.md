@@ -188,6 +188,8 @@ GET    /api/shipping/stats                            # 统计摘要
 GET    /api/shipping/shipped-dates                    # 所有发货记录的 shipped_date（去重升序，不含销退日期）
 POST   /api/shipping/resolve                          # 刷新 is_stale 订单的成品组合；旧 /task-status 轮询入口保留，状态已持久化
 POST   /api/shipping/resolve-all                      # 全量重新计算所有订单成品组合；返回 task_id
+                                                      # 当前默认维护关闭：未显式配置 ALLOW_FULL_RESOLVE=true 时
+                                                      # 立即返回 HTTP 503，不创建任务/租约/暂存数据
                                                       #   import/shipping、import/finance、resolve-all、resolve 均通过 tasks/:task_id 轮询
                                                       #   四类数据写任务（另含 POST /resolve）数据库级互斥；
                                                       #   已有任务运行时返回 409，data.task_id 为当前任务
