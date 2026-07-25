@@ -30,6 +30,9 @@ const currentTaskId = ref('')
 const showSkippedDialog = ref(false)
 const skippedRows       = ref([])
 
+// 客户简称冲突弹窗
+const showConflictsDialog = ref(false)
+
 // 错误弹窗
 const showErrorDialog = ref(false)
 const errorMessage    = ref('')
@@ -272,6 +275,14 @@ async function doImport() {
           <div class="rc-val">{{ result.aftersale_filtered }}</div>
           <div class="rc-lbl">售后组过滤</div>
         </div>
+        <div
+          v-if="(result.customer_alias_conflicts_count || 0) > 0"
+          class="result-card warning clickable"
+          @click="showConflictsDialog = true"
+        >
+          <div class="rc-val">{{ result.customer_alias_conflicts_count }}</div>
+          <div class="rc-lbl">客户简称冲突 ›</div>
+        </div>
       </div>
     </div>
 
@@ -285,6 +296,27 @@ async function doImport() {
       </el-table>
       <template #footer>
         <el-button @click="showSkippedDialog = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 客户简称冲突弹窗 -->
+    <el-dialog v-model="showConflictsDialog" title="客户简称冲突订单" width="520px" :close-on-click-modal="false">
+      <div class="conflicts-dialog-hint">
+        以下订单在本次导入涉及的发货记录中存在多个不同的非空客户简称，系统按"完成发货"口径取代表行的
+        简称，不影响本次导入结果，仅供人工核对客户匹配是否正确。
+      </div>
+      <div v-if="result?.customer_alias_conflicts_truncated" class="conflicts-dialog-truncated">
+        共 {{ result.customer_alias_conflicts_count }} 单存在冲突，仅展示前
+        {{ result.customer_alias_conflicts_order_nos?.length || 0 }} 单。
+      </div>
+      <el-table
+        :data="(result?.customer_alias_conflicts_order_nos || []).map(no => ({ order_no: no }))"
+        size="small" border max-height="360"
+      >
+        <el-table-column prop="order_no" label="电商主订单号" min-width="200" show-overflow-tooltip />
+      </el-table>
+      <template #footer>
+        <el-button @click="showConflictsDialog = false">关闭</el-button>
       </template>
     </el-dialog>
 
@@ -400,15 +432,25 @@ async function doImport() {
   border-radius: 10px; padding: 14px 10px; text-align: center;
 }
 .result-card.accent   { border-color: rgba(196,136,58,0.3); }
+.result-card.warning  { border-color: rgba(208,90,60,0.35); }
 .result-card.clickable { cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; }
 .result-card.clickable:hover { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(196,136,58,0.12); }
+.result-card.warning.clickable:hover { border-color: #d05a3c; box-shadow: 0 0 0 2px rgba(208,90,60,0.12); }
 .rc-val { font-size: 28px; font-weight: 700; color: var(--text-primary); }
 .result-card.accent .rc-val { color: var(--accent); }
+.result-card.warning .rc-val { color: #d05a3c; }
 .rc-lbl { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
 
 .error-dialog-body {
   font-size: 13px; color: var(--text-primary);
   line-height: 1.7; word-break: break-all;
   max-height: 300px; overflow-y: auto;
+}
+
+.conflicts-dialog-hint {
+  font-size: 12px; color: var(--text-muted); line-height: 1.7; margin-bottom: 10px;
+}
+.conflicts-dialog-truncated {
+  font-size: 12px; color: #d05a3c; margin-bottom: 10px;
 }
 </style>
