@@ -52,9 +52,21 @@ const router = createRouter({
       children: [
         { path: '', component: () => import('@/views/shippingViews/ShippingDashboard.vue') },
         { path: 'orders', component: () => import('@/views/shippingViews/ShippingTable.vue') },
-        { path: 'imports', component: () => import('@/views/shippingViews/ShippingImportsPage.vue') },
-        { path: 'settings', component: () => import('@/views/shippingViews/ShippingSettingsPage.vue') },
-        { path: 'maintenance', component: () => import('@/views/shippingViews/ShippingMaintenancePage.vue') },
+        {
+          path: 'imports',
+          component: () => import('@/views/shippingViews/ShippingImportsPage.vue'),
+          meta: { permission: 'shipping:edit' },
+        },
+        {
+          path: 'settings',
+          component: () => import('@/views/shippingViews/ShippingSettingsPage.vue'),
+          meta: { permission: 'shipping:edit' },
+        },
+        {
+          path: 'maintenance',
+          component: () => import('@/views/shippingViews/ShippingMaintenancePage.vue'),
+          meta: { permission: 'shipping:edit' },
+        },
       ]
     },
     {

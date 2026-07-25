@@ -35,7 +35,7 @@ test('首页不再显示独立的"数据管理"卡片', async ({ page }) => {
   await expect(page.getByText('发货数据', { exact: true })).toBeVisible()
 })
 
-test('viewer(shipping:view) 能进入五个子路由但看不到写入口', async ({ page }) => {
+test('viewer(shipping:view) 能进入分析看板/订单明细，数据接入/规则设置/数据维护不可见且直接访问被拦截', async ({ page }) => {
   await mockDataMgmtPage(page, { permissions: ['shipping:view'] })
   await mockShippingDashboard(page)
   // mockShippingDashboard 自带 shipping:edit 权限，这里补一个后注册的 addInitScript
@@ -55,25 +55,23 @@ test('viewer(shipping:view) 能进入五个子路由但看不到写入口', asyn
   await page.waitForLoadState('networkidle')
   await expect(page.locator('[data-testid="shipping-chart"]')).toBeVisible()
 
-  // 订单明细：viewer 至少能看到页面本体，不做写操作断言（订单页无独立写入口）
+  // 顶部导航栏不显示数据接入/规则设置/数据维护三个入口
+  const nav = page.locator('[data-testid="shipping-nav"]')
+  await expect(nav.getByRole('button', { name: '数据接入' })).toHaveCount(0)
+  await expect(nav.getByRole('button', { name: '规则设置' })).toHaveCount(0)
+  await expect(nav.getByRole('button', { name: '数据维护' })).toHaveCount(0)
+
+  // 订单明细：viewer 能看到页面本体
   await page.goto('/#/shipping/orders')
   await page.waitForLoadState('networkidle')
+  await expect(page).toHaveURL(/#\/shipping\/orders$/)
 
-  // 数据接入：看不到"开始导入"按钮
-  await page.goto('/#/shipping/imports')
-  await page.waitForLoadState('networkidle')
-  await expect(page.getByRole('button', { name: '开始导入' })).toHaveCount(0)
-
-  // 规则设置：仓库过滤开关禁用、无保存按钮
-  await page.goto('/#/shipping/settings')
-  await page.waitForLoadState('networkidle')
-  await page.getByRole('button', { name: '仓库过滤配置' }).click({ force: true })
-  await expect(page.locator('[data-testid="warehouse-save-btn"]')).toHaveCount(0)
-
-  // 数据维护：看不到"重建全部成品组合"按钮
-  await page.goto('/#/shipping/maintenance')
-  await page.waitForLoadState('networkidle')
-  await expect(page.getByRole('button', { name: '重建全部成品组合' })).toHaveCount(0)
+  // 数据接入/规则设置/数据维护：只对 shipping:edit 开放，viewer 直接访问被路由守卫拦截回首页
+  for (const path of ['imports', 'settings', 'maintenance']) {
+    await page.goto(`/#/shipping/${path}`)
+    await page.waitForLoadState('networkidle')
+    await expect(page).toHaveURL(/#\/index$/)
+  }
 })
 
 test('editor(shipping:edit) 能看到对应写入口', async ({ page }) => {

@@ -1,21 +1,27 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import WindowControls from '@/components/common/WindowControls.vue'
+import { usePermission } from '@/composables/usePermission'
 
 // ── 路由 ──────────────────────────────────────────
 const route  = useRoute()
 const router = useRouter()
+const { canEditShipping } = usePermission()
 
-const NAV_ITEMS = [
+const ALL_NAV_ITEMS = [
   { path: '/shipping',             label: '分析看板' },
   { path: '/shipping/orders',      label: '订单明细' },
-  { path: '/shipping/imports',     label: '数据接入' },
-  { path: '/shipping/settings',    label: '规则设置' },
-  { path: '/shipping/maintenance', label: '数据维护' },
+  { path: '/shipping/imports',     label: '数据接入',  editOnly: true },
+  { path: '/shipping/settings',    label: '规则设置',  editOnly: true },
+  { path: '/shipping/maintenance', label: '数据维护',  editOnly: true },
 ]
+// 数据接入/规则设置/数据维护只对有编辑权限的用户可见，viewer 看不到入口
+const NAV_ITEMS = computed(() =>
+  ALL_NAV_ITEMS.filter(item => !item.editOnly || canEditShipping)
+)
 
 // ── 生命周期 ──────────────────────────────────────
 onMounted(() => {
