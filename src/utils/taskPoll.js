@@ -34,8 +34,15 @@ export function pollTask(taskStatusUrl, { onEvent, interval = 1000 } = {}) {
       }
       const task = res.data
       const { status } = task
-      if (status === 'pending' || status === 'running') {
-        onEvent({ step: task.progress?.step ?? status, ...task.progress })
+      if (status === 'pending' || status === 'running' || status === 'committing') {
+        // committing：正在做最终业务提交，仍是活动态，必须继续轮询，不能落进下面的终态/错误分支
+        onEvent({
+          ...task.progress,
+          cancellable: task.cancellable,
+          cancelRequested: task.cancel_requested,
+          // step 必须最后赋值：committing 是任务状态本身推导出的，不能被 progress.step 覆盖
+          step: status === 'committing' ? 'committing' : (task.progress?.step ?? status),
+        })
         scheduleNext()
       } else if (status === 'done') {
         onEvent({ step: 'done', data: task.result })

@@ -6,9 +6,12 @@ import http from '@/api/http'
 import { pollShippingTask } from '@/utils/shippingTaskPoll'
 import { getConflictTaskId } from '@/utils/taskConflict'
 import { usePermission } from '@/composables/usePermission'
+import { useShippingTaskCancel } from '@/composables/useShippingTaskCancel'
+import ShippingTaskCancelButton from '@/components/shipping/ShippingTaskCancelButton.vue'
 
 // ── 响应式状态 ────────────────────────────────────
 const { canEditShipping } = usePermission()
+const taskCancel = useShippingTaskCancel()
 const lastShippedDate = ref('')   // 数据库中最新的发货日期
 
 const existingDatesArr = ref([])           // 已有数据的日期列表
@@ -106,7 +109,6 @@ const phaseDetail   = ref('')
 
 // 取消导入
 const currentTaskId    = ref('')
-const isCancelling     = ref(false)
 
 // 跳过记录弹窗
 const showSkippedDialog = ref(false)
@@ -151,13 +153,9 @@ function showError(msg) {
   progress.value        = 0   // 隐藏进度条
 }
 
-async function cancelImport() {
-  if (!currentTaskId.value || isCancelling.value) return
-  isCancelling.value = true
-  try {
-    await http.post(`/api/shipping/import/cancel/${currentTaskId.value}`)
-  } catch {}
-  // 后台线程收到信号后会把任务状态改为 cancelled，轮询下一轮会读到并处理后续重置
+function cancelImport() {
+  taskCancel.requestCancel(currentTaskId.value)
+  // 200 只代表取消请求已被持久化接受，实际任务状态仍由轮询读到 cancelled 才确认
 }
 
 function onFileChange(e) {
@@ -210,6 +208,11 @@ function handleEvent(data) {
       progress.value    = 55 + Math.round(pct * 0.42)
       break
     }
+    case 'committing':
+      phaseLabel.value  = '正在提交最终结果...'
+      phaseDetail.value = '此阶段已无法取消'
+      progress.value    = 98
+      break
     case 'done':
       phaseLabel.value  = '导入完成'
       phaseDetail.value = ''
@@ -222,8 +225,8 @@ async function doImport() {
   if (!file.value) { ElMessage.warning('请先选择文件'); return }
   activePoller?.stop()
   activePoller = null
+  taskCancel.reset()
   loading.value      = true
-  isCancelling.value = false
   currentTaskId.value = ''
   result.value       = null
   progress.value     = 0
@@ -254,6 +257,7 @@ async function doImport() {
       activePoller = pollShippingTask(currentTaskId.value, {
         onEvent(data) {
           handleEvent(data)
+          taskCancel.handlePollEvent(data)
           if (data.step === 'done') {
             result.value = data.data
             activePoller?.stop()
@@ -271,7 +275,7 @@ async function doImport() {
     })
 
     if (wasCancelled) {
-      ElMessage.info('导入已中止，已回滚')
+      ElMessage.info('已取消，所有导入数据已回滚')
     } else if (result.value) {
       ElMessage.success('导入成功')
       // 有跳过记录则弹出明细
@@ -287,8 +291,8 @@ async function doImport() {
   } finally {
     activePoller?.stop()
     activePoller = null
+    taskCancel.reset()
     loading.value       = false
-    isCancelling.value  = false
     currentTaskId.value = ''
   }
 }
@@ -345,9 +349,14 @@ async function doImport() {
       <button class="import-btn" :disabled="!file || loading" @click="doImport">
         {{ loading ? '导入中…' : '开始导入' }}
       </button>
-      <button v-if="loading" class="cancel-btn" :disabled="isCancelling" @click="cancelImport">
-        {{ isCancelling ? '中止中…' : '中止导入' }}
-      </button>
+      <ShippingTaskCancelButton
+        v-if="loading"
+        :cancellable="taskCancel.cancellable.value"
+        :cancel-requested="taskCancel.cancelRequested.value"
+        :cancel-submitting="taskCancel.cancelSubmitting.value"
+        :committing="taskCancel.committing.value"
+        @cancel="cancelImport"
+      />
     </div>
 
 
@@ -602,18 +611,6 @@ async function doImport() {
 }
 .import-btn:hover:not(:disabled) { background: var(--accent-hover); }
 .import-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-
-/* 中止按钮 */
-.cancel-btn {
-  padding: 11px 18px;
-  background: transparent;
-  color: #c06030; border: 1px solid #c06030;
-  border-radius: 8px;
-  font-size: 13px; font-weight: 500; font-family: inherit;
-  cursor: pointer; transition: all 0.18s; white-space: nowrap;
-}
-.cancel-btn:hover:not(:disabled) { background: rgba(192,96,48,0.06); }
-.cancel-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* 进度条 */
 .progress-wrap {
