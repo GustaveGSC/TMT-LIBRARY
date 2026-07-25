@@ -14,7 +14,7 @@
               v-for="(mod, i) in group.items"
               :key="mod.key"
               class="module-card"
-              :class="{ disabled: mod.disabled || mod.noPermission }"
+              :class="{ disabled: mod.disabled }"
               :style="{ animationDelay: `${0.05 + i * 0.07}s` }"
               @click="handleEnter(mod)"
             >
@@ -24,7 +24,6 @@
               <div class="module-name">{{ mod.name }}</div>
               <div class="module-desc">{{ mod.desc }}</div>
               <div v-if="mod.disabled" class="module-badge">即将上线</div>
-              <div v-else-if="mod.noPermission" class="module-badge module-badge--noperm">无权限</div>
             </div>
           </div>
         </div>
@@ -157,8 +156,8 @@ const userName    = computed(() => userInfo.display_name || userInfo.username ||
 const userInitial = computed(() => (userName.value?.[0] ?? '?').toUpperCase())
 
 // 模块分组，各组独立渲染
-// noPermission=true：无权限时禁用并显示"无权限"标签
-// hidden=true：对当前用户不可见
+// 无权限的功能入口直接不渲染（不显示"无权限"标签），与全站其他位置的权限处理方式统一。
+// disabled=true 是另一回事（即将上线，与权限无关），继续保留标签展示。
 const moduleGroups = computed(() => [
   {
     label: '业务数据',
@@ -170,7 +169,7 @@ const moduleGroups = computed(() => [
         icon: iconProduct,
         route: '/product',
         disabled: false,
-        noPermission: !canViewProduct,
+        visible: canViewProduct,
       },
       {
         key: 'shipping',
@@ -179,7 +178,7 @@ const moduleGroups = computed(() => [
         icon: iconShipping,
         route: '/shipping',
         disabled: false,
-        noPermission: !canViewShipping,
+        visible: canViewShipping,
       },
       {
         key: 'aftersale',
@@ -188,9 +187,9 @@ const moduleGroups = computed(() => [
         icon: iconAftersale,
         route: '/aftersale',
         disabled: false,
-        noPermission: !canViewAftersale,
+        visible: canViewAftersale,
       },
-    ],
+    ].filter(mod => mod.visible),
   },
   {
     label: '工具',
@@ -203,7 +202,7 @@ const moduleGroups = computed(() => [
         icon: iconRdTools,
         route: '/rd-tools',
         disabled: false,
-        noPermission: !canViewRd,
+        visible: canViewRd,
       },
       {
         key: 'general-tools',
@@ -212,16 +211,16 @@ const moduleGroups = computed(() => [
         icon: iconGeneralTools,
         route: '/general-tools',
         disabled: false,
-        noPermission: false,
+        visible: true,
       },
-    ],
+    ].filter(mod => mod.visible),
   },
-])
+].filter(group => group.items.length > 0))
 
 const MOBILE_UNSUPPORTED = ['rd-tools']
 
 function handleEnter(mod) {
-  if (mod.disabled || mod.noPermission) return
+  if (mod.disabled) return
   if (window.innerWidth <= 768 && MOBILE_UNSUPPORTED.includes(mod.key)) {
     ElMessage({ message: '手机端不支持该功能', type: 'warning', duration: 2000 })
     return
@@ -362,11 +361,6 @@ function handleUserSetting() { settingsDrawer.value?.open() }
   background: var(--accent-bg); border: 1px solid var(--border);
   border-radius: 6px; padding: 2px 7px;
   font-size: 10px; color: var(--text-muted);
-}
-.module-badge--noperm {
-  background: rgba(210, 70, 50, 0.07);
-  border-color: rgba(210, 70, 50, 0.25);
-  color: #c0402a;
 }
 
 .bottom-bar {

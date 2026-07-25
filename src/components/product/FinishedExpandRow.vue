@@ -1687,7 +1687,7 @@ function toggleSec(key) {
           </div>
           <div v-if="isSec('data')" class="eg-sec-bd eg-sec-bd-data">
             <!-- 发货数据 bar 图 -->
-            <div class="data-shipping-card">
+            <div v-if="canViewShipping" class="data-shipping-card">
               <div class="data-ph-hd">
                 发货数据
                 <div class="data-source-toggle" @click.stop>
@@ -1709,14 +1709,10 @@ function toggleSec(key) {
                 </div>
                 <div v-else-if="!shippingMonthly.length" class="data-shipping-empty">暂无发货记录</div>
                 <div v-else ref="shippingChartEl" class="data-shipping-chart"></div>
-                <!-- 无权限遮罩：仅覆盖图表区域 -->
-                <div v-if="!canViewShipping" class="data-shipping-mask">
-                  <span class="data-shipping-mask-text">无权限</span>
-                </div>
               </div>
             </div>
             <!-- 售后数据图表 -->
-            <div class="data-shipping-card">
+            <div v-if="canViewAftersale" class="data-shipping-card">
               <div class="data-ph-hd">售后数据（系列）</div>
               <div class="data-shipping-body">
                 <div v-if="aftersaleChartLoading" class="data-shipping-loading">
@@ -1725,10 +1721,6 @@ function toggleSec(key) {
                 <div v-else-if="!props.row.model_id" class="data-shipping-empty">未关联型号</div>
                 <div v-else-if="!aftersaleMonthly.length" class="data-shipping-empty">暂无售后记录</div>
                 <div v-else ref="aftersaleChartEl" class="data-shipping-chart"></div>
-                <!-- 无权限遮罩 -->
-                <div v-if="!canViewAftersale" class="data-shipping-mask">
-                  <span class="data-shipping-mask-text">无权限</span>
-                </div>
               </div>
             </div>
           </div>
@@ -2533,20 +2525,6 @@ function toggleSec(key) {
   animation: spin 0.7s linear infinite;
 }
 .data-shipping-empty  { font-size: 12px; color: #bbb; }
-.data-shipping-mask {
-  position: absolute; inset: 0;
-  background: rgba(200, 200, 200, 0.25);
-  backdrop-filter: blur(4px);
-  border-radius: 0 0 10px 10px;
-  display: flex; align-items: center; justify-content: center;
-}
-.data-shipping-mask-text {
-  font-size: 12px; color: #6b6b6b;
-  background: rgba(255,255,255,0.6);
-  border: 1px solid rgba(200,200,200,0.6);
-  border-radius: 6px;
-  padding: 3px 12px;
-}
 .params-loading { font-size: 12px; color: #bbb; }
 
 /* 参数区头部编辑按钮 */
