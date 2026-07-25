@@ -174,7 +174,8 @@ POST   /api/shipping/tasks/:task_id/cancel            # shipping:edit；持久�
                                                       # task_id/task_type/status/cancel_requested/cancellable
                                                       # 不存在404；不支持/已结束400；committing阶段409
 GET    /api/shipping/import/status/:task_id           # 兼容旧客户端，响应同 /tasks/:task_id
-GET    /api/shipping/import/progress/:task_id         # 已废弃 SSE 兼容入口；新客户端禁止使用，单 sync worker 会被长连接占用
+GET    /api/shipping/import/progress/:task_id         # 已废弃 SSE 兼容入口；立即返回单次持久化快照后关闭，
+                                                      # 不再等待终态/占用 sync worker；新客户端禁止使用
 POST   /api/shipping/import/cancel/:task_id           # 旧取消入口，转发到 /tasks/:task_id/cancel
 GET    /api/shipping/operators                        # 获取所有最近操作人及其分类
 POST   /api/shipping/operators/classify               # 批量保存操作人分类 [{operator, type}]
@@ -320,7 +321,7 @@ POST   /api/aftersale/chart-data                      # 图表聚合数据，bod
   "data": {
     "task_id": "UUID",
     "task_type": "import_shipping | import_finance | resolve_all | resolve_stale",
-    "status": "pending | running | done | error | cancelled | interrupted",
+    "status": "pending | running | committing | done | error | cancelled | interrupted",
     "filename": "原上传文件名或 null",
     "progress": { "step": "inserting", "current": 100, "total": 500 },
     "result": null,
@@ -333,9 +334,15 @@ POST   /api/aftersale/chart-data                      # 图表聚合数据，bod
 ```
 
 - `done` 时 `result` 与 SSE `done.data` 相同。
+- `committing` 表示任务已通过最终提交 CAS，不能再取消；该状态通常很短暂。
 - `error/cancelled/interrupted` 时查看 `message`；`interrupted` 表示 worker 被重启或 reload，导入事务不会留下部分业务数据。
 - 不存在的 task_id 返回 HTTP 404；终态查询不会删除记录。
-- 前端 SSE `onerror` 后应调用本接口回查；若仍为 `pending/running` 可短暂轮询，进入终态后停止。
+- 新前端只使用本接口短轮询；旧 SSE 入口仅返回调用时的一次快照，不等待状态变化。
+
+`POST /api/shipping/tasks/:task_id/cancel` 只对 `import_shipping`、`import_finance`
+生效。取消请求持久化后，worker 会在文件解析、数据库分块比对/写入、增量成品组合解析及
+最终提交前检查；命中取消会回滚整个导入事务并进入 `cancelled`。最终提交通过
+`running → committing` 的原子 CAS 与取消请求竞争，避免“接口返回取消成功但业务数据仍提交”。
 
 ## 上传安全限制
 

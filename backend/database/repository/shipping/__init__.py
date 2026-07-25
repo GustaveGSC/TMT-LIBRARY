@@ -331,7 +331,8 @@ class ShippingRepository:
     # ── 发货记录去重插入 ──────────────────────────────
 
     @staticmethod
-    def get_existing_keys(keys: List[Tuple], record_type: str = None) -> Set[Tuple]:
+    def get_existing_keys(keys: List[Tuple], record_type: str = None,
+                          cancel_check=None) -> Set[Tuple]:
         """
         给定 (ecommerce_order_no, line_no, product_code) 三元组列表，
         返回数据库中已存在的子集（Set of tuple）。
@@ -342,6 +343,8 @@ class ShippingRepository:
         existing = set()
         CHUNK = 500
         for i in range(0, len(keys), CHUNK):
+            if cancel_check and cancel_check():
+                raise InterruptedError('用户已请求取消任务')
             chunk = keys[i:i + CHUNK]
             q = db.session.query(
                 ShippingRecord.ecommerce_order_no,
@@ -358,6 +361,8 @@ class ShippingRepository:
                 q = q.filter(ShippingRecord.record_type == record_type)
             for r in q.all():
                 existing.add((r.ecommerce_order_no, r.line_no, r.product_code))
+            if cancel_check and cancel_check():
+                raise InterruptedError('用户已请求取消任务')
         return existing
 
     @staticmethod
@@ -405,7 +410,8 @@ class ShippingRepository:
         return existing
 
     @staticmethod
-    def get_finance_shipping_snapshots(keys: List[Tuple]) -> Dict[Tuple, Dict]:
+    def get_finance_shipping_snapshots(keys: List[Tuple],
+                                       cancel_check=None) -> Dict[Tuple, Dict]:
         """Return fields that determine whether a finance shipping row changed."""
         if not keys:
             return {}
@@ -424,6 +430,8 @@ class ShippingRepository:
             ShippingRecord.customer_alias,
         )
         for i in range(0, len(keys), 500):
+            if cancel_check and cancel_check():
+                raise InterruptedError('用户已请求取消任务')
             rows = db.session.query(*columns).filter(
                 db.tuple_(
                     ShippingRecord.ecommerce_order_no,
@@ -444,12 +452,15 @@ class ShippingRepository:
                     'district': row.district,
                     'customer_alias': row.customer_alias,
                 }
+            if cancel_check and cancel_check():
+                raise InterruptedError('用户已请求取消任务')
         return snapshots
 
     @staticmethod
     def bulk_insert_shipping(batch_id: int, rows: List[Dict],
                               progress_cb=None, record_type: str = 'shipping',
-                              source: str = 'shipping', commit_chunks: bool = True) -> int:
+                              source: str = 'shipping', commit_chunks: bool = True,
+                              cancel_check=None) -> int:
         """分块 UPSERT；重复键更新可更正字段，返回处理行数。"""
         if not rows:
             return 0
@@ -514,8 +525,12 @@ class ShippingRepository:
             ),
         )
         for i in range(0, total, CHUNK):
+            if cancel_check and cancel_check():
+                raise InterruptedError('用户已请求取消任务')
             chunk = rows[i:i + CHUNK]
             db.session.execute(stmt, [_make_param(r) for r in chunk])
+            if cancel_check and cancel_check():
+                raise InterruptedError('用户已请求取消任务')
             if commit_chunks:
                 db.session.commit()
             if progress_cb:
@@ -553,7 +568,8 @@ class ShippingRepository:
         return existing
 
     @staticmethod
-    def get_finance_return_snapshots(keys: List[Tuple]) -> Dict[Tuple, Dict]:
+    def get_finance_return_snapshots(keys: List[Tuple],
+                                     cancel_check=None) -> Dict[Tuple, Dict]:
         """Return fields that determine whether a finance return row changed."""
         if not keys:
             return {}
@@ -567,6 +583,8 @@ class ShippingRepository:
             ReturnRecord.customer_alias,
         )
         for i in range(0, len(keys), 500):
+            if cancel_check and cancel_check():
+                raise InterruptedError('用户已请求取消任务')
             rows = db.session.query(*columns).filter(
                 db.tuple_(
                     ReturnRecord.ecommerce_order_no,
@@ -581,11 +599,13 @@ class ShippingRepository:
                     'warehouse_name': row.warehouse_name,
                     'customer_alias': row.customer_alias,
                 }
+            if cancel_check and cancel_check():
+                raise InterruptedError('用户已请求取消任务')
         return snapshots
 
     @staticmethod
     def bulk_insert_return(batch_id: int, rows: List[Dict], progress_cb=None,
-                           commit_chunks: bool = True) -> int:
+                           commit_chunks: bool = True, cancel_check=None) -> int:
         """分块 UPSERT 写入 return_record，返回处理行数。"""
         if not rows:
             return 0
@@ -623,8 +643,12 @@ class ShippingRepository:
             ),
         )
         for i in range(0, total, CHUNK):
+            if cancel_check and cancel_check():
+                raise InterruptedError('用户已请求取消任务')
             chunk = rows[i:i + CHUNK]
             db.session.execute(stmt, [_make_param(r) for r in chunk])
+            if cancel_check and cancel_check():
+                raise InterruptedError('用户已请求取消任务')
             if commit_chunks:
                 db.session.commit()
             if progress_cb:
@@ -848,26 +872,32 @@ class ShippingRepository:
 
     @staticmethod
     def delete_order_finished(order_nos: List[str], source: str = 'shipping',
-                              commit_chunks: bool = True):
+                              commit_chunks: bool = True, cancel_check=None):
         """删除这些订单指定来源的旧结果；导入事务中禁止分块提交。"""
         if order_nos:
             chunk_size = 500
             for i in range(0, len(order_nos), chunk_size):
+                if cancel_check and cancel_check():
+                    raise InterruptedError('用户已请求取消任务')
                 chunk = order_nos[i:i + chunk_size]
                 ShippingOrderFinished.query.filter(
                     ShippingOrderFinished.ecommerce_order_no.in_(chunk),
                     ShippingOrderFinished.source == source,
                 ).delete(synchronize_session=False)
+                if cancel_check and cancel_check():
+                    raise InterruptedError('用户已请求取消任务')
                 if commit_chunks:
                     db.session.commit()
 
     @staticmethod
     def bulk_insert_order_finished(rows: List[Dict], progress_cb=None,
-                                   commit_chunks: bool = True):
+                                   commit_chunks: bool = True, cancel_check=None):
         """批量写入组合结果，分块 commit 避免大事务持锁超时"""
         chunk_size = 200
         total = len(rows)
         for i in range(0, total, chunk_size):
+            if cancel_check and cancel_check():
+                raise InterruptedError('用户已请求取消任务')
             chunk = rows[i:i + chunk_size]
             objects = [
                 ShippingOrderFinished(
@@ -893,6 +923,8 @@ class ShippingRepository:
                 for r in chunk
             ]
             db.session.bulk_save_objects(objects)
+            if cancel_check and cancel_check():
+                raise InterruptedError('用户已请求取消任务')
             if commit_chunks:
                 db.session.commit()
             if progress_cb:

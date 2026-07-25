@@ -12,7 +12,10 @@ def _patch_common_shipping_import(monkeypatch, *, fail_insert=False):
     repository = shipping_module.shipping_repository
     calls = {'commit': 0, 'rollback': 0}
 
-    monkeypatch.setattr(shipping_module, '_parse_csv_rows', lambda _content: [])
+    monkeypatch.setattr(
+        shipping_module, '_parse_csv_rows',
+        lambda _content, **_kwargs: [],
+    )
     monkeypatch.setattr(shipping_module, '_merge_rows', lambda rows: (rows, []))
     monkeypatch.setattr(repository, 'get_existing_keys', lambda *_args, **_kwargs: set())
     monkeypatch.setattr(
@@ -80,6 +83,115 @@ def test_shipping_import_rolls_back_without_cleanup_commit_on_failure(monkeypatc
     assert calls == {'commit': 0, 'rollback': 1, 'commit_chunks': False}
 
 
+def test_csv_parser_checks_persisted_cancel_during_row_iteration():
+    header = ','.join(shipping_module._REQUIRED_COL_NAMES)
+    row = ','.join([
+        'ORDER-1', '2026-07-24', '渠道', 'C001', '渠道商', '操作人',
+        '1', 'P001', '产品', '1', '浙江省',
+    ])
+    content = ('\n'.join([header] + [row] * 501)).encode('utf-8')
+    checks = {'count': 0}
+
+    def cancel_check():
+        checks['count'] += 1
+        # 解析前、解码后、表头处各检查一次；第四次发生在第 500 行。
+        return checks['count'] >= 4
+
+    with pytest.raises(InterruptedError, match='用户已请求取消任务'):
+        shipping_module._parse_csv_rows(content, cancel_check=cancel_check)
+
+    assert checks['count'] == 4
+
+
+def test_shipping_import_rolls_back_when_cancelled_during_insert(monkeypatch):
+    calls = _patch_common_shipping_import(monkeypatch)
+
+    def cancelled_insert(*_args, **kwargs):
+        assert callable(kwargs['cancel_check'])
+        raise InterruptedError('用户已请求取消任务')
+
+    monkeypatch.setattr(
+        shipping_module.shipping_repository,
+        'bulk_insert_shipping',
+        cancelled_insert,
+    )
+
+    with pytest.raises(InterruptedError, match='用户已请求取消任务'):
+        shipping_module.shipping_service.import_shipping(
+            'rows.csv', b'content', cancel_check=lambda: False,
+        )
+
+    assert calls['commit'] == 0
+    assert calls['rollback'] == 1
+
+
+def test_shipping_import_rolls_back_when_cancelled_during_resolve(monkeypatch):
+    calls = _patch_common_shipping_import(monkeypatch)
+    monkeypatch.setattr(
+        shipping_module.shipping_repository,
+        'get_new_order_nos_by_source',
+        lambda *_args, **_kwargs: ['ORDER-1'],
+    )
+
+    def cancelled_resolve(*_args, **kwargs):
+        assert kwargs['commit_chunks'] is False
+        assert callable(kwargs['cancel_check'])
+        raise InterruptedError('用户已请求取消任务')
+
+    monkeypatch.setattr(shipping_module, '_resolve_orders', cancelled_resolve)
+
+    with pytest.raises(InterruptedError, match='用户已请求取消任务'):
+        shipping_module.shipping_service.import_shipping(
+            'rows.csv', b'content', cancel_check=lambda: False,
+        )
+
+    assert calls['commit'] == 0
+    assert calls['rollback'] == 1
+
+
+def test_shipping_import_losing_final_commit_cas_rolls_back(monkeypatch):
+    calls = _patch_common_shipping_import(monkeypatch)
+
+    with pytest.raises(InterruptedError, match='最终提交'):
+        shipping_module.shipping_service.import_shipping(
+            'rows.csv',
+            b'content',
+            cancel_check=lambda: False,
+            begin_commit=lambda: False,
+        )
+
+    assert calls['commit'] == 0
+    assert calls['rollback'] == 1
+
+
+def test_shipping_import_winning_final_commit_cas_commits_once(monkeypatch):
+    calls = _patch_common_shipping_import(monkeypatch)
+    order = []
+
+    def begin_commit():
+        order.append('cas')
+        return True
+
+    original_commit = shipping_module.db.session.commit
+
+    def commit():
+        order.append('commit')
+        return original_commit()
+
+    monkeypatch.setattr(shipping_module.db.session, 'commit', commit)
+
+    shipping_module.shipping_service.import_shipping(
+        'rows.csv',
+        b'content',
+        cancel_check=lambda: False,
+        begin_commit=begin_commit,
+    )
+
+    assert order == ['cas', 'commit']
+    assert calls['commit'] == 1
+    assert calls['rollback'] == 0
+
+
 def test_finance_import_disables_chunk_commits_for_both_record_types(monkeypatch):
     repository = shipping_module.shipping_repository
     calls = {'commit': 0, 'rollback': 0, 'shipping_atomic': None, 'return_atomic': None}
@@ -87,7 +199,7 @@ def test_finance_import_disables_chunk_commits_for_both_record_types(monkeypatch
     monkeypatch.setattr(
         shipping_module,
         '_parse_csv_finance_rows',
-        lambda _content: ([], [], 0),
+        lambda _content, **_kwargs: ([], [], 0),
     )
     monkeypatch.setattr(shipping_module, '_merge_finance_shipping_rows', lambda rows: (rows, []))
     monkeypatch.setattr(shipping_module, '_merge_return_rows', lambda rows: (rows, []))
@@ -128,6 +240,56 @@ def test_finance_import_disables_chunk_commits_for_both_record_types(monkeypatch
         'shipping_atomic': True,
         'return_atomic': True,
     }
+
+
+def test_finance_import_propagates_cancel_and_honours_final_commit_cas(monkeypatch):
+    repository = shipping_module.shipping_repository
+    calls = {'commit': 0, 'rollback': 0, 'checks': 0}
+    monkeypatch.setattr(
+        shipping_module,
+        '_parse_csv_finance_rows',
+        lambda _content, **_kwargs: ([], [], 0),
+    )
+    monkeypatch.setattr(shipping_module, '_merge_finance_shipping_rows', lambda rows: (rows, []))
+    monkeypatch.setattr(shipping_module, '_merge_return_rows', lambda rows: (rows, []))
+
+    def shipping_snapshots(_keys, *, cancel_check):
+        assert callable(cancel_check)
+        calls['checks'] += 1
+        return {}
+
+    def return_snapshots(_keys, *, cancel_check):
+        assert callable(cancel_check)
+        calls['checks'] += 1
+        return {}
+
+    monkeypatch.setattr(repository, 'get_finance_shipping_snapshots', shipping_snapshots)
+    monkeypatch.setattr(repository, 'get_finance_return_snapshots', return_snapshots)
+    monkeypatch.setattr(
+        repository, 'create_batch',
+        lambda *_args, **_kwargs: SimpleNamespace(id=19),
+    )
+    monkeypatch.setattr(repository, 'bulk_insert_shipping', lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(repository, 'bulk_insert_return', lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(repository, 'get_new_order_nos_by_source', lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        shipping_module.db.session, 'commit',
+        lambda: calls.__setitem__('commit', calls['commit'] + 1),
+    )
+    monkeypatch.setattr(
+        shipping_module.db.session, 'rollback',
+        lambda: calls.__setitem__('rollback', calls['rollback'] + 1),
+    )
+
+    with pytest.raises(InterruptedError, match='最终提交'):
+        shipping_module.shipping_service.import_finance(
+            'finance.csv',
+            b'content',
+            cancel_check=lambda: False,
+            begin_commit=lambda: False,
+        )
+
+    assert calls == {'commit': 0, 'rollback': 1, 'checks': 2}
 
 
 def _task(status='done'):
@@ -239,11 +401,20 @@ def test_persisted_progress_updates_do_not_require_memory_queue(monkeypatch):
 def test_sse_can_recover_terminal_state_after_worker_queue_is_lost(monkeypatch):
     app = Flask(__name__)
     shipping_routes._task_queues.clear()
-    monkeypatch.setattr(shipping_routes.shipping_repository, 'get_task', lambda _task_id: _task())
+    calls = {'get_task': 0}
+
+    def get_task(_task_id):
+        calls['get_task'] += 1
+        return _task()
+
+    monkeypatch.setattr(shipping_routes.shipping_repository, 'get_task', get_task)
 
     with app.test_request_context('/api/shipping/import/progress/task-1'):
         response = shipping_routes.import_progress('task-1')
         payload = response.get_data(as_text=True)
 
+    assert calls['get_task'] == 1
+    assert response.is_streamed is False
+    assert response.headers['Cache-Control'] == 'no-store'
     assert '"step": "done"' in payload
     assert '"inserted": 3' in payload
