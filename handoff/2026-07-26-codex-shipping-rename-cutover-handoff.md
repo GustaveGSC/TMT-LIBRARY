@@ -1,7 +1,7 @@
 # resolve_all rename-table cutover 重设计交接
 
-日期：2026-07-26  
-分支：`codex/shipping-rename-cutover`  
+日期：2026-07-26
+分支：`codex/shipping-rename-cutover`
 状态：后端实现完成，本地验证通过；**未部署，`ALLOW_FULL_RESOLVE` 必须继续保持未设置**
 
 ## 一、结论
@@ -185,4 +185,3 @@ report_internal_error(context='...')
 - 未解除前端禁用。
 - 未开始 D 批压测。
 - 未把 stale 上限视为最终容量结论。
-
