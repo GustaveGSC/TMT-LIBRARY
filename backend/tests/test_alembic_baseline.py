@@ -21,7 +21,8 @@ SHIPPING_TASK_LEASE_REVISION = '20260724_01'
 LIFECYCLE_TASK_REVISION = '20260724_02'
 SHIPPING_CANCEL_REVISION = '20260724_03'
 SHIPPING_RESOLVE_STAGING_REVISION = '20260725_01'
-HEAD_REVISION = SHIPPING_RESOLVE_STAGING_REVISION
+SHIPPING_GENERATION_REVISION = '20260726_01'
+HEAD_REVISION = SHIPPING_GENERATION_REVISION
 CRITICAL_INDEXES = {
     'shipping_order_finished': {
         'ix_sof_source',
@@ -71,6 +72,10 @@ def test_baseline_has_linear_history_and_task_lease_is_the_only_head():
         scripts.get_revision(SHIPPING_RESOLVE_STAGING_REVISION).down_revision
         == SHIPPING_CANCEL_REVISION
     )
+    assert (
+        scripts.get_revision(SHIPPING_GENERATION_REVISION).down_revision
+        == SHIPPING_RESOLVE_STAGING_REVISION
+    )
 
 
 def test_performance_critical_production_indexes_are_declared_in_metadata():
@@ -81,6 +86,38 @@ def test_performance_critical_production_indexes_are_declared_in_metadata():
     for table_name, expected_indexes in CRITICAL_INDEXES.items():
         actual_indexes = {index.name for index in db.metadata.tables[table_name].indexes}
         assert expected_indexes <= actual_indexes
+
+
+def test_shipping_standby_schema_tracks_live_schema_exactly():
+    from database.base import db
+    import database.models.shipping  # noqa: F401
+
+    live = db.metadata.tables['shipping_order_finished']
+    standby = db.metadata.tables['shipping_order_finished_next']
+    assert [
+        (
+            column.name,
+            str(column.type),
+            column.nullable,
+            column.primary_key,
+        )
+        for column in live.columns
+    ] == [
+        (
+            column.name,
+            str(column.type),
+            column.nullable,
+            column.primary_key,
+        )
+        for column in standby.columns
+    ]
+    assert {
+        (index.name, tuple(column.name for column in index.columns))
+        for index in live.indexes
+    } == {
+        (index.name, tuple(column.name for column in index.columns))
+        for index in standby.indexes
+    }
 
 
 def test_removed_aftersale_dictionary_tables_are_explicitly_unmanaged():
@@ -181,6 +218,9 @@ def test_baseline_upgrade_adds_only_task_schemas(tmp_path, monkeypatch):
         'product_lifecycle_task',
         'shipping_resolve_target',
         'shipping_order_finished_staging',
+        'shipping_order_finished_next',
+        'shipping_order_finished_generation',
+        'shipping_order_finished_generation_next',
     }
     inspector = sa.inspect(engine)
     shipping_task_columns = {
@@ -204,6 +244,21 @@ def test_baseline_upgrade_adds_only_task_schemas(tmp_path, monkeypatch):
     }
     assert 'lease_key' in lifecycle_task_columns
     assert ('lease_key',) in lifecycle_task_uniques
+    standby_indexes = {
+        index['name']
+        for index in inspector.get_indexes(
+            'shipping_order_finished_next'
+        )
+    }
+    assert CRITICAL_INDEXES['shipping_order_finished'] <= standby_indexes
+    with engine.connect() as connection:
+        for marker_table in (
+            'shipping_order_finished_generation',
+            'shipping_order_finished_generation_next',
+        ):
+            assert connection.execute(sa.text(
+                f'SELECT COUNT(*) FROM {marker_table} WHERE id = 1'
+            )).scalar_one() == 1
     with engine.connect() as connection:
         current = MigrationContext.configure(connection).get_current_revision()
     assert current == HEAD_REVISION

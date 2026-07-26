@@ -1,5 +1,6 @@
 import csv
 import io
+import os
 import openpyxl
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -14,6 +15,11 @@ from upload_validation import ensure_spreadsheet_row_limit
 
 # 直辖市省名集合：这些省的 city 字段统一填写为省名本身
 _MUNICIPALITY_PROVINCES = {'北京市', '天津市', '上海市', '重庆市'}
+_DEFAULT_MAX_STALE_RESOLVE_ORDERS = 10_000
+
+
+class StaleResolveScopeTooLarge(RuntimeError):
+    pass
 
 
 def _raise_if_cancelled(cancel_check=None):
@@ -535,7 +541,8 @@ def _load_resolver_context(cancel_check=None):
 
 def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=None,
                     commit_chunks: bool = True, cancel_check=None,
-                    resolver_context=None, staging_task_id=None):
+                    resolver_context=None, staging_task_id=None,
+                    generation_task_id=None):
     """
     对给定订单号列表，执行成品组合匹配，写入 shipping_order_finished。
     source: 'shipping' 或 'finance'，决定从哪个来源的 shipping_record 读取产成品数据。
@@ -591,7 +598,7 @@ def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=
         )
         return_resolved[order_no] = order_ret
 
-    if staging_task_id is None:
+    if staging_task_id is None and generation_task_id is None:
         # 导入增量路径仍在自己的原子业务事务中直接替换正式结果。
         _raise_if_cancelled(cancel_check)
         shipping_repository.delete_order_finished(
@@ -666,7 +673,21 @@ def _resolve_orders(order_nos: List[str], source: str = 'shipping', progress_cb=
         progress_cb('resolving', current=total_orders, total=total_orders)
 
     _raise_if_cancelled(cancel_check)
-    if staging_task_id is None:
+    if generation_task_id is not None:
+        expected_orders = set(order_nos)
+        if any(
+            row.get('source') != source
+            or row.get('ecommerce_order_no') not in expected_orders
+            for row in to_insert
+        ):
+            raise RuntimeError('全量重算结果越出当前订单分块范围')
+        shipping_repository.bulk_insert_order_finished_generation(
+            generation_task_id,
+            to_insert,
+            progress_cb=progress_cb,
+            cancel_check=cancel_check,
+        )
+    elif staging_task_id is None:
         shipping_repository.bulk_insert_order_finished(
             to_insert, progress_cb=progress_cb, commit_chunks=commit_chunks,
             cancel_check=cancel_check,
@@ -949,6 +970,8 @@ class ShippingService:
         try:
             shipping_repository.cleanup_abandoned_resolve_staging()
             shipping_repository.cleanup_resolve_staging(task_id)
+            if full_rebuild:
+                shipping_repository.reset_full_resolve_generation(task_id)
             target_count = shipping_repository.create_resolve_targets(
                 task_id, unique_pairs, cancel_check=cancel_check,
             )
@@ -971,7 +994,12 @@ class ShippingService:
                         progress_cb=None,
                         cancel_check=cancel_check,
                         resolver_context=context,
-                        staging_task_id=task_id,
+                        staging_task_id=(
+                            None if full_rebuild else task_id
+                        ),
+                        generation_task_id=(
+                            task_id if full_rebuild else None
+                        ),
                     )
                     processed += len(chunk)
                     if progress_cb:
@@ -981,7 +1009,11 @@ class ShippingService:
                             total=target_count,
                         )
 
-            stats = shipping_repository.get_resolve_staging_stats(task_id)
+            stats = (
+                shipping_repository.get_full_generation_stats(task_id)
+                if full_rebuild
+                else shipping_repository.get_resolve_staging_stats(task_id)
+            )
             if stats['target_count'] != target_count:
                 raise RuntimeError('重算目标数量校验失败')
             if stats['orphan_count'] != 0:
@@ -992,19 +1024,26 @@ class ShippingService:
 
             # Drop the ORM transaction/connection before the short engine-level cutover.
             db.session.remove()
-            cutover = shipping_repository.cutover_resolve_staging(
-                task_id,
-                full_rebuild=full_rebuild,
-                resolved_count=target_count,
-                staged_rows=stats['staging_count'],
+            cutover = (
+                shipping_repository.publish_full_generation(
+                    task_id,
+                    resolved_count=target_count,
+                    generation_rows=stats['staging_count'],
+                )
+                if full_rebuild
+                else shipping_repository.cutover_resolve_staging(
+                    task_id,
+                    full_rebuild=False,
+                    resolved_count=target_count,
+                    staged_rows=stats['staging_count'],
+                )
             )
             try:
                 shipping_repository.cleanup_resolve_staging(task_id)
                 cleanup_pending = False
-            except Exception as exc:
+            except Exception:
                 cleanup_pending = True
                 report_internal_error(
-                    exc,
                     context=f'清理重算暂存数据失败 task_id={task_id}',
                 )
             if cleanup_pending:
@@ -1015,12 +1054,11 @@ class ShippingService:
                         result=cutover,
                         progress={'step': 'done', 'data': cutover},
                     )
-                except Exception as exc:
+                except Exception:
                     # The live cutover and terminal task state are already
                     # committed. A diagnostic update must never turn that
                     # successful publication into a reported task failure.
                     report_internal_error(
-                        exc,
                         context=f'更新重算暂存清理状态失败 task_id={task_id}',
                     )
             return cutover
@@ -1028,9 +1066,8 @@ class ShippingService:
             db.session.rollback()
             try:
                 shipping_repository.cleanup_resolve_staging(task_id)
-            except Exception as cleanup_exc:
+            except Exception:
                 report_internal_error(
-                    cleanup_exc,
                     context=f'异常后清理重算暂存数据失败 task_id={task_id}',
                 )
             raise
@@ -1039,6 +1076,17 @@ class ShippingService:
                       cancel_check=None, begin_commit=None) -> Dict:
         """Safely rebuild stale orders through task-isolated staging."""
         stale_pairs = shipping_repository.get_stale_order_nos()
+        max_orders = int(os.getenv(
+            'MAX_STALE_RESOLVE_ORDERS',
+            _DEFAULT_MAX_STALE_RESOLVE_ORDERS,
+        ))
+        if max_orders < 1:
+            raise RuntimeError('MAX_STALE_RESOLVE_ORDERS 必须大于 0')
+        if len(stale_pairs) > max_orders:
+            raise StaleResolveScopeTooLarge(
+                f'待重算订单 {len(stale_pairs)} 条，超过当前安全上限 '
+                f'{max_orders} 条；请先完成大规模旧数据重算门禁'
+            )
         return self._run_staged_resolve(
             task_id,
             stale_pairs,

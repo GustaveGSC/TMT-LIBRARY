@@ -8,12 +8,14 @@
 - `20260724_01` 为 `shipping_task` 新增数据库级互斥租约 `lease_key`
 - `20260725_01` 新增成品组合安全重算暂存表 `shipping_resolve_target` /
   `shipping_order_finished_staging`
+- `20260726_01` 新增与正式表同构的 `shipping_order_finished_next` standby，以及
+  `shipping_order_finished_generation` / `_next` 代际标记
 - `20260721_01` 清理不受支持的 `product:delete` 权限及既有角色关联
 - `20260721_02` 增加财务客户简称字段、人工映射表，并规范财务行内部唯一键
 - `20260721_03` 将客户简称带入成品组合结果，并增加 `(source, customer_alias)` 聚合索引
 - `20260721_04` 将财务客户映射从布尔值改为四态审核状态
 - `20260723_01` 删除已取消的 guest 角色及其关联
-- `20260723_02` 准备开发者/管理者/运维权限域、标准角色和兼容映射，是当前代码 head
+- `20260723_02` 准备开发者/管理者/运维权限域、标准角色和兼容映射
 - 生产已完成 `stamp 20260720_01`，模型差异检查为 0
 - `app.py` 启动时只校验数据库 revision，不执行隐式 DDL 或自动 upgrade
 - 后续结构变更必须使用经人工审查的 Alembic revision，部署前单独 `upgrade head`
@@ -394,22 +396,35 @@ cost_column_alias                          # Excel 列名映射（key → aliase
 - `status`: `pending | running | committing | done | error | cancelled | interrupted`。
 - `progress`、`result` 为 JSON；不保存上传文件内容。
 - 终态保留 7 天，由创建新任务时顺带清理。
-- 新 worker 启动时把上一进程遗留的 pending/running/committing 标记为 interrupted。
+- 新 worker 启动时先用正式代标记恢复 rename 已完成的 committing 全量任务为 done，再把其余
+  pending/running/committing 标记为 interrupted。
 - 导入业务数据使用单一事务；任务状态通过独立连接提交，不能提交业务 session。
 - `lease_key` 为空或固定为 `shipping_data_mutation`；唯一约束保证发货导入、财务导入、
   全量重算和旧数据重算任一时刻只能运行一个。任务进入终态或启动恢复将其清空。
 - `cancel_requested_at`/`cancel_requested_by` 持久化记录取消请求；取消请求本身不释放租约。
-- 四类任务均支持取消。导入任务在原业务事务中回滚；重算任务只分块提交 task_id 隔离的
-  staging，取消/失败不会修改 `shipping_order_finished`。
+- 四类任务均支持取消。导入任务在原业务事务中回滚；局部重算只分块提交 task_id 隔离的
+  staging；全量重算只分块提交 standby。取消/失败不会修改 `shipping_order_finished`。
 - worker 最终提交前用 CAS 从 running 切到 committing，且要求 `cancel_requested_at IS NULL`；
   取消和提交只有一个能成功，committing 后接口返回409。
-- 重算任务的正式表 cutover 与 `shipping_task=done` 在同一个事务内提交；全量重算必须先完成
-  shipping、finance 两个 source 的完整暂存代，再统一替换正式表。
+- 局部重算的正式表 cutover 与 `shipping_task=done` 在同一事务提交。全量重算必须先完成
+  shipping、finance 两个 source 的完整 standby，再以单条 MySQL `RENAME TABLE` 同时交换数据表
+  和代际标记；任务终态由标记提供 crash/reload 恢复依据。
 
 `shipping_resolve_target` 保存某个重算 task 的订单范围，复合主键为
 `(task_id, source, ecommerce_order_no)`。`shipping_order_finished_staging` 保存该 task 的完整
 派生结果，业务列与 `shipping_order_finished` 对齐，并以 task_id 隔离。暂存表不与任务表建立
 外键，避免 cutover/清理引入级联锁；终态超过一小时的遗留暂存数据会在下一次重算开始时清理。
+
+`shipping_order_finished_next` 的列、默认值、排序规则和索引名必须与
+`shipping_order_finished` 完全一致；生产迁移用 `CREATE TABLE ... LIKE` 保证物理结构相同。
+两张 generation 表各固定一行 `id=1`，随数据表在同一条 rename 中交换。运行时切换前还会核验
+四张代际表均为 InnoDB、正式/standby 结构一致、正式表没有外键引用、临时 swap 表不存在。
+standby 中的退役旧代不会在发布后立即 TRUNCATE，以保留验收窗口内的快速回切能力；验收后可
+显式清理，下一次全量重建开始时也会先清空。失败清理由分块 DELETE、独立新连接和最多三次退避
+重试完成，遗留数据仍由延迟清理兜底。维护窗口如需回切，使用
+`backend/scripts/rollback_shipping_generation.py --task-id <UUID> --confirm-task-id <UUID>`；
+脚本会再次核验正式代标记，并使用同一条原子 rename 反向交换。验收通过后使用
+`cleanup_shipping_retired_generation.py` 并重复传入同一个 task_id，显式释放退役代空间。
 
 `product_lifecycle_task` 独立保存产品生命周期更新任务，不与发货任务表混用：
 
