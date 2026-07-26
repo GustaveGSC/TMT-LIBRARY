@@ -2,7 +2,9 @@ import time
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import List, Dict, Set, Tuple
-from sqlalchemy import distinct as sql_distinct, func as sql_func
+from sqlalchemy import (
+    bindparam, distinct as sql_distinct, func as sql_func, inspect, text,
+)
 from sqlalchemy.exc import IntegrityError
 from database.base import db
 from database.models.shipping import (
@@ -10,6 +12,9 @@ from database.models.shipping import (
     ShippingOperatorType, ShippingOrderFinished, ShippingTask,
     ShippingFinanceCustomerMapping,
     ShippingOrderFinishedStaging, ShippingResolveTarget,
+    ShippingOrderFinishedNext,
+    ShippingOrderFinishedGeneration,
+    ShippingOrderFinishedGenerationNext,
 )
 from utils import now_cst
 
@@ -30,6 +35,138 @@ class ShippingTaskLeaseConflict(Exception):
 CANCELLABLE_TASK_TYPES = frozenset({
     'import_shipping', 'import_finance', 'resolve_all', 'resolve_stale',
 })
+
+_RESOLVE_CUTOVER_LOCK = 'tmt_shipping_resolve_cutover'
+_GENERATION_MARKER_ID = 1
+_STAGING_CLEANUP_CHUNK = 5000
+
+
+def _acquire_resolve_cutover_lock(connection, timeout=30):
+    if connection.dialect.name != 'mysql':
+        return
+    acquired = connection.execute(
+        text('SELECT GET_LOCK(:lock_name, :timeout)'),
+        {'lock_name': _RESOLVE_CUTOVER_LOCK, 'timeout': timeout},
+    ).scalar_one()
+    if acquired != 1:
+        raise RuntimeError('获取发货重算切换锁超时')
+
+
+def _release_resolve_cutover_lock(connection):
+    if connection.dialect.name != 'mysql':
+        return
+    try:
+        connection.execute(
+            text('SELECT RELEASE_LOCK(:lock_name)'),
+            {'lock_name': _RESOLVE_CUTOVER_LOCK},
+        )
+    except Exception:
+        # Named locks are connection-scoped and are released when a broken
+        # connection closes. Cleanup must not mask the original DB failure.
+        pass
+
+
+def _generation_tables_available(connection):
+    return inspect(connection).has_table(
+        ShippingOrderFinishedGeneration.name,
+    ) and inspect(connection).has_table(
+        ShippingOrderFinishedGenerationNext.name,
+    )
+
+
+def _assert_mysql_generation_cutover_safe(connection):
+    if connection.dialect.name != 'mysql':
+        return
+    table_names = (
+        'shipping_order_finished',
+        'shipping_order_finished_next',
+        'shipping_order_finished_generation',
+        'shipping_order_finished_generation_next',
+    )
+    engines = connection.execute(
+        text("""
+            SELECT TABLE_NAME, ENGINE
+            FROM information_schema.TABLES
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME IN :table_names
+        """).bindparams(bindparam('table_names', expanding=True)),
+        {'table_names': table_names},
+    ).all()
+    if len(engines) != len(table_names) or any(
+        (engine or '').upper() != 'INNODB'
+        for _table, engine in engines
+    ):
+        raise RuntimeError('全量重算切换要求四张代际表均为 InnoDB')
+
+    referencing_fks = connection.execute(text("""
+        SELECT COUNT(*)
+        FROM information_schema.KEY_COLUMN_USAGE
+        WHERE REFERENCED_TABLE_SCHEMA = DATABASE()
+          AND REFERENCED_TABLE_NAME = 'shipping_order_finished'
+    """)).scalar_one()
+    if referencing_fks:
+        raise RuntimeError(
+            'shipping_order_finished 存在外键引用，禁止 rename 切换'
+        )
+    outgoing_fks = connection.execute(text("""
+        SELECT COUNT(*)
+        FROM information_schema.TABLE_CONSTRAINTS
+        WHERE CONSTRAINT_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'shipping_order_finished'
+          AND CONSTRAINT_TYPE = 'FOREIGN KEY'
+    """)).scalar_one()
+    if outgoing_fks:
+        raise RuntimeError(
+            'shipping_order_finished 定义了外键，禁止 rename 切换'
+        )
+    trigger_count = connection.execute(text("""
+        SELECT COUNT(*)
+        FROM information_schema.TRIGGERS
+        WHERE TRIGGER_SCHEMA = DATABASE()
+          AND EVENT_OBJECT_TABLE = 'shipping_order_finished'
+    """)).scalar_one()
+    if trigger_count:
+        raise RuntimeError(
+            'shipping_order_finished 存在触发器，禁止 rename 切换'
+        )
+
+    def column_signature(table_name):
+        return connection.execute(text("""
+            SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE,
+                   COLUMN_DEFAULT, EXTRA,
+                   CHARACTER_SET_NAME, COLLATION_NAME
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = :table_name
+            ORDER BY ORDINAL_POSITION
+        """), {'table_name': table_name}).all()
+
+    def index_signature(table_name):
+        return connection.execute(text("""
+            SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX,
+                   COLUMN_NAME, SUB_PART, COLLATION, INDEX_TYPE
+            FROM information_schema.STATISTICS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = :table_name
+            ORDER BY INDEX_NAME, SEQ_IN_INDEX
+        """), {'table_name': table_name}).all()
+
+    if (
+        column_signature('shipping_order_finished')
+        != column_signature('shipping_order_finished_next')
+        or index_signature('shipping_order_finished')
+        != index_signature('shipping_order_finished_next')
+    ):
+        raise RuntimeError('正式表与 standby 表结构或索引不一致，拒绝切换')
+
+    for swap_table in (
+        'shipping_order_finished_swap',
+        'shipping_order_finished_generation_swap',
+    ):
+        if inspect(connection).has_table(swap_table):
+            raise RuntimeError(
+                f'检测到未清理的 cutover 临时表 {swap_table}，拒绝切换'
+            )
 
 
 def _get_ftp_finished_codes() -> set:
@@ -294,21 +431,123 @@ class ShippingRepository:
 
     @staticmethod
     def interrupt_running_tasks():
-        """新 worker 启动时，将上一进程未完成的任务标记为已中断。"""
+        """
+        新 worker 启动时恢复已发布代，并中断其余遗留任务。
+
+        RENAME TABLE 与任务状态更新不能处在同一事务内。正式代标记随数据表
+        一起 rename；若进程恰好在 rename 后退出，启动恢复会据此把 committing
+        任务补写为 done，而不是误报 interrupted。
+        """
         now = now_cst()
-        with db.engine.begin() as connection:
-            result = connection.execute(
-                db.update(ShippingTask)
-                .where(ShippingTask.status.in_(('pending', 'running', 'committing')))
-                .values(
-                    status='interrupted',
-                    message='任务因服务重启或重载中断',
-                    updated_at=now,
-                    finished_at=now,
-                    lease_key=None,
+        with db.engine.connect() as connection:
+            _acquire_resolve_cutover_lock(connection)
+            try:
+                published_task_id = None
+                if _generation_tables_available(connection):
+                    published_task_id = connection.execute(
+                        db.select(
+                            ShippingOrderFinishedGeneration.c.task_id
+                        ).where(
+                            ShippingOrderFinishedGeneration.c.id
+                            == _GENERATION_MARKER_ID,
+                        )
+                    ).scalar_one_or_none()
+                    if published_task_id:
+                        published = connection.execute(
+                            db.select(
+                                ShippingTask.status,
+                                ShippingTask.result,
+                            ).where(ShippingTask.id == published_task_id)
+                        ).mappings().one_or_none()
+                        if published and published['status'] == 'committing':
+                            result_data = published['result'] or {}
+                            connection.execute(
+                                db.update(ShippingTask)
+                                .where(
+                                    ShippingTask.id == published_task_id,
+                                    ShippingTask.status == 'committing',
+                                )
+                                .values(
+                                    status='done',
+                                    progress={
+                                        'step': 'done',
+                                        'data': result_data,
+                                    },
+                                    result=result_data,
+                                    message='',
+                                    updated_at=now,
+                                    finished_at=now,
+                                    lease_key=None,
+                                )
+                            )
+                            connection.commit()
+
+                result = connection.execute(
+                    db.update(ShippingTask)
+                    .where(
+                        ShippingTask.status.in_(
+                            ('pending', 'running', 'committing')
+                        )
+                    )
+                    .values(
+                        status='interrupted',
+                        message='任务因服务重启或重载中断',
+                        updated_at=now,
+                        finished_at=now,
+                        lease_key=None,
+                    )
                 )
-            )
-        return result.rowcount
+                interrupted = result.rowcount
+                connection.commit()
+
+                if _generation_tables_available(connection):
+                    standby_owner = connection.execute(
+                        db.select(
+                            ShippingOrderFinishedGenerationNext.c.task_id
+                        ).where(
+                            ShippingOrderFinishedGenerationNext.c.id
+                            == _GENERATION_MARKER_ID,
+                        )
+                    ).scalar_one_or_none()
+                    owner_status = None
+                    if standby_owner:
+                        owner_status = connection.execute(
+                            db.select(ShippingTask.status).where(
+                                ShippingTask.id == standby_owner,
+                            )
+                        ).scalar_one_or_none()
+                    if owner_status in (
+                        'error', 'cancelled', 'interrupted',
+                    ):
+                        if connection.dialect.name == 'mysql':
+                            connection.execute(text(
+                                'TRUNCATE TABLE '
+                                'shipping_order_finished_next'
+                            ))
+                            connection.commit()
+                        else:
+                            connection.execute(
+                                db.delete(ShippingOrderFinishedNext)
+                            )
+                            connection.commit()
+                        connection.execute(
+                            db.update(
+                                ShippingOrderFinishedGenerationNext
+                            )
+                            .where(
+                                ShippingOrderFinishedGenerationNext.c.id
+                                == _GENERATION_MARKER_ID,
+                            )
+                            .values(
+                                task_id=None,
+                                row_count=None,
+                                published_at=None,
+                            )
+                        )
+                        connection.commit()
+                return interrupted
+            finally:
+                _release_resolve_cutover_lock(connection)
 
     # ── 批次 ────────────────────────────────────────
 
@@ -1077,6 +1316,129 @@ class ShippingRepository:
                 )
 
     @staticmethod
+    def reset_full_resolve_generation(task_id: str):
+        """Claim and empty the private standby table before a full rebuild."""
+        with db.engine.connect() as connection:
+            _acquire_resolve_cutover_lock(connection)
+            try:
+                _assert_mysql_generation_cutover_safe(connection)
+                connection.execute(
+                    db.update(ShippingOrderFinishedGenerationNext)
+                    .where(
+                        ShippingOrderFinishedGenerationNext.c.id
+                        == _GENERATION_MARKER_ID,
+                    )
+                    .values(
+                        task_id=task_id,
+                        row_count=None,
+                        published_at=None,
+                    )
+                )
+                connection.commit()
+                if connection.dialect.name == 'mysql':
+                    connection.execute(
+                        text('TRUNCATE TABLE shipping_order_finished_next')
+                    )
+                    connection.commit()
+                else:
+                    connection.execute(
+                        db.delete(ShippingOrderFinishedNext)
+                    )
+                    connection.commit()
+            finally:
+                _release_resolve_cutover_lock(connection)
+
+    @staticmethod
+    def bulk_insert_order_finished_generation(
+            task_id: str, rows: List[Dict], progress_cb=None,
+            cancel_check=None):
+        """
+        Append rows to the claimed full-generation standby table.
+
+        The advisory lock makes reset/recovery and a committed insert chunk
+        mutually exclusive across graceful reload workers.
+        """
+        columns = tuple(
+            column.name
+            for column in ShippingOrderFinishedNext.c
+            if column.name != 'id'
+        )
+        prepared = [
+            {
+                column: (
+                    False if column == 'is_stale'
+                    else row.get(column)
+                )
+                for column in columns
+            }
+            for row in rows
+        ]
+        total = len(prepared)
+        chunk_size = 1000
+        with db.engine.connect() as connection:
+            _acquire_resolve_cutover_lock(connection)
+            try:
+                owner = connection.execute(
+                    db.select(
+                        ShippingOrderFinishedGenerationNext.c.task_id
+                    ).where(
+                        ShippingOrderFinishedGenerationNext.c.id
+                        == _GENERATION_MARKER_ID,
+                    )
+                ).scalar_one_or_none()
+                if owner != task_id:
+                    raise InterruptedError(
+                        '全量重算暂存代所有权已失效'
+                    )
+                for index in range(0, total, chunk_size):
+                    if cancel_check and cancel_check():
+                        raise InterruptedError('用户已请求取消任务')
+                    chunk = prepared[index:index + chunk_size]
+                    if chunk:
+                        connection.execute(
+                            db.insert(ShippingOrderFinishedNext),
+                            chunk,
+                        )
+                        connection.commit()
+                    if progress_cb:
+                        progress_cb(
+                            'saving',
+                            current=min(index + len(chunk), total),
+                            total=total,
+                        )
+            finally:
+                _release_resolve_cutover_lock(connection)
+
+    @staticmethod
+    def get_full_generation_stats(task_id: str) -> Dict:
+        with db.engine.connect() as connection:
+            owner = connection.execute(
+                db.select(
+                    ShippingOrderFinishedGenerationNext.c.task_id
+                ).where(
+                    ShippingOrderFinishedGenerationNext.c.id
+                    == _GENERATION_MARKER_ID,
+                )
+            ).scalar_one_or_none()
+            if owner != task_id:
+                raise RuntimeError('全量重算暂存代所有权校验失败')
+            target_count = connection.execute(
+                db.select(sql_func.count()).select_from(
+                    ShippingResolveTarget
+                ).where(ShippingResolveTarget.task_id == task_id)
+            ).scalar_one()
+            generation_rows = connection.execute(
+                db.select(sql_func.count()).select_from(
+                    ShippingOrderFinishedNext
+                )
+            ).scalar_one()
+        return {
+            'target_count': int(target_count),
+            'staging_count': int(generation_rows),
+            'orphan_count': 0,
+        }
+
+    @staticmethod
     def get_resolve_staging_stats(task_id: str) -> Dict:
         target = ShippingResolveTarget.__table__
         staging = ShippingOrderFinishedStaging.__table__
@@ -1110,6 +1472,257 @@ class ShippingRepository:
         }
 
     @staticmethod
+    def _finalize_published_generation(connection, task_id: str, result: Dict):
+        finished_at = now_cst()
+        update = connection.execute(
+            db.update(ShippingTask)
+            .where(
+                ShippingTask.id == task_id,
+                ShippingTask.status == 'committing',
+            )
+            .values(
+                status='done',
+                progress={'step': 'done', 'data': result},
+                result=result,
+                message='',
+                finished_at=finished_at,
+                updated_at=finished_at,
+                lease_key=None,
+            )
+        )
+        if update.rowcount not in (0, 1):
+            raise RuntimeError('全量重算任务终态更新数量异常')
+        connection.commit()
+
+    @staticmethod
+    def _rename_full_generation(connection):
+        if connection.dialect.name == 'mysql':
+            connection.execute(text("""
+                RENAME TABLE
+                    shipping_order_finished
+                        TO shipping_order_finished_swap,
+                    shipping_order_finished_next
+                        TO shipping_order_finished,
+                    shipping_order_finished_swap
+                        TO shipping_order_finished_next,
+                    shipping_order_finished_generation
+                        TO shipping_order_finished_generation_swap,
+                    shipping_order_finished_generation_next
+                        TO shipping_order_finished_generation,
+                    shipping_order_finished_generation_swap
+                        TO shipping_order_finished_generation_next
+            """))
+            return
+
+        # SQLite-only test fallback. Production always uses the single MySQL
+        # RENAME TABLE statement above.
+        statements = (
+            'ALTER TABLE shipping_order_finished '
+            'RENAME TO shipping_order_finished_swap',
+            'ALTER TABLE shipping_order_finished_next '
+            'RENAME TO shipping_order_finished',
+            'ALTER TABLE shipping_order_finished_swap '
+            'RENAME TO shipping_order_finished_next',
+            'ALTER TABLE shipping_order_finished_generation '
+            'RENAME TO shipping_order_finished_generation_swap',
+            'ALTER TABLE shipping_order_finished_generation_next '
+            'RENAME TO shipping_order_finished_generation',
+            'ALTER TABLE shipping_order_finished_generation_swap '
+            'RENAME TO shipping_order_finished_generation_next',
+        )
+        for statement in statements:
+            connection.execute(text(statement))
+        connection.commit()
+
+    @staticmethod
+    def publish_full_generation(task_id: str, *, resolved_count: int,
+                                generation_rows: int) -> Dict:
+        """
+        Atomically swap the fully built standby table into the live name.
+
+        The generation marker is renamed in the same MySQL statement. If the
+        worker exits after DDL commit but before task finalization, startup
+        recovery can prove publication and finish the committing task.
+        """
+        result = None
+        try:
+            with db.engine.connect() as connection:
+                _acquire_resolve_cutover_lock(connection)
+                try:
+                    _assert_mysql_generation_cutover_safe(connection)
+                    owner = connection.execute(
+                        db.select(
+                            ShippingOrderFinishedGenerationNext.c.task_id
+                        ).where(
+                            ShippingOrderFinishedGenerationNext.c.id
+                            == _GENERATION_MARKER_ID,
+                        )
+                    ).scalar_one_or_none()
+                    if owner != task_id:
+                        raise RuntimeError('全量重算 standby 所有权已失效')
+
+                    status = connection.execute(
+                        db.select(ShippingTask.status).where(
+                            ShippingTask.id == task_id,
+                        )
+                    ).scalar_one_or_none()
+                    if status != 'committing':
+                        raise RuntimeError('重算任务状态已变化，拒绝发布 standby')
+
+                    actual_rows = connection.execute(
+                        db.select(sql_func.count()).select_from(
+                            ShippingOrderFinishedNext
+                        )
+                    ).scalar_one()
+                    if int(actual_rows) != int(generation_rows):
+                        raise RuntimeError('standby 行数在切换前发生变化')
+                    live_rows = connection.execute(
+                        db.select(sql_func.count()).select_from(
+                            ShippingOrderFinished
+                        )
+                    ).scalar_one()
+                    result = {
+                        'resolved': int(resolved_count),
+                        'staged_rows': int(generation_rows),
+                        'deleted_rows': int(live_rows),
+                        'inserted_rows': int(actual_rows),
+                        'cleanup_pending': False,
+                        'cutover': 'rename',
+                        'retired_generation_retained': True,
+                    }
+                    prepared_at = now_cst()
+                    connection.execute(
+                        db.update(ShippingOrderFinishedGenerationNext)
+                        .where(
+                            ShippingOrderFinishedGenerationNext.c.id
+                            == _GENERATION_MARKER_ID,
+                        )
+                        .values(
+                            row_count=int(actual_rows),
+                            published_at=prepared_at,
+                        )
+                    )
+                    connection.execute(
+                        db.update(ShippingTask)
+                        .where(
+                            ShippingTask.id == task_id,
+                            ShippingTask.status == 'committing',
+                        )
+                        .values(
+                            progress={
+                                'step': 'committing',
+                                'data': result,
+                            },
+                            result=result,
+                            updated_at=prepared_at,
+                        )
+                    )
+                    connection.commit()
+
+                    ShippingRepository._rename_full_generation(connection)
+                    ShippingRepository._finalize_published_generation(
+                        connection, task_id, result,
+                    )
+                    return result
+                finally:
+                    _release_resolve_cutover_lock(connection)
+        except Exception:
+            # A socket timeout can make DDL outcome ambiguous to the client.
+            # Reconnect and trust the atomically renamed live marker.
+            with db.engine.connect() as recovery:
+                live_owner = recovery.execute(
+                    db.select(
+                        ShippingOrderFinishedGeneration.c.task_id
+                    ).where(
+                        ShippingOrderFinishedGeneration.c.id
+                        == _GENERATION_MARKER_ID,
+                    )
+                ).scalar_one_or_none()
+                if live_owner == task_id:
+                    stored_result = recovery.execute(
+                        db.select(ShippingTask.result).where(
+                            ShippingTask.id == task_id,
+                        )
+                    ).scalar_one_or_none() or result or {}
+                    ShippingRepository._finalize_published_generation(
+                        recovery, task_id, stored_result,
+                    )
+                    return stored_result
+            raise
+
+    @staticmethod
+    def rollback_published_full_generation(task_id: str) -> Dict:
+        """
+        Atomically swap the retained previous generation back into service.
+
+        This is an explicit maintenance operation, not an HTTP endpoint.
+        """
+        with db.engine.connect() as connection:
+            _acquire_resolve_cutover_lock(connection)
+            try:
+                _assert_mysql_generation_cutover_safe(connection)
+                live_owner = connection.execute(
+                    db.select(
+                        ShippingOrderFinishedGeneration.c.task_id
+                    ).where(
+                        ShippingOrderFinishedGeneration.c.id
+                        == _GENERATION_MARKER_ID,
+                    )
+                ).scalar_one_or_none()
+                if live_owner != task_id:
+                    raise RuntimeError(
+                        '当前正式代不是指定任务发布的版本，拒绝回切'
+                    )
+                standby_owner = connection.execute(
+                    db.select(
+                        ShippingOrderFinishedGenerationNext.c.task_id
+                    ).where(
+                        ShippingOrderFinishedGenerationNext.c.id
+                        == _GENERATION_MARKER_ID,
+                    )
+                ).scalar_one_or_none()
+                if standby_owner:
+                    standby_status = connection.execute(
+                        db.select(ShippingTask.status).where(
+                            ShippingTask.id == standby_owner,
+                        )
+                    ).scalar_one_or_none()
+                    if standby_status in (
+                        'pending', 'running', 'committing',
+                    ):
+                        raise RuntimeError(
+                            'standby 正被活跃任务使用，拒绝回切'
+                        )
+
+                ShippingRepository._rename_full_generation(connection)
+                task_result = connection.execute(
+                    db.select(ShippingTask.result).where(
+                        ShippingTask.id == task_id,
+                    )
+                ).scalar_one_or_none() or {}
+                task_result = {
+                    **task_result,
+                    'rolled_back': True,
+                    'rolled_back_at': now_cst().strftime(
+                        '%Y-%m-%d %H:%M:%S'
+                    ),
+                }
+                connection.execute(
+                    db.update(ShippingTask)
+                    .where(ShippingTask.id == task_id)
+                    .values(
+                        result=task_result,
+                        progress={'step': 'done', 'data': task_result},
+                        message='该全量重算发布已回切到上一代',
+                        updated_at=now_cst(),
+                    )
+                )
+                connection.commit()
+                return task_result
+            finally:
+                _release_resolve_cutover_lock(connection)
+
+    @staticmethod
     def cutover_resolve_staging(task_id: str, *, full_rebuild: bool,
                                 resolved_count: int,
                                 staged_rows: int) -> Dict:
@@ -1131,20 +1744,21 @@ class ShippingRepository:
             'city', 'district', 'customer_alias', 'source', 'is_stale',
             'resolved_at',
         )
+        if full_rebuild:
+            raise RuntimeError(
+                '全量重算必须使用 rename-table generation cutover'
+            )
         with db.engine.begin() as connection:
-            if full_rebuild:
-                deleted = connection.execute(db.delete(live)).rowcount
-            else:
-                in_scope = db.exists(
-                    db.select(1).select_from(target).where(
-                        target.c.task_id == task_id,
-                        target.c.source == live.c.source,
-                        target.c.ecommerce_order_no == live.c.ecommerce_order_no,
-                    )
+            in_scope = db.exists(
+                db.select(1).select_from(target).where(
+                    target.c.task_id == task_id,
+                    target.c.source == live.c.source,
+                    target.c.ecommerce_order_no == live.c.ecommerce_order_no,
                 )
-                deleted = connection.execute(
-                    db.delete(live).where(in_scope)
-                ).rowcount
+            )
+            deleted = connection.execute(
+                db.delete(live).where(in_scope)
+            ).rowcount
             source_rows = db.select(
                 *(staging.c[column] for column in columns)
             ).where(staging.c.task_id == task_id)
@@ -1181,18 +1795,154 @@ class ShippingRepository:
 
     @staticmethod
     def cleanup_resolve_staging(task_id: str):
-        """Best-effort idempotent cleanup outside the live cutover transaction."""
-        with db.engine.begin() as connection:
-            connection.execute(
-                db.delete(ShippingOrderFinishedStaging).where(
-                    ShippingOrderFinishedStaging.task_id == task_id,
+        """
+        Idempotently clean private resolve data with fresh-connection retries.
+
+        Large task scopes are deleted in committed chunks so cleanup does not
+        repeat the failed 30-second monolithic DELETE pattern.
+        """
+        last_error = None
+        for attempt in range(3):
+            try:
+                with db.engine.connect() as connection:
+                    if connection.dialect.name == 'mysql':
+                        for table_name in (
+                            'shipping_order_finished_staging',
+                            'shipping_resolve_target',
+                        ):
+                            while True:
+                                deleted = connection.execute(
+                                    text(
+                                        f'DELETE FROM {table_name} '
+                                        'WHERE task_id = :task_id '
+                                        f'LIMIT {_STAGING_CLEANUP_CHUNK}'
+                                    ),
+                                    {'task_id': task_id},
+                                ).rowcount
+                                connection.commit()
+                                if not deleted:
+                                    break
+                    else:
+                        connection.execute(
+                            db.delete(ShippingOrderFinishedStaging).where(
+                                ShippingOrderFinishedStaging.task_id
+                                == task_id,
+                            )
+                        )
+                        connection.execute(
+                            db.delete(ShippingResolveTarget).where(
+                                ShippingResolveTarget.task_id == task_id,
+                            )
+                        )
+                        connection.commit()
+
+                    if _generation_tables_available(connection):
+                        _acquire_resolve_cutover_lock(connection)
+                        try:
+                            owner = connection.execute(
+                                db.select(
+                                    ShippingOrderFinishedGenerationNext.c.task_id
+                                ).where(
+                                    ShippingOrderFinishedGenerationNext.c.id
+                                    == _GENERATION_MARKER_ID,
+                                )
+                            ).scalar_one_or_none()
+                            if owner == task_id:
+                                if connection.dialect.name == 'mysql':
+                                    connection.execute(text(
+                                        'TRUNCATE TABLE '
+                                        'shipping_order_finished_next'
+                                    ))
+                                    connection.commit()
+                                else:
+                                    connection.execute(
+                                        db.delete(ShippingOrderFinishedNext)
+                                    )
+                                    connection.commit()
+                                connection.execute(
+                                    db.update(
+                                        ShippingOrderFinishedGenerationNext
+                                    )
+                                    .where(
+                                        ShippingOrderFinishedGenerationNext.c.id
+                                        == _GENERATION_MARKER_ID,
+                                    )
+                                    .values(
+                                        task_id=None,
+                                        row_count=None,
+                                        published_at=None,
+                                    )
+                                )
+                                connection.commit()
+                        finally:
+                            _release_resolve_cutover_lock(connection)
+                return
+            except Exception as exc:
+                last_error = exc
+                if attempt < 2:
+                    time.sleep(0.25 * (2 ** attempt))
+        raise last_error
+
+    @staticmethod
+    def cleanup_retired_full_generation(task_id: str) -> bool:
+        """Truncate the old live generation after a successful atomic swap."""
+        with db.engine.connect() as connection:
+            _acquire_resolve_cutover_lock(connection)
+            try:
+                live_owner = connection.execute(
+                    db.select(
+                        ShippingOrderFinishedGeneration.c.task_id
+                    ).where(
+                        ShippingOrderFinishedGeneration.c.id
+                        == _GENERATION_MARKER_ID,
+                    )
+                ).scalar_one_or_none()
+                if live_owner != task_id:
+                    return False
+                standby_owner = connection.execute(
+                    db.select(
+                        ShippingOrderFinishedGenerationNext.c.task_id
+                    ).where(
+                        ShippingOrderFinishedGenerationNext.c.id
+                        == _GENERATION_MARKER_ID,
+                    )
+                ).scalar_one_or_none()
+                if standby_owner:
+                    standby_status = connection.execute(
+                        db.select(ShippingTask.status).where(
+                            ShippingTask.id == standby_owner,
+                        )
+                    ).scalar_one_or_none()
+                    if standby_status in (
+                        'pending', 'running', 'committing',
+                    ):
+                        return False
+                if connection.dialect.name == 'mysql':
+                    connection.execute(text(
+                        'TRUNCATE TABLE shipping_order_finished_next'
+                    ))
+                    connection.commit()
+                else:
+                    connection.execute(db.delete(
+                        ShippingOrderFinishedNext
+                    ))
+                    connection.commit()
+                connection.execute(
+                    db.update(ShippingOrderFinishedGenerationNext)
+                    .where(
+                        ShippingOrderFinishedGenerationNext.c.id
+                        == _GENERATION_MARKER_ID,
+                    )
+                    .values(
+                        task_id=None,
+                        row_count=None,
+                        published_at=None,
+                    )
                 )
-            )
-            connection.execute(
-                db.delete(ShippingResolveTarget).where(
-                    ShippingResolveTarget.task_id == task_id,
-                )
-            )
+                connection.commit()
+                return True
+            finally:
+                _release_resolve_cutover_lock(connection)
 
     @staticmethod
     def cleanup_abandoned_resolve_staging():
@@ -1203,23 +1953,33 @@ class ShippingRepository:
         marked interrupted but is still unwinding and writing its final chunk.
         """
         cutoff = now_cst() - timedelta(hours=1)
-        terminal_tasks = db.select(ShippingTask.id).where(
-            ShippingTask.status.in_(
-                ('done', 'error', 'cancelled', 'interrupted')
-            ),
-            ShippingTask.updated_at < cutoff,
-        )
-        with db.engine.begin() as connection:
-            connection.execute(
-                db.delete(ShippingOrderFinishedStaging).where(
-                    ShippingOrderFinishedStaging.task_id.in_(terminal_tasks),
+        with db.engine.connect() as connection:
+            terminal_ids = set(connection.execute(
+                db.select(ShippingTask.id).where(
+                    ShippingTask.status.in_(
+                        ('done', 'error', 'cancelled', 'interrupted')
+                    ),
+                    ShippingTask.updated_at < cutoff,
                 )
-            )
-            connection.execute(
-                db.delete(ShippingResolveTarget).where(
-                    ShippingResolveTarget.task_id.in_(terminal_tasks),
-                )
-            )
+            ).scalars().all())
+            private_ids = set(connection.execute(
+                db.select(
+                    ShippingOrderFinishedStaging.task_id
+                ).distinct()
+            ).scalars().all())
+            private_ids.update(connection.execute(
+                db.select(ShippingResolveTarget.task_id).distinct()
+            ).scalars().all())
+            existing_ids = set()
+            if private_ids:
+                existing_ids = set(connection.execute(
+                    db.select(ShippingTask.id).where(
+                        ShippingTask.id.in_(private_ids)
+                    )
+                ).scalars().all())
+            orphan_ids = private_ids - existing_ids
+        for task_id in terminal_ids | orphan_ids:
+            ShippingRepository.cleanup_resolve_staging(task_id)
 
     # ── 统计 ─────────────────────────────────────────
 

@@ -187,14 +187,17 @@ POST   /api/shipping/operators/classify               # 批量保存操作人分
 GET    /api/shipping/stats                            # 统计摘要
 GET    /api/shipping/shipped-dates                    # 所有发货记录的 shipped_date（去重升序，不含销退日期）
 POST   /api/shipping/resolve                          # 刷新 is_stale 订单的成品组合；旧 /task-status 轮询入口保留，状态已持久化
+                                                      # 默认最多10000个(order_no,source)，可用
+                                                      # MAX_STALE_RESOLVE_ORDERS调整；超限任务直接error且不建staging
 POST   /api/shipping/resolve-all                      # 全量重新计算所有订单成品组合；返回 task_id
                                                       # 当前默认维护关闭：未显式配置 ALLOW_FULL_RESOLVE=true 时
                                                       # 立即返回 HTTP 503，不创建任务/租约/暂存数据
                                                       #   import/shipping、import/finance、resolve-all、resolve 均通过 tasks/:task_id 轮询
                                                       #   四类数据写任务（另含 POST /resolve）数据库级互斥；
                                                       #   已有任务运行时返回 409，data.task_id 为当前任务
-                                                      #   resolve/resolve-all 先写任务隔离的 staging；
-                                                      #   shipping+finance 全部完成后才用一个短事务原子切换
+                                                      #   resolve 写 task 隔离 staging 后做小范围事务替换；
+                                                      #   resolve-all 直接构建同构 standby，shipping+finance
+                                                      #   全部完成后用单条 MySQL RENAME TABLE 原子交换
 GET    /api/shipping/warehouses                       # 所有出现过的仓库名及 is_excluded 状态
 POST   /api/shipping/warehouses/filter                # 批量保存仓库过滤配置 [{warehouse_name, is_excluded}]
 GET    /api/shipping/finance-customer-aliases         # shipping:view；客户简称计数+人工映射，?keyword=&page=1&per_page=100（上限500）
@@ -350,10 +353,16 @@ POST   /api/aftersale/chart-data                      # 图表聚合数据，bod
 
 `POST /api/shipping/tasks/:task_id/cancel` 对四类任务均生效。导入任务在文件解析、数据库
 分块比对/写入、增量成品组合解析及最终提交前检查；命中取消会回滚整个导入事务。
-`resolve_all`/`resolve_stale` 分块提交的仅是 task_id 隔离的暂存代，不会改变正式结果；
-取消或失败会清理暂存代。重算成功通过 `running → committing` CAS 后，在同一个短事务中
-切换正式结果并把任务写为 `done`，避免 reload 产生“数据已切换、任务却中断”的矛盾状态。
+`resolve_stale` 分块提交的仅是 task_id 隔离的 staging，不会改变正式结果；默认安全上限为
+10000 个 `(order_no, source)`，未完成更大范围门禁前拒绝执行。`resolve_all` 分块构建与正式表
+同构的 standby；取消或失败不会修改正式表。成功通过 `running → committing` CAS 后，数据表和
+代际标记由一条 MySQL `RENAME TABLE` 原子交换。DDL 与任务状态不能共用事务，因此新 worker 会先
+读取随表交换的代际标记：rename 已完成则把 committing 任务恢复为 done，未完成才标 interrupted。
 所有任务的最终提交均用 CAS 与取消请求竞争，committing 后取消返回 409。
+
+全量重算成功 result 在原字段外增加 `"cutover":"rename"` 和
+`"retired_generation_retained":true`；旧正式代保留在 standby，验收后才能显式清理，下一次
+全量重建开始时也会先清空。生产在新门禁通过前仍不得设置 `ALLOW_FULL_RESOLVE=true`。
 
 ## 上传安全限制
 

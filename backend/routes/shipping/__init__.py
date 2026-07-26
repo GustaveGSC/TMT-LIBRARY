@@ -3,7 +3,7 @@ import uuid
 import threading
 import json
 from flask import Blueprint, request, Response, current_app, g
-from services.shipping import shipping_service
+from services.shipping import shipping_service, StaleResolveScopeTooLarge
 from auth import make_blueprint_guard
 from result import Result
 from database.base import db
@@ -373,6 +373,11 @@ def resolve_stale():
                 _finish_task(
                     task_id, None, 'cancelled',
                     message='重算已取消，线上数据保持不变',
+                )
+            except StaleResolveScopeTooLarge as exc:
+                _finish_task(
+                    task_id, None, 'error',
+                    message=str(exc),
                 )
             except Exception:
                 _finish_task(

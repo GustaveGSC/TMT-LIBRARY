@@ -255,6 +255,31 @@ class ShippingOrderFinished(db.Model):
         }
 
 
+# 全量重算的 standby 物理表必须与正式表完全同构。它不参与日常查询，
+# 只在 resolve_all 构建下一代数据并通过 MySQL RENAME TABLE 原子交换时使用。
+ShippingOrderFinishedNext = ShippingOrderFinished.__table__.to_metadata(
+    db.metadata,
+    name='shipping_order_finished_next',
+)
+
+
+ShippingOrderFinishedGeneration = db.Table(
+    'shipping_order_finished_generation',
+    db.Column('id', db.SmallInteger, primary_key=True),
+    db.Column('task_id', db.String(36), nullable=True),
+    db.Column('row_count', db.BigInteger, nullable=True),
+    db.Column('published_at', db.DateTime, nullable=True),
+)
+
+
+ShippingOrderFinishedGenerationNext = (
+    ShippingOrderFinishedGeneration.to_metadata(
+        db.metadata,
+        name='shipping_order_finished_generation_next',
+    )
+)
+
+
 class ShippingResolveTarget(db.Model):
     """Persisted task scope used by staged resolve cutover."""
     __tablename__ = 'shipping_resolve_target'
