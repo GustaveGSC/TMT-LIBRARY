@@ -15,10 +15,10 @@ const taskCancel = useShippingTaskCancel()
 const currentTaskId = ref('')
 
 // ── 重建全部成品组合 ──────────────────────────────
-// 生产门禁实测（2026-07-25）：全量 cutover 的无 WHERE DELETE 超过 read_timeout 导致任务失败，
-// 见 handoff/2026-07-25-claude-staging-cutover-gate-test-report.md。后端正在改造为 RENAME TABLE
-// 型 cutover，期间前端临时禁用入口；等后端 fail-fast 补丁和新 cutover 一起上线后再放开。
-const FULL_RESOLVE_TEMPORARILY_DISABLED = true
+// 2026-07-25 曾因全量 cutover 的无 WHERE DELETE 超过 read_timeout 临时禁用该入口；
+// 2026-07-26 后端改为 RENAME TABLE 型 cutover 并通过生产门禁（两次独立全量重算，
+// 691,990 行组件守恒逐单校验 0 不一致，见 handoff/2026-07-26-claude-phase2-conclusion-correction.md），
+// 已重新开放。
 const resolving           = ref(false)
 const showResolveConfirm  = ref(false)
 const showResolveProgress = ref(false)
@@ -137,7 +137,7 @@ async function handleResolveAll() {
       <button
         class="btn-resolve"
         :class="{ resolving }"
-        :disabled="resolving || FULL_RESOLVE_TEMPORARILY_DISABLED"
+        :disabled="resolving"
         @click="showResolveConfirm = true"
       >
         <svg class="resolve-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -145,9 +145,6 @@ async function handleResolveAll() {
         </svg>
         <span>重建全部成品组合</span>
       </button>
-      <span v-if="FULL_RESOLVE_TEMPORARILY_DISABLED" class="resolve-disabled-hint">
-        当前正在优化，暂不可用
-      </span>
     </div>
 
     <!-- ── 重建全部成品组合确认弹窗 ─────────────────── -->
@@ -273,7 +270,6 @@ async function handleResolveAll() {
 .btn-resolve:disabled { opacity: 0.6; cursor: not-allowed; }
 .btn-resolve.resolving { border-color: rgba(196,136,58,0.4); color: var(--accent); }
 .resolve-icon { width: 15px; height: 15px; flex-shrink: 0; }
-.resolve-disabled-hint { font-size: 12px; color: #d05a3c; }
 
 .confirm-body { font-size: 13px; color: var(--text-primary); line-height: 1.7; }
 

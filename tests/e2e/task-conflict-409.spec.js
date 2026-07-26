@@ -12,10 +12,8 @@ import { mockDataMgmtPage } from './fixtures/dataMgmt.js'
 
 const RUNNING_TASK_ID = 'existing-task-id-123'
 
-// "重建全部成品组合"（resolve-all）入口已临时禁用：生产门禁实测发现全表 DELETE 超过
-// read_timeout 导致任务失败，见 handoff/2026-07-25-claude-staging-cutover-gate-test-report.md。
-// 等后端改为 RENAME TABLE 型 cutover、前端恢复入口后再取消 skip。
-test.skip('resolve-all 遇到 409 时展示后端文案并接入已有任务的进度流', async ({ page }) => {
+// 2026-07-26：后端已改为 RENAME TABLE 型 cutover 并通过生产门禁，前端入口恢复，取消 skip。
+test('resolve-all 遇到 409 时展示后端文案并接入已有任务的进度流', async ({ page }) => {
   await mockDataMgmtPage(page)
 
   await page.route('**/api/shipping/resolve-all', (route) =>
