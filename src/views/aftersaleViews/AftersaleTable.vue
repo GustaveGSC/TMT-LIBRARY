@@ -2,12 +2,18 @@
 import { ref, computed } from 'vue'
 import { usePermission } from '@/composables/usePermission'
 import AftersaleCasesTable from '@/components/aftersale/AftersaleCasesTable.vue'
+import AftersaleMediaImportDialog from '@/components/aftersale/AftersaleMediaImportDialog.vue'
 
 const tableRef    = ref(null)
 const dateRange   = ref([])
 const noSalesMode = ref('all')  // 'all' | 'exclude'
+const showMediaImport = ref(false)
 
 const { can } = usePermission()
+
+function onMediaImported() {
+  tableRef.value?.refreshMedia?.()
+}
 
 // 把工具栏状态合并为 filter prop 传给表格
 const tableFilter = computed(() => ({
@@ -35,6 +41,11 @@ defineExpose({ refresh: () => tableRef.value?.refresh() })
         <el-radio value="exclude">不记录当前未销售产品数据</el-radio>
       </el-radio-group>
       <el-button
+        v-if="can('aftersale:edit')"
+        size="small"
+        @click="showMediaImport = true"
+      >导入售后图片</el-button>
+      <el-button
         v-if="can('aftersale:export')"
         size="small"
         :loading="tableRef?.exportLoading"
@@ -49,6 +60,8 @@ defineExpose({ refresh: () => tableRef.value?.refresh() })
       :filter="tableFilter"
       style="flex:1; overflow:hidden"
     />
+
+    <AftersaleMediaImportDialog v-model="showMediaImport" @imported="onMediaImported" />
   </div>
 </template>
 

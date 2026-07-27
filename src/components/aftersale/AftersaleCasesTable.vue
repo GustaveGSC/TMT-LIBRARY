@@ -377,6 +377,7 @@ async function loadData() {
 
     const ids = res.data.items.map(r => r.id)
     if (!ids.length) return
+    loadMediaFlags(res.data.items.map(r => r.ecommerce_order_no))
     const r2 = await http.get('/api/aftersale/cases/reasons', { params: { ids: ids.join(',') } })
     if (!r2.success || seq !== _seq) return
     items.value = items.value.map(row => ({ ...row, reasons: r2.data[String(row.id)] ?? [] }))
@@ -385,6 +386,46 @@ async function loadData() {
     if (seq === _seq) loading.value = false
   }
 }
+
+// ── 售后图片/视频（展开行按需展示） ────────────────
+const mediaCounts  = ref({})   // { order_no: count }，当前页批量查一次
+const mediaDetails = ref({})   // { order_no: [{id,file_type,oss_url,original_filename,...}] }，展开时才拉取
+const mediaLoading = ref({})   // { order_no: true } 加载中标记
+
+async function loadMediaFlags(orderNos) {
+  const uniqueOrderNos = [...new Set(orderNos)]
+  if (!uniqueOrderNos.length) return
+  try {
+    const res = await http.post('/api/aftersale/cases/media-flags', { order_nos: uniqueOrderNos })
+    if (res.success) mediaCounts.value = { ...mediaCounts.value, ...res.data }
+  } catch { /* 媒体数量加载失败不影响主表格 */ }
+}
+
+async function onExpandChange(row, expandedRows) {
+  const orderNo = row.ecommerce_order_no
+  if (!expandedRows.includes(row)) return
+  if (!mediaCounts.value[orderNo] || mediaDetails.value[orderNo] || mediaLoading.value[orderNo]) return
+  mediaLoading.value = { ...mediaLoading.value, [orderNo]: true }
+  try {
+    const res = await http.get(`/api/aftersale/cases/${encodeURIComponent(orderNo)}/media`)
+    if (res.success) mediaDetails.value = { ...mediaDetails.value, [orderNo]: res.data }
+  } finally {
+    mediaLoading.value = { ...mediaLoading.value, [orderNo]: false }
+  }
+}
+
+function mediaImageUrls(orderNo) {
+  return (mediaDetails.value[orderNo] || []).filter(m => m.file_type === 'image').map(m => m.oss_url)
+}
+
+// 刷新时清空媒体缓存，避免导入新图片后展开行仍显示旧数据
+watch(() => props.filter, () => { mediaCounts.value = {}; mediaDetails.value = {} }, { deep: true })
+const playingVideoUrl = ref(null)   // 点击视频卡片时弹窗播放
+const showVideoDialog = computed({
+  get: () => playingVideoUrl.value != null,
+  set: (val) => { if (!val) playingVideoUrl.value = null },
+})
+defineExpose({ total, exportLoading, exportData, initSort, refresh: loadData, refreshMedia: () => { mediaCounts.value = {}; mediaDetails.value = {} } })
 
 async function loadEditOptions() {
   if (editOptions.value) return
@@ -680,7 +721,6 @@ async function exportData() {
   }
 }
 
-defineExpose({ total, exportLoading, exportData, initSort, refresh: loadData })
 </script>
 
 <template>
@@ -696,6 +736,7 @@ defineExpose({ total, exportLoading, exportData, initSort, refresh: loadData })
       :header-cell-class-name="getHeaderCellClass"
       :cell-class-name="getCellClass"
       class="cases-table"
+      @expand-change="onExpandChange"
     >
       <!-- 固定列：展开行 -->
       <el-table-column type="expand" width="32" label-class-name="col-fixed">
@@ -707,6 +748,29 @@ defineExpose({ total, exportLoading, exportData, initSort, refresh: loadData })
               </el-tag>
             </template>
             <span v-else class="no-products">暂无发货记录</span>
+          </div>
+
+          <!-- 售后图片/视频：仅当该订单有媒体时渲染，展开时才懒加载详情 -->
+          <div v-if="mediaCounts[row.ecommerce_order_no] > 0" class="expand-media">
+            <div class="expand-media-title">售后图片/视频（{{ mediaCounts[row.ecommerce_order_no] }}）</div>
+            <div v-if="mediaLoading[row.ecommerce_order_no]" class="expand-media-loading">加载中…</div>
+            <div v-else class="expand-media-grid">
+              <template v-for="m in (mediaDetails[row.ecommerce_order_no] || [])" :key="m.id">
+                <el-image
+                  v-if="m.file_type === 'image'"
+                  :src="m.oss_url"
+                  :preview-src-list="mediaImageUrls(row.ecommerce_order_no)"
+                  :initial-index="mediaImageUrls(row.ecommerce_order_no).indexOf(m.oss_url)"
+                  fit="cover"
+                  class="media-thumb"
+                  preview-teleported
+                />
+                <div v-else class="media-video-card" @click="playingVideoUrl = m.oss_url">
+                  <video :src="m.oss_url" class="media-video-thumb" preload="metadata" />
+                  <div class="media-video-play">▶</div>
+                </div>
+              </template>
+            </div>
           </div>
         </template>
       </el-table-column>
@@ -1051,6 +1115,18 @@ defineExpose({ total, exportLoading, exportData, initSort, refresh: loadData })
         @current-change="loadData"
       />
     </div>
+
+    <!-- 售后视频播放弹窗 -->
+    <el-dialog
+      v-model="showVideoDialog"
+      title="售后视频"
+      width="640px"
+      append-to-body
+      destroy-on-close
+      @close="playingVideoUrl = null"
+    >
+      <video v-if="playingVideoUrl" :src="playingVideoUrl" controls autoplay style="width:100%;max-height:70vh" />
+    </el-dialog>
   </div>
 </template>
 
@@ -1119,6 +1195,15 @@ defineExpose({ total, exportLoading, exportData, initSort, refresh: loadData })
 .expand-products { padding: 6px 16px 6px 40px; background: #faf7f2; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .product-tag { background: var(--bg-card); border-color: var(--border); color: var(--text-secondary); font-family: var(--font-family); }
 .no-products { color: var(--text-muted); font-style: italic; font-size: 12px; }
+
+.expand-media { padding: 8px 16px 10px 40px; background: #faf7f2; border-top: 1px solid var(--border); }
+.expand-media-title { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+.expand-media-loading { color: var(--text-muted); font-size: 12px; }
+.expand-media-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.media-thumb { width: 64px; height: 64px; border-radius: 6px; border: 1px solid var(--border); cursor: pointer; }
+.media-video-card { position: relative; width: 64px; height: 64px; border-radius: 6px; border: 1px solid var(--border); overflow: hidden; cursor: pointer; }
+.media-video-thumb { width: 100%; height: 100%; object-fit: cover; background: #000; }
+.media-video-play { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 18px; background: rgba(0,0,0,0.25); }
 
 /* 列头 & 单元格状态染色（锁定列=橙色，用户主动筛选列=绿色） */
 :deep(.col-locked)        { background: rgba(196, 136, 58, 0.14) !important; }
