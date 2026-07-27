@@ -2,6 +2,7 @@ import os
 import uuid
 import threading
 import json
+import time
 from flask import Blueprint, request, Response, current_app, g
 from services.shipping import (
     ShippingRuleChangeConflict, StaleResolveScopeTooLarge, shipping_service,
@@ -45,6 +46,43 @@ shipping_bp.before_request(_shipping_guard)
 # 旧版 SSE 兼容状态；新任务不再创建内存队列，进度以数据库为唯一来源。
 _task_queues:  dict = {}
 _MUTATION_LEASE_KEY = 'shipping_data_mutation'
+
+
+def _shipping_chart_perf_enabled():
+    """Enable temporary structured chart timing logs without changing APIs."""
+    return os.getenv('SHIPPING_CHART_PERF_LOG', '').strip().lower() in {
+        '1', 'true', 'yes', 'on',
+    }
+
+
+def _chart_perf_shape(params):
+    """Log request shape only—never filter values or user/business data."""
+    return {
+        'source': params.get('source', 'shipping'),
+        'group_by': params.get('group_by', 'date'),
+        'period': params.get('period'),
+        'has_date_range': bool(params.get('date_start') or params.get('date_end')),
+        'trade_type': params.get('trade_type', 'all'),
+        'category_count': len(params.get('category_ids') or []),
+        'series_count': len(params.get('series_ids') or []),
+        'model_count': len(params.get('model_ids') or []),
+        'channel_count': len(params.get('channel_names') or []),
+        'province_count': len(params.get('provinces') or []),
+        'tag_filter_count': len(params.get('tag_filters') or []),
+    }
+
+
+def _log_chart_perf(event, started_at, **fields):
+    if not _shipping_chart_perf_enabled():
+        return
+    payload = {
+        'event': event,
+        'duration_ms': round((time.perf_counter() - started_at) * 1000, 1),
+        **fields,
+    }
+    current_app.logger.info('shipping_chart_perf %s', json.dumps(
+        payload, ensure_ascii=False, sort_keys=True,
+    ))
 
 
 def _create_mutation_task(task_id, task_type, filename=None):
@@ -527,9 +565,23 @@ def get_chart_options():
     date_start = request.args.get('date_start')
     date_end   = request.args.get('date_end')
     source     = request.args.get('source', 'shipping')
+    started_at = time.perf_counter()
     try:
-        return Result.ok(data=shipping_service.get_chart_options(date_start, date_end, source=source)).to_response()
+        data = shipping_service.get_chart_options(date_start, date_end, source=source)
+        _log_chart_perf(
+            'options', started_at,
+            source=source,
+            has_date_range=bool(date_start or date_end),
+            channel_count=len(data.get('channels') or []),
+            province_count=len(data.get('provinces') or []),
+        )
+        return Result.ok(data=data).to_response()
     except Exception:
+        _log_chart_perf(
+            'options_error', started_at,
+            source=source,
+            has_date_range=bool(date_start or date_end),
+        )
         return internal_error_response('查询发货图表选项失败')
 
 
@@ -547,9 +599,18 @@ def get_chart_data():
     valid_fixed = {'date', 'category', 'series', 'model', 'channel', 'channel_code', 'province', 'city', 'district'}
     if not (gb in valid_fixed or (isinstance(gb, str) and re.match(r'^tag:\d+$', gb))):
         params['group_by'] = 'date'
+    started_at = time.perf_counter()
+    shape = _chart_perf_shape(params)
     try:
-        return Result.ok(data=shipping_service.get_chart_data(params)).to_response()
+        data = shipping_service.get_chart_data(params)
+        _log_chart_perf(
+            'data', started_at,
+            **shape,
+            item_count=len(data.get('items') or []),
+        )
+        return Result.ok(data=data).to_response()
     except Exception:
+        _log_chart_perf('data_error', started_at, **shape)
         return internal_error_response('查询发货图表数据失败')
 
 

@@ -1,3 +1,5 @@
+import logging
+
 from flask import Flask
 
 from auth import generate_token
@@ -76,6 +78,40 @@ def test_chart_data_remains_query_post_for_shipping_viewer(monkeypatch):
     )
 
     assert response.status_code == 200
+
+
+def test_chart_observability_logs_shape_not_filter_values(monkeypatch, caplog):
+    app = Flask(__name__)
+    app.register_blueprint(shipping_bp, url_prefix='/api/shipping')
+    monkeypatch.setattr(UserRepository, 'get_auth_state', lambda _id: (True, 0))
+    monkeypatch.setenv('SHIPPING_CHART_PERF_LOG', 'true')
+    monkeypatch.setattr(
+        shipping_service,
+        'get_chart_data',
+        lambda _params: {'summary': {}, 'items': [{'label': 'x'}]},
+    )
+    client = app.test_client()
+    _set_user(client, username='viewer', permissions=['shipping:view'])
+
+    with caplog.at_level(logging.INFO):
+        response = client.post(
+            '/api/shipping/chart-data',
+            json={
+                'group_by': 'tag:7', 'source': 'finance',
+                'provinces': ['sensitive-location'],
+                'tag_filters': [{'category_id': 9, 'tag_names': ['sensitive-country']}],
+            },
+            headers={'X-CSRF-Token': 'csrf'},
+        )
+
+    assert response.status_code == 200
+    messages = [record.getMessage() for record in caplog.records if 'shipping_chart_perf' in record.getMessage()]
+    assert len(messages) == 1
+    assert '"event": "data"' in messages[0]
+    assert '"province_count": 1' in messages[0]
+    assert '"tag_filter_count": 1' in messages[0]
+    assert 'sensitive-location' not in messages[0]
+    assert 'sensitive-country' not in messages[0]
 
 
 def test_task_cancel_requires_edit_and_old_path_uses_same_contract(monkeypatch):
