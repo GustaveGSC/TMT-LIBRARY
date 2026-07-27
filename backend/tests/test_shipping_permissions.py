@@ -80,6 +80,36 @@ def test_chart_data_remains_query_post_for_shipping_viewer(monkeypatch):
     assert response.status_code == 200
 
 
+def test_finance_map_breakdown_is_a_shipping_view_query(monkeypatch):
+    app = Flask(__name__)
+    app.register_blueprint(shipping_bp, url_prefix='/api/shipping')
+    monkeypatch.setattr(UserRepository, 'get_auth_state', lambda _id: (True, 0))
+    monkeypatch.setattr(
+        shipping_service,
+        'get_finance_map_breakdown',
+        lambda _params: {'items': [{'country': '加拿大', 'label': '品牌甲'}]},
+    )
+    client = app.test_client()
+    payload = {
+        'source': 'finance', 'country_category_id': 3,
+        'countries': ['加拿大'], 'breakdown_group_by': 'tag:4',
+    }
+
+    _set_user(client, username='viewer', permissions=[])
+    assert client.post(
+        '/api/shipping/map-breakdown', json=payload,
+        headers={'X-CSRF-Token': 'csrf'},
+    ).status_code == 403
+
+    _set_user(client, username='viewer', permissions=['shipping:view'])
+    response = client.post(
+        '/api/shipping/map-breakdown', json=payload,
+        headers={'X-CSRF-Token': 'csrf'},
+    )
+    assert response.status_code == 200
+    assert response.get_json()['data']['items'][0]['country'] == '加拿大'
+
+
 def test_chart_observability_logs_shape_not_filter_values(monkeypatch, caplog):
     app = Flask(__name__)
     app.register_blueprint(shipping_bp, url_prefix='/api/shipping')

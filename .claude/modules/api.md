@@ -227,6 +227,15 @@ POST   /api/shipping/chart-data                       # 图表聚合数据，bod
                                                       #   source=finance 且分类名为「地域」/「品牌」时可直接传 tag_names（字符串数组，单项最长100，最多100项），按人工映射文本筛选
                                                       #     tag_names 不要求 product_tag 中存在同名标签；与 tag_ids 同时传时取名称并集，同一分类内为 OR、不同分类之间为 AND
                                                       #   其他来源/分类忽略 tag_names，仍只支持 tag_ids，以保持产品标签筛选语义
+POST   /api/shipping/map-breakdown                    # shipping:view；财务端世界地图的批量悬浮细分
+                                                      #   body: source 固定 finance、country_category_id（已启用且名为「地域」）、
+                                                      #         countries（去重后 1..100 个国家）、breakdown_group_by（series 或 tag:<品牌分类ID>）
+                                                      #   可附带与 chart-data 相同的 date_start/date_end/category_ids/series_ids/model_ids/
+                                                      #         tag_filters/channel_names/channel_codes/provinces/cities/districts 筛选项；不接受 trade_type
+                                                      #   单条 grouped 查询返回 data.items:[{country,label,name?,quantity,return_quantity,actual_quantity}]，
+                                                      #         按 country、actual_quantity desc、label 排序；仅人工映射 status=export 且 country 非空的财务数据
+                                                      #   source 非 finance、地域/品牌维度无效或必填字段非法返回 400；无 shipping:view 返回 403
+                                                      #   不适用于 source=shipping 的产品标签多对多地图，后者继续使用原 chart-data 路径
 
 GET    /api/aftersale/pending                         # 待处理订单列表（动态查询，尚未建工单的售后操作人订单）
                                                       #   page>=1，page_size 1..200；非法值返回 400

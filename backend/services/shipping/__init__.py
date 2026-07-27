@@ -1328,6 +1328,9 @@ class ShippingService:
     def get_chart_data(self, params: Dict) -> Dict:
         return shipping_repository.get_chart_data(params)
 
+    def get_finance_map_breakdown(self, params: Dict) -> Dict:
+        return shipping_repository.get_finance_map_breakdown(params)
+
     def get_product_monthly(self, code: str, source: str = 'shipping') -> Result:
         data = shipping_repository.get_product_monthly(code, source=source)
         return Result.ok(data)

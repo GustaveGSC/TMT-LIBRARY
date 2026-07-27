@@ -25,7 +25,7 @@ shipping_bp = Blueprint('shipping', __name__)
 # 用 task_id（UUID）作为访问凭证，从 before_request 中豁免。
 _SSE_ENDPOINTS = frozenset({'shipping.import_progress'})
 
-_VIEW_POST = ('/chart-data',)
+_VIEW_POST = ('/chart-data', '/map-breakdown')
 
 
 def _is_full_resolve_enabled():
@@ -615,6 +615,29 @@ def get_chart_data():
     except Exception:
         _log_chart_perf('data_error', started_at, **shape)
         return internal_error_response('查询发货图表数据失败')
+
+
+@shipping_bp.post('/map-breakdown')
+def get_finance_map_breakdown():
+    """Return all finance-map country breakdowns in one grouped query."""
+    params = request.get_json(silent=True) or {}
+    started_at = time.perf_counter()
+    try:
+        data = shipping_service.get_finance_map_breakdown(params)
+        _log_chart_perf(
+            'map_breakdown', started_at,
+            source='finance',
+            country_count=len(params.get('countries') or []),
+            breakdown_group_by=params.get('breakdown_group_by'),
+            item_count=len(data.get('items') or []),
+        )
+        return Result.ok(data=data).to_response()
+    except ValueError as exc:
+        _log_chart_perf('map_breakdown_error', started_at, source='finance')
+        return Result.fail(str(exc)).to_response()
+    except Exception:
+        _log_chart_perf('map_breakdown_error', started_at, source='finance')
+        return internal_error_response('查询地图细分数据失败')
 
 
 # ── 产成品通用件配置 ──────────────────────────────────────
