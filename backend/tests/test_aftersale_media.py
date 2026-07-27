@@ -109,3 +109,25 @@ def test_media_rejects_path_like_order_or_filename(monkeypatch):
             'order_no': 'SAFE', 'mode': 'append',
             'files': [{'ext': 'jpg', 'file_size': 1, 'original_filename': '../bad.jpg'}],
         }, 1).success
+
+
+def test_delete_media_keeps_success_when_oss_cleanup_fails(monkeypatch):
+    app = _app()
+    bucket = _Bucket(fail_delete=True)
+    monkeypatch.setattr(aftersale_service_module, 'get_bucket', lambda: bucket)
+    with app.app_context():
+        _create_tables()
+        media = AftersaleCaseMedia(
+            order_no='ORDER-3', seq=1, file_type='image', original_filename='a.jpg',
+            stored_filename='ORDER-3_001.jpg', oss_url='https://oss.example/a.jpg',
+            storage_key='tmt-library/aftersale-media/ORDER-3/ORDER-3_001.jpg', file_size=10,
+        )
+        db.session.add(media)
+        db.session.commit()
+
+        result = AftersaleService().delete_case_media(media.id)
+
+        assert result.success
+        assert db.session.get(AftersaleCaseMedia, media.id) is None
+        failure = AftersaleMediaCleanupFailure.query.one()
+        assert failure.storage_key.endswith('ORDER-3_001.jpg')

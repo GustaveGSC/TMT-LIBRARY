@@ -186,6 +186,33 @@ class AftersaleService:
             return Result.fail(str(exc))
         return Result.ok(data=[row.to_dict() for row in _repo.get_media(order_no)])
 
+    def delete_case_media(self, media_id):
+        """Delete the DB record first; an OSS failure is compensatable, not a failed delete."""
+        media = db.session.get(AftersaleCaseMedia, media_id)
+        if not media:
+            return Result.fail('媒体不存在')
+        storage_key, order_no = media.storage_key, media.order_no
+        try:
+            db.session.delete(media)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            return Result.fail('删除媒体记录失败')
+
+        try:
+            get_bucket().delete_object(storage_key)
+        except Exception as exc:
+            # The user-visible deletion has succeeded; persist a retryable cleanup task.
+            try:
+                db.session.add(AftersaleMediaCleanupFailure(
+                    storage_key=storage_key, order_no=order_no,
+                    error_message=str(exc)[:1000],
+                ))
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+        return Result.ok(data={'id': media_id, 'deleted': True})
+
     # ── 一级分类 ───────────────────────────────────────────────────────────────
 
     def get_categories(self):

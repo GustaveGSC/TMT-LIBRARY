@@ -197,6 +197,11 @@ def get_media_flags():
 def get_case_media(order_no):
     return _svc.get_case_media(order_no).to_response()
 
+
+@aftersale_bp.delete('/media/<int:media_id>')
+def delete_case_media(media_id):
+    return _svc.delete_case_media(media_id).to_response()
+
 @aftersale_bp.get('/cases')
 def get_cases():
     def _ints(key):
