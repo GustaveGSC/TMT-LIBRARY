@@ -86,7 +86,6 @@ shipping_record
 return_record
   id, batch_id(FK→shipping_batch), ecommerce_order_no, shipped_date,
   product_code, quantity(负值), warehouse_name, customer_alias(客户简称，可空)
-  # ix_return_record_warehouse_order(warehouse_name, ecommerce_order_no)：仓库规则变更的影响范围反查
   # UNIQUE(ecommerce_order_no, product_code, shipped_date)
   # 发货端/财务端负数量行均写入此表
 
@@ -99,8 +98,7 @@ shipping_order_finished
   # source 与 shipping_record 对应；两个来源独立 resolve，互不干扰
   # resolve 元数据采用“完成发货”代表行：shipped_date DESC, id DESC 的首行；
   # customer_alias 若代表行为空，再按同一确定性顺序回退首个非空值；全量重算可修正历史结果
-  # INDEX(source)；INDEX(source, customer_alias)；INDEX(source, ecommerce_order_no) 用于 scoped stale 标记；图表查询必须带 source 过滤
-  # 成品-组件、通用件、仓库排除规则变更时，仅受影响的既有 (source, order_no) 对置 is_stale=True；配置写入和标记同事务提交
+  # INDEX(source)；INDEX(source, customer_alias)；图表查询必须带 source 过滤
 
 return_warehouse_filter
   id, warehouse_name(UNIQUE), is_excluded(默认False), created_at

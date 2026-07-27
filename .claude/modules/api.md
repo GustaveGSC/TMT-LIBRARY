@@ -199,7 +199,7 @@ POST   /api/shipping/resolve-all                      # 全量重新计算所有
                                                       #   resolve-all 直接构建同构 standby，shipping+finance
                                                       #   全部完成后用单条 MySQL RENAME TABLE 原子交换
 GET    /api/shipping/warehouses                       # 所有出现过的仓库名及 is_excluded 状态
-POST   /api/shipping/warehouses/filter                # 批量保存仓库过滤配置 [{warehouse_name, is_excluded}]；同事务标记受影响订单 stale
+POST   /api/shipping/warehouses/filter                # 批量保存仓库过滤配置 [{warehouse_name, is_excluded}]
 GET    /api/shipping/finance-customer-aliases         # shipping:view；客户简称计数+人工映射，?keyword=&page=1&per_page=100（上限500）
 POST   /api/shipping/finance-customer-aliases/mapping # shipping:edit；新增或更新人工映射
 
@@ -211,10 +211,8 @@ POST   /api/shipping/finance-customer-aliases/mapping # shipping:edit；新增�
 
 未维护的简称其 `mapping` 为 `null`。GET 可传 `status=pending|export|domestic|non_sales`；其中 `pending` 同时包含 `mapping=null` 和显式 pending，非法值返回 400。`POST /api/shipping/finance-customer-aliases/mapping` 请求体：`customer_alias`（必填字符串，最长255）、`status`（必填，四选一：`pending` 未审核、`export` 外贸客户、`domestic` 内销客户、`non_sales` 非销售客户）、`country`（可选，最长100）、`brand`（可选，最长100）、`note`（可选，最长1000）。成功返回 `{success,message,data}`，其中 `data` 是保存后的完整 mapping；参数错误返回 400，无编辑权限返回 403。该接口已移除 `is_export`，旧前端请求不兼容。
 GET    /api/shipping/equivalents                      # 列出所有通用件对（含 name_a/name_b 产成品名称）
-POST   /api/shipping/equivalents                      # 新增 {code_a, code_b, note?}；服务端保证 code_a<code_b；校验产成品存在，并标记受影响订单 stale
-DELETE /api/shipping/equivalents/<id>                 # 删除通用件对，并标记受影响订单 stale
-
-上述仓库过滤、通用件对、以及成品-产成品关联写接口均复用发货数据变更租约：若导入或重算正在运行，返回 `409 { success:false, data:{task_id} }`。成功响应的 `data` 保留原字段，并新增 `stale_pairs`、`stale_limit`、`requires_full_resolve`。规则保存与 `is_stale` 标记在同一事务提交；当 `requires_full_resolve=true` 时，配置已保存且不会部分重算，调用方应引导用户执行完整重建。
+POST   /api/shipping/equivalents                      # 新增 {code_a, code_b, note?}；服务端保证 code_a<code_b；校验产成品存在
+DELETE /api/shipping/equivalents/<id>                 # 删除通用件对
 GET    /api/shipping/chart-options                    # 渠道名和省份去重列表；?source=shipping|finance 过滤来源
                                                       #   返回额外含 tag_dimensions: [{category_id,name,color,tags:[{id,name}]}]
                                                       #   （已配置 is_shipping_dim=1 的标签分类及其 shipping_dim_enabled=1 的标签，见 database.md product_tag_category）

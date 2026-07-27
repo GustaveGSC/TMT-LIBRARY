@@ -3,9 +3,7 @@ import uuid
 import threading
 import json
 from flask import Blueprint, request, Response, current_app, g
-from services.shipping import (
-    ShippingRuleChangeConflict, StaleResolveScopeTooLarge, shipping_service,
-)
+from services.shipping import shipping_service, StaleResolveScopeTooLarge
 from auth import make_blueprint_guard
 from result import Result
 from database.base import db
@@ -442,11 +440,6 @@ def save_warehouse_filters():
         return Result.fail('请求体应为数组').to_response()
     try:
         result = shipping_service.save_warehouse_filters(items)
-    except ShippingRuleChangeConflict as exc:
-        return Result.fail(
-            '已有发货数据任务正在运行，请等待其结束后重试',
-            data={'task_id': exc.task_id},
-        ).to_response(409)
     except Exception:
         return internal_error_response('保存仓库配置失败')
     return Result.ok(data=result).to_response()
@@ -581,30 +574,50 @@ def list_equivalents():
 @shipping_bp.post('/equivalents')
 def add_equivalent():
     """新增通用件对。body: {code_a, code_b, note?}"""
+    from database.models.product.finished import PackagedEquivalent, ProductPackaged
+    from database.base import db
+    from utils import now_cst
     body = request.get_json(silent=True) or {}
     code_a = str(body.get('code_a', '')).strip()
     code_b = str(body.get('code_b', '')).strip()
     note   = str(body.get('note', '')).strip() or None
-    try:
-        data = shipping_service.add_equivalent(code_a, code_b, note)
-    except ShippingRuleChangeConflict as exc:
-        return Result.fail('已有发货数据任务正在运行，请等待其结束后重试', data={'task_id': exc.task_id}).to_response(409)
-    except ValueError as exc:
-        return Result.fail(str(exc)).to_response()
-    except Exception:
-        return internal_error_response('保存通用件对失败')
-    return Result.ok(data).to_response()
+    if not code_a or not code_b:
+        return Result.fail('code_a 和 code_b 不能为空').to_response()
+    if code_a == code_b:
+        return Result.fail('两个产成品编码不能相同').to_response()
+    # 统一存储：字典序较小的为 code_a
+    if code_a > code_b:
+        code_a, code_b = code_b, code_a
+    # 校验产成品存在
+    existing_codes = {r.code for r in ProductPackaged.query.filter(
+        ProductPackaged.code.in_([code_a, code_b])
+    ).all()}
+    missing = [c for c in [code_a, code_b] if c not in existing_codes]
+    if missing:
+        return Result.fail(f'产成品编码不存在：{", ".join(missing)}').to_response()
+    # 检查重复
+    dup = PackagedEquivalent.query.filter_by(code_a=code_a, code_b=code_b).first()
+    if dup:
+        return Result.fail('该通用件对已存在').to_response()
+    ep = PackagedEquivalent(code_a=code_a, code_b=code_b, note=note, created_at=now_cst())
+    db.session.add(ep)
+    db.session.commit()
+    d = ep.to_dict()
+    from database.models.product.finished import ProductPackaged as PP
+    name_map = {r.code: r.name for r in PP.query.filter(PP.code.in_([code_a, code_b])).all()}
+    d['name_a'] = name_map.get(code_a, '')
+    d['name_b'] = name_map.get(code_b, '')
+    return Result.ok(d).to_response()
 
 
 @shipping_bp.delete('/equivalents/<int:eq_id>')
 def delete_equivalent(eq_id):
     """删除通用件对"""
-    try:
-        data = shipping_service.delete_equivalent(eq_id)
-    except ShippingRuleChangeConflict as exc:
-        return Result.fail('已有发货数据任务正在运行，请等待其结束后重试', data={'task_id': exc.task_id}).to_response(409)
-    except ValueError as exc:
-        return Result.fail(str(exc)).to_response()
-    except Exception:
-        return internal_error_response('删除通用件对失败')
-    return Result.ok(data).to_response()
+    from database.models.product.finished import PackagedEquivalent
+    from database.base import db
+    ep = PackagedEquivalent.query.get(eq_id)
+    if not ep:
+        return Result.fail('记录不存在').to_response()
+    db.session.delete(ep)
+    db.session.commit()
+    return Result.ok().to_response()
