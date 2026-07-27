@@ -2,6 +2,7 @@ import os
 import uuid
 import threading
 import json
+import logging
 import time
 from flask import Blueprint, request, Response, current_app, g
 from services.shipping import (
@@ -75,6 +76,8 @@ def _chart_perf_shape(params):
 def _log_chart_perf(event, started_at, **fields):
     if not _shipping_chart_perf_enabled():
         return
+    if current_app.logger.getEffectiveLevel() > logging.INFO:
+        current_app.logger.setLevel(logging.INFO)
     payload = {
         'event': event,
         'duration_ms': round((time.perf_counter() - started_at) * 1000, 1),
