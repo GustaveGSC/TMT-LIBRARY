@@ -4,11 +4,10 @@ import { mockDataMgmtPage } from './fixtures/dataMgmt.js'
 // D批(handoff-33)：发货后台任务进度从 SSE 改为对 /api/shipping/tasks/<id> 的短轮询。
 // 这里验证：不再创建 EventSource，请求间隔约1秒且不重叠，终态(done)后立即停止轮询。
 //
-// 下面两个用例都通过点击"重建全部成品组合"触发 resolve-all；该入口已临时禁用，见
-// handoff/2026-07-25-claude-staging-cutover-gate-test-report.md，等后端改为 RENAME TABLE 型
-// cutover、前端恢复入口后再取消 skip。
+// 下面两个用例都通过点击"重建全部成品组合"触发 resolve-all。2026-07-26：后端已改为
+// RENAME TABLE 型 cutover 并通过生产门禁，前端入口恢复，取消 skip。
 
-test.skip('resolve-all 进度改为短轮询，不再使用 SSE，终态后停止', async ({ page }) => {
+test('resolve-all 进度改为短轮询，不再使用 SSE，终态后停止', async ({ page }) => {
   await mockDataMgmtPage(page)
 
   await page.route('**/api/shipping/resolve-all', (route) =>
@@ -79,7 +78,7 @@ test.skip('resolve-all 进度改为短轮询，不再使用 SSE，终态后停�
   expect(pollCount).toBe(countAtDone)
 })
 
-test.skip('离开页面（组件卸载）后停止轮询', async ({ page }) => {
+test('离开页面（组件卸载）后停止轮询', async ({ page }) => {
   await mockDataMgmtPage(page)
 
   await page.route('**/api/shipping/resolve-all', (route) =>
