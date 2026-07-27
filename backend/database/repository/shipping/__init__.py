@@ -41,6 +41,16 @@ _GENERATION_MARKER_ID = 1
 _STAGING_CLEANUP_CHUNK = 5000
 
 
+def _order_no_join(left, right):
+    """Compare legacy order keys safely across production MySQL collations."""
+    if db.session.bind.dialect.name == 'mysql':
+        # return_record uses utf8mb4_0900_ai_ci, whereas the long-lived
+        # resolved table uses utf8mb4_unicode_ci.  Collate only the return
+        # side, keeping the resolved side indexable for nested lookups.
+        return left.collate('utf8mb4_unicode_ci') == right
+    return left == right
+
+
 def _acquire_resolve_cutover_lock(connection, timeout=30):
     if connection.dialect.name != 'mysql':
         return
@@ -1092,7 +1102,10 @@ class ShippingRepository:
                 ShippingOrderFinished.ecommerce_order_no.label('ecommerce_order_no'),
             ).join(
                 ReturnRecord,
-                ReturnRecord.ecommerce_order_no == ShippingOrderFinished.ecommerce_order_no,
+                _order_no_join(
+                    ReturnRecord.ecommerce_order_no,
+                    ShippingOrderFinished.ecommerce_order_no,
+                ),
             ).filter(ReturnRecord.product_code.in_(component_codes)))
         if finished_codes:
             pair_queries.append(db.session.query(
@@ -1115,7 +1128,10 @@ class ShippingRepository:
             ShippingOrderFinished.ecommerce_order_no.label('ecommerce_order_no'),
         ).join(
             ReturnRecord,
-            ReturnRecord.ecommerce_order_no == ShippingOrderFinished.ecommerce_order_no,
+            _order_no_join(
+                ReturnRecord.ecommerce_order_no,
+                ShippingOrderFinished.ecommerce_order_no,
+            ),
         ).filter(ReturnRecord.warehouse_name.in_(names))
         return ShippingRepository._mark_stale_pairs(pairs)
 

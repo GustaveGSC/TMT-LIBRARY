@@ -1,10 +1,17 @@
+import os
+from types import SimpleNamespace
+
+import pytest
+import sqlalchemy as sa
 from flask import Flask
+from sqlalchemy.dialects import mysql
 
 from database.base import db
 from database.models.shipping import (
     ReturnRecord, ReturnWarehouseFilter, ShippingBatch, ShippingOrderFinished,
     ShippingRecord, ShippingTask,
 )
+import database.repository.shipping as shipping_repository_module
 from database.repository.shipping import ShippingRepository
 from utils import now_cst
 
@@ -104,3 +111,36 @@ def test_warehouse_scope_marks_both_sources_for_a_changed_return_warehouse(tmp_p
             ('finance', 'shared'): True,
             ('shipping', 'other'): False,
         }
+
+
+def test_mysql_order_join_compiles_with_explicit_legacy_collation(monkeypatch):
+    """Protect the production-only 1267 collation failure from regressing."""
+    fake_db = SimpleNamespace(
+        session=SimpleNamespace(bind=SimpleNamespace(dialect=mysql.dialect())),
+    )
+    monkeypatch.setattr(shipping_repository_module, 'db', fake_db)
+
+    expression = shipping_repository_module._order_no_join(
+        ReturnRecord.ecommerce_order_no,
+        ShippingOrderFinished.ecommerce_order_no,
+    )
+    sql = str(expression.compile(dialect=mysql.dialect()))
+    assert 'COLLATE utf8mb4_unicode_ci' in sql
+
+
+@pytest.mark.mysql_integration
+@pytest.mark.skipif(
+    not os.getenv('MYSQL_COLLATION_TEST_DATABASE_URL'),
+    reason='requires an isolated MySQL database with the production collations',
+)
+def test_mysql_collation_join_executes_on_real_mysql():
+    """Read-only staging gate; execute the exact problematic comparison on MySQL."""
+    engine = sa.create_engine(os.environ['MYSQL_COLLATION_TEST_DATABASE_URL'])
+    statement = sa.select(ShippingOrderFinished.id).join(
+        ReturnRecord,
+        ReturnRecord.ecommerce_order_no.collate('utf8mb4_unicode_ci')
+        == ShippingOrderFinished.ecommerce_order_no,
+    ).limit(1)
+    with engine.connect() as connection:
+        connection.execute(sa.text('SET SESSION TRANSACTION READ ONLY'))
+        connection.execute(statement).all()
