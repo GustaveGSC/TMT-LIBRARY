@@ -465,13 +465,15 @@ function seriesCategoryName(seriesCode) {
 }
 
 let breakdownFetchToken = 0
-/** 按当前 tooltipMode，为地图上每个有数据的国家批量拉一份细分数据（系列或品牌） */
+/** 按当前 tooltipMode，为地图上每个有数据的国家批量拉一份细分数据（系列或品牌）
+ * 财务端（source=finance）一次批量请求拿全部国家；发货端因产品标签多对多语义暂保留逐国请求。
+ */
 async function fetchTooltipBreakdown() {
   if (tooltipMode.value === 'default' || lastMapKey !== 'world') {
-    tooltipBreakdown.value = {}; breakdownLoading.value = false; return
+    tooltipBreakdownRaw.value = {}; lastBreakdownFingerprint = null; breakdownLoading.value = false; return
   }
   const regionDim = findTagDim(groupBy.value)
-  if (!regionDim) { tooltipBreakdown.value = {}; breakdownLoading.value = false; return }
+  if (!regionDim) { tooltipBreakdownRaw.value = {}; lastBreakdownFingerprint = null; breakdownLoading.value = false; return }
 
   let subGroupBy
   if (tooltipMode.value === 'series') {
@@ -480,16 +482,11 @@ async function fetchTooltipBreakdown() {
     const brandDim = tagDimensions.value.find(td => td.name === '品牌')
     if (!brandDim) {
       ElMessage.warning('未找到「品牌」标签维度，请先在标签维度配置里启用')
-      tooltipBreakdown.value = {}; breakdownLoading.value = false; return
+      tooltipBreakdownRaw.value = {}; lastBreakdownFingerprint = null; breakdownLoading.value = false; return
     }
     subGroupBy = `tag:${brandDim.category_id}`
   }
 
-  const token = ++breakdownFetchToken
-  breakdownLoading.value = true
-  // 立即清空旧数据：否则切系列→品牌时，面板会先用旧模式的数据顶一下（不是加载动画）再刷新
-  tooltipBreakdown.value = {}
-  const { field } = METRIC_MAP[dataMetric.value]
   const [start, end] = filters.value.dateRange || []
   const baseBody = {
     date_start:    start ? formatDate(start) : null,
@@ -506,37 +503,66 @@ async function fetchTooltipBreakdown() {
     source:        dataSource.value,
   }
 
-  const countries = lastMapItems.filter(i => i.rawValue > 0)
+  const countryNames = lastMapItems.filter(i => i.rawValue > 0).map(i => i.originalName)
+  // 筛选、国家集合、tooltip模式均未变化（比如纯粹切换显示指标触发的重渲染）时，
+  // 复用已拉取的细分数据，不重新发请求——避免"地图重绘就重新拉tooltip"
+  const fingerprint = JSON.stringify({ subGroupBy, baseBody, countryNames, tags: buildTagFilters() })
+  if (fingerprint === lastBreakdownFingerprint && Object.keys(tooltipBreakdownRaw.value).length) {
+    return
+  }
+
+  const token = ++breakdownFetchToken
+  breakdownLoading.value = true
+  // 立即清空旧数据：否则切系列→品牌时，面板会先用旧模式的数据顶一下（不是加载动画）再刷新
+  tooltipBreakdownRaw.value = {}
   const results = {}
   try {
-    await Promise.all(countries.map(async (item) => {
-      let countryFilter
-      if (dataSource.value === 'finance') {
-        // 财务端地域/品牌完全以人工映射文本为准，不要求该国家/品牌在
-        // product_tag 里有对应记录（很多国家是这次才第一次通过客户简称
-        // 映射识别出来的，产品库里从来没有打过这个地域标签）
-        countryFilter = { category_id: regionDim.category_id, tag_names: [item.originalName] }
-      } else {
-        const tagId = regionDim.tags?.find(t => t.name === item.originalName)?.id
-        if (tagId == null) return
-        countryFilter = { category_id: regionDim.category_id, tag_ids: [tagId] }
-      }
-      const tagFilters = [...buildTagFilters(), countryFilter]
+    if (dataSource.value === 'finance') {
+      // 财务端：一次批量请求拿全部国家的细分数据，取代原先"每国一次chart-data"
       try {
-        const res = await http.post('/api/shipping/chart-data', {
-          ...baseBody, group_by: subGroupBy, tag_filters: tagFilters,
+        const res = await http.post('/api/shipping/map-breakdown', {
+          ...baseBody,
+          country_category_id: regionDim.category_id,
+          countries: countryNames,
+          breakdown_group_by: subGroupBy,
+          tag_filters: buildTagFilters(),
         })
         if (res.success) {
-          results[item.originalName] = res.data.items
-            .map(r => ({ label: r.label, name: r.name || r.label, value: r[field] ?? 0 }))
-            .filter(r => r.value > 0)
-            .sort((a, b) => b.value - a.value)
+          for (const row of res.data.items) {
+            const bucket = results[row.country] || (results[row.country] = [])
+            bucket.push({
+              label: row.label, name: row.name || row.label,
+              quantity: row.quantity ?? 0, return_quantity: row.return_quantity ?? 0,
+              actual_quantity: row.actual_quantity ?? 0,
+            })
+          }
         }
-      } catch { /* 单个国家失败不影响其它国家 */ }
-    }))
+      } catch { /* 批量请求失败：面板保持空，不影响主图 */ }
+    } else {
+      // 发货端：产品标签多对多语义与财务人工映射不同，暂保留逐国请求
+      await Promise.all(countryNames.map(async (name) => {
+        const tagId = regionDim.tags?.find(t => t.name === name)?.id
+        if (tagId == null) return
+        const countryFilter = { category_id: regionDim.category_id, tag_ids: [tagId] }
+        const tagFilters = [...buildTagFilters(), countryFilter]
+        try {
+          const res = await http.post('/api/shipping/chart-data', {
+            ...baseBody, group_by: subGroupBy, tag_filters: tagFilters,
+          })
+          if (res.success) {
+            results[name] = res.data.items.map(r => ({
+              label: r.label, name: r.name || r.label,
+              quantity: r.quantity ?? 0, return_quantity: r.return_quantity ?? 0,
+              actual_quantity: r.actual_quantity ?? 0,
+            }))
+          }
+        } catch { /* 单个国家失败不影响其它国家 */ }
+      }))
+    }
   } finally {
     if (token === breakdownFetchToken) {
-      tooltipBreakdown.value = results
+      tooltipBreakdownRaw.value = results
+      lastBreakdownFingerprint = fingerprint
       breakdownLoading.value = false
     }
   }
@@ -683,8 +709,21 @@ const TOOLTIP_MODE_OPTIONS = [
   { value: 'brand',   label: '按品牌' },
 ]
 const tooltipMode      = ref('default')
-const tooltipBreakdown = ref({})   // { [国家中文名]: [{label, name, value}] }，已过滤0值
+// 原始细分数据（含三种指标），按国家分组；指标切换只重算 tooltipBreakdown，不重新请求
+const tooltipBreakdownRaw = ref({})   // { [国家中文名]: [{label, name, quantity, return_quantity, actual_quantity}] }
+const tooltipBreakdown = computed(() => {
+  const { field } = METRIC_MAP[dataMetric.value]
+  const result = {}
+  for (const [country, rows] of Object.entries(tooltipBreakdownRaw.value)) {
+    result[country] = rows
+      .map(r => ({ label: r.label, name: r.name || r.label, value: r[field] ?? 0 }))
+      .filter(r => r.value > 0)
+      .sort((a, b) => b.value - a.value)
+  }
+  return result
+})
 const breakdownLoading = ref(false) // 批量拉取细分数据进行中：面板显示加载动画，避免误以为"没有数据"
+let lastBreakdownFingerprint = null // 筛选/国家集合/tooltip模式未变化时跳过重新请求
 
 // 临时需求：标记已参加过展会的国家（红点）。这份名单是用户口头给的一次性数据，
 // 不是后端配置，后续人工改这个数组即可，不用做成界面配置。
