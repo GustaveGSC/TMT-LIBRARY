@@ -6,6 +6,7 @@ import time
 
 from flask import Blueprint, request, g
 from services.product.finished import finished_service
+from services.shipping import ShippingRuleChangeConflict
 from database.repository.product.category import CategoryRepository
 from storage.client import get_bucket
 from auth import make_blueprint_guard
@@ -161,13 +162,23 @@ def get_packaged_by_finished(finished_id: int):
 # ── 添加关联 ──────────────────────────────────────────────────────────────
 @finished_bp.post('/finished/<int:finished_id>/packaged/<int:packaged_id>')
 def add_packaged_relation(finished_id: int, packaged_id: int):
-    return finished_service.add_packaged_relation(finished_id, packaged_id).to_response()
+    try:
+        return finished_service.add_packaged_relation(finished_id, packaged_id).to_response()
+    except ShippingRuleChangeConflict as exc:
+        return Result.fail('已有发货数据任务正在运行，请等待其结束后重试', data={'task_id': exc.task_id}).to_response(409)
+    except ValueError as exc:
+        return Result.fail(str(exc)).to_response()
 
 
 # ── 移除关联 ──────────────────────────────────────────────────────────────
 @finished_bp.delete('/finished/<int:finished_id>/packaged/<int:packaged_id>')
 def remove_packaged_relation(finished_id: int, packaged_id: int):
-    return finished_service.remove_packaged_relation(finished_id, packaged_id).to_response()
+    try:
+        return finished_service.remove_packaged_relation(finished_id, packaged_id).to_response()
+    except ShippingRuleChangeConflict as exc:
+        return Result.fail('已有发货数据任务正在运行，请等待其结束后重试', data={'task_id': exc.task_id}).to_response(409)
+    except ValueError as exc:
+        return Result.fail(str(exc)).to_response()
 
 
 # ── 上传封面图到 OSS ──────────────────────────────────────────────────────

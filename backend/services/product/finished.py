@@ -114,8 +114,9 @@ class FinishedService:
         pkg = FinishedRepository.get_packaged_by_id(packaged_id)
         if not pkg:
             return Result.fail('产成品不存在')
-        FinishedRepository.add_packaged_to_finished(fin, pkg)
-        return Result.ok(message='关联成功')
+        from services.shipping import shipping_service
+        data = shipping_service.save_finished_packaged_relation(finished_id, packaged_id, add=True)
+        return Result.ok(data=data, message='关联成功')
 
     def remove_packaged_relation(self, finished_id: int, packaged_id: int) -> Result:
         fin = FinishedRepository.get_finished_by_id(finished_id)
@@ -124,8 +125,9 @@ class FinishedService:
         pkg = FinishedRepository.get_packaged_by_id(packaged_id)
         if not pkg:
             return Result.fail('产成品不存在')
-        FinishedRepository.remove_packaged_from_finished(fin, pkg)
-        return Result.ok(message='移除成功')
+        from services.shipping import shipping_service
+        data = shipping_service.save_finished_packaged_relation(finished_id, packaged_id, add=False)
+        return Result.ok(data=data, message='移除成功')
 
 
 finished_service = FinishedService()
