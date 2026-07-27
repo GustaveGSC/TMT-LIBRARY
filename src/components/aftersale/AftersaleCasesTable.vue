@@ -757,29 +757,37 @@ async function exportData() {
       <!-- 固定列：展开行 -->
       <el-table-column type="expand" width="32" label-class-name="col-fixed">
         <template #default="{ row }">
-          <div class="expand-products">
-            <template v-if="row.products?.length">
-              <el-tag v-for="p in row.products" :key="p.code" size="small" class="product-tag">
-                {{ p.name }} × {{ p.quantity }}
-              </el-tag>
-            </template>
-            <span v-else class="no-products">暂无发货记录</span>
-          </div>
+          <div class="expand-wrap">
+            <!-- 发货物料清单 -->
+            <div class="expand-section">
+              <div class="expand-section-title">发货物料清单</div>
+              <div class="expand-section-body">
+                <template v-if="row.products?.length">
+                  <el-tag v-for="p in row.products" :key="p.code" size="small" class="product-tag" :title="p.name">
+                    {{ p.name }} × {{ p.quantity }}
+                  </el-tag>
+                </template>
+                <span v-else class="no-products">暂无发货记录</span>
+              </div>
+            </div>
 
-          <!-- 售后图片/视频：仅当该订单有媒体时渲染，展开时才懒加载详情 -->
-          <div v-if="mediaCounts[row.ecommerce_order_no] > 0" class="expand-media">
-            <div class="expand-media-title">售后图片/视频（{{ mediaCounts[row.ecommerce_order_no] }}）</div>
-            <div v-if="mediaLoading[row.ecommerce_order_no]" class="expand-media-loading">加载中…</div>
-            <div v-else class="expand-media-grid">
-              <template v-for="m in (mediaDetails[row.ecommerce_order_no] || [])" :key="m.id">
-                <div class="media-card" @click="openViewer(row.ecommerce_order_no, m.id)">
-                  <img v-if="m.file_type === 'image'" :src="m.oss_url" class="media-card-thumb" />
-                  <template v-else>
-                    <video :src="m.oss_url" class="media-card-thumb" preload="metadata" />
-                    <div class="media-video-play">▶</div>
+            <!-- 售后图片/视频：仅当该订单有媒体时渲染，展开时才懒加载详情 -->
+            <div v-if="mediaCounts[row.ecommerce_order_no] > 0" class="expand-section">
+              <div class="expand-section-title">售后图片/视频（{{ mediaCounts[row.ecommerce_order_no] }}）</div>
+              <div class="expand-section-body">
+                <div v-if="mediaLoading[row.ecommerce_order_no]" class="expand-media-loading">加载中…</div>
+                <div v-else class="expand-media-grid">
+                  <template v-for="m in (mediaDetails[row.ecommerce_order_no] || [])" :key="m.id">
+                    <div class="media-card" @click="openViewer(row.ecommerce_order_no, m.id)">
+                      <img v-if="m.file_type === 'image'" :src="m.oss_url" class="media-card-thumb" />
+                      <template v-else>
+                        <video :src="m.oss_url" class="media-card-thumb" preload="metadata" />
+                        <div class="media-video-play">▶</div>
+                      </template>
+                    </div>
                   </template>
                 </div>
-              </template>
+              </div>
             </div>
           </div>
         </template>
@@ -1206,13 +1214,20 @@ async function exportData() {
 .btn-ignore  { color: var(--text-muted) !important; border-color: var(--border) !important; }
 .btn-ignore:hover { color: #d05a3c !important; border-color: #f0c0c0 !important; }
 
-/* 展开行 */
-.expand-products { padding: 6px 16px 6px 40px; background: #faf7f2; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+/* 展开行：按模块分区，每块有明确标题，区块间用分隔线隔开 */
+.expand-wrap { background: #faf7f2; padding: 10px 16px 12px 40px; }
+.expand-section { padding: 8px 0; }
+.expand-section + .expand-section { border-top: 1px solid var(--border); }
+.expand-section-title {
+  font-size: 12px; font-weight: 600; color: var(--text-secondary);
+  margin-bottom: 8px; display: flex; align-items: center; gap: 6px;
+}
+.expand-section-title::before {
+  content: ''; width: 3px; height: 12px; background: var(--accent); border-radius: 2px; display: inline-block;
+}
+.expand-section-body { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .product-tag { background: var(--bg-card); border-color: var(--border); color: var(--text-secondary); font-family: var(--font-family); }
 .no-products { color: var(--text-muted); font-style: italic; font-size: 12px; }
-
-.expand-media { padding: 8px 16px 10px 40px; background: #faf7f2; border-top: 1px solid var(--border); }
-.expand-media-title { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
 .expand-media-loading { color: var(--text-muted); font-size: 12px; }
 .expand-media-grid { display: flex; flex-wrap: wrap; gap: 10px; }
 /* 卡片保持固定比例容器 + object-fit:contain，不裁切/拉伸原图比例（参考产品资料库卡片） */
