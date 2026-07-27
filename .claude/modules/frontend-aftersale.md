@@ -111,3 +111,11 @@
 
 ### 服务端排序
 - `sort_by` / `sort_order` 参数传给后端（白名单字段），前端无客户端排序
+
+### 售后图片/视频导入（AftersaleMediaImportDialog.vue）
+- 工具栏「导入售后图片」按钮（`aftersale:edit` 可见）打开对话框，`<input type="file" webkitdirectory>` 选文件夹
+- 分组规则：`webkitRelativePath` 2 段（直选单订单文件夹）取第一段为订单号；3 段以上（父文件夹套多订单子文件夹）取第二段
+- 冲突确认：选完文件夹后调 `POST /api/aftersale/media/precheck` 批量查已有媒体，逐订单选「追加/替换/跳过」（含"全部设为…"快捷按钮）；订单号含非法字符直接标记跳过
+- 上传执行：逐订单串行（不并发压垮单 worker）—— `presign` 拿 `session_token`+签名列表 → 浏览器 `fetch(PUT)` 直传 OSS → 全部成功后 `confirm({session_token})`；不支持部分文件失败后继续 confirm，需整单重试
+- 完成后展示成功/失败汇总，失败订单可「仅重试失败项」
+- `AftersaleCasesTable.vue` 展开行：`loadData()` Phase 1 后追加 `POST /api/aftersale/cases/media-flags` 批量查当前页 has_media 计数（不逐行查）；展开时才 `GET /cases/<order_no>/media` 懒加载详情；图片用 `el-image` 网格+`preview-src-list`，视频点击卡片弹窗 `<video controls autoplay>` 播放；筛选变化时清空媒体缓存（`watch(props.filter)`）
