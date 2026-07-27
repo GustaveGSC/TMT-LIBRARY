@@ -1,12 +1,13 @@
 import csv
 import io
 import os
+import uuid
 import openpyxl
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import List, Dict
 from database.base import db
-from database.repository.shipping import shipping_repository
+from database.repository.shipping import ShippingTaskLeaseConflict, shipping_repository
 from error_handling import report_internal_error
 from result import Result
 
@@ -22,6 +23,14 @@ class StaleResolveScopeTooLarge(RuntimeError):
     pass
 
 
+class ShippingRuleChangeConflict(RuntimeError):
+    """A data-mutating shipping task currently owns the shared lease."""
+
+    def __init__(self, task_id: str):
+        super().__init__(task_id)
+        self.task_id = task_id
+
+
 def _raise_if_cancelled(cancel_check=None):
     if cancel_check and cancel_check():
         raise InterruptedError('用户已请求取消任务')
@@ -32,6 +41,15 @@ def _normalize_city(province: str, city) -> str:
     if province in _MUNICIPALITY_PROVINCES:
         return province
     return city
+
+
+def _max_stale_resolve_orders() -> int:
+    max_orders = int(os.getenv(
+        'MAX_STALE_RESOLVE_ORDERS', _DEFAULT_MAX_STALE_RESOLVE_ORDERS,
+    ))
+    if max_orders < 1:
+        raise RuntimeError('MAX_STALE_RESOLVE_ORDERS 必须大于 0')
+    return max_orders
 
 # ── 必要列名（按列名匹配，与列顺序无关）─────────────
 _REQUIRED_COL_NAMES = {
@@ -709,6 +727,143 @@ def _get_finished_name(finished) -> str:
 
 
 class ShippingService:
+    def _run_rule_change(self, task_label: str, mutation) -> Dict:
+        """Serialize rule writes with imports/resolves and atomically mark stale.
+
+        The short-lived task uses the same DB-backed lease as every shipping
+        data mutation.  `mutation` must only flush ORM changes; this method
+        owns the single commit so a changed rule can never be visible without
+        its corresponding stale markers.
+        """
+        task_id = str(uuid.uuid4())
+        try:
+            shipping_repository.create_task(
+                task_id, 'rule_change', task_label,
+                lease_key='shipping_data_mutation',
+            )
+        except ShippingTaskLeaseConflict as exc:
+            raise ShippingRuleChangeConflict(exc.task_id) from exc
+        try:
+            result = mutation()
+            db.session.commit()
+        except Exception as exc:
+            db.session.rollback()
+            shipping_repository.update_task(task_id, status='error', message=str(exc))
+            raise
+        shipping_repository.update_task(task_id, status='done', result=result)
+        return result
+
+    @staticmethod
+    def _scope_result(stale_pairs: int) -> Dict:
+        stale_limit = _max_stale_resolve_orders()
+        return {
+            'stale_pairs': stale_pairs,
+            'stale_limit': stale_limit,
+            'requires_full_resolve': stale_pairs > stale_limit,
+        }
+
+    @staticmethod
+    def _direct_equivalent_codes(component_codes: set) -> set:
+        """Expand one direct equivalent edge, matching resolver semantics exactly."""
+        if not component_codes:
+            return set()
+        from database.models.product.finished import PackagedEquivalent
+        rows = PackagedEquivalent.query.filter(
+            db.or_(
+                PackagedEquivalent.code_a.in_(component_codes),
+                PackagedEquivalent.code_b.in_(component_codes),
+            )
+        ).all()
+        expanded = set(component_codes)
+        for row in rows:
+            expanded.update((row.code_a, row.code_b))
+        return expanded
+
+    def save_finished_packaged_relation(self, finished_id: int, packaged_id: int, *, add: bool) -> Dict:
+        """Change a finished/component edge and mark only its affected orders stale."""
+        def mutation():
+            from database.models.product.finished import ProductFinished, ProductPackaged
+            finished = db.session.get(ProductFinished, finished_id)
+            packaged = db.session.get(ProductPackaged, packaged_id)
+            if not finished:
+                raise ValueError('成品不存在')
+            if not packaged:
+                raise ValueError('产成品不存在')
+            exists = packaged in finished.packaged_list
+            if exists == add:
+                return {'changed': False, **self._scope_result(0)}
+            before_codes = {item.code for item in finished.packaged_list}
+            after_codes = set(before_codes)
+            if add:
+                after_codes.add(packaged.code)
+            else:
+                after_codes.discard(packaged.code)
+            affected_components = self._direct_equivalent_codes(before_codes | after_codes)
+            if add:
+                finished.packaged_list.append(packaged)
+            else:
+                finished.packaged_list.remove(packaged)
+            db.session.flush()
+            stale_pairs = shipping_repository.mark_stale_for_component_codes(
+                affected_components, {finished.code},
+            )
+            return {'changed': True, **self._scope_result(stale_pairs)}
+
+        return self._run_rule_change('finished_packaged_relation', mutation)
+
+    def add_equivalent(self, code_a: str, code_b: str, note=None) -> Dict:
+        from database.models.product.finished import PackagedEquivalent, ProductPackaged
+
+        if not code_a or not code_b:
+            raise ValueError('code_a 和 code_b 不能为空')
+        if code_a == code_b:
+            raise ValueError('两个产成品编码不能相同')
+        if code_a > code_b:
+            code_a, code_b = code_b, code_a
+        def mutation():
+            existing_codes = {row.code for row in ProductPackaged.query.filter(
+                ProductPackaged.code.in_([code_a, code_b]),
+            ).all()}
+            missing = [code for code in (code_a, code_b) if code not in existing_codes]
+            if missing:
+                raise ValueError(f'产成品编码不存在：{", ".join(missing)}')
+            if PackagedEquivalent.query.filter_by(code_a=code_a, code_b=code_b).first():
+                raise ValueError('该通用件对已存在')
+            from utils import now_cst
+            pair = PackagedEquivalent(
+                code_a=code_a, code_b=code_b, note=note, created_at=now_cst(),
+            )
+            db.session.add(pair)
+            db.session.flush()
+            stale_pairs = shipping_repository.mark_stale_for_component_codes(
+                {code_a, code_b}, set(),
+            )
+            names = {row.code: row.name for row in ProductPackaged.query.filter(
+                ProductPackaged.code.in_([code_a, code_b]),
+            ).all()}
+            data = pair.to_dict()
+            data.update({
+                'name_a': names.get(code_a, ''),
+                'name_b': names.get(code_b, ''),
+            })
+            return {**data, **self._scope_result(stale_pairs)}
+
+        return self._run_rule_change('packaged_equivalent_add', mutation)
+
+    def delete_equivalent(self, eq_id: int) -> Dict:
+        from database.models.product.finished import PackagedEquivalent
+        def mutation():
+            pair = db.session.get(PackagedEquivalent, eq_id)
+            if not pair:
+                raise ValueError('记录不存在')
+            codes = {pair.code_a, pair.code_b}
+            db.session.delete(pair)
+            db.session.flush()
+            stale_pairs = shipping_repository.mark_stale_for_component_codes(codes, set())
+            return self._scope_result(stale_pairs)
+
+        return self._run_rule_change('packaged_equivalent_delete', mutation)
+
 
     def import_shipping(self, filename: str, file_bytes: bytes,
                         progress_cb=None, cancel_check=None,
@@ -1076,12 +1231,7 @@ class ShippingService:
                       cancel_check=None, begin_commit=None) -> Dict:
         """Safely rebuild stale orders through task-isolated staging."""
         stale_pairs = shipping_repository.get_stale_order_nos()
-        max_orders = int(os.getenv(
-            'MAX_STALE_RESOLVE_ORDERS',
-            _DEFAULT_MAX_STALE_RESOLVE_ORDERS,
-        ))
-        if max_orders < 1:
-            raise RuntimeError('MAX_STALE_RESOLVE_ORDERS 必须大于 0')
+        max_orders = _max_stale_resolve_orders()
         if len(stale_pairs) > max_orders:
             raise StaleResolveScopeTooLarge(
                 f'待重算订单 {len(stale_pairs)} 条，超过当前安全上限 '
@@ -1124,8 +1274,23 @@ class ShippingService:
         return shipping_repository.get_all_warehouses()
 
     def save_warehouse_filters(self, items: List[Dict]) -> Dict:
-        count = shipping_repository.save_warehouse_filters(items)
-        return {'updated': count}
+        normalized = {
+            (item.get('warehouse_name') or '').strip(): bool(item.get('is_excluded', False))
+            for item in items
+            if (item.get('warehouse_name') or '').strip()
+        }
+        def mutation():
+            before = shipping_repository.get_warehouse_filter_states(set(normalized))
+            changed_names = {
+                name for name, excluded in normalized.items()
+                if before.get(name, False) != excluded
+            }
+            count = shipping_repository.save_warehouse_filters(items)
+            db.session.flush()
+            stale_pairs = shipping_repository.mark_stale_for_warehouse_names(changed_names)
+            return {'updated': count, **self._scope_result(stale_pairs)}
+
+        return self._run_rule_change('warehouse_filter_save', mutation)
 
     def get_finance_customer_aliases(self, keyword=None, status=None, page=1, per_page=100) -> Dict:
         return shipping_repository.get_finance_customer_aliases(

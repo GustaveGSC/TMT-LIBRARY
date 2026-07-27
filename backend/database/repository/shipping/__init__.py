@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import List, Dict, Set, Tuple
 from sqlalchemy import (
-    bindparam, distinct as sql_distinct, func as sql_func, inspect, text,
+    bindparam, distinct as sql_distinct, func as sql_func, inspect, text, tuple_,
 )
 from sqlalchemy.exc import IntegrityError
 from database.base import db
@@ -1034,8 +1034,90 @@ class ShippingRepository:
                     created_at     = now_cst(),
                 ))
             count += 1
-        db.session.commit()
         return count
+
+    @staticmethod
+    def get_warehouse_filter_states(names: Set[str]) -> Dict[str, bool]:
+        """Return persisted exclusion states for the supplied warehouse names."""
+        if not names:
+            return {}
+        rows = ReturnWarehouseFilter.query.filter(
+            ReturnWarehouseFilter.warehouse_name.in_(names),
+        ).all()
+        return {row.warehouse_name: bool(row.is_excluded) for row in rows}
+
+    @staticmethod
+    def _mark_stale_pairs(pair_query) -> int:
+        """Mark existing derived order/source pairs stale and return their count.
+
+        The caller owns the surrounding transaction so configuration and this
+        marker can commit (or roll back) as one unit.
+        """
+        pairs = pair_query.distinct().subquery()
+        count = db.session.query(sql_func.count()).select_from(pairs).scalar() or 0
+        if count:
+            db.session.query(ShippingOrderFinished).filter(
+                tuple_(
+                    ShippingOrderFinished.source,
+                    ShippingOrderFinished.ecommerce_order_no,
+                ).in_(
+                    db.session.query(pairs.c.source, pairs.c.ecommerce_order_no),
+                ),
+            ).update({ShippingOrderFinished.is_stale: True}, synchronize_session=False)
+        return int(count)
+
+    @staticmethod
+    def mark_stale_for_component_codes(component_codes: Set[str], finished_codes: Set[str]) -> int:
+        """Mark derived orders affected by an exact component/finished rule change."""
+        component_codes = {code for code in component_codes if code}
+        finished_codes = {code for code in finished_codes if code}
+        if not component_codes and not finished_codes:
+            return 0
+        pair_queries = []
+        if component_codes:
+            pair_queries.append(db.session.query(
+                ShippingOrderFinished.source.label('source'),
+                ShippingOrderFinished.ecommerce_order_no.label('ecommerce_order_no'),
+            ).join(
+                ShippingRecord,
+                (ShippingRecord.source == ShippingOrderFinished.source)
+                & (ShippingRecord.ecommerce_order_no == ShippingOrderFinished.ecommerce_order_no),
+            ).filter(
+                ShippingRecord.record_type == 'shipping',
+                ShippingRecord.ecommerce_order_no.isnot(None),
+                ShippingRecord.product_code.in_(component_codes),
+            ))
+            pair_queries.append(db.session.query(
+                ShippingOrderFinished.source.label('source'),
+                ShippingOrderFinished.ecommerce_order_no.label('ecommerce_order_no'),
+            ).join(
+                ReturnRecord,
+                ReturnRecord.ecommerce_order_no == ShippingOrderFinished.ecommerce_order_no,
+            ).filter(ReturnRecord.product_code.in_(component_codes)))
+        if finished_codes:
+            pair_queries.append(db.session.query(
+                ShippingOrderFinished.source.label('source'),
+                ShippingOrderFinished.ecommerce_order_no.label('ecommerce_order_no'),
+            ).filter(ShippingOrderFinished.finished_code.in_(finished_codes)))
+        pair_query = pair_queries[0]
+        for query in pair_queries[1:]:
+            pair_query = pair_query.union(query)
+        return ShippingRepository._mark_stale_pairs(pair_query)
+
+    @staticmethod
+    def mark_stale_for_warehouse_names(warehouse_names: Set[str]) -> int:
+        """Mark all source/order pairs whose return quantity uses changed warehouses."""
+        names = {name for name in warehouse_names if name}
+        if not names:
+            return 0
+        pairs = db.session.query(
+            ShippingOrderFinished.source.label('source'),
+            ShippingOrderFinished.ecommerce_order_no.label('ecommerce_order_no'),
+        ).join(
+            ReturnRecord,
+            ReturnRecord.ecommerce_order_no == ShippingOrderFinished.ecommerce_order_no,
+        ).filter(ReturnRecord.warehouse_name.in_(names))
+        return ShippingRepository._mark_stale_pairs(pairs)
 
     @staticmethod
     def get_excluded_warehouse_set() -> Set[str]:

@@ -122,6 +122,7 @@ class ReturnRecord(db.Model):
         db.Index('ix_return_record_order_no',     'ecommerce_order_no'),
         db.Index('ix_return_record_product_code', 'product_code'),
         db.Index('ix_return_record_shipped_date', 'shipped_date'),
+        db.Index('ix_return_record_warehouse_order', 'warehouse_name', 'ecommerce_order_no'),
     )
 
     id                 = db.Column(db.Integer,        primary_key=True, autoincrement=True)
@@ -208,6 +209,7 @@ class ShippingOrderFinished(db.Model):
         db.Index('ix_sof_source_date',           'source', 'shipped_date'),
         db.Index('ix_sof_source_finished_code',  'source', 'finished_code'),
         db.Index('ix_sof_source_customer_alias', 'source', 'customer_alias'),
+        db.Index('ix_sof_source_order',          'source', 'ecommerce_order_no'),
         db.Index('ix_sof_finished_code_date',    'finished_code', 'shipped_date'),
     )
 

@@ -22,7 +22,8 @@ LIFECYCLE_TASK_REVISION = '20260724_02'
 SHIPPING_CANCEL_REVISION = '20260724_03'
 SHIPPING_RESOLVE_STAGING_REVISION = '20260725_01'
 SHIPPING_GENERATION_REVISION = '20260726_01'
-HEAD_REVISION = SHIPPING_GENERATION_REVISION
+SHIPPING_SCOPED_STALE_INDEX_REVISION = '20260727_01'
+HEAD_REVISION = SHIPPING_SCOPED_STALE_INDEX_REVISION
 CRITICAL_INDEXES = {
     'shipping_order_finished': {
         'ix_sof_source',
@@ -30,6 +31,7 @@ CRITICAL_INDEXES = {
         'ix_sof_source_finished_code',
         'ix_sof_source_customer_alias',
         'ix_sof_finished_code_date',
+        'ix_sof_source_order',
     },
     'user_login_log': {
         'ix_login_log_user_id',
@@ -75,6 +77,10 @@ def test_baseline_has_linear_history_and_task_lease_is_the_only_head():
     assert (
         scripts.get_revision(SHIPPING_GENERATION_REVISION).down_revision
         == SHIPPING_RESOLVE_STAGING_REVISION
+    )
+    assert (
+        scripts.get_revision(SHIPPING_SCOPED_STALE_INDEX_REVISION).down_revision
+        == SHIPPING_GENERATION_REVISION
     )
 
 
