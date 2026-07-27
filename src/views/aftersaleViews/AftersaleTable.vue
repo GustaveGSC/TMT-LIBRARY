@@ -8,6 +8,7 @@ const tableRef    = ref(null)
 const dateRange   = ref([])
 const noSalesMode = ref('all')  // 'all' | 'exclude'
 const showMediaImport = ref(false)
+const hasMediaOnly    = ref(false)  // 只显示有售后图片/视频的订单
 
 const { can } = usePermission()
 
@@ -21,6 +22,7 @@ const tableFilter = computed(() => ({
   date_start:              dateRange.value?.[0] || undefined,
   date_end:                dateRange.value?.[1] || undefined,
   exclude_no_sales_series: noSalesMode.value === 'exclude' || undefined,
+  has_media:               hasMediaOnly.value || undefined,
 }))
 
 defineExpose({ refresh: () => tableRef.value?.refresh() })
@@ -33,13 +35,14 @@ defineExpose({ refresh: () => tableRef.value?.refresh() })
       <el-date-picker
         v-model="dateRange"
         type="daterange" size="small" range-separator="~"
-        start-placeholder="售后日期起" end-placeholder="售后日期止"
-        value-format="YYYY-MM-DD" style="width:230px"
+        start-placeholder="开始日期" end-placeholder="结束日期"
+        value-format="YYYY-MM-DD" style="width:200px"
       />
       <el-radio-group v-model="noSalesMode" size="small">
         <el-radio value="all">所有数据</el-radio>
         <el-radio value="exclude">不记录当前未销售产品数据</el-radio>
       </el-radio-group>
+      <el-checkbox v-model="hasMediaOnly">只显示有媒体文件的订单</el-checkbox>
       <el-button
         v-if="can('aftersale:edit')"
         size="small"

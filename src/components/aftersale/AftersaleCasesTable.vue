@@ -291,6 +291,7 @@ function buildParams() {
     city:                f.city                || undefined,
     search:                   f.search              || undefined,
     exclude_no_sales_series:  f.exclude_no_sales_series || undefined,
+    has_media:                f.has_media               || undefined,
     sort_by:             currentSortBy.value,
     sort_order:          currentSortOrder.value,
     ...(cf.product_category ? { category_ids:       String(cf.product_category) } : {}),

@@ -11,9 +11,12 @@ const emit = defineEmits(['update:modelValue'])
 
 const tableRef        = ref(null)
 const exportLoading   = ref(false)
+const hasMediaOnly    = ref(false)  // 只显示有售后图片/视频的订单
 
-// 合并外部筛选（图表上下文） + 固定 status
-const drawerFilter = computed(() => ({ status: 'confirmed', ...props.filter }))
+// 合并外部筛选（图表上下文） + 固定 status + 本地媒体筛选
+const drawerFilter = computed(() => ({
+  status: 'confirmed', ...props.filter, has_media: hasMediaOnly.value || undefined,
+}))
 
 function handleClose() { emit('update:modelValue', false) }
 
@@ -43,6 +46,7 @@ function openInNewTab() {
       <div class="drawer-header">
         <span class="drawer-title">{{ title }}</span>
         <span class="drawer-total">共 {{ tableRef?.total ?? 0 }} 条</span>
+        <el-checkbox v-model="hasMediaOnly" size="small">只显示有媒体文件的订单</el-checkbox>
         <el-button size="small" class="btn-newtab" title="在新标签页中打开" @click="openInNewTab">↗ 新标签页</el-button>
         <el-button
           size="small"
