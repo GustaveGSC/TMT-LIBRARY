@@ -43,7 +43,7 @@ _STAGING_CLEANUP_CHUNK = 5000
 
 def _order_no_join(left, right):
     """Compare legacy order keys safely across production MySQL collations."""
-    if db.session.bind.dialect.name == 'mysql':
+    if db.session.get_bind().dialect.name == 'mysql':
         # return_record uses utf8mb4_0900_ai_ci, whereas the long-lived
         # resolved table uses utf8mb4_unicode_ci.  Collate only the return
         # side, keeping the resolved side indexable for nested lookups.

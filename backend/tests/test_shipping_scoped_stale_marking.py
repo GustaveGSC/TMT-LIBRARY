@@ -116,7 +116,9 @@ def test_warehouse_scope_marks_both_sources_for_a_changed_return_warehouse(tmp_p
 def test_mysql_order_join_compiles_with_explicit_legacy_collation(monkeypatch):
     """Protect the production-only 1267 collation failure from regressing."""
     fake_db = SimpleNamespace(
-        session=SimpleNamespace(bind=SimpleNamespace(dialect=mysql.dialect())),
+        session=SimpleNamespace(
+            get_bind=lambda: SimpleNamespace(dialect=mysql.dialect()),
+        ),
     )
     monkeypatch.setattr(shipping_repository_module, 'db', fake_db)
 
