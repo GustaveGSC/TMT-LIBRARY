@@ -3,7 +3,8 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import List, Dict, Set, Tuple
 from sqlalchemy import (
-    bindparam, distinct as sql_distinct, func as sql_func, inspect, text, tuple_,
+    bindparam, distinct as sql_distinct, func as sql_func, inspect, select, text,
+    tuple_, union_all,
 )
 from sqlalchemy.exc import IntegrityError
 from database.base import db
@@ -1063,7 +1064,15 @@ class ShippingRepository:
         The caller owns the surrounding transaction so configuration and this
         marker can commit (or roll back) as one unit.
         """
-        pairs = pair_query.distinct().subquery()
+        # Never feed a legacy ORM Query.union() directly to subquery(): on
+        # MySQL/SQLAlchemy 2 it can lose the public labels of compound-query
+        # columns.  Re-select the named columns from a concrete subquery so
+        # downstream count/update code has a stable two-column contract.
+        raw_pairs = pair_query.subquery('affected_pairs_raw')
+        pairs = select(
+            raw_pairs.c.source.label('source'),
+            raw_pairs.c.ecommerce_order_no.label('ecommerce_order_no'),
+        ).distinct().subquery('affected_pairs')
         count = db.session.query(sql_func.count()).select_from(pairs).scalar() or 0
         if count:
             db.session.query(ShippingOrderFinished).filter(
@@ -1085,36 +1094,36 @@ class ShippingRepository:
             return 0
         pair_queries = []
         if component_codes:
-            pair_queries.append(db.session.query(
+            pair_queries.append(select(
                 ShippingOrderFinished.source.label('source'),
                 ShippingOrderFinished.ecommerce_order_no.label('ecommerce_order_no'),
-            ).join(
+            ).select_from(ShippingOrderFinished).join(
                 ShippingRecord,
                 (ShippingRecord.source == ShippingOrderFinished.source)
                 & (ShippingRecord.ecommerce_order_no == ShippingOrderFinished.ecommerce_order_no),
-            ).filter(
+            ).where(
                 ShippingRecord.record_type == 'shipping',
                 ShippingRecord.ecommerce_order_no.isnot(None),
                 ShippingRecord.product_code.in_(component_codes),
             ))
-            pair_queries.append(db.session.query(
+            pair_queries.append(select(
                 ShippingOrderFinished.source.label('source'),
                 ShippingOrderFinished.ecommerce_order_no.label('ecommerce_order_no'),
-            ).join(
+            ).select_from(ShippingOrderFinished).join(
                 ReturnRecord,
                 _order_no_join(
                     ReturnRecord.ecommerce_order_no,
                     ShippingOrderFinished.ecommerce_order_no,
                 ),
-            ).filter(ReturnRecord.product_code.in_(component_codes)))
+            ).where(ReturnRecord.product_code.in_(component_codes)))
         if finished_codes:
-            pair_queries.append(db.session.query(
+            pair_queries.append(select(
                 ShippingOrderFinished.source.label('source'),
                 ShippingOrderFinished.ecommerce_order_no.label('ecommerce_order_no'),
-            ).filter(ShippingOrderFinished.finished_code.in_(finished_codes)))
-        pair_query = pair_queries[0]
-        for query in pair_queries[1:]:
-            pair_query = pair_query.union(query)
+            ).where(ShippingOrderFinished.finished_code.in_(finished_codes)))
+        # Core union_all preserves the explicitly supplied labels above across
+        # MySQL and SQLite; the helper applies the final DISTINCT.
+        pair_query = union_all(*pair_queries)
         return ShippingRepository._mark_stale_pairs(pair_query)
 
     @staticmethod

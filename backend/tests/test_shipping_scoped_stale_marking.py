@@ -79,6 +79,14 @@ def test_component_scope_marks_existing_raw_and_return_pairs_only(tmp_path):
         states = {row.ecommerce_order_no: row.is_stale for row in ShippingOrderFinished.query.all()}
         assert states == {'raw-hit': True, 'return-hit': True, 'unrelated': False}
 
+        # Exercise the three-branch union shape too: two component branches
+        # are empty, while the finished-code branch supplies the one target.
+        ShippingOrderFinished.query.update({ShippingOrderFinished.is_stale: False})
+        db.session.commit()
+        assert ShippingRepository.mark_stale_for_component_codes(
+            {'not-present'}, {'F-3'},
+        ) == 1
+
 
 def test_warehouse_scope_marks_both_sources_for_a_changed_return_warehouse(tmp_path):
     app = _app(tmp_path)
@@ -146,3 +154,27 @@ def test_mysql_collation_join_executes_on_real_mysql():
     with engine.connect() as connection:
         connection.execute(sa.text('SET SESSION TRANSACTION READ ONLY'))
         connection.execute(statement).all()
+
+
+@pytest.mark.mysql_integration
+@pytest.mark.skipif(
+    not os.getenv('MYSQL_COLLATION_TEST_DATABASE_URL'),
+    reason='requires an isolated MySQL database with the production collations',
+)
+def test_mysql_component_scope_union_executes_on_real_mysql():
+    """Run the former AttributeError path against MySQL, read-only."""
+    app = Flask(__name__)
+    app.config.update(
+        SQLALCHEMY_DATABASE_URI=os.environ['MYSQL_COLLATION_TEST_DATABASE_URL'],
+        SQLALCHEMY_TRACK_MODIFICATIONS=False,
+    )
+    db.init_app(app)
+    with app.app_context():
+        db.session.execute(sa.text('SET SESSION TRANSACTION READ ONLY'))
+        # Deliberately absent codes still execute all three UNION branches;
+        # read-only mode proves this gate cannot mutate its fixture database.
+        assert ShippingRepository.mark_stale_for_component_codes(
+            {'__mysql_scope_missing_component__'},
+            {'__mysql_scope_missing_finished__'},
+        ) == 0
+        db.session.rollback()
