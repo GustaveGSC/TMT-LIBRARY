@@ -1,5 +1,9 @@
 # 售后图片/视频导入功能设计（交接 Codex，未实现）
 
+> 2026-07-27 修订：吸收审查意见，修正 presign 并发 seq 冲突、replace 删除时序、confirm 信任
+> 客户端输入、订单号/key 规范化、清理失败可追踪、media-flags 改 POST 六项问题。原始版本的
+> OSS 直传/批量 flags/展开懒加载/不建外键方向审查确认无需改动。
+
 ## 需求回顾
 
 1. 用户在本地新建以**售后订单号**命名的文件夹，内部放图片/视频，整体导入；导入时文件按订单号规则重新命名。
@@ -16,16 +20,44 @@ aftersale_case_media
   file_type VARCHAR(20)               # image | video
   original_filename VARCHAR(300)      # 用户本地原始文件名，仅展示用途
   stored_filename VARCHAR(300)        # 重命名后的文件名（见命名规则）
+  seq INT NOT NULL                    # 该订单内的序号，追加/替换都靠这列算下一个号，不解析文件名字符串
   oss_url VARCHAR(1000) NOT NULL
-  storage_key VARCHAR(500) NOT NULL
+  storage_key VARCHAR(500) NOT NULL UNIQUE   # 唯一约束：防止两次 confirm 误写同一个 key 的重复行
   file_size BIGINT
   sort_order INT DEFAULT 0
   uploaded_by INT FK→user SET NULL nullable
   created_at DATETIME
   # 索引：ix_aftersale_case_media_order_no（列表页批量查 has_media、展开行按 order_no 查详情都靠它）
+
+aftersale_media_upload_session        # presign 发号即预留，不再是"只发号不落记录"
+  id BIGINT PK
+  session_token VARCHAR(64) UNIQUE NOT NULL   # 不可伪造的令牌（如 secrets.token_urlsafe），confirm 必须携带
+  order_no VARCHAR(100) NOT NULL
+  mode VARCHAR(20) NOT NULL           # append | replace，presign 时定，confirm 必须一致，不接受 confirm 时改写
+  storage_key VARCHAR(500) NOT NULL UNIQUE
+  stored_filename VARCHAR(300) NOT NULL
+  seq INT NOT NULL
+  file_type VARCHAR(20) NOT NULL
+  declared_ext VARCHAR(10) NOT NULL
+  declared_file_size BIGINT NOT NULL
+  status VARCHAR(20) NOT NULL DEFAULT 'pending'   # pending | confirmed | expired
+  expires_at DATETIME NOT NULL        # presign 时设 created_at + 1小时（对齐 OSS 签名 URL 的 3600s 有效期）
+  created_at DATETIME
+  # 索引：ix_media_upload_session_token, ix_media_upload_session_order_no
+  # 过期/未 confirm 的 pending 会话可定期清理（连带清理孤儿 OSS 对象，见下）
+
+aftersale_media_cleanup_failure       # replace 删除旧 OSS 对象失败时的可追踪记录，不静默吞掉
+  id BIGINT PK
+  order_no VARCHAR(100) NOT NULL
+  storage_key VARCHAR(500) NOT NULL
+  error_message VARCHAR(500)
+  created_at DATETIME
+  resolved_at DATETIME NULL           # 人工/补偿任务处理后回填
 ```
 
 不建 `order_no` → `aftersale_case.ecommerce_order_no` 外键的原因：需求 2 明确"无需判断导入的文件夹订单号是否存在于当前售后订单目录"。媒体表和工单表通过 `order_no` 字符串做运行时关联，工单后续导入/确认时自动"接上"已存在的媒体，不需要回填。
+
+**`seq` 并发分配靠 `aftersale_media_upload_session` 表的写入去重**，不是靠内存计数或"读 MAX(seq) 再 +1"这种存在竞态的算法：presign 阶段为每个文件插入一条 session 行（`storage_key` 唯一约束天然防止两次 presign 分配到同一个 key），下一个可用 `seq` 通过 `SELECT MAX(seq) FROM (该订单已有 aftersale_case_media 的 seq 以及该订单当前 pending 状态的 upload_session 的 seq 取并集) + 1` 计算，并在**同一事务**里把新的 session 行插入，用数据库行锁/唯一约束保证并发两次 presign 请求不会拿到同一个 seq（比如对 order_no 加 `SELECT ... FOR UPDATE` 或依赖 `storage_key` 唯一约束在极端情况下让第二个请求重试）。具体锁粒度由 Codex 按 MySQL 隔离级别选型，但**不能是"纯 Python 里算好 seq 直接返回"这种无锁方案**。
 
 ## 存储
 
@@ -39,15 +71,22 @@ OSS key 规则：`tmt-library/aftersale-media/{order_no}/{stored_filename}`，�
 
 - `seq` 起始值：
   - 全新订单（该 order_no 之前无记录）→ 从 `001` 开始；
-  - **追加**模式 → 从该订单当前最大 `seq` + 1 继续（需要解析已有 `stored_filename` 或额外存一列 `seq INT`，建议直接加 `seq` 列而不是解析文件名字符串，更稳）；
-  - **替换**模式 → 先删除该订单旧记录（DB 行 + 对应 OSS 对象），再从 `001` 开始。
+  - **追加**模式 → 从该订单当前最大 `seq` + 1 继续，见上一节"并发分配"约束；
+  - **替换**模式 → **confirm 成功后**才清空旧序号语义，presign 阶段仍从 `001` 开始编号新一批（旧记录此时还没删，只是新记录会在 confirm 里替换掉它们，见下方"replace 时序修正"）。
 - 同批次内即使原文件名重复，`seq` 天然去重，不会冲突。
+
+**订单号/扩展名/OSS key 规范化（白名单）**：
+- `order_no`：只接受 `[A-Za-z0-9_-]{1,100}`，拒绝任何路径分隔符（`/`、`\`）、`..`、空白、控制字符——这是文件夹名直接来自用户本地文件系统，必须当成不可信输入处理，否则可以拼出跳出 `aftersale-media/` 前缀的 OSS key。
+- `ext`：只接受 `UPLOAD_EXT_MAP` 白名单里的固定集合（`png/jpg/jpeg/webp/mp4/mov/webm`），大小写归一化为小写，不接受用户传入的原始扩展名字符串直接拼接进 key。
+- 拼出 `storage_key` 前用同一个校验函数处理 `order_no`，非法字符直接拒绝该订单整批导入（返回给前端提示"订单号包含非法字符"），不是静默过滤。
 
 ## 支持的文件类型
 
 复用 `backend/routes/product/resource.py` 里 `UPLOAD_EXT_MAP` 的图片/视频子集：`png/jpg/jpeg/webp` + `mp4/mov/webm`。文件夹内其它类型文件（如 `.DS_Store`、`Thumbs.db`、文档）直接跳过，不阻塞整单导入，导入结果里提示"已跳过 N 个不支持的文件"。
 
 大小限制：建议复用 `upload_validation.py` 里现成的额度校验逻辑（`parse_declared_size`），是否需要为售后视频单独定一个比 `RESOURCE_UPLOAD_LIMIT` 更大的上限，由 Codex 按实际售后视频文件大小评估。
+
+**关于文件内容校验的边界（明确声明，不是遗漏）**：OSS 直传是浏览器直接 PUT 到 OSS，服务器完全不经手文件内容，因此**后端无法读取真实文件头做 magic number 校验**。当前设计只能校验：扩展名（白名单）、前端声明的 `Content-Type`（写入 presign 的 `required_headers`，OSS 侧按此存储但不代表内容真实性）、前端声明的文件大小（`declared_file_size`，与 OSS 侧实际对象大小可能不完全一致，因为声明值来自前端 `File.size`，OSS 会记录真实上传字节数，如果两者需要强一致，可在 confirm 时用 `bucket.head_object` 查真实 `Content-Length` 校验，见下）。如果"必须确认上传的确实是合法图片/视频而不是改了后缀的任意文件"是硬安全要求，需要接入 OSS 上传回调（OSS callback）或后置的异步内容校验任务；本设计**默认不做真实内容嗅探**，只做扩展名+声明大小的边界校验，Codex 如果认为这条业务线需要更强的校验，请在实现前单独提出，不要自行默默加回调机制。
 
 ## 后端接口设计
 
@@ -79,26 +118,47 @@ OSS key 规则：`tmt-library/aftersale-media/{order_no}/{stored_filename}`，�
 ```
 一次返回该订单**这一批全部文件**的 presign 列表（不要每个文件单独一次 HTTP 往返，做法比照 `product/resource.py::presign_upload`，但一次请求批量生成 N 个 `bucket.sign_url`）：
 ```json
-{ "items": [{"presign_url":"...","storage_key":"...","stored_filename":"202410210001_004.jpg","required_headers":{...}}, ...] }
+{
+  "session_token": "abc123...",
+  "items": [{"storage_key":"...","stored_filename":"202410210001_004.jpg","presign_url":"...","required_headers":{...}}, ...]
+}
 ```
-`seq` 在这一步就要算好并占用（避免同一订单并发两次导入时 seq 冲突），但**不要在这一步写 DB 记录或删除旧数据**——只是发号+签名。真正落库放在下一步，这样即使用户上传到一半放弃，也不会产生"数据库有记录但 OSS 没文件"的悬空行；顶多留下几个孤儿 OSS 对象（无展示副作用，可以不做强制清理，Codex 视情况决定是否需要一个后续清理脚本）。
+**这一步必须落一条"预留"记录**（`aftersale_media_upload_session`，见数据模型），不能只是内存里算好 seq 就直接返回——否则同一订单并发发起两次导入，两次 presign 各自"算出"相同的下一个 seq，会导致 `storage_key` 冲突或 seq 重复。做法：
+1. 校验 `order_no` 规范化通过、`mode` 合法、每个文件的 `ext` 在白名单、`file_size` 不超限；
+2. 在一个事务里为这批文件分配连续 `seq`（结合当前已有 `aftersale_case_media` 记录和该订单尚未过期的 `pending` session 记录取 MAX，`storage_key` 唯一约束兜底冲突）；
+3. 每个文件写一条 `status='pending'`、`expires_at=now()+1小时` 的 session 行；
+4. 返回 `session_token`（整批共用一个 token，关联这批全部文件的 session 行）和逐文件的签名。
+
+`confirm` 只能确认这个 `session_token` 名下的文件，不接受客户端凭空传一个 `storage_key` 就直接落库（见下）。
 
 ### 3. 确认写入 `POST /api/aftersale/media/confirm`
 ```json
 {
+  "session_token": "abc123...",
   "order_no": "202410210001",
   "mode": "replace",
-  "uploaded": [{"storage_key":"...","stored_filename":"...","original_filename":"...","file_type":"image","file_size":123456,"seq":1}, ...]
+  "uploaded_storage_keys": ["tmt-library/aftersale-media/202410210001/202410210001_001.jpg", ...]
 }
 ```
-- `mode=replace`：先删除该 `order_no` 现有的全部 `aftersale_case_media` 行**以及对应 OSS 对象**（`bucket.delete_object`，逐个 try，不要因单个删除失败整体回滚——旧文件删不掉不影响新数据可用），再插入新行；整个"删旧+插新"包在一个 DB 事务里。
-- `mode=append`：直接插入新行。
-- 幂等性：如果这一步网络失败，前端应允许用同一批 `storage_key` 重新调用（不会产生副作用之外的重复写入前提是前端不重复提交——不强制做 storage_key 唯一约束，简单场景足够，除非 Codex 认为有必要加）。
+**confirm 不信任客户端传回的任意 key/文件名/大小**，一律以 `session_token` 关联的 `aftersale_media_upload_session` 记录为准：
+1. 用 `session_token` 查出这批 `status='pending'` 且未过期的 session 行，逐条核对 `order_no`/`mode` 与请求体一致，`uploaded_storage_keys` 必须是这批 session 行 `storage_key` 的子集（允许部分文件上传失败被前端剔除，不允许出现 session 之外的 key）；
+2. （可选但建议）对每个 key 调 `bucket.head_object(key)` 核实对象确实存在且 `Content-Length` 与 session 里 `declared_file_size` 量级相符（不要求字节级完全相等，允许合理误差，因为分片上传等场景可能有细微差异），防止"声明上传成功但 OSS 上没有对象"或"声明大小与实际严重不符"的情况；
+3. **`mode=replace` 的正确时序**（这是原方案的关键 bug，已修正）：
+   - **先**在一个 DB 事务里插入新的 `aftersale_case_media` 行、把这批 session 行标记 `status='confirmed'`，**提交事务**；
+   - 事务提交成功后，**再**查出该订单在本次新增之前的旧 `aftersale_case_media` 行（本次事务开始前就存在的那些），逐个尝试删除对应 OSS 对象；删除失败的记一条 `aftersale_media_cleanup_failure`（不静默吞掉，见下），同时仍然把该行从 `aftersale_case_media` 删除（DB 记录以"新数据已确认写入成功"为准，旧对象只是物理清理，清理失败不影响业务可用性，但要留痕方便后续人工/补偿任务处理）。
+   - 这样即使"新记录落库"这一步本身失败（比如唯一约束冲突、DB 连接问题），旧媒体还在，不会出现"新数据没写进去、旧数据却已经被删"的数据丢失窗口。
+4. `mode=append`：直接插入新行、标记 session 为 confirmed，不涉及删除。
+5. 幂等性：`session_token` 一旦全部 confirmed，重复调用 confirm 应该识别为"已确认过"并直接返回当前结果（不是报错，也不是重复插入——`storage_key` 唯一约束会在重复插入时天然报错，service 层应该先查 session 状态短路掉）。
+
+**过期/未确认的 session 清理**：定期任务（或每次 precheck/presign 请求时顺手清一批）把 `expires_at` 已过且仍是 `pending` 状态的 session 标记为 `expired`，对应的孤儿 OSS 对象可以异步批量清理，不强制要求这批就做，但 session 表要留着方便以后接一个清理脚本。
 
 ### 4. 列表页批量 has_media 标志
 在 `AftersaleTable.vue` 现有的两阶段加载模式基础上新增第三个批量标志查询（不要塞进 Phase 1 主 SQL，避免主查询变复杂；也不要为每行单独查）：
 
-`GET /api/aftersale/cases/media-flags?order_nos=xxx,yyy,zzz`
+`POST /api/aftersale/cases/media-flags`（用 POST + body 而不是 GET + 查询串，因为 order_nos 列表长度取决于页面大小，未来页面大小调大或导出场景批量查时容易撞上 URL 长度限制）
+```json
+{ "order_nos": ["202410210001", "202410210002", ...] }
+```
 
 返回 `{ "202410210001": 3, "202410210002": 0 }`（order_no → 媒体数量，用一条 `GROUP BY order_no` 的 `COUNT(*)` 语句按当前页 order_no 列表批量查），前端拿到后在展开箭头/图标上显示"有 N 张图片"提示，为 0 或订单不在返回结果里则不显示媒体入口。
 
@@ -130,9 +190,9 @@ OSS key 规则：`tmt-library/aftersale-media/{order_no}/{stored_filename}`，�
 
 ### 上传执行
 逐订单（可并发几个订单，不要几十个订单全部并发炸掉单 worker）：
-1. 调 `presign` 拿该订单这批文件的签名列表；
+1. 调 `presign` 拿该订单这批文件的 `session_token` + 签名列表；
 2. 前端用 `fetch(presign_url, {method:'PUT', headers: required_headers, body: file})` 直传 OSS（复用资料库现成的直传模式，不新造轮子）；
-3. 全部上传成功后调 `confirm` 落库；
+3. 收集实际上传成功的 `storage_key` 列表（允许部分文件失败），调 `confirm` 落库，传入 `session_token` + 成功的 key 列表；
 4. 更新进度 UI（按订单/按文件的进度条，参考发货导入任务已有的进度组件风格）。
 
 结束后汇总：成功 N 单、失败 M 单（列出失败 order_no，支持仅重试失败项）。
@@ -152,6 +212,8 @@ OSS key 规则：`tmt-library/aftersale-media/{order_no}/{stored_filename}`，�
 
 ## 验收要求（部署前）
 
-- 真实 MySQL 下验证：追加模式 seq 递增正确、替换模式旧 OSS 对象确实被删除（不是只删 DB 行）、precheck/media-flags 批量查询在多订单场景下仍是常数条 SQL（不随订单数增长）。
-- 真实 HTTP 走一遍完整流程：选择本地测试文件夹 → precheck → presign → 直传 OSS → confirm → 列表页展开行看到图片。
+- 真实 MySQL 下验证：追加模式 seq 递增正确、并发两次对同一订单调用 presign 不会分配到相同 seq/storage_key（可写个并发测试模拟）、替换模式**先插入新记录提交成功后再删旧 OSS 对象**（可以人为在"插入新记录"这一步制造失败，验证旧数据仍然完好）、precheck/media-flags 批量查询在多订单场景下仍是常数条 SQL（不随订单数增长）。
+- confirm 校验：用篡改过的 `storage_key`（不属于该 session）调用 confirm，应被拒绝；用已过期的 `session_token` 调用应被拒绝；订单号包含 `../` 或路径分隔符应在 presign 阶段就被拒绝。
+- 真实 HTTP 走一遍完整流程：选择本地测试文件夹 → precheck → presign（拿到 session_token）→ 直传 OSS → confirm → 列表页展开行看到图片。
 - 大文件（几十 MB 视频）直传验证不经过服务器 CPU 密集处理，确认不会触发 gunicorn 看门狗风险。
+- `aftersale_media_cleanup_failure` 表在人为制造 OSS 删除失败（比如临时吊销该 key 的删除权限）时确实写入记录，不是静默吞异常。
