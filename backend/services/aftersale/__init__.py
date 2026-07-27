@@ -433,8 +433,10 @@ class AftersaleService:
             exclude_no_sales_series=exclude_no_sales_series,
             has_media=has_media,
         )
+        response_items = [c.to_dict(include_reasons=False) for c in items]
+        _repo.apply_import_names_to_case_snapshots(response_items)
         return Result.ok(data={
-            'items':     [c.to_dict(include_reasons=False) for c in items],
+            'items':     response_items,
             'total':     total,
             'page':      page,
             'page_size': page_size,
