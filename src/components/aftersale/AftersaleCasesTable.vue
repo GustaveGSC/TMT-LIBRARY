@@ -771,15 +771,12 @@ async function exportData() {
             <div v-if="mediaLoading[row.ecommerce_order_no]" class="expand-media-loading">加载中…</div>
             <div v-else class="expand-media-grid">
               <template v-for="m in (mediaDetails[row.ecommerce_order_no] || [])" :key="m.id">
-                <img
-                  v-if="m.file_type === 'image'"
-                  :src="m.oss_url"
-                  class="media-thumb"
-                  @click="openViewer(row.ecommerce_order_no, m.id)"
-                />
-                <div v-else class="media-video-card" @click="openViewer(row.ecommerce_order_no, m.id)">
-                  <video :src="m.oss_url" class="media-video-thumb" preload="metadata" />
-                  <div class="media-video-play">▶</div>
+                <div class="media-card" @click="openViewer(row.ecommerce_order_no, m.id)">
+                  <img v-if="m.file_type === 'image'" :src="m.oss_url" class="media-card-thumb" />
+                  <template v-else>
+                    <video :src="m.oss_url" class="media-card-thumb" preload="metadata" />
+                    <div class="media-video-play">▶</div>
+                  </template>
                 </div>
               </template>
             </div>
@@ -1214,9 +1211,12 @@ async function exportData() {
 .expand-media-title { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
 .expand-media-loading { color: var(--text-muted); font-size: 12px; }
 .expand-media-grid { display: flex; flex-wrap: wrap; gap: 10px; }
-.media-thumb { width: 140px; height: 140px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); cursor: pointer; }
-.media-video-card { position: relative; width: 140px; height: 140px; border-radius: 8px; border: 1px solid var(--border); overflow: hidden; cursor: pointer; }
-.media-video-thumb { width: 100%; height: 100%; object-fit: cover; background: #000; }
+/* 卡片保持固定比例容器 + object-fit:contain，不裁切/拉伸原图比例（参考产品资料库卡片） */
+.media-card {
+  position: relative; width: 160px; aspect-ratio: 4/3; border-radius: 8px;
+  border: 1px solid var(--border); overflow: hidden; cursor: pointer; background: #f5f0e8;
+}
+.media-card-thumb { width: 100%; height: 100%; object-fit: contain; background: #fff; display: block; }
 .media-video-play { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 28px; background: rgba(0,0,0,0.25); }
 .media-marker { color: var(--accent); margin-left: 4px; vertical-align: -2px; cursor: default; }
 
