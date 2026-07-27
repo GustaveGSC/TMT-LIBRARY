@@ -20,6 +20,7 @@ from database.models.aftersale import (
 )
 from database.models.shipping import ShippingRecord, ShippingOperatorType
 from database.models.product.category import ProductModel
+from database.models.product.import_raw import ImportProductRaw
 
 from utils import now_cst
 
@@ -422,9 +423,29 @@ class AftersaleRepository:
             .group_by(ShippingRecord.product_code)
             .all()
         )
+        return self._apply_import_product_names(rows)
+
+    @staticmethod
+    def _apply_import_product_names(rows):
+        """以 ERP 产品库导入名称覆盖发货文件短名称，缺失时保留原名称。
+
+        所有调用方先完成 shipping_record 聚合，再用一个 IN 查询加载本批编码，
+        因而列表页不会从原来的常数查询退化为 N+1。
+        """
+        codes = {row.product_code for row in rows if row.product_code}
+        raw_names = {
+            row.code: row.name
+            for row in ImportProductRaw.query.with_entities(
+                ImportProductRaw.code, ImportProductRaw.name,
+            ).filter(ImportProductRaw.code.in_(codes)).all()
+        } if codes else {}
         return [
-            {'code': r.product_code, 'name': r.product_name, 'quantity': float(r.quantity or 0)}
-            for r in rows
+            {
+                'code': row.product_code,
+                'name': raw_names.get(row.product_code) or row.product_name,
+                'quantity': float(row.quantity or 0),
+            }
+            for row in rows
         ]
 
     def _get_batch_order_products(self, order_nos):
@@ -444,12 +465,9 @@ class AftersaleRepository:
             .all()
         )
         result: dict = {no: [] for no in order_nos}
-        for r in rows:
-            result[r.ecommerce_order_no].append({
-                'code': r.product_code,
-                'name': r.product_name,
-                'quantity': float(r.quantity or 0),
-            })
+        enriched = self._apply_import_product_names(rows)
+        for row, product in zip(rows, enriched):
+            result[row.ecommerce_order_no].append(product)
         return result
 
     # ── 工单 CRUD ──────────────────────────────────────────────────────────
