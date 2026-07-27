@@ -449,6 +449,33 @@ class AftersaleRepository:
             for row in rows
         ]
 
+    @staticmethod
+    def apply_import_names_to_case_snapshots(items):
+        """Overlay ERP names onto paginated AftersaleCase JSON snapshots.
+
+        Confirmed cases intentionally retain their historical products JSON, so
+        this is read-time enrichment only.  It performs one IN query for the
+        complete page and never mutates the ORM snapshot or writes it back.
+        """
+        codes = {
+            product.get('code')
+            for item in items for product in (item.get('products') or [])
+            if isinstance(product, dict) and product.get('code')
+        }
+        if not codes:
+            return items
+        raw_names = {
+            row.code: row.name
+            for row in ImportProductRaw.query.with_entities(
+                ImportProductRaw.code, ImportProductRaw.name,
+            ).filter(ImportProductRaw.code.in_(codes)).all()
+        }
+        for item in items:
+            for product in item.get('products') or []:
+                if isinstance(product, dict):
+                    product['name'] = raw_names.get(product.get('code')) or product.get('name')
+        return items
+
     def _get_batch_order_products(self, order_nos):
         """批量聚合多个订单的物料，返回 {order_no: [products]} 字典（1 次 IN 查询）"""
         if not order_nos:
