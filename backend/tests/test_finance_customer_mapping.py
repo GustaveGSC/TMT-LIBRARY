@@ -18,7 +18,8 @@ from database.models.shipping import (
     ReturnRecord,
 )
 from database.models.product.erp_code_rules import ErpCodeRule
-from database.models.product.finished import ProductTag, ProductTagCategory
+from database.models.product.category import ProductCategory, ProductModel, ProductSeries
+from database.models.product.finished import ProductFinished, ProductTag, ProductTagCategory
 import database.models.product.category  # noqa: F401 - resolve ORM relationships
 import database.models.product.resource  # noqa: F401 - resolve ORM relationships
 from database.repository.shipping import ShippingRepository
@@ -418,16 +419,38 @@ def test_finance_chart_uses_manual_mapping_for_trade_country_brand_and_filters()
 
     with app.app_context():
         for model in (
+            ProductCategory, ProductSeries, ProductModel, ProductFinished,
             ProductTagCategory, ProductTag, ErpCodeRule, ShippingOperatorType,
             ShippingOrderFinished, ShippingFinanceCustomerMapping,
         ):
             model.__table__.create(db.engine)
         region = ProductTagCategory(name='地域', is_shipping_dim=True)
         brand = ProductTagCategory(name='品牌', is_shipping_dim=True)
-        db.session.add_all([region, brand])
+        category = ProductCategory(name='财务测试品类')
+        db.session.add_all([region, brand, category])
+        db.session.flush()
+        series_canada = ProductSeries(
+            category_id=category.id, code='SERIES-CA', name='加拿大系列',
+        )
+        series_thailand = ProductSeries(
+            category_id=category.id, code='SERIES-TH', name='泰国系列',
+        )
+        db.session.add_all([series_canada, series_thailand])
+        db.session.flush()
+        model_canada = ProductModel(
+            series_id=series_canada.id, code='MODEL-CA', name='加拿大型号', model_code='M-CA',
+        )
+        model_thailand = ProductModel(
+            series_id=series_thailand.id, code='MODEL-TH', name='泰国型号', model_code='M-TH',
+        )
+        db.session.add_all([model_canada, model_thailand])
         db.session.flush()
         canada = ProductTag(name='加拿大', category_id=region.id)
-        db.session.add(canada)
+        db.session.add_all([
+            canada,
+            ProductFinished(code='SKU-E', model_id=model_canada.id),
+            ProductFinished(code='SKU-T', model_id=model_thailand.id),
+        ])
         db.session.add_all([
             ShippingFinanceCustomerMapping(
                 customer_alias='EXPORT', status='export', country='加拿大', brand='品牌甲',
@@ -500,6 +523,33 @@ def test_finance_chart_uses_manual_mapping_for_trade_country_brand_and_filters()
             'source': 'finance', 'group_by': f'tag:{brand.id}', 'trade_type': 'foreign',
             'tag_filters': [{'category_id': region.id, 'tag_names': ['泰国']}],
         })
+        batched_brand = ShippingRepository.get_finance_map_breakdown({
+            'source': 'finance',
+            'country_category_id': region.id,
+            'countries': ['加拿大', '泰国'],
+            'breakdown_group_by': f'tag:{brand.id}',
+        })
+        batched_series = ShippingRepository.get_finance_map_breakdown({
+            'source': 'finance',
+            'country_category_id': region.id,
+            'countries': ['加拿大', '泰国'],
+            'breakdown_group_by': 'series',
+        })
+        statements = []
+
+        def collect_sql(_conn, _cursor, statement, _params, _context, _many):
+            statements.append(statement)
+
+        sa.event.listen(db.engine, 'before_cursor_execute', collect_sql)
+        try:
+            ShippingRepository.get_finance_map_breakdown({
+                'source': 'finance',
+                'country_category_id': region.id,
+                'countries': ['加拿大', '泰国'],
+                'breakdown_group_by': f'tag:{brand.id}',
+            })
+        finally:
+            sa.event.remove(db.engine, 'before_cursor_execute', collect_sql)
 
         assert {row['label'] for row in country['items']} == {'加拿大', '泰国'}
         assert {row['label'] for row in brand_rows['items']} == {'品牌甲', '品牌泰'}
@@ -513,6 +563,28 @@ def test_finance_chart_uses_manual_mapping_for_trade_country_brand_and_filters()
             'label': '品牌泰', 'quantity': 15.0, 'return_quantity': 0.0,
             'actual_quantity': 15.0,
         }]
+        assert batched_brand['items'] == [
+            {
+                'country': '加拿大', 'label': '品牌甲', 'quantity': 10.0,
+                'return_quantity': 0.0, 'actual_quantity': 10.0,
+            },
+            {
+                'country': '泰国', 'label': '品牌泰', 'quantity': 15.0,
+                'return_quantity': 0.0, 'actual_quantity': 15.0,
+            },
+        ]
+        assert batched_series['items'] == [
+            {
+                'country': '加拿大', 'label': 'SERIES-CA', 'name': '加拿大系列',
+                'quantity': 10.0, 'return_quantity': 0.0, 'actual_quantity': 10.0,
+            },
+            {
+                'country': '泰国', 'label': 'SERIES-TH', 'name': '泰国系列',
+                'quantity': 15.0, 'return_quantity': 0.0, 'actual_quantity': 15.0,
+            },
+        ]
+        # 国家数量不应增加主表聚合次数：两个国家仍是一条 grouped SELECT。
+        assert sum('shipping_order_finished' in sql.lower() for sql in statements) == 1
 
         # 修改人工映射后 chart-data 下一次查询实时 JOIN 新状态；
         # 不需要也不允许借助 resolve-all 刷新派生组合。

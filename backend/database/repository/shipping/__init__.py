@@ -2637,6 +2637,200 @@ class ShippingRepository:
             'items': items,
         }
 
+    @staticmethod
+    def get_finance_map_breakdown(params: Dict) -> Dict:
+        """Batch all finance-map tooltip breakdowns in one grouped query.
+
+        This deliberately has a narrow contract: country and (optionally)
+        brand come from the one-to-one finance customer mapping, not from the
+        product-tag many-to-many relation used by the shipping-source map.
+        """
+        from datetime import datetime as _dt
+        from database.models.product.category import ProductCategory, ProductModel, ProductSeries
+        from database.models.product.erp_code_rules import ErpCodeRule
+        from database.models.product.finished import ProductFinished, ProductTag, ProductTagCategory, finished_tag
+
+        if params.get('source') != 'finance':
+            raise ValueError('批量地图细分仅支持财务端 source=finance')
+
+        country_category_id = params.get('country_category_id')
+        try:
+            country_category_id = int(country_category_id)
+        except (TypeError, ValueError):
+            raise ValueError('country_category_id 必须是地域标签分类') from None
+        country_category = db.session.get(ProductTagCategory, country_category_id)
+        if not country_category or country_category.name != '地域' or not country_category.is_shipping_dim:
+            raise ValueError('country_category_id 必须是已启用的地域标签分类')
+
+        countries = []
+        for value in params.get('countries') or []:
+            if not isinstance(value, str):
+                continue
+            value = value.strip()
+            if value and len(value) <= 100 and value not in countries:
+                countries.append(value)
+        if not countries:
+            raise ValueError('countries 至少需要一个国家')
+        if len(countries) > 100:
+            raise ValueError('countries 最多 100 个')
+
+        breakdown_group_by = params.get('breakdown_group_by')
+        is_series = breakdown_group_by == 'series'
+        brand_category = None
+        if not is_series:
+            if not isinstance(breakdown_group_by, str) or not breakdown_group_by.startswith('tag:'):
+                raise ValueError('breakdown_group_by 必须是 series 或品牌标签维度')
+            try:
+                brand_category = db.session.get(
+                    ProductTagCategory, int(breakdown_group_by.split(':', 1)[1]),
+                )
+            except (TypeError, ValueError):
+                raise ValueError('breakdown_group_by 必须是 series 或品牌标签维度') from None
+            if not brand_category or brand_category.name != '品牌' or not brand_category.is_shipping_dim:
+                raise ValueError('breakdown_group_by 必须是已启用的品牌标签维度')
+
+        def parse_date(value, label):
+            if not value:
+                return None
+            try:
+                return _dt.strptime(value, '%Y-%m-%d').date()
+            except (TypeError, ValueError):
+                raise ValueError(f'{label} 必须是 YYYY-MM-DD') from None
+
+        date_start = parse_date(params.get('date_start'), 'date_start')
+        date_end = parse_date(params.get('date_end'), 'date_end')
+        category_ids = params.get('category_ids') or []
+        series_ids = params.get('series_ids') or []
+        model_ids = params.get('model_ids') or []
+        tag_filters = params.get('tag_filters') or []
+
+        mapping_filters = []
+        product_tag_filters = []
+        for tag_filter in tag_filters:
+            if not isinstance(tag_filter, dict):
+                continue
+            category_id = tag_filter.get('category_id')
+            try:
+                category_id = int(category_id)
+            except (TypeError, ValueError):
+                continue
+            tag_category = db.session.get(ProductTagCategory, category_id)
+            tag_ids = tag_filter.get('tag_ids') or []
+            names = {
+                value.strip() for value in (tag_filter.get('tag_names') or [])
+                if isinstance(value, str) and value.strip() and len(value.strip()) <= 100
+            }
+            mapping_field = (
+                ShippingFinanceCustomerMapping.country if tag_category and tag_category.name == '地域'
+                else ShippingFinanceCustomerMapping.brand if tag_category and tag_category.name == '品牌'
+                else None
+            )
+            if mapping_field is not None:
+                if tag_ids:
+                    names.update(row[0] for row in db.session.query(ProductTag.name).filter(
+                        ProductTag.category_id == category_id,
+                        ProductTag.id.in_(tag_ids),
+                    ).all())
+                if names:
+                    mapping_filters.append((mapping_field, sorted(names)))
+            elif tag_ids:
+                product_tag_filters.append((category_id, tag_ids))
+
+        sof = ShippingOrderFinished
+        country_expr = ShippingFinanceCustomerMapping.country
+        label_expr = ProductSeries.code if is_series else ShippingFinanceCustomerMapping.brand
+        name_expr = ProductSeries.name if is_series else None
+        needs_product_join = is_series or bool(category_ids or series_ids or model_ids or product_tag_filters)
+
+        select_columns = [
+            country_expr.label('country'),
+            label_expr.label('label'),
+            sql_func.sum(sof.quantity).label('quantity'),
+            sql_func.sum(sof.return_quantity).label('return_quantity'),
+            sql_func.sum(sof.actual_quantity).label('actual_quantity'),
+        ]
+        if name_expr is not None:
+            select_columns.append(sql_func.max(name_expr).label('name'))
+
+        query = db.session.query(*select_columns).select_from(sof).with_hint(
+            sof,
+            'USE INDEX (ix_sof_source_date)' if (date_start or date_end)
+            else 'USE INDEX (ix_sof_source_customer_alias)',
+            dialect_name='mysql',
+        ).join(
+            ShippingFinanceCustomerMapping,
+            sof.customer_alias == ShippingFinanceCustomerMapping.customer_alias,
+        ).filter(
+            sof.source == 'finance',
+            sof.finished_code.isnot(None),
+            ShippingFinanceCustomerMapping.status == 'export',
+            country_expr.in_(countries),
+            country_expr.isnot(None),
+            country_expr != '',
+        )
+        if needs_product_join:
+            query = query.join(ProductFinished, sof.finished_code == ProductFinished.code
+            ).join(ProductModel, ProductFinished.model_id == ProductModel.id)
+        if is_series or series_ids or category_ids:
+            query = query.join(ProductSeries, ProductModel.series_id == ProductSeries.id)
+        if category_ids:
+            query = query.join(ProductCategory, ProductSeries.category_id == ProductCategory.id)
+        if model_ids:
+            query = query.filter(ProductModel.id.in_(model_ids))
+        if series_ids:
+            query = query.filter(ProductSeries.id.in_(series_ids))
+        if category_ids:
+            query = query.filter(ProductCategory.id.in_(category_ids))
+        for category_id, tag_ids in product_tag_filters:
+            matched_codes = [row[0] for row in db.session.query(ProductFinished.code).join(
+                finished_tag, ProductFinished.id == finished_tag.c.finished_id,
+            ).join(ProductTag, finished_tag.c.tag_id == ProductTag.id).filter(
+                ProductTag.category_id == category_id,
+                ProductTag.id.in_(tag_ids),
+            ).all()]
+            query = query.filter(sof.finished_code.in_(matched_codes))
+        for mapping_field, names in mapping_filters:
+            query = query.filter(mapping_field.in_(names))
+        if date_start:
+            query = query.filter(sof.shipped_date >= date_start)
+        if date_end:
+            query = query.filter(sof.shipped_date <= date_end)
+        for key, column in (
+            ('channel_names', sof.channel_name), ('channel_codes', sof.channel_code),
+            ('provinces', sof.province), ('cities', sof.city), ('districts', sof.district),
+        ):
+            values = params.get(key) or []
+            if values:
+                query = query.filter(column.in_(values))
+
+        disabled_prefixes = [row.prefix for row in ErpCodeRule.query.filter_by(
+            type='finished', is_disabled=True,
+        ).all()]
+        if disabled_prefixes:
+            from sqlalchemy import not_, or_ as sa_or_
+            query = query.filter(not_(sa_or_(*[
+                sof.finished_code.like(prefix + '%') for prefix in disabled_prefixes
+            ])))
+
+        group_columns = [country_expr, label_expr]
+        if name_expr is not None:
+            # name is MAX() above so it must not expand the grouping key.
+            pass
+        rows = query.group_by(*group_columns).order_by(
+            country_expr.asc(), sql_func.sum(sof.actual_quantity).desc(), label_expr.asc(),
+        ).all()
+
+        return {
+            'items': [{
+                'country': row.country,
+                'label': row.label,
+                **({'name': row.name} if name_expr is not None else {}),
+                'quantity': float(row.quantity or 0),
+                'return_quantity': float(row.return_quantity or 0),
+                'actual_quantity': float(row.actual_quantity or 0),
+            } for row in rows],
+        }
+
 
     @staticmethod
     def get_orders(page: int, size: int, filters: Dict, sort_field: str, sort_order: str) -> Dict:
