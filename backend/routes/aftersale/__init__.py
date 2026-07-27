@@ -12,7 +12,10 @@ _svc = AftersaleService()
 
 aftersale_bp.before_request(make_blueprint_guard(
     'aftersale:view', 'aftersale:edit', 'aftersale:export',
-    view_post_paths=('/chart-data', '/chart-filter-options', '/suggest-product', '/filter-options'),
+    view_post_paths=(
+        '/chart-data', '/chart-filter-options', '/suggest-product', '/filter-options',
+        '/media/precheck', '/cases/media-flags',
+    ),
 ))
 
 _MAX_PAGE_SIZE = 200
@@ -163,6 +166,36 @@ def get_pending_count():
 
 
 # ── 工单 ────────────────────────────────────────────────────────────────────
+
+# ── 售后媒体 ────────────────────────────────────────────────────────────────
+
+@aftersale_bp.post('/media/precheck')
+def precheck_media():
+    return _svc.precheck_media(request.get_json() or {}).to_response()
+
+
+@aftersale_bp.post('/media/presign')
+def presign_media():
+    return _svc.presign_media(
+        request.get_json() or {}, getattr(g, 'current_user', {}).get('id'),
+    ).to_response()
+
+
+@aftersale_bp.post('/media/confirm')
+def confirm_media():
+    return _svc.confirm_media(
+        request.get_json() or {}, getattr(g, 'current_user', {}).get('id'),
+    ).to_response()
+
+
+@aftersale_bp.post('/cases/media-flags')
+def get_media_flags():
+    return _svc.get_media_flags(request.get_json() or {}).to_response()
+
+
+@aftersale_bp.get('/cases/<string:order_no>/media')
+def get_case_media(order_no):
+    return _svc.get_case_media(order_no).to_response()
 
 @aftersale_bp.get('/cases')
 def get_cases():

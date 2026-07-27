@@ -3955,3 +3955,31 @@ class AftersaleRepository:
             db.session.add(AftersaleSetting(key=key, value=encoded, label=label))
         db.session.commit()
         return True, None
+
+    # ── 售后媒体 ───────────────────────────────────────────────────────────
+
+    def get_media_summaries(self, order_nos):
+        from database.models.aftersale import AftersaleCaseMedia
+        rows = db.session.query(
+            AftersaleCaseMedia.order_no,
+            db.func.count(AftersaleCaseMedia.id).label('count'),
+        ).filter(AftersaleCaseMedia.order_no.in_(order_nos)).group_by(
+            AftersaleCaseMedia.order_no,
+        ).all()
+        return {row.order_no: int(row.count) for row in rows}
+
+    def get_media_for_orders(self, order_nos):
+        from database.models.aftersale import AftersaleCaseMedia
+        rows = AftersaleCaseMedia.query.filter(
+            AftersaleCaseMedia.order_no.in_(order_nos),
+        ).order_by(AftersaleCaseMedia.order_no, AftersaleCaseMedia.seq).all()
+        grouped = {order_no: [] for order_no in order_nos}
+        for row in rows:
+            grouped.setdefault(row.order_no, []).append(row)
+        return grouped
+
+    def get_media(self, order_no):
+        from database.models.aftersale import AftersaleCaseMedia
+        return AftersaleCaseMedia.query.filter_by(order_no=order_no).order_by(
+            AftersaleCaseMedia.seq,
+        ).all()
