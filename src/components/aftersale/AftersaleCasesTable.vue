@@ -2,11 +2,13 @@
 // ── 导入 ──────────────────────────────────────────
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Edit, Check, Close, Remove } from '@element-plus/icons-vue'
+import { Edit, Check, Close, Remove, Picture } from '@element-plus/icons-vue'
 import Sortable from 'sortablejs'
 import http from '@/api/http.js'
 import { downloadBlob } from '@/utils/download.js'
 import { isElectron } from '@/utils/platform'
+import { usePermission } from '@/composables/usePermission'
+import AftersaleMediaViewer from '@/components/aftersale/AftersaleMediaViewer.vue'
 
 // ── Props ──────────────────────────────────────────
 const props = defineProps({
@@ -414,17 +416,30 @@ async function onExpandChange(row, expandedRows) {
   }
 }
 
-function mediaImageUrls(orderNo) {
-  return (mediaDetails.value[orderNo] || []).filter(m => m.file_type === 'image').map(m => m.oss_url)
-}
-
 // 刷新时清空媒体缓存，避免导入新图片后展开行仍显示旧数据
 watch(() => props.filter, () => { mediaCounts.value = {}; mediaDetails.value = {} }, { deep: true })
-const playingVideoUrl = ref(null)   // 点击视频卡片时弹窗播放
-const showVideoDialog = computed({
-  get: () => playingVideoUrl.value != null,
-  set: (val) => { if (!val) playingVideoUrl.value = null },
-})
+
+// ── 统一图片/视频查看器：点击任意缩略图打开，同一个框里左右切换（不区分类型） ──
+const viewerVisible   = ref(false)
+const viewerItems     = ref([])
+const viewerIndex     = ref(0)
+const viewerOrderNo   = ref(null)
+const { canEditAftersale } = usePermission()
+
+function openViewer(orderNo, mediaId) {
+  const list = mediaDetails.value[orderNo] || []
+  viewerItems.value   = list
+  viewerIndex.value   = Math.max(0, list.findIndex(m => m.id === mediaId))
+  viewerOrderNo.value = orderNo
+  viewerVisible.value = true
+}
+
+function onMediaDeleted(mediaId) {
+  const orderNo = viewerOrderNo.value
+  if (!orderNo) return
+  mediaDetails.value = { ...mediaDetails.value, [orderNo]: (mediaDetails.value[orderNo] || []).filter(m => m.id !== mediaId) }
+  mediaCounts.value  = { ...mediaCounts.value, [orderNo]: Math.max(0, (mediaCounts.value[orderNo] || 1) - 1) }
+}
 defineExpose({ total, exportLoading, exportData, initSort, refresh: loadData, refreshMedia: () => { mediaCounts.value = {}; mediaDetails.value = {} } })
 
 async function loadEditOptions() {
@@ -756,16 +771,13 @@ async function exportData() {
             <div v-if="mediaLoading[row.ecommerce_order_no]" class="expand-media-loading">加载中…</div>
             <div v-else class="expand-media-grid">
               <template v-for="m in (mediaDetails[row.ecommerce_order_no] || [])" :key="m.id">
-                <el-image
+                <img
                   v-if="m.file_type === 'image'"
                   :src="m.oss_url"
-                  :preview-src-list="mediaImageUrls(row.ecommerce_order_no)"
-                  :initial-index="mediaImageUrls(row.ecommerce_order_no).indexOf(m.oss_url)"
-                  fit="cover"
                   class="media-thumb"
-                  preview-teleported
+                  @click="openViewer(row.ecommerce_order_no, m.id)"
                 />
-                <div v-else class="media-video-card" @click="playingVideoUrl = m.oss_url">
+                <div v-else class="media-video-card" @click="openViewer(row.ecommerce_order_no, m.id)">
                   <video :src="m.oss_url" class="media-video-thumb" preload="metadata" />
                   <div class="media-video-play">▶</div>
                 </div>
@@ -794,7 +806,12 @@ async function exportData() {
             </div>
             <div class="th-fph" />
           </template>
-          <template #default="{ row }">{{ row.ecommerce_order_no }}</template>
+          <template #default="{ row }">
+            {{ row.ecommerce_order_no }}
+            <el-tooltip v-if="mediaCounts[row.ecommerce_order_no] > 0" :content="`有 ${mediaCounts[row.ecommerce_order_no]} 个售后图片/视频`">
+              <el-icon class="media-marker"><Picture /></el-icon>
+            </el-tooltip>
+          </template>
         </el-table-column>
 
         <!-- 产品品类 -->
@@ -1116,17 +1133,14 @@ async function exportData() {
       />
     </div>
 
-    <!-- 售后视频播放弹窗 -->
-    <el-dialog
-      v-model="showVideoDialog"
-      title="售后视频"
-      width="640px"
-      append-to-body
-      destroy-on-close
-      @close="playingVideoUrl = null"
-    >
-      <video v-if="playingVideoUrl" :src="playingVideoUrl" controls autoplay style="width:100%;max-height:70vh" />
-    </el-dialog>
+    <!-- 售后图片/视频统一查看器：同一个框内左右切换，不区分类型 -->
+    <AftersaleMediaViewer
+      v-model="viewerVisible"
+      :items="viewerItems"
+      :initial-index="viewerIndex"
+      :can-delete="canEditAftersale"
+      @deleted="onMediaDeleted"
+    />
   </div>
 </template>
 
@@ -1199,11 +1213,12 @@ async function exportData() {
 .expand-media { padding: 8px 16px 10px 40px; background: #faf7f2; border-top: 1px solid var(--border); }
 .expand-media-title { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
 .expand-media-loading { color: var(--text-muted); font-size: 12px; }
-.expand-media-grid { display: flex; flex-wrap: wrap; gap: 8px; }
-.media-thumb { width: 64px; height: 64px; border-radius: 6px; border: 1px solid var(--border); cursor: pointer; }
-.media-video-card { position: relative; width: 64px; height: 64px; border-radius: 6px; border: 1px solid var(--border); overflow: hidden; cursor: pointer; }
+.expand-media-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+.media-thumb { width: 140px; height: 140px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); cursor: pointer; }
+.media-video-card { position: relative; width: 140px; height: 140px; border-radius: 8px; border: 1px solid var(--border); overflow: hidden; cursor: pointer; }
 .media-video-thumb { width: 100%; height: 100%; object-fit: cover; background: #000; }
-.media-video-play { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 18px; background: rgba(0,0,0,0.25); }
+.media-video-play { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 28px; background: rgba(0,0,0,0.25); }
+.media-marker { color: var(--accent); margin-left: 4px; vertical-align: -2px; cursor: default; }
 
 /* 列头 & 单元格状态染色（锁定列=橙色，用户主动筛选列=绿色） */
 :deep(.col-locked)        { background: rgba(196, 136, 58, 0.14) !important; }
