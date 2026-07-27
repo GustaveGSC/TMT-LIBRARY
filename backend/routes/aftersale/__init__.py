@@ -231,6 +231,7 @@ def get_cases():
     sort_order      = request.args.get('sort_order', 'desc')
     max_days        = request.args.get('max_days_since_purchase', type=int)
     exclude_no_sales = request.args.get('exclude_no_sales_series', '').lower() == 'true'
+    has_media = request.args.get('has_media', '').lower() in ('true', '1')
     try:
         id_filters = {
             'model_ids': _ints('model_ids'),
@@ -253,6 +254,7 @@ def get_cases():
         provinces=_strs('provinces'),
         cities=_strs('cities'),
         exclude_no_sales_series=exclude_no_sales,
+        has_media=has_media,
     ).to_response()
 
 

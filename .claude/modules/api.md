@@ -254,7 +254,7 @@ POST   /api/aftersale/suggest-product                 # 型号/物料等推荐�
                                                       #   suggested_return_alias_source('library'|'history'|null),
                                                       #   suggested_return_alias_score（仅 library 匹配时有值）,
                                                       #   suggested_reason_id, suggested_reason_category_id
-GET    /api/aftersale/cases                           # 工单列表（分页+服务端排序）
+GET    /api/aftersale/cases                           # 工单列表（分页+服务端排序）；?has_media=true|1 时仅返回存在媒体的订单
                                                       #   params: page/page_size/status/date_start/date_end/order_no/
                                                       #           channel_name/province/city/district/
                                                       #           reason_category/reason_name/

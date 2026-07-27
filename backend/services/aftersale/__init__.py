@@ -415,7 +415,7 @@ class AftersaleService:
                   shipping_alias_ids=None, channel_names=None,
                   provinces=None, cities=None,
                   max_days_since_purchase=None,
-                  exclude_no_sales_series=False):
+                  exclude_no_sales_series=False, has_media=False):
         items, total = _repo.get_cases(
             page=page, page_size=page_size,
             status=status, date_start=date_start, date_end=date_end,
@@ -431,6 +431,7 @@ class AftersaleService:
             provinces=provinces, cities=cities,
             max_days_since_purchase=max_days_since_purchase,
             exclude_no_sales_series=exclude_no_sales_series,
+            has_media=has_media,
         )
         return Result.ok(data={
             'items':     [c.to_dict(include_reasons=False) for c in items],
