@@ -16,6 +16,7 @@ from database.models.aftersale import (
     AftersaleDictSuggestion,
     AftersaleReasonAliasAffinity,
     AftersaleProductRemarkDict,
+    AftersaleCaseMedia,
 
 )
 from database.models.shipping import ShippingRecord, ShippingOperatorType
@@ -481,7 +482,7 @@ class AftersaleRepository:
                   shipping_alias_ids=None, channel_names=None,
                   provinces=None, cities=None,
                   max_days_since_purchase=None, count_total=True,
-                  exclude_no_sales_series=False):
+                  exclude_no_sales_series=False, has_media=False):
         """分页查询工单，支持多维筛选和服务端排序"""
         from sqlalchemy import func as sqlfunc
         from database.models.product.category import ProductSeries, ProductCategory
@@ -510,6 +511,13 @@ class AftersaleRepository:
             q = q.filter(AftersaleCase.district == district)
         if search:
             q = q.filter(AftersaleCase.ecommerce_order_no.like(f'%{search}%'))
+        if has_media:
+            # Correlated EXISTS is a semi-join: it cannot fan out cases that have
+            # multiple files and uses ix_aftersale_case_media_order_no directly.
+            media_exists = db.session.query(AftersaleCaseMedia.id).filter(
+                AftersaleCaseMedia.order_no == AftersaleCase.ecommerce_order_no,
+            ).exists()
+            q = q.filter(media_exists)
         if max_days_since_purchase is not None:
             sub = (db.session.query(AftersaleCaseReason.case_id)
                    .filter(AftersaleCaseReason.days_since_purchase <= max_days_since_purchase)

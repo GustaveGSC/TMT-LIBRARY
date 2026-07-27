@@ -2,8 +2,9 @@ from flask import Flask
 
 from database.base import db
 from database.models.aftersale import (
-    AftersaleCaseMedia, AftersaleMediaCleanupFailure, AftersaleMediaUploadSession,
+    AftersaleCase, AftersaleCaseMedia, AftersaleMediaCleanupFailure, AftersaleMediaUploadSession,
 )
+from database.repository.aftersale import AftersaleRepository
 from database.models.account import User
 from services.aftersale import AftersaleService
 import services.aftersale as aftersale_service_module
@@ -131,3 +132,29 @@ def test_delete_media_keeps_success_when_oss_cleanup_fails(monkeypatch):
         assert db.session.get(AftersaleCaseMedia, media.id) is None
         failure = AftersaleMediaCleanupFailure.query.one()
         assert failure.storage_key.endswith('ORDER-3_001.jpg')
+
+
+def test_cases_has_media_filter_uses_semijoin_and_filters_total():
+    app = _app()
+    with app.app_context():
+        for model in (User, AftersaleCase, AftersaleCaseMedia):
+            model.__table__.create(db.engine)
+        db.session.add_all([
+            AftersaleCase(ecommerce_order_no='WITH-MEDIA'),
+            AftersaleCase(ecommerce_order_no='WITHOUT-MEDIA'),
+        ])
+        db.session.flush()
+        db.session.add(AftersaleCaseMedia(
+            order_no='WITH-MEDIA', seq=1, file_type='image', original_filename='a.jpg',
+            stored_filename='WITH-MEDIA_001.jpg', oss_url='https://oss.example/a.jpg',
+            storage_key='tmt-library/aftersale-media/WITH-MEDIA/WITH-MEDIA_001.jpg', file_size=1,
+        ))
+        db.session.commit()
+
+        filtered, total = AftersaleRepository().get_cases(page=1, page_size=50, has_media=True)
+        unfiltered, unfiltered_total = AftersaleRepository().get_cases(page=1, page_size=50)
+
+        assert [case.ecommerce_order_no for case in filtered] == ['WITH-MEDIA']
+        assert total == 1
+        assert {case.ecommerce_order_no for case in unfiltered} == {'WITH-MEDIA', 'WITHOUT-MEDIA'}
+        assert unfiltered_total == 2
