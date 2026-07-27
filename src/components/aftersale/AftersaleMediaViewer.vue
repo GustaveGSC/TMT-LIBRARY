@@ -158,7 +158,9 @@ watch(() => props.modelValue, async (val) => { if (val) { await nextTick(); root
 
 <style scoped>
 .viewer-overlay {
-  position: fixed; inset: 0; z-index: 3000; background: rgba(0,0,0,0.88);
+  /* z-index 必须低于 Element Plus 弹出层基准值（PopupManager 默认从 2000 起递增），
+     否则 ElMessageBox（删除确认）会被本遮罩盖住 */
+  position: fixed; inset: 0; z-index: 1999; background: rgba(0,0,0,0.88);
   display: flex; flex-direction: column; outline: none;
 }
 .viewer-content {
