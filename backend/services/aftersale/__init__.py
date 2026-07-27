@@ -1,5 +1,7 @@
 import os
-from datetime import date
+import re
+import secrets
+from datetime import date, timedelta
 from result import Result
 from database.repository.aftersale import AftersaleRepository
 from database.models.aftersale import (
@@ -7,12 +9,182 @@ from database.models.aftersale import (
     AftersaleShippingAlias,
     AftersaleShippingAmbiguousTerm,
     AftersaleCase, AftersaleCaseReason,
+    AftersaleCaseMedia, AftersaleMediaUploadSession, AftersaleMediaCleanupFailure,
 )
+from database.base import db
+from storage.client import get_bucket
+from upload_validation import parse_declared_size, UploadValidationError
+from utils import now_cst
+
+_MEDIA_EXTENSIONS = {
+    'png': ('image/png', 'image'), 'jpg': ('image/jpeg', 'image'),
+    'jpeg': ('image/jpeg', 'image'), 'webp': ('image/webp', 'image'),
+    'mp4': ('video/mp4', 'video'), 'mov': ('video/quicktime', 'video'),
+    'webm': ('video/webm', 'video'),
+}
+_MEDIA_LIMIT = int(os.getenv('AFTERSALE_MEDIA_UPLOAD_LIMIT', 500 * 1024 * 1024))
+_ORDER_NO_RE = re.compile(r'^[A-Za-z0-9_-]{1,100}$')
+_MEDIA_SESSION_TTL_MINUTES = 60
 
 _repo = AftersaleRepository()
 
 
 class AftersaleService:
+
+    # ── 售后媒体 ───────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _media_order_no(value):
+        value = (value or '').strip()
+        if not _ORDER_NO_RE.fullmatch(value) or '..' in value:
+            raise ValueError('订单号只能包含字母、数字、下划线和连字符')
+        return value
+
+    @staticmethod
+    def _media_ext(value):
+        ext = (value or '').strip().lower().lstrip('.')
+        if ext not in _MEDIA_EXTENSIONS:
+            raise ValueError(f'不支持的媒体类型: {ext}')
+        return ext
+
+    def precheck_media(self, data):
+        raw = data.get('order_nos') or []
+        if not isinstance(raw, list) or not raw:
+            return Result.fail('order_nos 至少需要一个订单号')
+        order_nos = list(dict.fromkeys(self._media_order_no(value) for value in raw))
+        if len(order_nos) > 200:
+            return Result.fail('订单号数量不能超过 200')
+        grouped = _repo.get_media_for_orders(order_nos)
+        return Result.ok(data={order_no: {
+            'exists': bool(grouped.get(order_no)),
+            'count': len(grouped.get(order_no, [])),
+            'files': [item.to_dict() for item in grouped.get(order_no, [])],
+        } for order_no in order_nos})
+
+    def presign_media(self, data, user_id):
+        try:
+            order_no = self._media_order_no(data.get('order_no'))
+            mode = data.get('mode')
+            if mode not in {'append', 'replace'}:
+                raise ValueError('mode 必须是 append 或 replace')
+            files = data.get('files') or []
+            if not isinstance(files, list) or not 1 <= len(files) <= 100:
+                raise ValueError('files 数量必须在 1 到 100 之间')
+            normalized = []
+            for item in files:
+                if not isinstance(item, dict):
+                    raise ValueError('files 格式错误')
+                ext = self._media_ext(item.get('ext'))
+                original = (item.get('original_filename') or '').strip()
+                if not original or len(original) > 300 or any(c in original for c in '/\\\x00'):
+                    raise ValueError('原文件名非法')
+                size = parse_declared_size(item.get('file_size'), maximum=_MEDIA_LIMIT, label='售后媒体文件')
+                normalized.append((ext, original, size))
+        except (ValueError, UploadValidationError) as exc:
+            return Result.fail(str(exc))
+
+        # 已确认媒体和未过期预留共同占用 seq；唯一约束保护并发争抢，冲突时重试。
+        for _ in range(3):
+            try:
+                now = now_cst()
+                max_media = db.session.query(db.func.max(AftersaleCaseMedia.seq)).filter_by(order_no=order_no).scalar() or 0
+                max_reserved = db.session.query(db.func.max(AftersaleMediaUploadSession.end_seq)).filter(
+                    AftersaleMediaUploadSession.order_no == order_no,
+                    AftersaleMediaUploadSession.expires_at > now,
+                    AftersaleMediaUploadSession.confirmed_at.is_(None),
+                ).scalar() or 0
+                start_seq = 1 if mode == 'replace' else max(max_media, max_reserved) + 1
+                token = secrets.token_urlsafe(48)
+                manifest = []
+                for offset, (ext, original, size) in enumerate(normalized):
+                    seq = start_seq + offset
+                    stored = f'{order_no}_{seq:03d}.{ext}'
+                    rel_path = f'aftersale-media/{order_no}/{stored}'
+                    manifest.append({
+                        'seq': seq, 'ext': ext, 'file_type': _MEDIA_EXTENSIONS[ext][1],
+                        'original_filename': original, 'stored_filename': stored,
+                        'storage_key': f'tmt-library/{rel_path}', 'oss_url': f"{os.getenv('OSS_BASE_URL', '').rstrip('/')}/{rel_path}",
+                        'file_size': size,
+                    })
+                session = AftersaleMediaUploadSession(
+                    session_token=token, order_no=order_no, mode=mode,
+                    start_seq=start_seq, reserved_start=start_seq, end_seq=start_seq + len(manifest) - 1,
+                    manifest=manifest, uploaded_by=user_id,
+                    expires_at=now + timedelta(minutes=_MEDIA_SESSION_TTL_MINUTES),
+                )
+                db.session.add(session)
+                db.session.commit()
+                bucket = get_bucket()
+                items = []
+                for item in manifest:
+                    headers = {'Content-Type': _MEDIA_EXTENSIONS[item['ext']][0], 'Content-Length': str(item['file_size'])}
+                    items.append({**item, 'presign_url': bucket.sign_url('PUT', item['storage_key'], 3600, headers=headers), 'required_headers': headers})
+                return Result.ok(data={'session_token': token, 'expires_at': session.expires_at.strftime('%Y-%m-%d %H:%M:%S'), 'items': items})
+            except Exception as exc:
+                db.session.rollback()
+                if 'uq_aftersale_media_session_start_seq' not in str(exc):
+                    return Result.fail('生成媒体上传签名失败')
+        return Result.fail('当前订单正在生成上传序号，请重试')
+
+    def confirm_media(self, data, user_id):
+        token = (data.get('session_token') or '').strip()
+        if not token:
+            return Result.fail('缺少 session_token')
+        session = AftersaleMediaUploadSession.query.filter_by(session_token=token).first()
+        if not session or session.uploaded_by != user_id:
+            return Result.fail('上传会话不存在或无权限')
+        if session.confirmed_at:
+            return Result.ok(data={'order_no': session.order_no, 'confirmed': True, 'idempotent': True})
+        if session.expires_at <= now_cst():
+            return Result.fail('上传会话已过期，请重新获取上传签名')
+        old_keys = []
+        try:
+            if session.mode == 'replace':
+                old_keys = [row.storage_key for row in _repo.get_media(session.order_no)]
+                AftersaleCaseMedia.query.filter_by(order_no=session.order_no).delete(synchronize_session=False)
+            for item in session.manifest:
+                db.session.add(AftersaleCaseMedia(
+                    order_no=session.order_no, seq=item['seq'], file_type=item['file_type'],
+                    original_filename=item['original_filename'], stored_filename=item['stored_filename'],
+                    oss_url=item['oss_url'], storage_key=item['storage_key'], file_size=item['file_size'],
+                    sort_order=item['seq'], uploaded_by=user_id,
+                ))
+            session.confirmed_at = now_cst()
+            session.reserved_start = None
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            return Result.fail('确认媒体上传失败')
+
+        # DB 已提交后才做不可逆的旧对象删除；失败落库，绝不静默丢失。
+        if old_keys:
+            bucket = get_bucket()
+            for key in old_keys:
+                try:
+                    bucket.delete_object(key)
+                except Exception as exc:
+                    db.session.add(AftersaleMediaCleanupFailure(
+                        storage_key=key, order_no=session.order_no, error_message=str(exc)[:1000],
+                    ))
+            db.session.commit()
+        return Result.ok(data={'order_no': session.order_no, 'confirmed': True, 'count': len(session.manifest)})
+
+    def get_media_flags(self, data):
+        try:
+            raw = data.get('order_nos') or []
+            if not isinstance(raw, list) or len(raw) > 200:
+                raise ValueError('order_nos 数量必须在 1 到 200 之间')
+            order_nos = list(dict.fromkeys(self._media_order_no(value) for value in raw))
+        except ValueError as exc:
+            return Result.fail(str(exc))
+        return Result.ok(data=_repo.get_media_summaries(order_nos))
+
+    def get_case_media(self, order_no):
+        try:
+            order_no = self._media_order_no(order_no)
+        except ValueError as exc:
+            return Result.fail(str(exc))
+        return Result.ok(data=[row.to_dict() for row in _repo.get_media(order_no)])
 
     # ── 一级分类 ───────────────────────────────────────────────────────────────
 

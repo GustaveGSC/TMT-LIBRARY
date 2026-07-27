@@ -208,6 +208,73 @@ class AftersaleCase(db.Model):
         return d
 
 
+class AftersaleCaseMedia(db.Model):
+    """附件可先于售后工单抵达，因此仅以订单号逻辑关联，不设外键。"""
+    __tablename__ = 'aftersale_case_media'
+    __table_args__ = (
+        db.UniqueConstraint('storage_key', name='uq_aftersale_case_media_storage_key'),
+        db.UniqueConstraint('order_no', 'seq', name='uq_aftersale_case_media_order_seq'),
+        db.Index('ix_aftersale_case_media_order_no', 'order_no'),
+    )
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    order_no = db.Column(db.String(100), nullable=False)
+    seq = db.Column(db.Integer, nullable=False)
+    file_type = db.Column(db.String(20), nullable=False)
+    original_filename = db.Column(db.String(300), nullable=False)
+    stored_filename = db.Column(db.String(300), nullable=False)
+    oss_url = db.Column(db.String(1000), nullable=False)
+    storage_key = db.Column(db.String(500), nullable=False)
+    file_size = db.Column(db.BigInteger, nullable=False)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    uploaded_by = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=now_cst)
+
+    def to_dict(self):
+        return {
+            'id': self.id, 'order_no': self.order_no, 'seq': self.seq,
+            'file_type': self.file_type, 'original_filename': self.original_filename,
+            'stored_filename': self.stored_filename, 'oss_url': self.oss_url,
+            'file_size': self.file_size,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
+        }
+
+
+class AftersaleMediaUploadSession(db.Model):
+    """服务器端上传清单和序号预留；confirm 永不信任客户端文件元数据。"""
+    __tablename__ = 'aftersale_media_upload_session'
+    __table_args__ = (
+        db.UniqueConstraint('session_token', name='uq_aftersale_media_session_token'),
+        db.UniqueConstraint('order_no', 'reserved_start', name='uq_aftersale_media_session_start_seq'),
+        db.Index('ix_aftersale_media_session_expiry', 'expires_at'),
+    )
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    session_token = db.Column(db.String(128), nullable=False)
+    order_no = db.Column(db.String(100), nullable=False)
+    mode = db.Column(db.String(16), nullable=False)
+    start_seq = db.Column(db.Integer, nullable=False)
+    # 未确认时参与唯一预留；确认后置空，保留 session 供 confirm 幂等重试。
+    reserved_start = db.Column(db.Integer, nullable=True)
+    end_seq = db.Column(db.Integer, nullable=False)
+    manifest = db.Column(db.JSON, nullable=False)
+    uploaded_by = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    confirmed_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=now_cst)
+
+
+class AftersaleMediaCleanupFailure(db.Model):
+    """OSS 补偿删除失败必须留痕，供后续重试任务处理。"""
+    __tablename__ = 'aftersale_media_cleanup_failure'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    storage_key = db.Column(db.String(500), nullable=False, index=True)
+    order_no = db.Column(db.String(100), nullable=False, index=True)
+    error_message = db.Column(db.String(1000), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=now_cst)
+
+
 class AftersaleReasonAliasAffinity(db.Model):
     """原因-发货简称亲和度：记录已确认工单中 reason_id + shipping_alias_id 的共现次数，
     用于在候选简称基础分相同时做二次排序。"""

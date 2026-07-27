@@ -240,6 +240,13 @@ POST   /api/shipping/map-breakdown                    # shipping:view；财务�
 GET    /api/aftersale/pending                         # 待处理订单列表（动态查询，尚未建工单的售后操作人订单）
                                                       #   page>=1，page_size 1..200；非法值返回 400
 GET    /api/aftersale/pending/count                   # 待处理订单数量
+POST   /api/aftersale/media/precheck                  # aftersale:view；{order_nos: string[1..200]} 批量返回每单已有媒体摘要
+POST   /api/aftersale/media/presign                   # aftersale:edit；{order_no,mode:append|replace,files:[{ext,file_size,original_filename}]}
+                                                      # 返回不可伪造 session_token 和批量 OSS PUT 签名；服务端预留 seq，1小时过期
+POST   /api/aftersale/media/confirm                   # aftersale:edit；{session_token}；只以 session 服务端 manifest 落库
+                                                      # replace 先提交新记录再补偿删除旧 OSS；清理失败写入留痕表
+POST   /api/aftersale/cases/media-flags               # aftersale:view；{order_nos:string[1..200]} → {order_no: media_count}，单次 GROUP BY
+GET    /api/aftersale/cases/:order_no/media           # aftersale:view；按需返回该订单全部图片/视频
 POST   /api/aftersale/suggest-product                 # 型号/物料等推荐；body 含 product_codes、seller_remark 等
                                                       #   返回 data 中可含 suggestions：
                                                       #   suggested_shipping_alias_id, suggested_return_alias_id,
