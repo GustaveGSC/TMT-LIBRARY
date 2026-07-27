@@ -2,7 +2,8 @@
 // ── 导入 ──────────────────────────────────────────
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Edit, Check, Close, Remove, Picture } from '@element-plus/icons-vue'
+import { Edit, Check, Close, Remove } from '@element-plus/icons-vue'
+import mediaMarkerIcon from '@/assets/icons/icon_image_2.png'
 import Sortable from 'sortablejs'
 import http from '@/api/http.js'
 import { downloadBlob } from '@/utils/download.js'
@@ -806,7 +807,10 @@ async function exportData() {
           <template #default="{ row }">
             {{ row.ecommerce_order_no }}
             <el-tooltip v-if="mediaCounts[row.ecommerce_order_no] > 0" :content="`有 ${mediaCounts[row.ecommerce_order_no]} 个售后图片/视频`">
-              <el-icon class="media-marker"><Picture /></el-icon>
+              <span class="media-marker">
+                <img :src="mediaMarkerIcon" class="media-marker-icon" />
+                <span class="media-marker-count">{{ mediaCounts[row.ecommerce_order_no] }}</span>
+              </span>
             </el-tooltip>
           </template>
         </el-table-column>
@@ -1218,7 +1222,13 @@ async function exportData() {
 }
 .media-card-thumb { width: 100%; height: 100%; object-fit: contain; background: #fff; display: block; }
 .media-video-play { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 28px; background: rgba(0,0,0,0.25); }
-.media-marker { color: var(--accent); margin-left: 4px; vertical-align: -2px; cursor: default; }
+.media-marker {
+  display: inline-flex; align-items: center; gap: 2px; margin-left: 6px; vertical-align: middle;
+  background: rgba(196,136,58,0.12); border: 1px solid var(--accent); border-radius: 10px;
+  padding: 1px 6px 1px 3px; cursor: default;
+}
+.media-marker-icon { width: 16px; height: 16px; display: block; }
+.media-marker-count { font-size: 11px; color: var(--accent); font-weight: 600; line-height: 1; }
 
 /* 列头 & 单元格状态染色（锁定列=橙色，用户主动筛选列=绿色） */
 :deep(.col-locked)        { background: rgba(196, 136, 58, 0.14) !important; }
