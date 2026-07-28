@@ -329,6 +329,22 @@ product_resource_model             # 资料-型号 关联（型号继承）
   model_id(FK→product_model CASCADE),
   PRIMARY KEY(resource_id, model_id)
   # 产品若属于该型号，则自动继承此资料（link_type='model'）
+
+product_detail_package             # 独立的产品详情包，不复用 product_resource
+  id, name(VARCHAR 200), tag_condition(JSON nullable), created_at, updated_at
+  # 成品详情按“型号命中 OR 标签条件命中”展示；tag_condition 语义与 product_resource 相同
+
+product_detail_package_media
+  id, package_id(FK→product_detail_package CASCADE), file_type(image|video),
+  original_filename(VARCHAR 300), oss_url(VARCHAR 1000), storage_key(VARCHAR 500 UNIQUE),
+  file_size(BIGINT), sort_order, created_at
+
+product_detail_package_tag / product_detail_package_model
+  package_id(FK→product_detail_package CASCADE), tag_id/model_id(FK CASCADE), PRIMARY KEY(package_id, tag_id/model_id)
+
+product_detail_package_cleanup_failure
+  id, package_id(nullable), storage_key, error_message, created_at
+  # 数据库删除成功但 OSS 对象删除失败时留痕；不将已完成的删除操作伪装成失败
 ```
 
 ## BOM 成本库（`backend/database/models/rd/cost.py`）

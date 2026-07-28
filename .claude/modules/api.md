@@ -144,6 +144,19 @@ POST   /api/resources/finished/:code                  # 直接关联资料 {reso
 DELETE /api/resources/finished/:code/:resource_id     # 解除直接关联
 PUT    /api/resources/finished/:code/order            # 更新排序 {ordered_ids:[...]}
 
+GET    /api/product-detail-packages                    # product:view；?search&page&size，返回 {items,total,page,size}
+POST   /api/product-detail-packages                    # product:edit；新建 {name}
+PUT    /api/product-detail-packages/:id                # product:edit；重命名 {name}
+DELETE /api/product-detail-packages/:id                # product:edit；删除包及 DB 媒体记录；OSS 清理失败留痕、不回滚成功删除
+PUT    /api/product-detail-packages/:id/tags           # product:edit；全量设置 {tag_ids:[int],tag_condition?:null|object|array}
+PUT    /api/product-detail-packages/:id/models         # product:edit；全量设置 {model_ids:[int]}
+POST   /api/product-detail-packages/:id/media/presign  # product:edit；批量 {files:[{ext,original_filename,file_size}]}
+                                                      #   返回每项 presign_url/storage_key/oss_url/file_type/file_size/required_headers；仅 image/video，单项上限500MB
+POST   /api/product-detail-packages/:id/media/confirm  # product:edit；{files:[{storage_key,original_filename,file_size}]}
+                                                      #   key 必须属于当前包且不得有子路径；storage_key 全局唯一
+DELETE /api/product-detail-packages/:id/media/:media_id # product:edit；DB 先删除，OSS 失败留痕
+GET    /api/product-detail-packages/finished/:code     # product:view；返回当前成品匹配的包及媒体，匹配为型号 OR 标签条件
+
 GET    /api/product/params/keys                       # 所有键名按分组聚合
 POST   /api/product/params/keys                       # 创建键名 {name, group_name, sort_order?}
 PUT    /api/product/params/keys/:key_id               # 更新键名
