@@ -1460,11 +1460,22 @@ function setTagFilter(categoryId, tagIds) {
   filters.value.tagFilters = { ...filters.value.tagFilters, [categoryId]: tagIds }
 }
 
-/** 标签筛选：body 传参格式，展开分组 UUID 为标签 id，过滤掉空选择的分类 */
+/** 标签筛选：body 传参格式，展开分组 UUID 为标签 id/名称，过滤掉空选择的分类
+ *  财务端"地域/品牌"是人工映射文本（value_kind==='name'），走 tag_names；
+ *  其余维度是产品标签库 id（value_kind==='id'，含 shipping 端及财务其他维度），走 tag_ids */
 function buildTagFilters() {
   return Object.entries(filters.value.tagFilters || {})
-    .map(([categoryId, ids]) => ({ category_id: Number(categoryId), tag_ids: expandStrSel(ids || []) }))
-    .filter(tf => tf.tag_ids.length)
+    .map(([categoryId, ids]) => {
+      const catId = Number(categoryId)
+      const values = expandStrSel(ids || [])
+      const td = tagDimensions.value.find(d => d.category_id === catId)
+      const isNameKind = td?.value_kind === 'name'
+      return {
+        category_id: catId,
+        ...(isNameKind ? { tag_names: values } : { tag_ids: values }),
+      }
+    })
+    .filter(tf => (tf.tag_names || tf.tag_ids || []).length)
 }
 
 /** 分组下钻：右击激活分组条目，展开分组成员的明细数据 */
