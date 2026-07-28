@@ -148,6 +148,7 @@ class FinishedRepository:
                 'delisted_yymm': fin.delisted_yymm if fin else None,
                 # 市场
                 'market':        fin.market        if fin else None,
+                'remark':        fin.remark        if fin else None,
                 # 封面图
                 'cover_image':          fin.cover_image          if fin else None,
                 'cover_image_original': fin.cover_image_original if fin else None,
