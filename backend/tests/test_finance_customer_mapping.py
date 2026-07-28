@@ -583,6 +583,10 @@ def test_finance_chart_uses_manual_mapping_for_trade_country_brand_and_filters()
 
         assert {row['label'] for row in country['items']} == {'加拿大', '泰国'}
         assert {row['label'] for row in brand_rows['items']} == {'品牌甲', '品牌泰'}
+        assert {
+            row['label']: row.get('name') for row in brand_rows['items']
+        } == {'品牌甲': '加拿大', '品牌泰': '泰国'}
+        assert all('name' not in row for row in country['items'])
         assert [row['label'] for row in domestic['items']] == ['内销部']
         assert {row['label'] for row in foreign['items']} == {'外贸部', '泰国渠道'}
         assert {row['label'] for row in all_rows['items']} == {
@@ -591,7 +595,7 @@ def test_finance_chart_uses_manual_mapping_for_trade_country_brand_and_filters()
         assert [row['label'] for row in filtered['items']] == ['外贸部']
         assert text_filtered_breakdown['items'] == [{
             'label': '品牌泰', 'quantity': 15.0, 'return_quantity': 0.0,
-            'actual_quantity': 15.0,
+            'actual_quantity': 15.0, 'name': '泰国',
         }]
         assert batched_brand['items'] == [
             {
@@ -664,6 +668,24 @@ def test_finance_chart_uses_manual_mapping_for_trade_country_brand_and_filters()
             'country': '泰国', 'label': '品牌泰', 'quantity': 15.0,
             'return_quantity': 0.0, 'actual_quantity': 15.0,
         }]
+
+        # 同一品牌的历史映射若对应多个国家，tooltip 副标题必须保留全部国家。
+        db.session.add_all([
+            ShippingFinanceCustomerMapping(
+                customer_alias='BRAND-MULTI', status='export', country='波兰', brand='品牌甲',
+            ),
+            ShippingOrderFinished(
+                ecommerce_order_no='MULTI', finished_code='SKU-E', quantity=1,
+                return_quantity=0, actual_quantity=1, source='finance',
+                customer_alias='BRAND-MULTI', channel_name='波兰渠道',
+            ),
+        ])
+        db.session.commit()
+        multi_country_brand = ShippingRepository.get_chart_data({
+            'source': 'finance', 'group_by': f'tag:{brand.id}', 'trade_type': 'all',
+        })
+        brand_a = next(item for item in multi_country_brand['items'] if item['label'] == '品牌甲')
+        assert set(brand_a['name'].split(',')) == {'加拿大', '波兰'}
 
 
 def test_finance_customer_mapping_api_contract_and_permissions(monkeypatch):

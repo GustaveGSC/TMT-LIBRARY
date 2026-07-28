@@ -2590,7 +2590,13 @@ class ShippingRepository:
             order_expr = func.sum(sof.actual_quantity).desc()
         elif is_finance_mapping_group:
             label_expr = finance_mapping_field
-            name_expr  = None
+            # 品牌 tooltip 的副标题展示该品牌对应的国家。历史映射可能把同一
+            # 品牌写到多个客户/国家，GROUP_CONCAT DISTINCT 保留全部信息而不静默取首项。
+            name_expr = (
+                func.group_concat(sql_distinct(ShippingFinanceCustomerMapping.country))
+                if finance_mapping_field is ShippingFinanceCustomerMapping.brand
+                else None
+            )
             order_expr = func.sum(sof.actual_quantity).desc()
         elif is_tag_group_by:
             from database.models.product.finished import ProductTag

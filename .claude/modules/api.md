@@ -237,9 +237,10 @@ POST   /api/shipping/chart-data                       # 图表聚合数据，bod
                                                       #   source=shipping：trade_type 保留历史 FTP 产品判断（前端固定传 all）
                                                       #   source=finance：domestic/foreign 仅按人工映射 status=domestic/export；pending、non_sales、未映射均不进入两者，all 仍包含全部
                                                       #   group_by 除固定维度外，可传 'tag:<category_id>' 按该标签分类聚合（需先在数据配置中启用该分类为发货维度）
-                                                      #   source=finance 且标签分类名为「地域」或「品牌」时，按人工映射的 country/brand 聚合；仅 status=export 且值非空的数据参与，响应结构不变
+                                                      #   source=finance 且标签分类名为「地域」/「全球区域」或「品牌」时，按人工映射的 country/brand 聚合；仅 status=export 且值非空的数据参与
+                                                      #   按“品牌”聚合的 item 额外含 name（该品牌对应的一个或多个国家，以逗号分隔），供 tooltip 副标题显示；地域聚合不含 name
                                                       #   tag_filters?: [{category_id, tag_ids?, tag_names?}]，与 group_by 相互独立
-                                                      #   source=finance 且分类名为「地域」/「品牌」时可直接传 tag_names（字符串数组，单项最长100，最多100项），按人工映射文本筛选
+                                                      #   source=finance 且分类名为「地域」/「全球区域」/「品牌」时可直接传 tag_names（字符串数组，单项最长100，最多100项），按人工映射文本筛选
                                                       #     tag_names 不要求 product_tag 中存在同名标签；与 tag_ids 同时传时取名称并集，同一分类内为 OR、不同分类之间为 AND
                                                       #   其他来源/分类忽略 tag_names，仍只支持 tag_ids，以保持产品标签筛选语义
 POST   /api/shipping/map-breakdown                    # shipping:view；财务端世界地图的批量悬浮细分
