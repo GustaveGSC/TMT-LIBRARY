@@ -628,6 +628,43 @@ def test_finance_chart_uses_manual_mapping_for_trade_country_brand_and_filters()
             '外贸部', '泰国渠道', '未审核部',
         }
 
+        # 生产库的长期显示名为“全球区域”。重命名不应让财务映射退回产品标签路径；
+        # 同时覆盖图表 options、chart-data 的 tag_names 筛选和批量地图明细入口。
+        region.name = '全球区域'
+        db.session.commit()
+        _invalidate_chart_options_cache()
+        global_region_options = ShippingRepository.get_chart_options(source='finance')
+        global_region_shipping_options = ShippingRepository.get_chart_options(source='shipping')
+        global_region_dimension = next(
+            item for item in global_region_options['tag_dimensions']
+            if item['category_id'] == region.id
+        )
+        assert global_region_dimension['value_kind'] == 'name'
+        assert {item['name'] for item in global_region_dimension['tags']} == {
+            '加拿大', '泰国', '中国', '德国', '俄罗斯',
+        }
+        global_region_shipping_dimension = next(
+            item for item in global_region_shipping_options['tag_dimensions']
+            if item['category_id'] == region.id
+        )
+        assert global_region_shipping_dimension['value_kind'] == 'id'
+        assert global_region_shipping_dimension['tags'] == [
+            {'id': canada.id, 'name': '加拿大'},
+        ]
+        global_region_filtered = ShippingRepository.get_chart_data({
+            'source': 'finance', 'group_by': 'channel', 'trade_type': 'all',
+            'tag_filters': [{'category_id': region.id, 'tag_names': ['泰国']}],
+        })
+        assert [item['label'] for item in global_region_filtered['items']] == ['泰国渠道']
+        global_region_breakdown = ShippingRepository.get_finance_map_breakdown({
+            'source': 'finance', 'country_category_id': region.id,
+            'countries': ['泰国'], 'breakdown_group_by': f'tag:{brand.id}',
+        })
+        assert global_region_breakdown['items'] == [{
+            'country': '泰国', 'label': '品牌泰', 'quantity': 15.0,
+            'return_quantity': 0.0, 'actual_quantity': 15.0,
+        }]
+
 
 def test_finance_customer_mapping_api_contract_and_permissions(monkeypatch):
     app = Flask(__name__)
