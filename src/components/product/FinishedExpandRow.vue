@@ -899,6 +899,62 @@ const detailMediaVisibleCount = ref(DETAIL_MEDIA_PAGE_SIZE)
 const visibleDetailMedia = computed(() => detailMediaItems.value.slice(0, detailMediaVisibleCount.value))
 function loadMoreDetailMedia() { detailMediaVisibleCount.value += DETAIL_MEDIA_PAGE_SIZE }
 
+// ── 批量上传（"产品详情"经常是一次性上传大量图片，不适合一个一个走"新建资料"弹窗）──
+const bulkUploadInput   = ref(null)
+const bulkUploading     = ref(false)
+const bulkUploadDone    = ref(0)
+const bulkUploadTotal   = ref(0)
+const bulkUploadFailed  = ref(0)
+
+function openBulkUpload() { bulkUploadInput.value?.click() }
+
+async function onBulkUploadSelected(e) {
+  const files = Array.from(e.target.files || [])
+  e.target.value = ''   // 允许重复选择同一批文件
+  if (!files.length) return
+
+  if (!resourceTypes.value.length) await loadResourceTypes()
+  const detailType = resourceTypes.value.find(t => t.name === '产品详情')
+  if (!detailType) {
+    ElMessage.error('未找到"产品详情"资料类型，请联系管理员')
+    return
+  }
+
+  bulkUploading.value    = true
+  bulkUploadDone.value   = 0
+  bulkUploadTotal.value  = files.length
+  bulkUploadFailed.value = 0
+
+  // 逐个上传：uploadFile 内部走 presign+OSS直传+进度，逐个处理避免同时发起大量并发请求压垮服务器
+  for (const file of files) {
+    try {
+      const uploaded = await uploadFile(file)
+      if (!uploaded) { bulkUploadFailed.value++; continue }
+      const title = file.name.replace(/\.[^.]+$/, '') || file.name
+      const created = await createResource({
+        title, type_id: detailType.id,
+        url: uploaded.url, file_type: uploaded.file_type,
+        source: 'oss', storage_key: uploaded.storage_key,
+        original_filename: uploaded.original_filename, description: '',
+      })
+      if (!created) { bulkUploadFailed.value++; continue }
+      await linkResource(created.id, 0, { silent: true })
+    } catch {
+      bulkUploadFailed.value++
+    } finally {
+      bulkUploadDone.value++
+    }
+  }
+
+  await loadLinkedResources()
+  bulkUploading.value = false
+  if (bulkUploadFailed.value) {
+    ElMessage.warning(`批量上传完成：成功 ${bulkUploadTotal.value - bulkUploadFailed.value} 个，失败 ${bulkUploadFailed.value} 个`)
+  } else {
+    ElMessage.success(`批量上传完成，共 ${bulkUploadTotal.value} 个文件`)
+  }
+}
+
 const detailMediaViewerVisible = ref(false)
 const detailMediaViewerIndex   = ref(0)
 const detailMediaViewerItems   = computed(() => detailMediaItems.value.map(r => ({
@@ -1726,10 +1782,25 @@ function toggleSec(key) {
               </div>
 
               <!-- "产品详情"类型：固定在最底部，横向分割线与其它资料隔开，不参与 tab 切换 -->
-              <template v-if="productDetailTypeGroup">
-                <div class="res-detail-divider" />
-                <div class="res-detail-block">
-                  <div class="res-detail-hd">{{ productDetailTypeGroup.type_name }}（{{ productDetailTypeGroup.items.length }}）</div>
+              <div class="res-detail-divider" />
+              <div class="res-detail-block">
+                <div class="res-detail-hd">
+                  产品详情（{{ productDetailTypeGroup?.items.length || 0 }}）
+                  <template v-if="canEditProduct && editing">
+                    <button class="res-sec-btn" :disabled="bulkUploading" @click.stop="openBulkUpload">+ 批量上传</button>
+                    <input
+                      ref="bulkUploadInput" type="file" multiple
+                      accept=".png,.jpg,.jpeg,.webp,.mp4,.mov,.webm"
+                      style="display:none" @change="onBulkUploadSelected"
+                    />
+                  </template>
+                </div>
+                <div v-if="bulkUploading" class="res-bulk-progress">
+                  上传中… {{ bulkUploadDone }}/{{ bulkUploadTotal }}
+                  <span v-if="bulkUploadFailed">（{{ bulkUploadFailed }} 个失败）</span>
+                </div>
+                <div v-if="!productDetailTypeGroup" class="res-empty">暂无图片/视频</div>
+                <template v-else>
                   <div class="res-files res-files--detail" @click.self="resSelectedId = null">
                     <div
                       v-for="r in productDetailTypeGroup.items"
@@ -1756,8 +1827,8 @@ function toggleSec(key) {
                       <div v-if="r.link_type === 'model'" class="res-file-badge res-file-badge--model" title="通过型号关联"></div>
                     </div>
                   </div>
-                </div>
-              </template>
+                </template>
+              </div>
             </template>
           </div>
         </div>
@@ -2903,7 +2974,8 @@ function toggleSec(key) {
 /* "产品详情"类型固定在最底部，横向分割线与其它资料类型隔开（类似"未分类"与其它分类的隔开方式） */
 .res-detail-divider { height: 1px; background: #ddd0b8; margin: 12px 0; }
 .res-detail-block {}
-.res-detail-hd { font-size: 11px; color: #8a7a6a; margin-bottom: 6px; }
+.res-detail-hd { font-size: 11px; color: #8a7a6a; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+.res-bulk-progress { font-size: 11px; color: #c4883a; margin-bottom: 8px; }
 .res-files--detail { padding: 0; }
 
 .res-files {
