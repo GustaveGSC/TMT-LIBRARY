@@ -82,6 +82,13 @@ src/stores/product/
 - eg-lbl 宽80px，居中，背景#faf7f2，右边框分隔
 - eg-row min-height:34px，不用固定height
 
+## FinishedExpandRow 产品详情区说明
+- **折叠区 ec-sections 新增子节**：产品详情，位于"数据"上方（当前实际渲染顺序：参数 / 资料 / 产品详情 / 数据）
+- 复用"资料"tab 同一份 `useProductResources(() => props.row.code).linkedResources`（同一 composable 实例，不新增接口/请求），仅筛选 `file_type` 为 `image`/`video` 的条目，与"资料"共享标签/型号继承逻辑
+- **分批渲染**：单产品详情文件可能较多，画廊默认渲染前 24 张，"加载更多"每次 +24（纯前端分页，数据已一次性加载完毕）；缩略图 `loading="lazy"`
+- **卡片样式**：`aspect-ratio:4/3` + `object-fit:contain`（与售后媒体卡片一致，不裁切原始比例）
+- **查看器**：点击卡片打开 `MediaViewer`（只读，不传 `delete-handler`），同一个框内左右切换、图片支持缩放平移
+
 ## FinishedExpandRow 资料区说明
 - **折叠区 ec-sections 包含三个子节**：资料 / 参数 / 数据（资料在最前）
 - **composable**：`useProductResources(() => props.row.code)`（每个实例独立，非全局单例）
