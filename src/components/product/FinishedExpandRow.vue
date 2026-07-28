@@ -10,7 +10,6 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFinishedStore } from '@/stores/product/finished'
 import { usePackagedStore } from '@/stores/product/packaged'
 import GEditTagList from '@/components/common/GEditTagList.vue'
-import MediaViewer from '@/components/common/MediaViewer.vue'
 import modelTipImg from '@/assets/images/image_model_tip.png'
 import { useFinishedImage } from '@/composables/useFinishedImage'
 import { useFinishedParams, GROUP_DEFS } from '@/composables/useFinishedParams'
@@ -881,89 +880,6 @@ const {
 // 资料区 tab（当前选中类型 type_id）
 const resActiveTab   = ref(null)
 const resSelectedId  = ref(null)   // 单击选中的文件 id
-// "产品详情"类型在资料 tab 里单独隔开显示（视觉上与其它类型分组），不与说明书/安装视频等混排
-const normalTypeGroups      = computed(() => linkedByType.value.filter(g => g.type_name !== '产品详情'))
-const productDetailTypeGroup = computed(() => linkedByType.value.find(g => g.type_name === '产品详情') || null)
-
-// ── 产品详情（图片/视频画廊，复用"资料"库同一套上传/标签机制，但内容独立）──
-// 只展示"产品详情"这一资料类型下的条目，不混入说明书/安装视频/售后视频等其它既有类型；
-// 编辑时在"资料"tab 用「新建资料」选择"产品详情"类型即可关联进这个区块。
-// 同一产品的详情文件可能较多，画廊分批渲染（"加载更多"），避免一次性渲染过多缩略图卡顿
-const detailMediaItems = computed(() =>
-  linkedResources.value.filter(r =>
-    r.type_name === '产品详情' && (r.file_type === 'image' || r.file_type === 'video'),
-  ),
-)
-const DETAIL_MEDIA_PAGE_SIZE = 24
-const detailMediaVisibleCount = ref(DETAIL_MEDIA_PAGE_SIZE)
-const visibleDetailMedia = computed(() => detailMediaItems.value.slice(0, detailMediaVisibleCount.value))
-function loadMoreDetailMedia() { detailMediaVisibleCount.value += DETAIL_MEDIA_PAGE_SIZE }
-
-// ── 批量上传（"产品详情"经常是一次性上传大量图片，不适合一个一个走"新建资料"弹窗）──
-const bulkUploadInput   = ref(null)
-const bulkUploading     = ref(false)
-const bulkUploadDone    = ref(0)
-const bulkUploadTotal   = ref(0)
-const bulkUploadFailed  = ref(0)
-
-function openBulkUpload() { bulkUploadInput.value?.click() }
-
-async function onBulkUploadSelected(e) {
-  const files = Array.from(e.target.files || [])
-  e.target.value = ''   // 允许重复选择同一批文件
-  if (!files.length) return
-
-  if (!resourceTypes.value.length) await loadResourceTypes()
-  const detailType = resourceTypes.value.find(t => t.name === '产品详情')
-  if (!detailType) {
-    ElMessage.error('未找到"产品详情"资料类型，请联系管理员')
-    return
-  }
-
-  bulkUploading.value    = true
-  bulkUploadDone.value   = 0
-  bulkUploadTotal.value  = files.length
-  bulkUploadFailed.value = 0
-
-  // 逐个上传：uploadFile 内部走 presign+OSS直传+进度，逐个处理避免同时发起大量并发请求压垮服务器
-  for (const file of files) {
-    try {
-      const uploaded = await uploadFile(file)
-      if (!uploaded) { bulkUploadFailed.value++; continue }
-      const title = file.name.replace(/\.[^.]+$/, '') || file.name
-      const created = await createResource({
-        title, type_id: detailType.id,
-        url: uploaded.url, file_type: uploaded.file_type,
-        source: 'oss', storage_key: uploaded.storage_key,
-        original_filename: uploaded.original_filename, description: '',
-      })
-      if (!created) { bulkUploadFailed.value++; continue }
-      await linkResource(created.id, 0, { silent: true })
-    } catch {
-      bulkUploadFailed.value++
-    } finally {
-      bulkUploadDone.value++
-    }
-  }
-
-  await loadLinkedResources()
-  bulkUploading.value = false
-  if (bulkUploadFailed.value) {
-    ElMessage.warning(`批量上传完成：成功 ${bulkUploadTotal.value - bulkUploadFailed.value} 个，失败 ${bulkUploadFailed.value} 个`)
-  } else {
-    ElMessage.success(`批量上传完成，共 ${bulkUploadTotal.value} 个文件`)
-  }
-}
-
-const detailMediaViewerVisible = ref(false)
-const detailMediaViewerIndex   = ref(0)
-const detailMediaViewerItems   = computed(() => detailMediaItems.value.map(r => ({
-  id: r.id, file_type: r.file_type, oss_url: r.url, original_filename: r.title,
-})))
-function openDetailMediaViewer(resourceId) {
-  detailMediaViewerIndex.value   = Math.max(0, detailMediaItems.value.findIndex(r => r.id === resourceId))
-  detailMediaViewerVisible.value = true
-}
 
 // 资料弹窗（从资料库多选）
 const resourcePickerVisible  = ref(false)
@@ -1147,15 +1063,12 @@ function toggleSec(key) {
   }
   if (key === 'resources' && openSec[key] && !linkedLoaded.value) {
     loadLinkedResources().then(() => {
-      // 默认选中第一个 tab（"产品详情"固定在底部单独展示，不参与 tab 默认选中）
-      if (resActiveTab.value === null && normalTypeGroups.value.length) {
-        resActiveTab.value = normalTypeGroups.value[0].type_id
+      // 默认选中第一个 tab
+      if (resActiveTab.value === null && linkedByType.value.length) {
+        resActiveTab.value = linkedByType.value[0].type_id
       }
     })
     if (!resourceTypes.value.length) loadResourceTypes()
-  }
-  if (key === 'productDetail' && openSec[key] && !linkedLoaded.value) {
-    loadLinkedResources()
   }
 }
 </script>
@@ -1724,11 +1637,12 @@ function toggleSec(key) {
             <div v-if="linkedLoading" class="res-loading">加载中…</div>
             <div v-else-if="!linkedResources.length" class="res-empty">暂无资料</div>
             <template v-else>
-              <!-- 顶部 Tab + 文件网格布局（不含"产品详情"，该类型固定显示在下方独立区块） -->
-              <div v-if="normalTypeGroups.length" class="res-layout">
+              <!-- 顶部 Tab + 文件网格布局 -->
+              <div class="res-layout">
+                <!-- 顶部类型 tab -->
                 <div class="res-tabs">
                   <div
-                    v-for="g in normalTypeGroups"
+                    v-for="g in linkedByType"
                     :key="g.type_id"
                     class="res-tab"
                     :class="{ 'res-tab--active': resActiveTab === g.type_id }"
@@ -1737,7 +1651,7 @@ function toggleSec(key) {
                 </div>
                 <!-- 文件网格 -->
                 <div class="res-files" @click.self="resSelectedId = null">
-                  <template v-for="g in normalTypeGroups" :key="g.type_id">
+                  <template v-for="g in linkedByType" :key="g.type_id">
                     <template v-if="resActiveTab === g.type_id">
                       <div
                         v-for="r in g.items"
@@ -1779,88 +1693,6 @@ function toggleSec(key) {
                     </template>
                   </template>
                 </div>
-              </div>
-
-              <!-- "产品详情"类型：固定在最底部，横向分割线与其它资料隔开，不参与 tab 切换 -->
-              <div class="res-detail-divider" />
-              <div class="res-detail-block">
-                <div class="res-detail-hd">
-                  产品详情（{{ productDetailTypeGroup?.items.length || 0 }}）
-                  <template v-if="canEditProduct && editing">
-                    <button class="res-sec-btn" :disabled="bulkUploading" @click.stop="openBulkUpload">+ 批量上传</button>
-                    <input
-                      ref="bulkUploadInput" type="file" multiple
-                      accept=".png,.jpg,.jpeg,.webp,.mp4,.mov,.webm"
-                      style="display:none" @change="onBulkUploadSelected"
-                    />
-                  </template>
-                </div>
-                <div v-if="bulkUploading" class="res-bulk-progress">
-                  上传中… {{ bulkUploadDone }}/{{ bulkUploadTotal }}
-                  <span v-if="bulkUploadFailed">（{{ bulkUploadFailed }} 个失败）</span>
-                </div>
-                <div v-if="!productDetailTypeGroup" class="res-empty">暂无图片/视频</div>
-                <template v-else>
-                  <div class="res-files res-files--detail" @click.self="resSelectedId = null">
-                    <div
-                      v-for="r in productDetailTypeGroup.items"
-                      :key="r.id"
-                      class="res-file"
-                      :class="{ 'res-file--selected': resSelectedId === r.id }"
-                      @click.stop="resSelectedId = r.id"
-                      @dblclick.stop="openResPreview(r)"
-                    >
-                      <button v-if="editing && r.link_type === 'direct'" class="res-file-unlink" title="解除关联" @click.stop="unlinkResource(r.id)">×</button>
-                      <div v-if="r.file_type === 'image'" class="res-file-thumb">
-                        <img :src="r.url" class="res-file-thumb-img" loading="lazy" />
-                      </div>
-                      <div v-else-if="r.file_type === 'video'" class="res-file-thumb res-file-thumb--video">
-                        <img v-if="r.cover_url" :src="r.cover_url" class="res-file-thumb-img" loading="lazy" />
-                        <video v-else :src="r.url" preload="metadata" muted class="res-file-thumb-img" style="object-fit:cover" />
-                        <div class="res-file-thumb-play"><el-icon><VideoPlay /></el-icon></div>
-                      </div>
-                      <div v-else class="res-file-icon">
-                        <el-icon><component :is="resourceFileIcon(r.file_type)" /></el-icon>
-                      </div>
-                      <div class="res-file-name" :title="r.title">{{ r.title }}</div>
-                      <div v-if="r.link_type === 'tag'" class="res-file-badge res-file-badge--tag" title="通过标签关联"></div>
-                      <div v-if="r.link_type === 'model'" class="res-file-badge res-file-badge--model" title="通过型号关联"></div>
-                    </div>
-                  </div>
-                </template>
-              </div>
-            </template>
-          </div>
-        </div>
-
-        <!-- 产品详情 section（图片/视频画廊，复用资料库数据，只展示 image/video 类型）─── -->
-        <div class="eg-sec">
-          <div class="eg-sec-hd" @click="toggleSec('productDetail')">
-            <span class="eg-arr">{{ isSec('productDetail') ? '▾' : '›' }}</span>产品详情
-          </div>
-          <div v-if="isSec('productDetail')" class="eg-sec-bd">
-            <div v-if="linkedLoading" class="res-loading">加载中…</div>
-            <div v-else-if="!detailMediaItems.length" class="res-empty">暂无图片/视频</div>
-            <template v-else>
-              <div class="pd-media-grid">
-                <div
-                  v-for="r in visibleDetailMedia"
-                  :key="r.id"
-                  class="pd-media-card"
-                  @click="openDetailMediaViewer(r.id)"
-                >
-                  <img v-if="r.file_type === 'image'" :src="r.url" class="pd-media-thumb" loading="lazy" />
-                  <template v-else>
-                    <img v-if="r.cover_url" :src="r.cover_url" class="pd-media-thumb" loading="lazy" />
-                    <video v-else :src="r.url" class="pd-media-thumb" preload="metadata" muted />
-                    <div class="pd-media-play"><el-icon><VideoPlay /></el-icon></div>
-                  </template>
-                </div>
-              </div>
-              <div v-if="detailMediaVisibleCount < detailMediaItems.length" class="pd-media-more">
-                <button class="param-sec-edit-btn" @click="loadMoreDetailMedia">
-                  加载更多（{{ detailMediaVisibleCount }}/{{ detailMediaItems.length }}）
-                </button>
               </div>
             </template>
           </div>
@@ -2146,13 +1978,6 @@ function toggleSec(key) {
       <button class="crop-btn crop-btn-confirm" @click="applyCrop">应用裁剪</button>
     </template>
   </el-dialog>
-
-  <!-- 产品详情图片/视频统一查看器 -->
-  <MediaViewer
-    v-model="detailMediaViewerVisible"
-    :items="detailMediaViewerItems"
-    :initial-index="detailMediaViewerIndex"
-  />
 
 </template>
 
@@ -2932,19 +2757,6 @@ function toggleSec(key) {
   padding: 10px 0; text-align: center;
 }
 
-/* ── 产品详情 图片/视频画廊 ── */
-.pd-media-grid { display: flex; flex-wrap: wrap; gap: 10px; }
-.pd-media-card {
-  position: relative; width: 140px; aspect-ratio: 4/3; border-radius: 8px;
-  border: 1px solid var(--border); overflow: hidden; cursor: pointer; background: #f5f0e8;
-}
-.pd-media-thumb { width: 100%; height: 100%; object-fit: contain; background: #fff; display: block; }
-.pd-media-play {
-  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-  color: #fff; font-size: 26px; background: rgba(0,0,0,0.25);
-}
-.pd-media-more { margin-top: 10px; text-align: center; }
-
 /* ── 资料 顶部 Tab + 文件网格布局 ── */
 .res-layout {
   border: 1px solid #ddd0b8;
@@ -2971,13 +2783,6 @@ function toggleSec(key) {
   color: #c4883a; font-weight: 600;
   background: #faf6ef;
 }
-/* "产品详情"类型固定在最底部，横向分割线与其它资料类型隔开（类似"未分类"与其它分类的隔开方式） */
-.res-detail-divider { height: 1px; background: #ddd0b8; margin: 12px 0; }
-.res-detail-block {}
-.res-detail-hd { font-size: 11px; color: #8a7a6a; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
-.res-bulk-progress { font-size: 11px; color: #c4883a; margin-bottom: 8px; }
-.res-files--detail { padding: 0; }
-
 .res-files {
   padding: 10px 12px;
   display: flex; flex-wrap: wrap;

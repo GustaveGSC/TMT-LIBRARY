@@ -195,13 +195,11 @@ export function useProductResources(codeGetter = null) {
     }
   }
 
-  // silent=true 时跳过自动刷新 linkedResources，供批量上传场景在循环结束后统一刷新一次，
-  // 避免连续上传 N 个文件时触发 N 次列表重新拉取
-  async function linkResource(resourceId, sort_order = 0, { silent = false } = {}) {
+  async function linkResource(resourceId, sort_order = 0) {
     if (!codeGetter) return false
     const code = codeGetter()
     const res = await http.post(`/api/resources/finished/${code}`, { resource_id: resourceId, sort_order })
-    if (res.success) { if (!silent) await loadLinkedResources() }
+    if (res.success) await loadLinkedResources()
     else ElMessage.error(res.message || '关联失败')
     return res.success
   }

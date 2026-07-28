@@ -314,8 +314,6 @@ const filteredUncategorizedTags = computed(() => {
 // ── 类型筛选 ──────────────────────────────────────
 const activeTypeId = ref(null)
 // "产品详情"是系统内置类型，侧边栏固定在最底部单独隔开，不与其它类型混排
-const normalTypes      = computed(() => types.value.filter(t => t.name !== '产品详情'))
-const productDetailType = computed(() => types.value.find(t => t.name === '产品详情') || null)
 
 function selectType(typeId) {
   activeTypeId.value = typeId
@@ -718,21 +716,12 @@ onBeforeUnmount(() => {
           @click="selectType(0)"
         >未分类</div>
         <div
-          v-for="t in normalTypes"
+          v-for="t in types"
           :key="t.id"
           class="type-item"
           :class="{ active: activeTypeId === t.id }"
           @click="selectType(t.id)"
         >{{ t.name }}</div>
-        <!-- "产品详情"固定在最底部，横向分割线与其它类型隔开（同"未分类"的隔开方式） -->
-        <template v-if="productDetailType">
-          <div class="type-sidebar-divider" />
-          <div
-            class="type-item"
-            :class="{ active: activeTypeId === productDetailType.id }"
-            @click="selectType(productDetailType.id)"
-          >{{ productDetailType.name }}</div>
-        </template>
       </aside>
 
       <!-- 右侧资料列表 -->
@@ -813,11 +802,10 @@ onBeforeUnmount(() => {
       <div class="type-manage">
         <div v-for="t in types" :key="t.id" class="type-row">
           <span class="type-row-name">{{ t.name }}</span>
-          <div v-if="t.name !== '产品详情'" class="type-row-actions">
+          <div class="type-row-actions">
             <el-button size="small" :icon="Edit" @click="openTypeEdit(t)" />
             <el-button size="small" :icon="Delete" type="danger" plain @click="deleteType(t.id)" />
           </div>
-          <span v-else class="type-row-protected">系统内置，不可编辑/删除</span>
         </div>
         <el-button :icon="Plus" style="width:100%;margin-top:10px" @click="openTypeCreate">新增类型</el-button>
       </div>
@@ -1157,7 +1145,6 @@ onBeforeUnmount(() => {
 .type-item:hover { background: rgba(196,136,58,0.06); color: var(--text-primary); }
 .type-item.active { background: var(--accent-bg); color: var(--accent); font-weight: 500; }
 .type-item--uncat { margin-bottom: 8px; border-bottom: 1px solid var(--border); padding-bottom: 10px; color: var(--text-muted); font-size: 12px; }
-.type-sidebar-divider { border-top: 1px solid var(--border); margin: 8px 0; }
 
 /* ── 资料列表 ──────────────────────────────── */
 .resource-list {
@@ -1276,7 +1263,6 @@ onBeforeUnmount(() => {
 .type-row    { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; }
 .type-row-name { font-size: 13px; color: var(--text-primary); }
 .type-row-actions { display: flex; gap: 6px; }
-.type-row-protected { font-size: 11px; color: var(--text-muted); }
 
 /* ── 上传 ──────────────────────────────────── */
 .upload-area     { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
