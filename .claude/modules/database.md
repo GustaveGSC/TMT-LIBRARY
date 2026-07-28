@@ -255,7 +255,7 @@ product_model
 
 product_finished
   id, code(UNIQUE), status, model_id(FK→product_model),
-  listed_yymm, delisted_yymm, market(domestic/foreign/both),
+  listed_yymm, delisted_yymm, market(domestic/foreign/both), remark(TEXT NULL),
   cover_image, created_at, updated_at
   # status: unrecorded=未录入, recorded=已录入, ignored=无需录入
   # market: domestic=内销, foreign=外贸, both=内外销

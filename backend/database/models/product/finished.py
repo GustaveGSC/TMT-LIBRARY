@@ -94,6 +94,7 @@ class ProductFinished(db.Model):
     listed_yymm   = db.Column(db.String(7),   nullable=True)
     delisted_yymm = db.Column(db.String(7),   nullable=True)
     market        = db.Column(db.String(16),  nullable=True)   # domestic/foreign/both
+    remark        = db.Column(db.Text,        nullable=True)
     cover_image          = db.Column(db.String(500), nullable=True)
     cover_image_original = db.Column(db.String(500), nullable=True)   # 原始高清图 OSS URL
     cover_image_width    = db.Column(db.Integer,     nullable=True)   # 原始高清图宽度（像素）
@@ -141,6 +142,7 @@ class ProductFinished(db.Model):
             'listed_yymm':   self.listed_yymm,
             'delisted_yymm': self.delisted_yymm,
             'market':        self.market,
+            'remark':        self.remark,
             'cover_image':          self.cover_image,
             'cover_image_original': self.cover_image_original,
             'cover_image_width':    self.cover_image_width,

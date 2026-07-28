@@ -82,7 +82,7 @@ POST   /api/product/import/preview
 POST   /api/product/import
 GET    /api/product/stats
 GET    /api/product/finished
-POST   /api/product/finished
+POST   /api/product/finished       # body 可含 remark（TEXT，可为空）；列表项同步返回 remark
 GET    /api/product/packaged/all
 GET    /api/product/packaged/candidates
 POST   /api/product/packaged
