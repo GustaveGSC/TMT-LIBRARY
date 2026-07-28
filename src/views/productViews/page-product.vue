@@ -20,6 +20,7 @@ import ProductCategory  from './ProductCategory.vue'
 import ProductTag     from './ProductTag.vue'
 import ProductParam     from './ProductParam.vue'
 import ProductResources from './ProductResources.vue'
+import ProductDetailPackages from './ProductDetailPackages.vue'
 import iconTable  from '@/assets/icons/icon_table.png'
 import iconImage  from '@/assets/icons/icon_image.png'
 import iconEchart from '@/assets/icons/icon_echart.png'
@@ -33,7 +34,7 @@ const activePage  = ref('overview')
 const pageLoading = ref(false)
 
 // 懒加载：首次切换到 tab 时才挂载对应组件
-const mountedTabs = reactive({ table: false, image: false, chart: false, resources: false })
+const mountedTabs = reactive({ table: false, image: false, chart: false, resources: false, detailPackages: false })
 watch(activePage, page => { if (page in mountedTabs) mountedTabs[page] = true })
 
 // ── 各页面数据加载器（按需扩展）──────────────────
@@ -108,6 +109,10 @@ const navItems = [
   {
     key: 'resources', label: '资料',
     svg: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z'
+  },
+  {
+    key: 'detailPackages', label: '产品详情',
+    svg: 'M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z'
   },
 ]
 
@@ -397,6 +402,9 @@ onMounted(async () => {
 
       <!-- ⑤ 资料库 -->
       <ProductResources v-if="canEditProduct && mountedTabs.resources" v-show="activePage === 'resources'" />
+
+      <!-- ⑥ 产品详情包管理 -->
+      <ProductDetailPackages v-if="canEditProduct && mountedTabs.detailPackages" v-show="activePage === 'detailPackages'" />
 
     </main>
 

@@ -10,6 +10,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFinishedStore } from '@/stores/product/finished'
 import { usePackagedStore } from '@/stores/product/packaged'
 import GEditTagList from '@/components/common/GEditTagList.vue'
+import MediaViewer from '@/components/common/MediaViewer.vue'
 import modelTipImg from '@/assets/images/image_model_tip.png'
 import { useFinishedImage } from '@/composables/useFinishedImage'
 import { useFinishedParams, GROUP_DEFS } from '@/composables/useFinishedParams'
@@ -881,6 +882,32 @@ const {
 const resActiveTab   = ref(null)
 const resSelectedId  = ref(null)   // 单击选中的文件 id
 
+// ── 产品详情管理（独立"包"系统，按型号/标签适用范围匹配，只读展示）──
+const detailPackages        = ref([])
+const detailPackagesLoading = ref(false)
+const detailPackagesLoaded  = ref(false)
+
+async function loadDetailPackages() {
+  detailPackagesLoading.value = true
+  try {
+    const res = await http.get(`/api/product-detail-packages/finished/${props.row.code}`)
+    if (res.success) { detailPackages.value = res.data; detailPackagesLoaded.value = true }
+  } finally {
+    detailPackagesLoading.value = false
+  }
+}
+
+const detailPackageViewerVisible = ref(false)
+const detailPackageViewerIndex   = ref(0)
+const detailPackageViewerItems   = ref([])
+function openDetailPackageViewer(pkg, mediaId) {
+  detailPackageViewerItems.value = pkg.media.map(m => ({
+    id: m.id, file_type: m.file_type, oss_url: m.oss_url, original_filename: m.original_filename,
+  }))
+  detailPackageViewerIndex.value = Math.max(0, pkg.media.findIndex(m => m.id === mediaId))
+  detailPackageViewerVisible.value = true
+}
+
 // 资料弹窗（从资料库多选）
 const resourcePickerVisible  = ref(false)
 const resourcePickerSearch   = ref('')
@@ -1069,6 +1096,9 @@ function toggleSec(key) {
       }
     })
     if (!resourceTypes.value.length) loadResourceTypes()
+  }
+  if (key === 'detailPackages' && openSec[key] && !detailPackagesLoaded.value) {
+    loadDetailPackages()
   }
 }
 </script>
@@ -1698,6 +1728,31 @@ function toggleSec(key) {
           </div>
         </div>
 
+        <!-- 产品详情管理 section（独立于资料，按型号/标签适用范围自动匹配包）──────── -->
+        <div class="eg-sec">
+          <div class="eg-sec-hd" @click="toggleSec('detailPackages')">
+            <span class="eg-arr">{{ isSec('detailPackages') ? '▾' : '›' }}</span>产品详情管理
+          </div>
+          <div v-if="isSec('detailPackages')" class="eg-sec-bd">
+            <div v-if="detailPackagesLoading" class="res-loading">加载中…</div>
+            <div v-else-if="!detailPackages.length" class="res-empty">暂无匹配的产品详情包</div>
+            <template v-else>
+              <div v-for="pkg in detailPackages" :key="pkg.id" class="dp-pkg-block">
+                <div class="dp-pkg-title">{{ pkg.name }}（{{ pkg.media.length }}）</div>
+                <div class="dp-pkg-grid">
+                  <div
+                    v-for="m in pkg.media" :key="m.id" class="dp-media-card"
+                    @click="openDetailPackageViewer(pkg, m.id)"
+                  >
+                    <img v-if="m.file_type === 'image'" :src="m.oss_url" class="dp-media-thumb" loading="lazy" />
+                    <video v-else :src="m.oss_url" class="dp-media-thumb" preload="metadata" muted />
+                  </div>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+
         <div class="eg-sec">
           <div class="eg-sec-hd" @click="toggleSec('data')">
             <span class="eg-arr">{{ isSec('data') ? '▾' : '›' }}</span>数据
@@ -1978,6 +2033,13 @@ function toggleSec(key) {
       <button class="crop-btn crop-btn-confirm" @click="applyCrop">应用裁剪</button>
     </template>
   </el-dialog>
+
+  <!-- 产品详情管理：只读查看器 -->
+  <MediaViewer
+    v-model="detailPackageViewerVisible"
+    :items="detailPackageViewerItems"
+    :initial-index="detailPackageViewerIndex"
+  />
 
 </template>
 
@@ -2756,6 +2818,16 @@ function toggleSec(key) {
   font-size: 12px; color: #8a7a6a;
   padding: 10px 0; text-align: center;
 }
+
+/* ── 产品详情管理（独立包，只读展示） ── */
+.dp-pkg-block + .dp-pkg-block { margin-top: 14px; }
+.dp-pkg-title { font-size: 12px; color: #8a7a6a; margin-bottom: 6px; }
+.dp-pkg-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+.dp-media-card {
+  width: 120px; aspect-ratio: 4/3; border-radius: 8px; border: 1px solid var(--border);
+  overflow: hidden; cursor: pointer; background: #f5f0e8;
+}
+.dp-media-thumb { width: 100%; height: 100%; object-fit: contain; background: #fff; display: block; }
 
 /* ── 资料 顶部 Tab + 文件网格布局 ── */
 .res-layout {
