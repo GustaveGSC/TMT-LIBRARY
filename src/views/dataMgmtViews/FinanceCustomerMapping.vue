@@ -4,6 +4,7 @@ import { ref, reactive, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import http from '@/api/http'
 import { usePermission } from '@/composables/usePermission'
+import { WORLD_COUNTRY_NAMES_ZH } from '@/utils/worldCountries'
 
 // ── 权限 ──────────────────────────────────────────
 const { canEditShipping } = usePermission()
@@ -145,7 +146,7 @@ function handlePageChange(p) {
 
     <div class="config-header">
       <div class="config-title">客户匹配</div>
-      <div class="config-sub">财务原始数据"客户简称"列去重列表，人工审核归类为外贸客户/内销客户/非销售客户，并按需填写国家/品牌（不做自动解析）。客户分类、国家和品牌保存后立即生效；财务导入会自动增量更新本批受影响订单。</div>
+      <div class="config-sub">财务原始数据"客户简称"列去重列表，人工审核归类为外贸客户/内销客户/非销售客户，并按需填写国家/品牌（不做自动解析）。国家/地区请从下拉列表选择标准名称（也可直接输入自定义值），避免与世界地图的匹配名称不一致导致地图不显示。客户分类、国家和品牌保存后立即生效；财务导入会自动增量更新本批受影响订单。</div>
     </div>
 
     <!-- 筛选栏 -->
@@ -185,13 +186,19 @@ function handlePageChange(p) {
           >
             <el-option v-for="s in STATUS_OPTIONS" :key="s.value" :label="s.label" :value="s.value" />
           </el-select>
-          <el-input
+          <el-select
             v-model="drafts[item.customer_alias].country"
             placeholder="国家/地区"
+            filterable
+            allow-create
+            default-first-option
+            clearable
             :disabled="!canEditShipping"
-            style="width: 130px"
-            @input="markDirty(item.customer_alias)"
-          />
+            style="width: 150px"
+            @change="markDirty(item.customer_alias)"
+          >
+            <el-option v-for="c in WORLD_COUNTRY_NAMES_ZH" :key="c" :label="c" :value="c" />
+          </el-select>
           <el-input
             v-model="drafts[item.customer_alias].brand"
             placeholder="品牌"
