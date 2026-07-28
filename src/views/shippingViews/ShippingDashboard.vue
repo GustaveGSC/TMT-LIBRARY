@@ -110,14 +110,19 @@ const GROUPBY_ALLOWED = {
   date:     { chartTypes: [],              comparisons: ['yoy', 'mom'], default: null  },
 }
 const TAG_DIM_ALLOWED       = { chartTypes: ['bar', 'pie'],        comparisons: [], default: 'bar' }
-// "地域"标签维度（标签值为国家中文名）额外支持世界地图
+// 财务端"国家"维度（标签值为国家中文名）额外支持世界地图，由后端 map_dimension_category_id
+// 按 id 稳定识别，不再依赖分类名字符串（分类可能被改名，如"地域"→"全球区域"）
 const REGION_TAG_DIM_ALLOWED = { chartTypes: ['bar', 'pie', 'map'], comparisons: [], default: 'bar' }
-const REGION_TAG_DIM_NAME    = '地域'
+const mapDimensionCategoryId = ref(null)
+function isRegionTagDim(gb) {
+  const td = findTagDim(gb)
+  return !!td && mapDimensionCategoryId.value != null && td.category_id === mapDimensionCategoryId.value
+}
 
 /** 标签维度（tag:N）不在 GROUPBY_ALLOWED 静态表中，统一走这个 helper 取配置 */
 function groupByConfig(gb) {
   if (typeof gb === 'string' && gb.startsWith('tag:')) {
-    return findTagDim(gb)?.name === REGION_TAG_DIM_NAME ? REGION_TAG_DIM_ALLOWED : TAG_DIM_ALLOWED
+    return isRegionTagDim(gb) ? REGION_TAG_DIM_ALLOWED : TAG_DIM_ALLOWED
   }
   return GROUPBY_ALLOWED[gb] ?? { chartTypes: [], comparisons: [], default: null }
 }
@@ -642,7 +647,7 @@ async function ensureProvinceMap(adcode) {
  * 返回最终使用的 mapKey。
  */
 async function resolveMapKey() {
-  if (findTagDim(groupBy.value)?.name === REGION_TAG_DIM_NAME) {
+  if (isRegionTagDim(groupBy.value)) {
     const ok = await ensureWorldMap()
     return ok ? 'world' : null
   }
@@ -1652,6 +1657,7 @@ async function loadOptions() {
       if (optRes.data.data_date_min) dataDateMin.value = optRes.data.data_date_min
       if (optRes.data.data_date_max) dataDateMax.value = optRes.data.data_date_max
       tagDimensions.value = optRes.data.tag_dimensions || []
+      mapDimensionCategoryId.value = optRes.data.map_dimension_category_id ?? null
     }
   } catch { ElMessage.error('加载筛选数据失败') }
   finally  { loadingOptions.value = false }
@@ -2772,7 +2778,7 @@ function buildMapOption(items, mapKey = 'china') {
 
 // 地图右侧 Top10 表格：地域维度且图表为地图时显示
 const showMapTable = computed(() =>
-  (groupBy.value === 'province' || findTagDim(groupBy.value)?.name === REGION_TAG_DIM_NAME)
+  (groupBy.value === 'province' || isRegionTagDim(groupBy.value))
   && chartType.value === 'map'
 )
 

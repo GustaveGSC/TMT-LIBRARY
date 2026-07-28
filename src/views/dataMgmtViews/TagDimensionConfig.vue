@@ -22,10 +22,14 @@ async function loadCategories() {
   try {
     const res = await http.get('/api/product/tags/categories/')
     if (res.success) {
-      categories.value = res.data.map(cat => ({
-        id: cat.id, name: cat.name, color: cat.color, is_shipping_dim: !!cat.is_shipping_dim,
-        tags: (cat.tags || []).map(t => ({ id: t.id, name: t.name, shipping_dim_enabled: !!t.shipping_dim_enabled })),
-      }))
+      // 财务专用维度（国家/品牌，值来自客户映射而非产品标签）由系统固定管理，
+      // 不在这个通用标签维度配置页里出现，避免误关导致财务图表少维度
+      categories.value = res.data
+        .filter(cat => !cat.finance_dimension_field)
+        .map(cat => ({
+          id: cat.id, name: cat.name, color: cat.color, is_shipping_dim: !!cat.is_shipping_dim,
+          tags: (cat.tags || []).map(t => ({ id: t.id, name: t.name, shipping_dim_enabled: !!t.shipping_dim_enabled })),
+        }))
       initialSnapshot = JSON.stringify(categories.value)
     } else {
       ElMessage.error(res.message)
