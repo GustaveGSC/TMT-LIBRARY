@@ -147,6 +147,7 @@ src/stores/product/
 - **数据节**：两张等宽卡片并排
   - **发货数据**：条形图，x 轴年月，y 轴净发货量（调 `GET /api/shipping/product/:code/monthly`）
   - **售后数据（系列）**：条形图（售后量，红色）+ 折线图（发货占比%，橙色右轴），仅显示有售后数据的年月；需 `canViewAftersale` 权限，未关联型号时显示提示；调 `GET /api/aftersale/model/:model_id/series-monthly`
+  - **折叠/展开图表重挂载**：`eg-sec-bd-data` 用 `v-if`，折叠时图表容器 DOM 会被销毁；`toggleSec('data')` 收起时会 `dispose()` 两个 echarts 实例并置 `null`（保留已缓存的月度数据和 `xxxLoaded` 标记，不重新请求接口），`loadShippingMonthly`/`loadAftersaleMonthly` 在数据已缓存时跳过网络请求但仍会 `nextTick()` 后重新 `initXxxChart()`，绑定到重新展开后的新 DOM 容器（2026-07-28 修复"折叠再展开图表不显示"的 bug）
 
 ## ProductChart.vue 说明
 - 图表视图，从 `finishedStore.rawItems` 读取数据
