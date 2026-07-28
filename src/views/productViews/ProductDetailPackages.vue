@@ -261,7 +261,6 @@ onMounted(() => { loadFolders(); loadAllTags(); loadCategoryTreeOnce() })
         <div v-for="folder in folders" :key="folder.id" class="pkg-card" @dblclick="openFolder(folder)">
           <div class="pkg-icon-wrap">
             <el-icon class="pkg-folder-icon"><Folder /></el-icon>
-            <img v-if="folder.cover_thumbnail" :src="folder.cover_thumbnail" class="pkg-cover-overlay" />
           </div>
           <div class="pkg-name" :title="folder.name">{{ folder.name }}</div>
           <div class="pkg-meta">{{ folder.media_count }} 个文件</div>
@@ -353,10 +352,6 @@ onMounted(() => { loadFolders(); loadAllTags(); loadCategoryTreeOnce() })
 .pkg-card:hover { background: rgba(196,136,58,0.08); }
 .pkg-icon-wrap { position: relative; width: 72px; height: 60px; }
 .pkg-folder-icon { font-size: 60px; color: #e8b84b; filter: drop-shadow(0 2px 2px rgba(0,0,0,0.15)); }
-.pkg-cover-overlay {
-  position: absolute; left: 14px; top: 20px; width: 44px; height: 32px;
-  object-fit: cover; border-radius: 3px; border: 1px solid rgba(255,255,255,0.8);
-}
 .pkg-name { font-size: 12px; color: var(--text-primary); text-align: center; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pkg-meta { font-size: 11px; color: var(--text-muted); }
 
