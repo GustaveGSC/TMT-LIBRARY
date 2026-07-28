@@ -38,6 +38,13 @@ class DetailPackageService:
         items, total = DetailPackageRepository.list_packages(search, page, size)
         return Result.ok(data={'items': items, 'total': total, 'page': page, 'size': size})
 
+    def get_one(self, package_id):
+        package = DetailPackageRepository.get(package_id)
+        if not package:
+            return Result.fail('产品详情包不存在')
+        media = DetailPackageRepository.media_for_packages([package_id])[package_id]
+        return Result.ok(data=package.to_dict(media=media))
+
     def create(self, name):
         name = (name or '').strip()
         if not name or len(name) > 200:

@@ -24,6 +24,11 @@ def create_package():
     return detail_package_service.create((request.get_json() or {}).get('name')).to_response()
 
 
+@detail_package_bp.get('/<int:package_id>')
+def get_package(package_id):
+    return detail_package_service.get_one(package_id).to_response()
+
+
 @detail_package_bp.put('/<int:package_id>')
 def update_package(package_id):
     return detail_package_service.update(package_id, (request.get_json() or {}).get('name')).to_response()
