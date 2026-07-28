@@ -10,6 +10,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFinishedStore } from '@/stores/product/finished'
 import { usePackagedStore } from '@/stores/product/packaged'
 import GEditTagList from '@/components/common/GEditTagList.vue'
+import MediaViewer from '@/components/common/MediaViewer.vue'
 import modelTipImg from '@/assets/images/image_model_tip.png'
 import { useFinishedImage } from '@/composables/useFinishedImage'
 import { useFinishedParams, GROUP_DEFS } from '@/composables/useFinishedParams'
@@ -881,6 +882,26 @@ const {
 const resActiveTab   = ref(null)
 const resSelectedId  = ref(null)   // 单击选中的文件 id
 
+// ── 产品详情（图片/视频画廊，复用"资料"库同一份 linkedResources，只筛 image/video）──
+// 同一产品的详情文件可能较多，画廊分批渲染（"加载更多"），避免一次性渲染过多缩略图卡顿
+const detailMediaItems = computed(() =>
+  linkedResources.value.filter(r => r.file_type === 'image' || r.file_type === 'video'),
+)
+const DETAIL_MEDIA_PAGE_SIZE = 24
+const detailMediaVisibleCount = ref(DETAIL_MEDIA_PAGE_SIZE)
+const visibleDetailMedia = computed(() => detailMediaItems.value.slice(0, detailMediaVisibleCount.value))
+function loadMoreDetailMedia() { detailMediaVisibleCount.value += DETAIL_MEDIA_PAGE_SIZE }
+
+const detailMediaViewerVisible = ref(false)
+const detailMediaViewerIndex   = ref(0)
+const detailMediaViewerItems   = computed(() => detailMediaItems.value.map(r => ({
+  id: r.id, file_type: r.file_type, oss_url: r.url, original_filename: r.title,
+})))
+function openDetailMediaViewer(resourceId) {
+  detailMediaViewerIndex.value   = Math.max(0, detailMediaItems.value.findIndex(r => r.id === resourceId))
+  detailMediaViewerVisible.value = true
+}
+
 // 资料弹窗（从资料库多选）
 const resourcePickerVisible  = ref(false)
 const resourcePickerSearch   = ref('')
@@ -1069,6 +1090,9 @@ function toggleSec(key) {
       }
     })
     if (!resourceTypes.value.length) loadResourceTypes()
+  }
+  if (key === 'productDetail' && openSec[key] && !linkedLoaded.value) {
+    loadLinkedResources()
   }
 }
 </script>
@@ -1698,6 +1722,39 @@ function toggleSec(key) {
           </div>
         </div>
 
+        <!-- 产品详情 section（图片/视频画廊，复用资料库数据，只展示 image/video 类型）─── -->
+        <div class="eg-sec">
+          <div class="eg-sec-hd" @click="toggleSec('productDetail')">
+            <span class="eg-arr">{{ isSec('productDetail') ? '▾' : '›' }}</span>产品详情
+          </div>
+          <div v-if="isSec('productDetail')" class="eg-sec-bd">
+            <div v-if="linkedLoading" class="res-loading">加载中…</div>
+            <div v-else-if="!detailMediaItems.length" class="res-empty">暂无图片/视频</div>
+            <template v-else>
+              <div class="pd-media-grid">
+                <div
+                  v-for="r in visibleDetailMedia"
+                  :key="r.id"
+                  class="pd-media-card"
+                  @click="openDetailMediaViewer(r.id)"
+                >
+                  <img v-if="r.file_type === 'image'" :src="r.url" class="pd-media-thumb" loading="lazy" />
+                  <template v-else>
+                    <img v-if="r.cover_url" :src="r.cover_url" class="pd-media-thumb" loading="lazy" />
+                    <video v-else :src="r.url" class="pd-media-thumb" preload="metadata" muted />
+                    <div class="pd-media-play"><el-icon><VideoPlay /></el-icon></div>
+                  </template>
+                </div>
+              </div>
+              <div v-if="detailMediaVisibleCount < detailMediaItems.length" class="pd-media-more">
+                <button class="param-sec-edit-btn" @click="loadMoreDetailMedia">
+                  加载更多（{{ detailMediaVisibleCount }}/{{ detailMediaItems.length }}）
+                </button>
+              </div>
+            </template>
+          </div>
+        </div>
+
         <div class="eg-sec">
           <div class="eg-sec-hd" @click="toggleSec('data')">
             <span class="eg-arr">{{ isSec('data') ? '▾' : '›' }}</span>数据
@@ -1978,6 +2035,13 @@ function toggleSec(key) {
       <button class="crop-btn crop-btn-confirm" @click="applyCrop">应用裁剪</button>
     </template>
   </el-dialog>
+
+  <!-- 产品详情图片/视频统一查看器 -->
+  <MediaViewer
+    v-model="detailMediaViewerVisible"
+    :items="detailMediaViewerItems"
+    :initial-index="detailMediaViewerIndex"
+  />
 
 </template>
 
@@ -2756,6 +2820,19 @@ function toggleSec(key) {
   font-size: 12px; color: #8a7a6a;
   padding: 10px 0; text-align: center;
 }
+
+/* ── 产品详情 图片/视频画廊 ── */
+.pd-media-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+.pd-media-card {
+  position: relative; width: 140px; aspect-ratio: 4/3; border-radius: 8px;
+  border: 1px solid var(--border); overflow: hidden; cursor: pointer; background: #f5f0e8;
+}
+.pd-media-thumb { width: 100%; height: 100%; object-fit: contain; background: #fff; display: block; }
+.pd-media-play {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 26px; background: rgba(0,0,0,0.25);
+}
+.pd-media-more { margin-top: 10px; text-align: center; }
 
 /* ── 资料 顶部 Tab + 文件网格布局 ── */
 .res-layout {

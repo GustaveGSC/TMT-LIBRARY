@@ -9,7 +9,7 @@ import http from '@/api/http.js'
 import { downloadBlob } from '@/utils/download.js'
 import { isElectron } from '@/utils/platform'
 import { usePermission } from '@/composables/usePermission'
-import AftersaleMediaViewer from '@/components/aftersale/AftersaleMediaViewer.vue'
+import MediaViewer from '@/components/common/MediaViewer.vue'
 
 // ── Props ──────────────────────────────────────────
 const props = defineProps({
@@ -441,6 +441,12 @@ function onMediaDeleted(mediaId) {
   if (!orderNo) return
   mediaDetails.value = { ...mediaDetails.value, [orderNo]: (mediaDetails.value[orderNo] || []).filter(m => m.id !== mediaId) }
   mediaCounts.value  = { ...mediaCounts.value, [orderNo]: Math.max(0, (mediaCounts.value[orderNo] || 1) - 1) }
+}
+
+async function deleteAftersaleMedia(item) {
+  const res = await http.delete(`/api/aftersale/media/${item.id}`)
+  if (!res.success) ElMessage.error(res.message || '删除失败')
+  return res.success
 }
 defineExpose({ total, exportLoading, exportData, initSort, refresh: loadData, refreshMedia: () => { mediaCounts.value = {}; mediaDetails.value = {} } })
 
@@ -1144,11 +1150,11 @@ async function exportData() {
     </div>
 
     <!-- 售后图片/视频统一查看器：同一个框内左右切换，不区分类型 -->
-    <AftersaleMediaViewer
+    <MediaViewer
       v-model="viewerVisible"
       :items="viewerItems"
       :initial-index="viewerIndex"
-      :can-delete="canEditAftersale"
+      :delete-handler="canEditAftersale ? deleteAftersaleMedia : null"
       @deleted="onMediaDeleted"
     />
   </div>

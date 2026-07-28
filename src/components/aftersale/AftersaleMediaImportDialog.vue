@@ -3,7 +3,7 @@
 import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import http from '@/api/http.js'
-import AftersaleMediaViewer from '@/components/aftersale/AftersaleMediaViewer.vue'
+import MediaViewer from '@/components/common/MediaViewer.vue'
 
 // ── Props / Emits ──────────────────────────────────
 const props = defineProps({
@@ -365,7 +365,7 @@ const overallProgress = computed(() => {
       </div>
     </div>
 
-    <AftersaleMediaViewer v-model="viewerVisible" :items="viewerItems" :can-delete="false" />
+    <MediaViewer v-model="viewerVisible" :items="viewerItems" />
   </el-dialog>
 </template>
 

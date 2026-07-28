@@ -1,18 +1,19 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
-// 统一图片/视频查看器：全屏遮罩，图片支持滚轮缩放+拖拽平移+双击缩放（参考微信查看图片的交互），
-// 视频不自动播放，需用户手动点击播放。左右切换不区分类型。
+// 通用图片/视频查看器：全屏遮罩，图片支持滚轮缩放+拖拽平移+双击缩放（参考微信查看图片的交互），
+// 视频不自动播放，需用户手动点击播放。左右切换不区分类型。业务方通过 delete-handler prop
+// 传入实际删除逻辑（不传则不显示删除按钮），保持本组件与具体业务接口解耦。
 import { ref, computed, watch, nextTick } from 'vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { ArrowLeft, ArrowRight, Close, Delete, ZoomIn, ZoomOut, RefreshRight } from '@element-plus/icons-vue'
-import http from '@/api/http.js'
 
 // ── Props / Emits ──────────────────────────────────
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
   items: { type: Array, default: () => [] },   // [{id, file_type, oss_url, original_filename}]
   initialIndex: { type: Number, default: 0 },
-  canDelete: { type: Boolean, default: false },
+  // 传入时显示删除按钮；返回 Promise<boolean>（true=删除成功）。不传则该媒体只读。
+  deleteHandler: { type: Function, default: null },
 })
 const emit = defineEmits(['update:modelValue', 'deleted'])
 
@@ -90,19 +91,17 @@ function onKeydown(e) {
 }
 
 async function deleteCurrent() {
-  if (!current.value) return
+  if (!current.value || !props.deleteHandler) return
   try {
     await ElMessageBox.confirm(`确认删除「${current.value.original_filename}」？此操作不可撤销。`, '删除媒体', { type: 'warning' })
   } catch { return }
   deleting.value = true
   try {
-    const res = await http.delete(`/api/aftersale/media/${current.value.id}`)
-    if (res.success) {
+    const ok = await props.deleteHandler(current.value)
+    if (ok) {
       ElMessage.success('已删除')
       emit('deleted', current.value.id)
       if (index.value >= props.items.length - 1) index.value = Math.max(0, props.items.length - 2)
-    } else {
-      ElMessage.error(res.message || '删除失败')
     }
   } finally {
     deleting.value = false
@@ -121,7 +120,7 @@ watch(() => props.modelValue, async (val) => { if (val) { await nextTick(); root
       @keydown="onKeydown" @mousemove="onMouseMove" @mouseup="onMouseUp"
     >
       <button class="viewer-close" @click="visible = false"><el-icon><Close /></el-icon></button>
-      <button v-if="canDelete" class="viewer-delete" :disabled="deleting" @click="deleteCurrent"><el-icon><Delete /></el-icon></button>
+      <button v-if="deleteHandler" class="viewer-delete" :disabled="deleting" @click="deleteCurrent"><el-icon><Delete /></el-icon></button>
 
       <button class="viewer-nav viewer-nav-prev" :disabled="index === 0" @click="prev"><el-icon><ArrowLeft /></el-icon></button>
       <button class="viewer-nav viewer-nav-next" :disabled="index === items.length - 1" @click="next"><el-icon><ArrowRight /></el-icon></button>
