@@ -146,6 +146,7 @@ PUT    /api/resources/finished/:code/order            # 更新排序 {ordered_id
 
 GET    /api/product-detail-packages                    # product:view；?search&page&size，返回 {items,total,page,size}
 POST   /api/product-detail-packages                    # product:edit；新建 {name}
+GET    /api/product-detail-packages/:id                # product:view；返回单个包完整信息（含 tag_ids/tag_condition/model_ids/media[]）
 PUT    /api/product-detail-packages/:id                # product:edit；重命名 {name}
 DELETE /api/product-detail-packages/:id                # product:edit；删除包及 DB 媒体记录；OSS 清理失败留痕、不回滚成功删除
 PUT    /api/product-detail-packages/:id/tags           # product:edit；全量设置 {tag_ids:[int],tag_condition?:null|object|array}

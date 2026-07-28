@@ -88,3 +88,33 @@ def test_confirm_rejects_foreign_or_nested_storage_key(monkeypatch):
         }])
         assert not result.success
         assert ProductDetailPackageMedia.query.count() == 0
+
+
+def test_get_one_returns_complete_package_and_its_media():
+    app = _app()
+    with app.app_context():
+        _create_tables()
+        package = ProductDetailPackage(name='已有媒体的包')
+        db.session.add(package)
+        db.session.flush()
+        db.session.add_all([
+            ProductDetailPackageMedia(
+                package_id=package.id, file_type='image', original_filename='a.jpg',
+                oss_url='https://oss.example/a.jpg', storage_key='tmt-library/product-detail/1/a.jpg',
+                file_size=10, sort_order=2,
+            ),
+            ProductDetailPackageMedia(
+                package_id=package.id, file_type='video', original_filename='b.mp4',
+                oss_url='https://oss.example/b.mp4', storage_key='tmt-library/product-detail/1/b.mp4',
+                file_size=20, sort_order=1,
+            ),
+        ])
+        db.session.commit()
+
+        result = DetailPackageService().get_one(package.id)
+
+        assert result.success
+        assert result.data['name'] == '已有媒体的包'
+        assert [item['original_filename'] for item in result.data['media']] == ['b.mp4', 'a.jpg']
+        assert result.data['media'][0]['file_type'] == 'video'
+        assert not DetailPackageService().get_one(999).success
