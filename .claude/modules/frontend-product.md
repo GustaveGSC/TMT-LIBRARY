@@ -151,7 +151,7 @@ src/stores/product/
 ## ProductResources.vue 说明（资料库页面）
 - 产品库顶部导航新增"资料"tab，与表格/图片/图表平级
 - **布局**：左侧类型侧边栏（140px）+ 右侧资料卡片网格
-- **侧边栏**：「未分类」固定在最顶部（`type_id='none'` 传给后端），下方按 sort_order 排列各类型
+- **侧边栏**：「未分类」固定在最顶部（`type_id='none'` 传给后端），下方按 sort_order 排列各类型；「产品详情」系统内置类型固定在最底部，用横向分割线单独隔开（`normalTypes`/`productDetailType` 两个 computed 拆分 `types`），与 `FinishedExpandRow.vue` 资料区的隔开方式一致
 - **资料卡片**：预览区（图片缩略图 or PDF红色图标 or 文件类型图标）+ 标题（最多3行）+ 产品数
   - PDF：红色自定义图标（非 Element Plus 图标），与 FinishedExpandRow 保持一致
   - 卡片不显示类型和备注；备注在点击预览弹窗里显示
