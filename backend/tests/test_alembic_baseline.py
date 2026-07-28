@@ -25,7 +25,8 @@ SHIPPING_GENERATION_REVISION = '20260726_01'
 SHIPPING_SCOPED_STALE_INDEX_REVISION = '20260727_01'
 AFTERSALE_CASE_MEDIA_REVISION = '20260727_02'
 PRODUCT_FINISHED_REMARK_REVISION = '20260728_01'
-HEAD_REVISION = PRODUCT_FINISHED_REMARK_REVISION
+DETAIL_PACKAGE_REVISION = '20260728_02'
+HEAD_REVISION = DETAIL_PACKAGE_REVISION
 CRITICAL_INDEXES = {
     'shipping_order_finished': {
         'ix_sof_source',
@@ -92,6 +93,7 @@ def test_baseline_has_linear_history_and_task_lease_is_the_only_head():
         scripts.get_revision(PRODUCT_FINISHED_REMARK_REVISION).down_revision
         == AFTERSALE_CASE_MEDIA_REVISION
     )
+    assert scripts.get_revision(DETAIL_PACKAGE_REVISION).down_revision == PRODUCT_FINISHED_REMARK_REVISION
 
 
 def test_performance_critical_production_indexes_are_declared_in_metadata():
@@ -240,6 +242,11 @@ def test_baseline_upgrade_adds_only_task_schemas(tmp_path, monkeypatch):
         'aftersale_case_media',
         'aftersale_media_upload_session',
         'aftersale_media_cleanup_failure',
+        'product_detail_package',
+        'product_detail_package_media',
+        'product_detail_package_tag',
+        'product_detail_package_model',
+        'product_detail_package_cleanup_failure',
     }
     inspector = sa.inspect(engine)
     shipping_task_columns = {

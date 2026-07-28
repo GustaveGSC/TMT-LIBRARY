@@ -98,6 +98,7 @@ def create_app() -> Flask:
     from routes.rd import rd_bp
     from routes.rd.cost import cost_bp as rd_cost_bp
     from routes.product.resource import resource_bp
+    from routes.product.detail_package import detail_package_bp
     from routes.config import config_bp
     from database.repository.shipping import shipping_repository
     from database.repository.product.lifecycle import product_lifecycle_task_repository
@@ -129,6 +130,7 @@ def create_app() -> Flask:
     app.register_blueprint(rd_bp,             url_prefix="/api/rd")
     app.register_blueprint(rd_cost_bp,        url_prefix="/api/rd/cost")
     app.register_blueprint(resource_bp,       url_prefix="/api/resources")
+    app.register_blueprint(detail_package_bp, url_prefix="/api/product-detail-packages")
     app.register_blueprint(config_bp,         url_prefix="/api/config")
 
     # ── 健康检查 ──────────────────────────────────────
