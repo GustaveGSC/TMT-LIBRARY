@@ -19,7 +19,7 @@ src/stores/product/
 ## page-product.vue 说明
 - `onMounted`：调用 `maximizeApp()`
 - 返回按钮：先 `unmaximizeApp()` 再 `router.back()`
-- 顶部导航：概览(SVG inline) / 表格(PNG) / 图片(PNG) / 图表(PNG)
+- 顶部导航：概览(SVG inline) / 表格(PNG) / 图片(PNG) / 图表(PNG) / 资料(SVG) / 产品详情(SVG，`ProductDetailPackages.vue`，2026-07-28 新增)
 - active 状态：文字加粗 + 主色 + 底部2px橙色指示线，无背景填充
 - 数据管理区：导入数据 / 编码规则 / 分类管理 / 标签管理 / **参数管理**
 - **数据管理区需要 `product:edit` 权限才显示**（`v-if="canEditProduct"`）
@@ -82,11 +82,23 @@ src/stores/product/
 - eg-lbl 宽80px，居中，背景#faf7f2，右边框分隔
 - eg-row min-height:34px，不用固定height
 
-## FinishedExpandRow 产品详情管理（2026-07-28 重新设计，见对应 handoff 文档）
-资料类型式方案（`product_resource_type` 加一个"产品详情"类型 + 复用 `linkedResources` 过滤）已
-于 2026-07-28 撤销——用户反馈效果不理想。新方案是独立的"包"（Windows 文件夹外观，自由命名，
-拖拽上传图片/视频）+ 按系列/型号/标签设置适用范围的绑定机制，与"资料"完全独立、同级展示。
-设计与实现进度见 `handoff/2026-07-28-*-product-detail-package-*.md`，本节待新方案落地后补充。
+## 产品详情包（独立于"资料"，2026-07-28 上线）
+- **数据模型**：全新后端表（`product_detail_package`/`_media`/`_tag`/`_model`），不复用
+  `product_resource`；一个"包"=自由命名的容器，内部放若干图片/视频，通过设置"适用范围"
+  （型号/标签）与产品自动匹配，不需要逐产品手动关联。
+- **管理页**：`ProductDetailPackages.vue`，产品库顶部导航新增"产品详情"tab（与"资料"同级，
+  同样需要 `canEditProduct` 才挂载）。Windows 文件夹图标网格展示所有包；点开包详情弹窗：改名
+  （失焦/回车即保存）、设置适用范围（型号 `el-cascader` 多选 + 标签简单多选，标签是 OR 语义，
+  未做 AND/OR/NOT 条件构建器）、拖拽或点击选择文件批量上传（presign 批量签名 + OSS 直传 +
+  confirm，跳过不支持类型）、媒体网格点击打开 `MediaViewer`（`delete-handler` 传入删除接口）。
+  **已知缺口**：重新打开一个已有媒体的包时依赖 `GET /api/product-detail-packages/:id` 加载
+  完整媒体列表，该接口后端尚未提供（见 `handoff/2026-07-28-claude-product-detail-package-single-get-request.md`），
+  在此之前重新打开旧包看不到已上传内容（同一次上传会话内本地维护的状态没有这个问题）。
+- **产品详情页展示区块**：`FinishedExpandRow.vue` 新增顶级折叠区"产品详情管理"（与资料/参数/
+  数据同级），懒加载 `GET /api/product-detail-packages/finished/:code`，按包分组展示只读画廊，
+  点击打开 `MediaViewer`（不传 `delete-handler`，编辑走独立管理页，这里只读）。
+- 旧的资料类型式方案（`product_resource_type` 加"产品详情"类型）已于同日撤销，所有相关记录
+  不再适用。
 
 ## FinishedExpandRow 资料区说明
 - **折叠区 ec-sections 包含三个子节**：资料 / 参数 / 数据（资料在最前）
