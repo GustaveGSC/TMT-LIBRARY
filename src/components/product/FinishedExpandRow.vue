@@ -1448,12 +1448,11 @@ function toggleSec(key) {
         </el-select>
       </div>
 
-      <!-- 备注：全宽，标签行下方、折叠分组上方 -->
-      <div class="ec-remark">
-        <span class="ec-remark-lbl">备注</span>
-        <span v-if="!editing" class="ec-remark-text" :class="{ 'ec-remark-empty': !row.remark }">{{ row.remark || '暂无备注' }}</span>
+      <!-- 备注：全宽卡片，标签行下方、折叠分组上方；查看模式无内容时不渲染 -->
+      <div v-if="editing ? canEditProduct : row.remark" class="ec-remark-card">
+        <span v-if="!editing" class="ec-remark-text">{{ row.remark }}</span>
         <el-input
-          v-else-if="canEditProduct"
+          v-else
           v-model="editForm.remark"
           type="textarea"
           :rows="2"
@@ -2114,20 +2113,15 @@ function toggleSec(key) {
 }
 .ec-tags-edit-below .ei-sel { width: 100%; flex: none; }
 
-/* 备注：全宽，标签行下方、折叠分组上方 */
-.ec-remark {
-  display: flex; align-items: flex-start; gap: 8px;
-  padding: 8px 12px; background: #fff; border-top: 1px solid #f0e8dc;
-}
-.ec-remark-lbl {
-  flex-shrink: 0; font-size: 12px; color: var(--text-secondary);
-  padding-top: 2px;
+/* 备注：全宽卡片，标签行下方、折叠分组上方；不带"备注"文字标签 */
+.ec-remark-card {
+  margin: 8px 12px; padding: 10px 12px;
+  background: #fff7ed; border: 1px solid var(--border); border-radius: 12px;
 }
 .ec-remark-text {
-  flex: 1; font-size: 13px; color: var(--text-primary); white-space: pre-wrap; word-break: break-all;
+  font-size: 13px; color: var(--text-primary); white-space: pre-wrap; word-break: break-all;
 }
-.ec-remark-input { flex: 1; }
-.ec-remark-empty { color: #bbb; font-style: italic; }
+.ec-remark-input :deep(.el-textarea__inner) { background: transparent; border: none; box-shadow: none; padding: 0; font-size: 13px; }
 .ec-img-ico  { font-size: 26px; opacity: 0.2; }
 .ec-img-hint { font-size: 11px; color: #c8bfb0; }
 
