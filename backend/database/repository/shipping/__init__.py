@@ -2255,18 +2255,36 @@ class ShippingRepository:
         tag_cats = ProductTagCategory.query.filter_by(is_shipping_dim=True).order_by(
             ProductTagCategory.sort_order, ProductTagCategory.name
         ).all()
-        tag_dimensions = [
-            {
-                'category_id': cat.id,
-                'name':        cat.name,
-                'color':       cat.color,
-                'tags':        [
+        finance_mapping_fields = {
+            '地域': ShippingFinanceCustomerMapping.country,
+            '品牌': ShippingFinanceCustomerMapping.brand,
+        }
+        tag_dimensions = []
+        for cat in tag_cats:
+            mapping_field = finance_mapping_fields.get(cat.name) if source == 'finance' else None
+            if mapping_field is not None:
+                # 财务端的地域/品牌由人工客户映射定义，并非产品标签。值本身就是
+                # 前端传回 tag_names 的稳定筛选值，不能伪造为产品标签 id。
+                values = [
+                    row[0] for row in db.session.query(mapping_field).filter(
+                        mapping_field.isnot(None), mapping_field != '',
+                    ).distinct().order_by(mapping_field).all()
+                ]
+                tags = [{'id': value, 'name': value} for value in values]
+                value_kind = 'name'
+            else:
+                tags = [
                     {'id': t.id, 'name': t.name}
                     for t in cat.tags.filter_by(shipping_dim_enabled=True).order_by(ProductTag.name).all()
-                ],
-            }
-            for cat in tag_cats
-        ]
+                ]
+                value_kind = 'id'
+            tag_dimensions.append({
+                'category_id': cat.id,
+                'name': cat.name,
+                'color': cat.color,
+                'tags': tags,
+                'value_kind': value_kind,
+            })
 
         result = {
             'channels':            channels,

@@ -22,7 +22,7 @@ from database.models.product.category import ProductCategory, ProductModel, Prod
 from database.models.product.finished import ProductFinished, ProductTag, ProductTagCategory
 import database.models.product.category  # noqa: F401 - resolve ORM relationships
 import database.models.product.resource  # noqa: F401 - resolve ORM relationships
-from database.repository.shipping import ShippingRepository
+from database.repository.shipping import ShippingRepository, _invalidate_chart_options_cache
 from services.shipping import (
     _REQUIRED_FINANCE_COL_NAMES,
     _build_col_map,
@@ -426,8 +426,9 @@ def test_finance_chart_uses_manual_mapping_for_trade_country_brand_and_filters()
             model.__table__.create(db.engine)
         region = ProductTagCategory(name='地域', is_shipping_dim=True)
         brand = ProductTagCategory(name='品牌', is_shipping_dim=True)
+        other_dimension = ProductTagCategory(name='其他维度', is_shipping_dim=True)
         category = ProductCategory(name='财务测试品类')
-        db.session.add_all([region, brand, category])
+        db.session.add_all([region, brand, other_dimension, category])
         db.session.flush()
         series_canada = ProductSeries(
             category_id=category.id, code='SERIES-CA', name='加拿大系列',
@@ -446,8 +447,9 @@ def test_finance_chart_uses_manual_mapping_for_trade_country_brand_and_filters()
         db.session.add_all([model_canada, model_thailand])
         db.session.flush()
         canada = ProductTag(name='加拿大', category_id=region.id)
+        other_tag = ProductTag(name='保留标签', category_id=other_dimension.id)
         db.session.add_all([
-            canada,
+            canada, other_tag,
             ProductFinished(code='SKU-E', model_id=model_canada.id),
             ProductFinished(code='SKU-T', model_id=model_thailand.id),
         ])
@@ -499,6 +501,34 @@ def test_finance_chart_uses_manual_mapping_for_trade_country_brand_and_filters()
             ),
         ])
         db.session.commit()
+
+        _invalidate_chart_options_cache()
+        finance_options = ShippingRepository.get_chart_options(source='finance')
+        shipping_options = ShippingRepository.get_chart_options(source='shipping')
+        finance_dimensions = {item['name']: item for item in finance_options['tag_dimensions']}
+        shipping_dimensions = {item['name']: item for item in shipping_options['tag_dimensions']}
+
+        assert finance_dimensions['地域']['value_kind'] == 'name'
+        assert {item['name'] for item in finance_dimensions['地域']['tags']} == {
+            '加拿大', '泰国', '中国', '德国', '俄罗斯',
+        }
+        assert finance_dimensions['品牌']['value_kind'] == 'name'
+        assert {item['name'] for item in finance_dimensions['品牌']['tags']} == {
+            '品牌甲', '品牌泰', '品牌乙', '品牌丙', '品牌丁',
+        }
+        assert finance_dimensions['其他维度'] == {
+            'category_id': other_dimension.id, 'name': '其他维度',
+            'color': other_dimension.color,
+            'tags': [{'id': other_tag.id, 'name': '保留标签'}], 'value_kind': 'id',
+        }
+        assert shipping_dimensions['地域'] == {
+            'category_id': region.id, 'name': '地域', 'color': region.color,
+            'tags': [{'id': canada.id, 'name': '加拿大'}], 'value_kind': 'id',
+        }
+        assert shipping_dimensions['品牌'] == {
+            'category_id': brand.id, 'name': '品牌', 'color': brand.color,
+            'tags': [], 'value_kind': 'id',
+        }
 
         country = ShippingRepository.get_chart_data({
             'source': 'finance', 'group_by': f'tag:{region.id}', 'trade_type': 'all',

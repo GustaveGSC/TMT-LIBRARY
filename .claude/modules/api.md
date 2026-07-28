@@ -230,7 +230,8 @@ DELETE /api/shipping/equivalents/<id>                 # 删除通用件对，并
 
 上述仓库过滤、通用件对、以及成品-产成品关联写接口均复用发货数据变更租约：若导入或重算正在运行，返回 `409 { success:false, data:{task_id} }`。成功响应的 `data` 保留原字段，并新增 `stale_pairs`、`stale_limit`、`requires_full_resolve`。规则保存与 `is_stale` 标记在同一事务提交；当 `requires_full_resolve=true` 时，配置已保存且不会部分重算，调用方应引导用户执行完整重建。
 GET    /api/shipping/chart-options                    # 渠道名和省份去重列表；?source=shipping|finance 过滤来源
-                                                      #   返回额外含 tag_dimensions: [{category_id,name,color,tags:[{id,name}]}]
+                                                      #   返回额外含 tag_dimensions: [{category_id,name,color,tags:[{id,name}],value_kind:'id'|'name'}]
+                                                      #   source=finance 的“地域”/“品牌”取客户映射 country/brand 去重值，value_kind='name'（前端须传 tag_names）；其余维度为产品标签，value_kind='id'
                                                       #   （已配置 is_shipping_dim=1 的标签分类及其 shipping_dim_enabled=1 的标签，见 database.md product_tag_category）
 POST   /api/shipping/chart-data                       # 图表聚合数据，body 含 source('shipping'|'finance')、trade_type('all'|'domestic'|'foreign')
                                                       #   source=shipping：trade_type 保留历史 FTP 产品判断（前端固定传 all）
