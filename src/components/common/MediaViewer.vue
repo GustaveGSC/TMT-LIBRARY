@@ -4,8 +4,17 @@
 // 视频不自动播放，需用户手动点击播放。左右切换不区分类型。业务方通过 delete-handler prop
 // 传入实际删除逻辑（不传则不显示删除按钮），保持本组件与具体业务接口解耦。
 import { ref, computed, watch, nextTick } from 'vue'
-import { ElMessageBox, ElMessage } from 'element-plus'
+import { ElMessageBox, ElMessage, useZIndex } from 'element-plus'
 import { ArrowLeft, ArrowRight, Close, Delete, ZoomIn, ZoomOut, RefreshRight } from '@element-plus/icons-vue'
+
+// 用 Element Plus 自己的全局 z-index 计数器，而不是写死的数字：本组件经常被嵌套在
+// el-dialog（比如 ProductImage 详情弹窗内嵌 FinishedExpandRow，或本组件自身的管理弹窗）
+// 里面打开，宿主 dialog 的 z-index 在会话中是递增的、不固定为 2000；写死的数字在有多层
+// 弹窗时会出现"放大图片被挡在宿主面板下方"。用 nextZIndex() 保证：①永远高于当前已打开的
+// 所有弹出层；②后续如果在查看器里弹出 ElMessageBox（删除确认），它会从同一个计数器继续
+// 递增，天然仍然盖在查看器上方，不需要再手动协调两者数值。
+const { nextZIndex } = useZIndex()
+const overlayZIndex = ref(2000)
 
 // ── Props / Emits ──────────────────────────────────
 const props = defineProps({
@@ -23,7 +32,7 @@ const visible = computed({
 })
 
 const index = ref(props.initialIndex)
-watch(() => props.modelValue, (val) => { if (val) { index.value = props.initialIndex; resetZoom() } })
+watch(() => props.modelValue, (val) => { if (val) { index.value = props.initialIndex; resetZoom(); overlayZIndex.value = nextZIndex() } })
 
 const current = computed(() => props.items[index.value] || null)
 const deleting = ref(false)
@@ -117,6 +126,7 @@ watch(() => props.modelValue, async (val) => { if (val) { await nextTick(); root
   <teleport to="body">
     <div
       v-if="visible" ref="rootEl" class="viewer-overlay" tabindex="0"
+      :style="{ zIndex: overlayZIndex }"
       @keydown="onKeydown" @mousemove="onMouseMove" @mouseup="onMouseUp"
     >
       <button class="viewer-close" @click="visible = false"><el-icon><Close /></el-icon></button>
@@ -157,9 +167,10 @@ watch(() => props.modelValue, async (val) => { if (val) { await nextTick(); root
 
 <style scoped>
 .viewer-overlay {
-  /* z-index 必须低于 Element Plus 弹出层基准值（PopupManager 默认从 2000 起递增），
-     否则 ElMessageBox（删除确认）会被本遮罩盖住 */
-  position: fixed; inset: 0; z-index: 1999; background: rgba(0,0,0,0.88);
+  /* z-index 由脚本用 Element Plus 的 useZIndex().nextZIndex() 动态赋值（内联 style），
+     保证永远高于当前已打开的宿主弹窗（无论嵌套多深），后续在查看器里弹出的 ElMessageBox
+     也会从同一个全局计数器继续递增、天然盖在查看器上方，不需要写死数字互相协调 */
+  position: fixed; inset: 0; background: rgba(0,0,0,0.88);
   display: flex; flex-direction: column; outline: none;
 }
 .viewer-content {

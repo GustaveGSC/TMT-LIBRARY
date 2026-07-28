@@ -2,7 +2,7 @@
 // ── 导入 ──────────────────────────────────────────
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Folder, Search, Close, Edit, Delete } from '@element-plus/icons-vue'
+import { Plus, Folder, Search, ArrowLeft, Delete } from '@element-plus/icons-vue'
 import http from '@/api/http'
 import { usePermission } from '@/composables/usePermission'
 import { useCategoryTree } from '@/composables/useCategoryTree'
@@ -40,110 +40,116 @@ async function loadAllTags() {
   if (res.success) allTags.value = res.data || []
 }
 
-// ── 包列表 ──────────────────────────────────────────
-const packages     = ref([])
-const packagesTotal = ref(0)
-const packagesLoading = ref(false)
+// ── 文件夹列表 ────────────────────────────────────────
+const folders      = ref([])
+const foldersTotal  = ref(0)
+const foldersLoading = ref(false)
 const search = ref('')
 let searchTimer = null
 function onSearchInput() {
   clearTimeout(searchTimer)
-  searchTimer = setTimeout(loadPackages, 300)
+  searchTimer = setTimeout(loadFolders, 300)
 }
 
-async function loadPackages() {
-  packagesLoading.value = true
+async function loadFolders() {
+  foldersLoading.value = true
   try {
     const res = await http.get('/api/product-detail-packages', { params: { search: search.value || undefined, size: 100 } })
-    if (res.success) { packages.value = res.data.items; packagesTotal.value = res.data.total }
+    if (res.success) { folders.value = res.data.items; foldersTotal.value = res.data.total }
   } finally {
-    packagesLoading.value = false
+    foldersLoading.value = false
   }
 }
 
-async function createPackage() {
+async function createFolder() {
   try {
-    const { value: name } = await ElMessageBox.prompt('包名称', '新建产品详情包', {
+    const { value: name } = await ElMessageBox.prompt('文件夹名称', '新建产品详情文件夹', {
       confirmButtonText: '创建', cancelButtonText: '取消', inputPattern: /\S+/, inputErrorMessage: '名称不能为空',
     })
     const res = await http.post('/api/product-detail-packages', { name })
-    if (res.success) { ElMessage.success('已创建'); await loadPackages(); openDetail(res.data) }
+    if (res.success) { ElMessage.success('已创建'); await loadFolders(); openFolder(res.data) }
     else ElMessage.error(res.message || '创建失败')
   } catch { /* 用户取消 */ }
 }
 
-// ── 包详情弹窗 ──────────────────────────────────────
-const detailVisible = ref(false)
-const detailPackage = ref(null)
-const detailMedia   = ref([])
-const detailNameEdit = ref('')
-const detailCascaderValue = ref([])
-const detailTagIds  = ref([])
-const detailSaving  = ref(false)
+// ── 打开文件夹（双击进入，原地切换视图，不是弹窗）─────
+const insideFolder = ref(false)   // false=文件夹网格视图，true=文件夹内部视图
+const activeFolder = ref(null)
+const activeMedia   = ref([])
+const nameEdit      = ref('')
+const cascaderValue  = ref([])
+const tagIds         = ref([])
+const scopeSaving    = ref(false)
 
-async function openDetail(pkg) {
+async function openFolder(folder) {
   await Promise.all([loadCategoryTreeOnce(), allTags.value.length ? Promise.resolve() : loadAllTags()])
-  detailPackage.value = pkg
-  detailNameEdit.value = pkg.name
-  detailCascaderValue.value = modelIdsToPaths(pkg.model_ids || [])
-  detailTagIds.value = pkg.tag_ids || []
-  detailVisible.value = true
-  await refreshDetailMedia()
+  activeFolder.value = folder
+  nameEdit.value = folder.name
+  cascaderValue.value = modelIdsToPaths(folder.model_ids || [])
+  tagIds.value = folder.tag_ids || []
+  insideFolder.value = true
+  await refreshActiveMedia()
 }
 
-async function refreshDetailMedia() {
-  if (!detailPackage.value) return
-  const res = await http.get(`/api/product-detail-packages/${detailPackage.value.id}`)
-  if (res.success) detailMedia.value = res.data.media || []
+function backToGrid() {
+  insideFolder.value = false
+  activeFolder.value = null
+  activeMedia.value = []
 }
 
-async function saveDetailName() {
-  if (!detailNameEdit.value.trim()) { ElMessage.warning('名称不能为空'); return }
-  const res = await http.put(`/api/product-detail-packages/${detailPackage.value.id}`, { name: detailNameEdit.value.trim() })
-  if (res.success) { ElMessage.success('已保存'); detailPackage.value.name = res.data.name; await loadPackages() }
+async function refreshActiveMedia() {
+  if (!activeFolder.value) return
+  const res = await http.get(`/api/product-detail-packages/${activeFolder.value.id}`)
+  if (res.success) activeMedia.value = res.data.media || []
+}
+
+async function saveName() {
+  if (!nameEdit.value.trim()) { ElMessage.warning('名称不能为空'); return }
+  const res = await http.put(`/api/product-detail-packages/${activeFolder.value.id}`, { name: nameEdit.value.trim() })
+  if (res.success) { ElMessage.success('已保存'); activeFolder.value.name = res.data.name; await loadFolders() }
   else ElMessage.error(res.message || '保存失败')
 }
 
 async function onCascaderChange(paths) {
-  detailCascaderValue.value = paths
+  cascaderValue.value = paths
   const modelIds = (paths || []).map(p => p[p.length - 1])
-  detailSaving.value = true
+  scopeSaving.value = true
   try {
-    const res = await http.put(`/api/product-detail-packages/${detailPackage.value.id}/models`, { model_ids: modelIds })
+    const res = await http.put(`/api/product-detail-packages/${activeFolder.value.id}/models`, { model_ids: modelIds })
     if (!res.success) ElMessage.error(res.message || '设置型号范围失败')
   } finally {
-    detailSaving.value = false
+    scopeSaving.value = false
   }
 }
 
-async function onTagIdsChange(tagIds) {
-  detailTagIds.value = tagIds
-  detailSaving.value = true
+async function onTagIdsChange(ids) {
+  tagIds.value = ids
+  scopeSaving.value = true
   try {
-    const res = await http.put(`/api/product-detail-packages/${detailPackage.value.id}/tags`, {
-      tag_ids: tagIds, tag_condition: tagIds.length ? { op: 'OR', items: tagIds.map(id => ({ tag_id: id })) } : null,
+    const res = await http.put(`/api/product-detail-packages/${activeFolder.value.id}/tags`, {
+      tag_ids: ids, tag_condition: ids.length ? { op: 'OR', items: ids.map(id => ({ tag_id: id })) } : null,
     })
     if (!res.success) ElMessage.error(res.message || '设置标签范围失败')
   } finally {
-    detailSaving.value = false
+    scopeSaving.value = false
   }
 }
 
-async function deletePackage(pkg) {
+async function deleteFolder(folder) {
   try {
-    await ElMessageBox.confirm(`确认删除包「${pkg.name}」？包内全部图片/视频将一并删除，此操作不可撤销。`, '删除确认', { type: 'warning' })
+    await ElMessageBox.confirm(`确认删除文件夹「${folder.name}」？文件夹内全部图片/视频将一并删除，此操作不可撤销。`, '删除确认', { type: 'warning' })
   } catch { return }
-  const res = await http.delete(`/api/product-detail-packages/${pkg.id}`)
+  const res = await http.delete(`/api/product-detail-packages/${folder.id}`)
   if (res.success) {
     ElMessage.success('已删除')
-    if (detailPackage.value?.id === pkg.id) detailVisible.value = false
-    await loadPackages()
+    if (activeFolder.value?.id === folder.id) backToGrid()
+    await loadFolders()
   } else {
     ElMessage.error(res.message || '删除失败')
   }
 }
 
-// ── 拖拽/选择上传 ────────────────────────────────────
+// ── 拖拽/选择上传（直接在文件夹内部进行，不弹面板）───
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp'])
 const VIDEO_EXTS  = new Set(['mp4', 'mov', 'webm'])
 const isDragOver = ref(false)
@@ -186,7 +192,7 @@ async function uploadFiles(files) {
   uploadDone.value = 0
   uploadTotal.value = valid.length
   try {
-    const presignRes = await http.post(`/api/product-detail-packages/${detailPackage.value.id}/media/presign`, {
+    const presignRes = await http.post(`/api/product-detail-packages/${activeFolder.value.id}/media/presign`, {
       files: valid.map(f => ({ ext: extOf(f.name), file_size: f.size, original_filename: f.name })),
     })
     if (!presignRes.success) { ElMessage.error(presignRes.message || '获取上传签名失败'); return }
@@ -202,10 +208,10 @@ async function uploadFiles(files) {
       uploadDone.value++
     }
     if (confirmed.length) {
-      const confirmRes = await http.post(`/api/product-detail-packages/${detailPackage.value.id}/media/confirm`, { files: confirmed })
+      const confirmRes = await http.post(`/api/product-detail-packages/${activeFolder.value.id}/media/confirm`, { files: confirmed })
       if (confirmRes.success) {
-        detailMedia.value = [...detailMedia.value, ...confirmRes.data]
-        await loadPackages()
+        activeMedia.value = [...activeMedia.value, ...confirmRes.data]
+        await loadFolders()
       } else {
         ElMessage.error(confirmRes.message || '确认上传失败')
       }
@@ -223,96 +229,108 @@ async function uploadFiles(files) {
 // ── 媒体查看/删除 ────────────────────────────────────
 const viewerVisible = ref(false)
 const viewerIndex   = ref(0)
-const viewerItems = computed(() => detailMedia.value.map(m => ({
+const viewerItems = computed(() => activeMedia.value.map(m => ({
   id: m.id, file_type: m.file_type, oss_url: m.oss_url, original_filename: m.original_filename,
 })))
 function openViewer(mediaId) {
-  viewerIndex.value = Math.max(0, detailMedia.value.findIndex(m => m.id === mediaId))
+  viewerIndex.value = Math.max(0, activeMedia.value.findIndex(m => m.id === mediaId))
   viewerVisible.value = true
 }
 async function deleteMedia(item) {
-  const res = await http.delete(`/api/product-detail-packages/${detailPackage.value.id}/media/${item.id}`)
+  const res = await http.delete(`/api/product-detail-packages/${activeFolder.value.id}/media/${item.id}`)
   if (!res.success) { ElMessage.error(res.message || '删除失败'); return false }
-  detailMedia.value = detailMedia.value.filter(m => m.id !== item.id)
-  await loadPackages()
+  activeMedia.value = activeMedia.value.filter(m => m.id !== item.id)
+  await loadFolders()
   return true
 }
 
-onMounted(() => { loadPackages(); loadAllTags(); loadCategoryTreeOnce() })
+onMounted(() => { loadFolders(); loadAllTags(); loadCategoryTreeOnce() })
 </script>
 
 <template>
   <div class="pkg-page">
-    <!-- 工具栏 -->
-    <div class="pkg-toolbar">
-      <el-input v-model="search" placeholder="搜索包名称…" :prefix-icon="Search" clearable style="width:260px" @input="onSearchInput" />
-      <el-button v-if="canEditProduct" type="primary" :icon="Plus" @click="createPackage">新建包</el-button>
-    </div>
-
-    <!-- 文件夹网格 -->
-    <div v-loading="packagesLoading" class="pkg-grid">
-      <div v-if="!packagesLoading && !packages.length" class="pkg-empty">暂无产品详情包</div>
-      <div v-for="pkg in packages" :key="pkg.id" class="pkg-card" @click="openDetail(pkg)">
-        <div class="pkg-icon-wrap">
-          <el-icon class="pkg-folder-icon"><Folder /></el-icon>
-          <img v-if="pkg.cover_thumbnail" :src="pkg.cover_thumbnail" class="pkg-cover-overlay" />
-        </div>
-        <div class="pkg-name" :title="pkg.name">{{ pkg.name }}</div>
-        <div class="pkg-meta">{{ pkg.media_count }} 个文件</div>
-      </div>
-    </div>
-
-    <!-- 包详情弹窗 -->
-    <el-dialog v-model="detailVisible" width="720" align-center destroy-on-close>
-      <template #header>
-        <div class="pkg-detail-hd">
-          <el-input v-model="detailNameEdit" size="small" style="width:260px" :disabled="!canEditProduct" @blur="saveDetailName" @keyup.enter="saveDetailName" />
-          <el-button v-if="canEditProduct" size="small" type="danger" plain :icon="Delete" @click="deletePackage(detailPackage)">删除包</el-button>
-        </div>
-      </template>
-
-      <div v-if="canEditProduct" class="pkg-scope">
-        <div class="pkg-scope-row">
-          <span class="pkg-scope-lbl">适用型号</span>
-          <el-cascader
-            :model-value="detailCascaderValue" :options="cascaderOptions" multiple
-            filterable clearable collapse-tags collapse-tags-tooltip
-            placeholder="选择型号，该型号产品自动展示此包" style="flex:1"
-            @change="onCascaderChange"
-          />
-        </div>
-        <div class="pkg-scope-row">
-          <span class="pkg-scope-lbl">适用标签</span>
-          <el-select
-            :model-value="detailTagIds" multiple filterable clearable
-            placeholder="带任一标签的产品自动展示此包" style="flex:1"
-            @change="onTagIdsChange"
-          >
-            <el-option v-for="t in allTags" :key="t.id" :value="t.id" :label="t.name" />
-          </el-select>
-        </div>
+    <!-- ── 文件夹网格视图 ── -->
+    <template v-if="!insideFolder">
+      <div class="pkg-toolbar">
+        <el-input v-model="search" placeholder="搜索文件夹名称…" :prefix-icon="Search" clearable style="width:260px" @input="onSearchInput" />
+        <el-button v-if="canEditProduct" type="primary" :icon="Plus" @click="createFolder">新建文件夹</el-button>
       </div>
 
-      <!-- 拖拽上传区 -->
-      <div
-        v-if="canEditProduct"
-        class="pkg-dropzone" :class="{ 'pkg-dropzone--over': isDragOver }"
-        @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop" @click="openFilePicker"
-      >
-        <input ref="fileInput" type="file" multiple accept=".png,.jpg,.jpeg,.webp,.mp4,.mov,.webm" style="display:none" @change="onFileInputChange" />
-        <span v-if="!uploading">拖拽图片/视频到此处，或点击选择文件（支持多选）</span>
-        <span v-else>上传中… {{ uploadDone }}/{{ uploadTotal }}</span>
-      </div>
-
-      <!-- 媒体网格 -->
-      <div class="pkg-media-grid">
-        <div v-if="!detailMedia.length" class="pkg-empty">包内暂无图片/视频</div>
-        <div v-for="m in detailMedia" :key="m.id" class="pkg-media-card" @click="openViewer(m.id)">
-          <img v-if="m.file_type === 'image'" :src="m.oss_url" class="pkg-media-thumb" loading="lazy" />
-          <video v-else :src="m.oss_url" class="pkg-media-thumb" preload="metadata" muted />
+      <div v-loading="foldersLoading" class="pkg-grid">
+        <div v-if="!foldersLoading && !folders.length" class="pkg-empty">暂无产品详情文件夹</div>
+        <div v-for="folder in folders" :key="folder.id" class="pkg-card" @dblclick="openFolder(folder)">
+          <div class="pkg-icon-wrap">
+            <el-icon class="pkg-folder-icon"><Folder /></el-icon>
+            <img v-if="folder.cover_thumbnail" :src="folder.cover_thumbnail" class="pkg-cover-overlay" />
+          </div>
+          <div class="pkg-name" :title="folder.name">{{ folder.name }}</div>
+          <div class="pkg-meta">{{ folder.media_count }} 个文件</div>
         </div>
       </div>
-    </el-dialog>
+    </template>
+
+    <!-- ── 文件夹内部视图（像 Windows 双击进入文件夹一样原地切换，不是弹窗）── -->
+    <template v-else>
+      <div class="pkg-inside-hd">
+        <el-button text :icon="ArrowLeft" @click="backToGrid">返回</el-button>
+        <el-input
+          v-model="nameEdit" size="small" style="width:240px" :disabled="!canEditProduct"
+          @blur="saveName" @keyup.enter="saveName"
+        />
+        <span class="pkg-inside-count">{{ activeMedia.length }} 个文件</span>
+        <el-button v-if="canEditProduct" size="small" type="danger" plain :icon="Delete" style="margin-left:auto" @click="deleteFolder(activeFolder)">删除文件夹</el-button>
+      </div>
+
+      <div class="pkg-inside-body">
+        <!-- 左侧：适用范围设置，常驻显示 -->
+        <aside v-if="canEditProduct" class="pkg-scope-panel">
+          <div class="pkg-scope-title">适用范围</div>
+          <div class="pkg-scope-field">
+            <div class="pkg-scope-lbl">适用型号</div>
+            <el-cascader
+              :model-value="cascaderValue" :options="cascaderOptions" multiple
+              filterable clearable collapse-tags collapse-tags-tooltip size="small"
+              placeholder="选择型号" style="width:100%"
+              @change="onCascaderChange"
+            />
+          </div>
+          <div class="pkg-scope-field">
+            <div class="pkg-scope-lbl">适用标签</div>
+            <el-select
+              :model-value="tagIds" multiple filterable clearable size="small"
+              placeholder="选择标签" style="width:100%"
+              @change="onTagIdsChange"
+            >
+              <el-option v-for="t in allTags" :key="t.id" :value="t.id" :label="t.name" />
+            </el-select>
+          </div>
+          <div class="pkg-scope-hint">选中型号或标签的产品，会在其详情页自动展示这个文件夹里的图片/视频</div>
+        </aside>
+
+        <!-- 右侧：文件区，整个区域都是拖拽上传目标 -->
+        <div
+          class="pkg-inside-main"
+          :class="{ 'pkg-inside-main--over': isDragOver }"
+          @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop"
+        >
+          <input ref="fileInput" type="file" multiple accept=".png,.jpg,.jpeg,.webp,.mp4,.mov,.webm" style="display:none" @change="onFileInputChange" />
+          <div v-if="canEditProduct" class="pkg-upload-hint" @click="openFilePicker">
+            <span v-if="!uploading">将图片/视频拖到这里上传，或点击此处选择文件（支持多选）</span>
+            <span v-else>上传中… {{ uploadDone }}/{{ uploadTotal }}</span>
+          </div>
+
+          <div class="pkg-media-grid">
+            <div v-if="!activeMedia.length" class="pkg-empty">文件夹内暂无图片/视频</div>
+            <div v-for="m in activeMedia" :key="m.id" class="pkg-media-card" @click="openViewer(m.id)">
+              <img v-if="m.file_type === 'image'" :src="m.oss_url" class="pkg-media-thumb" loading="lazy" />
+              <video v-else :src="m.oss_url" class="pkg-media-thumb" preload="metadata" muted />
+            </div>
+          </div>
+
+          <div v-if="isDragOver" class="pkg-drop-overlay">松开鼠标上传</div>
+        </div>
+      </div>
+    </template>
 
     <MediaViewer
       v-model="viewerVisible" :items="viewerItems" :initial-index="viewerIndex"
@@ -330,7 +348,7 @@ onMounted(() => { loadPackages(); loadAllTags(); loadCategoryTreeOnce() })
 .pkg-empty { color: var(--text-muted); font-size: 13px; padding: 30px; width: 100%; text-align: center; }
 .pkg-card {
   width: 120px; display: flex; flex-direction: column; align-items: center; gap: 4px;
-  cursor: pointer; padding: 8px; border-radius: 10px; transition: background 0.15s;
+  cursor: pointer; padding: 8px; border-radius: 10px; transition: background 0.15s; user-select: none;
 }
 .pkg-card:hover { background: rgba(196,136,58,0.08); }
 .pkg-icon-wrap { position: relative; width: 72px; height: 60px; }
@@ -342,20 +360,39 @@ onMounted(() => { loadPackages(); loadAllTags(); loadCategoryTreeOnce() })
 .pkg-name { font-size: 12px; color: var(--text-primary); text-align: center; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pkg-meta { font-size: 11px; color: var(--text-muted); }
 
-.pkg-detail-hd { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding-right: 24px; }
-.pkg-scope { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
-.pkg-scope-row { display: flex; align-items: center; gap: 10px; }
-.pkg-scope-lbl { flex-shrink: 0; width: 64px; font-size: 12px; color: var(--text-secondary); }
+/* ── 文件夹内部视图 ── */
+.pkg-inside-hd { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-shrink: 0; }
+.pkg-inside-count { font-size: 12px; color: var(--text-muted); }
+.pkg-inside-body { flex: 1; display: flex; gap: 16px; overflow: hidden; }
 
-.pkg-dropzone {
-  border: 2px dashed var(--border); border-radius: 10px; padding: 20px; text-align: center;
+.pkg-scope-panel {
+  width: 220px; flex-shrink: 0; background: #fff; border: 1px solid var(--border); border-radius: 12px;
+  padding: 14px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto;
+}
+.pkg-scope-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.pkg-scope-field { display: flex; flex-direction: column; gap: 4px; }
+.pkg-scope-lbl { font-size: 12px; color: var(--text-secondary); }
+.pkg-scope-hint { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
+
+.pkg-inside-main {
+  flex: 1; position: relative; overflow-y: auto; border: 1px solid var(--border); border-radius: 12px;
+  background: #fff; padding: 14px;
+}
+.pkg-inside-main--over { border-color: var(--accent); }
+.pkg-upload-hint {
+  border: 2px dashed var(--border); border-radius: 10px; padding: 16px; text-align: center;
   color: var(--text-muted); font-size: 13px; cursor: pointer; margin-bottom: 14px; transition: all 0.15s;
 }
-.pkg-dropzone--over { border-color: var(--accent); background: rgba(196,136,58,0.06); color: var(--accent); }
+.pkg-upload-hint:hover { border-color: var(--accent); color: var(--accent); }
+.pkg-drop-overlay {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: rgba(196,136,58,0.1); color: var(--accent); font-size: 14px; font-weight: 600;
+  border-radius: 12px; pointer-events: none;
+}
 
-.pkg-media-grid { display: flex; flex-wrap: wrap; gap: 10px; max-height: 320px; overflow-y: auto; }
+.pkg-media-grid { display: flex; flex-wrap: wrap; gap: 10px; }
 .pkg-media-card {
-  width: 100px; aspect-ratio: 4/3; border-radius: 8px; border: 1px solid var(--border);
+  width: 120px; aspect-ratio: 4/3; border-radius: 8px; border: 1px solid var(--border);
   overflow: hidden; cursor: pointer; background: #f5f0e8;
 }
 .pkg-media-thumb { width: 100%; height: 100%; object-fit: contain; background: #fff; display: block; }

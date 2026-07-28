@@ -1731,11 +1731,11 @@ function toggleSec(key) {
         <!-- 产品详情管理 section（独立于资料，按型号/标签适用范围自动匹配包）──────── -->
         <div class="eg-sec">
           <div class="eg-sec-hd" @click="toggleSec('detailPackages')">
-            <span class="eg-arr">{{ isSec('detailPackages') ? '▾' : '›' }}</span>产品详情管理
+            <span class="eg-arr">{{ isSec('detailPackages') ? '▾' : '›' }}</span>产品详情
           </div>
           <div v-if="isSec('detailPackages')" class="eg-sec-bd">
             <div v-if="detailPackagesLoading" class="res-loading">加载中…</div>
-            <div v-else-if="!detailPackages.length" class="res-empty">暂无匹配的产品详情包</div>
+            <div v-else-if="!detailPackages.length" class="res-empty">暂无匹配的产品详情文件夹</div>
             <template v-else>
               <div v-for="pkg in detailPackages" :key="pkg.id" class="dp-pkg-block">
                 <div class="dp-pkg-title">{{ pkg.name }}（{{ pkg.media.length }}）</div>
