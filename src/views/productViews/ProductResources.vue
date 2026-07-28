@@ -801,10 +801,11 @@ onBeforeUnmount(() => {
       <div class="type-manage">
         <div v-for="t in types" :key="t.id" class="type-row">
           <span class="type-row-name">{{ t.name }}</span>
-          <div class="type-row-actions">
+          <div v-if="t.name !== '产品详情'" class="type-row-actions">
             <el-button size="small" :icon="Edit" @click="openTypeEdit(t)" />
             <el-button size="small" :icon="Delete" type="danger" plain @click="deleteType(t.id)" />
           </div>
+          <span v-else class="type-row-protected">系统内置，不可编辑/删除</span>
         </div>
         <el-button :icon="Plus" style="width:100%;margin-top:10px" @click="openTypeCreate">新增类型</el-button>
       </div>
@@ -1262,6 +1263,7 @@ onBeforeUnmount(() => {
 .type-row    { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; }
 .type-row-name { font-size: 13px; color: var(--text-primary); }
 .type-row-actions { display: flex; gap: 6px; }
+.type-row-protected { font-size: 11px; color: var(--text-muted); }
 
 /* ── 上传 ──────────────────────────────────── */
 .upload-area     { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }

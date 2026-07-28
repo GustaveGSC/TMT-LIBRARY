@@ -1091,9 +1091,9 @@ function toggleSec(key) {
   }
   if (key === 'resources' && openSec[key] && !linkedLoaded.value) {
     loadLinkedResources().then(() => {
-      // 默认选中第一个 tab
-      if (resActiveTab.value === null && linkedByType.value.length) {
-        resActiveTab.value = linkedByType.value[0].type_id
+      // 默认选中第一个 tab（"产品详情"固定在底部单独展示，不参与 tab 默认选中）
+      if (resActiveTab.value === null && normalTypeGroups.value.length) {
+        resActiveTab.value = normalTypeGroups.value[0].type_id
       }
     })
     if (!resourceTypes.value.length) loadResourceTypes()
@@ -1668,9 +1668,8 @@ function toggleSec(key) {
             <div v-if="linkedLoading" class="res-loading">加载中…</div>
             <div v-else-if="!linkedResources.length" class="res-empty">暂无资料</div>
             <template v-else>
-              <!-- 顶部 Tab + 文件网格布局 -->
-              <div class="res-layout">
-                <!-- 顶部类型 tab："产品详情"与其它类型用竖线隔开，视觉上独立一块 -->
+              <!-- 顶部 Tab + 文件网格布局（不含"产品详情"，该类型固定显示在下方独立区块） -->
+              <div v-if="normalTypeGroups.length" class="res-layout">
                 <div class="res-tabs">
                   <div
                     v-for="g in normalTypeGroups"
@@ -1679,18 +1678,10 @@ function toggleSec(key) {
                     :class="{ 'res-tab--active': resActiveTab === g.type_id }"
                     @click="resActiveTab = g.type_id; resSelectedId = null"
                   >{{ g.type_name }} ({{ g.items.length }})</div>
-                  <template v-if="productDetailTypeGroup">
-                    <div class="res-tab-divider" />
-                    <div
-                      class="res-tab res-tab--detail"
-                      :class="{ 'res-tab--active': resActiveTab === productDetailTypeGroup.type_id }"
-                      @click="resActiveTab = productDetailTypeGroup.type_id; resSelectedId = null"
-                    >{{ productDetailTypeGroup.type_name }} ({{ productDetailTypeGroup.items.length }})</div>
-                  </template>
                 </div>
                 <!-- 文件网格 -->
                 <div class="res-files" @click.self="resSelectedId = null">
-                  <template v-for="g in linkedByType" :key="g.type_id">
+                  <template v-for="g in normalTypeGroups" :key="g.type_id">
                     <template v-if="resActiveTab === g.type_id">
                       <div
                         v-for="r in g.items"
@@ -1733,6 +1724,40 @@ function toggleSec(key) {
                   </template>
                 </div>
               </div>
+
+              <!-- "产品详情"类型：固定在最底部，横向分割线与其它资料隔开，不参与 tab 切换 -->
+              <template v-if="productDetailTypeGroup">
+                <div class="res-detail-divider" />
+                <div class="res-detail-block">
+                  <div class="res-detail-hd">{{ productDetailTypeGroup.type_name }}（{{ productDetailTypeGroup.items.length }}）</div>
+                  <div class="res-files res-files--detail" @click.self="resSelectedId = null">
+                    <div
+                      v-for="r in productDetailTypeGroup.items"
+                      :key="r.id"
+                      class="res-file"
+                      :class="{ 'res-file--selected': resSelectedId === r.id }"
+                      @click.stop="resSelectedId = r.id"
+                      @dblclick.stop="openResPreview(r)"
+                    >
+                      <button v-if="editing && r.link_type === 'direct'" class="res-file-unlink" title="解除关联" @click.stop="unlinkResource(r.id)">×</button>
+                      <div v-if="r.file_type === 'image'" class="res-file-thumb">
+                        <img :src="r.url" class="res-file-thumb-img" loading="lazy" />
+                      </div>
+                      <div v-else-if="r.file_type === 'video'" class="res-file-thumb res-file-thumb--video">
+                        <img v-if="r.cover_url" :src="r.cover_url" class="res-file-thumb-img" loading="lazy" />
+                        <video v-else :src="r.url" preload="metadata" muted class="res-file-thumb-img" style="object-fit:cover" />
+                        <div class="res-file-thumb-play"><el-icon><VideoPlay /></el-icon></div>
+                      </div>
+                      <div v-else class="res-file-icon">
+                        <el-icon><component :is="resourceFileIcon(r.file_type)" /></el-icon>
+                      </div>
+                      <div class="res-file-name" :title="r.title">{{ r.title }}</div>
+                      <div v-if="r.link_type === 'tag'" class="res-file-badge res-file-badge--tag" title="通过标签关联"></div>
+                      <div v-if="r.link_type === 'model'" class="res-file-badge res-file-badge--model" title="通过型号关联"></div>
+                    </div>
+                  </div>
+                </div>
+              </template>
             </template>
           </div>
         </div>
@@ -2875,11 +2900,11 @@ function toggleSec(key) {
   color: #c4883a; font-weight: 600;
   background: #faf6ef;
 }
-/* "产品详情"类型用竖线和左边距与其它类型隔开，视觉上独立一块 */
-.res-tab-divider {
-  width: 1px; margin: 6px 6px 5px; background: #ddd0b8; flex-shrink: 0;
-}
-.res-tab--detail { margin-left: 2px; }
+/* "产品详情"类型固定在最底部，横向分割线与其它资料类型隔开（类似"未分类"与其它分类的隔开方式） */
+.res-detail-divider { height: 1px; background: #ddd0b8; margin: 12px 0; }
+.res-detail-block {}
+.res-detail-hd { font-size: 11px; color: #8a7a6a; margin-bottom: 6px; }
+.res-files--detail { padding: 0; }
 
 .res-files {
   padding: 10px 12px;
