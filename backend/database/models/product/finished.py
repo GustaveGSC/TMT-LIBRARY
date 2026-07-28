@@ -11,6 +11,9 @@ class ProductTagCategory(db.Model):
     color           = db.Column(db.String(16), nullable=False, default='#c4883a')
     sort_order      = db.Column(db.Integer,    nullable=False, default=0)
     is_shipping_dim = db.Column(db.Boolean,    nullable=False, default=False)  # 是否用作发货图表分析维度
+    # country/brand are finance-only dimensions backed by customer mappings;
+    # ordinary categories leave this null and retain tag-based semantics.
+    finance_dimension_field = db.Column(db.String(20), nullable=True)
     created_at      = db.Column(db.DateTime,   nullable=False, default=now_cst)
 
     tags = db.relationship('ProductTag', backref='category', lazy='dynamic')
@@ -22,6 +25,7 @@ class ProductTagCategory(db.Model):
             'color':           self.color,
             'sort_order':      self.sort_order,
             'is_shipping_dim': bool(self.is_shipping_dim),
+            'finance_dimension_field': self.finance_dimension_field,
             'created_at':      self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
         }
 

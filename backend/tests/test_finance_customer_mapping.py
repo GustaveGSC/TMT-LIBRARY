@@ -23,6 +23,7 @@ from database.models.product.finished import ProductFinished, ProductTag, Produc
 import database.models.product.category  # noqa: F401 - resolve ORM relationships
 import database.models.product.resource  # noqa: F401 - resolve ORM relationships
 from database.repository.shipping import ShippingRepository, _invalidate_chart_options_cache
+from services.product.tag import TagCategoryService
 from services.shipping import (
     _REQUIRED_FINANCE_COL_NAMES,
     _build_col_map,
@@ -424,8 +425,12 @@ def test_finance_chart_uses_manual_mapping_for_trade_country_brand_and_filters()
             ShippingOrderFinished, ShippingFinanceCustomerMapping,
         ):
             model.__table__.create(db.engine)
-        region = ProductTagCategory(name='地域', is_shipping_dim=True)
-        brand = ProductTagCategory(name='品牌', is_shipping_dim=True)
+        region = ProductTagCategory(
+            name='地域', is_shipping_dim=True, finance_dimension_field='country',
+        )
+        brand = ProductTagCategory(
+            name='品牌', is_shipping_dim=True, finance_dimension_field='brand',
+        )
         other_dimension = ProductTagCategory(name='其他维度', is_shipping_dim=True)
         category = ProductCategory(name='财务测试品类')
         db.session.add_all([region, brand, other_dimension, category])
@@ -521,14 +526,20 @@ def test_finance_chart_uses_manual_mapping_for_trade_country_brand_and_filters()
             'color': other_dimension.color,
             'tags': [{'id': other_tag.id, 'name': '保留标签'}], 'value_kind': 'id',
         }
-        assert shipping_dimensions['地域'] == {
-            'category_id': region.id, 'name': '地域', 'color': region.color,
-            'tags': [{'id': canada.id, 'name': '加拿大'}], 'value_kind': 'id',
+        assert '地域' not in shipping_dimensions
+        assert '品牌' not in shipping_dimensions
+        assert shipping_options['map_dimension_category_id'] is None
+        assert shipping_dimensions['其他维度'] == {
+            'category_id': other_dimension.id, 'name': '其他维度',
+            'color': other_dimension.color,
+            'tags': [{'id': other_tag.id, 'name': '保留标签'}], 'value_kind': 'id',
         }
-        assert shipping_dimensions['品牌'] == {
-            'category_id': brand.id, 'name': '品牌', 'color': brand.color,
-            'tags': [], 'value_kind': 'id',
+        categories_response = TagCategoryService.get_all()
+        category_fields = {
+            item['name']: item['finance_dimension_field']
+            for item in categories_response.data
         }
+        assert category_fields == {'地域': 'country', '品牌': 'brand', '其他维度': None}
 
         country = ShippingRepository.get_chart_data({
             'source': 'finance', 'group_by': f'tag:{region.id}', 'trade_type': 'all',
@@ -635,6 +646,8 @@ def test_finance_chart_uses_manual_mapping_for_trade_country_brand_and_filters()
         # 生产库的长期显示名为“全球区域”。重命名不应让财务映射退回产品标签路径；
         # 同时覆盖图表 options、chart-data 的 tag_names 筛选和批量地图明细入口。
         region.name = '全球区域'
+        region.is_shipping_dim = False
+        brand.is_shipping_dim = False
         db.session.commit()
         _invalidate_chart_options_cache()
         global_region_options = ShippingRepository.get_chart_options(source='finance')
@@ -647,14 +660,14 @@ def test_finance_chart_uses_manual_mapping_for_trade_country_brand_and_filters()
         assert {item['name'] for item in global_region_dimension['tags']} == {
             '加拿大', '泰国', '中国', '德国', '俄罗斯',
         }
-        global_region_shipping_dimension = next(
-            item for item in global_region_shipping_options['tag_dimensions']
-            if item['category_id'] == region.id
-        )
-        assert global_region_shipping_dimension['value_kind'] == 'id'
-        assert global_region_shipping_dimension['tags'] == [
-            {'id': canada.id, 'name': '加拿大'},
-        ]
+        assert global_region_shipping_options['map_dimension_category_id'] is None
+        assert {item['category_id'] for item in global_region_shipping_options['tag_dimensions']} == {
+            other_dimension.id,
+        }
+        assert global_region_options['map_dimension_category_id'] == region.id
+        assert {item['category_id'] for item in global_region_options['tag_dimensions']} >= {
+            region.id, brand.id,
+        }
         global_region_filtered = ShippingRepository.get_chart_data({
             'source': 'finance', 'group_by': 'channel', 'trade_type': 'all',
             'tag_filters': [{'category_id': region.id, 'tag_names': ['泰国']}],

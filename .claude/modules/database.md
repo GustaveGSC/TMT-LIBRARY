@@ -269,8 +269,10 @@ product_finished_packaged
 
 product_tag_category
   id, name(UNIQUE VARCHAR 32), color(default:#c4883a), sort_order,
-  is_shipping_dim(BOOLEAN DEFAULT False), created_at
+  is_shipping_dim(BOOLEAN DEFAULT False), finance_dimension_field(VARCHAR 20 nullable), created_at
   # is_shipping_dim=True 时该分类作为发货图表可选聚合维度（数据管理→数据配置→标签分析维度 配置）
+  # finance_dimension_field='country'|'brand' 时是财务客户映射维度：财务端固定显示、发货端不返回，
+  # 不受 is_shipping_dim/shipping_dim_enabled 配置影响；NULL 为普通产品标签维度
 
 product_tag
   id, name(UNIQUE), color(default:#c4883a), category_id(FK→product_tag_category nullable),

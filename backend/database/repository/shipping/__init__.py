@@ -200,19 +200,15 @@ def _get_ftp_finished_codes() -> set:
 # ── chart_options 缓存（导入、图表维度或客户映射变化时失效）──
 _chart_options_cache: dict = {}
 _CHART_OPTIONS_TTL = 300  # 5 分钟
-_FINANCE_COUNTRY_CATEGORY_NAMES = frozenset({'地域', '全球区域'})
 
 
-def _finance_mapping_field_for_category(category_name):
-    """Return the finance mapping column for a configured chart dimension.
-
-    ``全球区域`` is the long-lived production display name; ``地域`` remains
-    supported for older databases.  Keep this mapping in one place so the
-    chart options, chart data, and map breakdown contracts cannot drift.
-    """
-    if category_name in _FINANCE_COUNTRY_CATEGORY_NAMES:
+def _finance_mapping_field_for_category_row(category):
+    """Map a data-configured finance dimension to its customer mapping column."""
+    if category is None:
+        return None
+    if category.finance_dimension_field == 'country':
         return ShippingFinanceCustomerMapping.country
-    if category_name == '品牌':
+    if category.finance_dimension_field == 'brand':
         return ShippingFinanceCustomerMapping.brand
     return None
 
@@ -2267,12 +2263,21 @@ class ShippingRepository:
 
         # 已配置为发货分析维度的标签分类（及其纳入统计的标签）
         from database.models.product.finished import ProductTagCategory, ProductTag
-        tag_cats = ProductTagCategory.query.filter_by(is_shipping_dim=True).order_by(
-            ProductTagCategory.sort_order, ProductTagCategory.name
-        ).all()
+        if source == 'finance':
+            tag_cats = ProductTagCategory.query.filter(
+                db.or_(
+                    ProductTagCategory.is_shipping_dim.is_(True),
+                    ProductTagCategory.finance_dimension_field.isnot(None),
+                ),
+            ).order_by(ProductTagCategory.sort_order, ProductTagCategory.name).all()
+        else:
+            tag_cats = ProductTagCategory.query.filter(
+                ProductTagCategory.is_shipping_dim.is_(True),
+                ProductTagCategory.finance_dimension_field.is_(None),
+            ).order_by(ProductTagCategory.sort_order, ProductTagCategory.name).all()
         tag_dimensions = []
         for cat in tag_cats:
-            mapping_field = _finance_mapping_field_for_category(cat.name) if source == 'finance' else None
+            mapping_field = _finance_mapping_field_for_category_row(cat) if source == 'finance' else None
             if mapping_field is not None:
                 # 财务端的地域/品牌由人工客户映射定义，并非产品标签。值本身就是
                 # 前端传回 tag_names 的稳定筛选值，不能伪造为产品标签 id。
@@ -2306,6 +2311,10 @@ class ShippingRepository:
             'data_date_min':       min_date,
             'data_date_max':       max_date,
             'tag_dimensions':      tag_dimensions,
+            'map_dimension_category_id': next(
+                (cat.id for cat in tag_cats if cat.finance_dimension_field == 'country'),
+                None,
+            ) if source == 'finance' else None,
         }
         _chart_options_cache[cache_key] = {**result, '_at': time.time()}
         return result
@@ -2353,10 +2362,8 @@ class ShippingRepository:
         tag_category_id = int(group_by.split(':', 1)[1]) if is_tag_group_by else None
         finance_mapping_field = None
         if source == 'finance' and is_tag_group_by:
-            tag_category_name = db.session.query(ProductTagCategory.name).filter(
-                ProductTagCategory.id == tag_category_id,
-            ).scalar()
-            finance_mapping_field = _finance_mapping_field_for_category(tag_category_name)
+            tag_category = db.session.get(ProductTagCategory, tag_category_id)
+            finance_mapping_field = _finance_mapping_field_for_category_row(tag_category)
         is_finance_mapping_group = finance_mapping_field is not None
 
         # 财务端「地域/品牌」既兼容原有 tag_ids，也允许直接传 tag_names，
@@ -2378,10 +2385,10 @@ class ShippingRepository:
                 continue
             filter_category_name = None
             if source == 'finance':
-                filter_category_name = db.session.query(ProductTagCategory.name).filter(
-                    ProductTagCategory.id == filter_category_id,
-                ).scalar()
-            mapping_field = _finance_mapping_field_for_category(filter_category_name)
+                filter_category = db.session.get(ProductTagCategory, filter_category_id)
+            else:
+                filter_category = None
+            mapping_field = _finance_mapping_field_for_category_row(filter_category)
             if mapping_field is None:
                 if filter_tag_ids:
                     product_tag_filters.append(tag_filter)
@@ -2690,10 +2697,9 @@ class ShippingRepository:
         country_category = db.session.get(ProductTagCategory, country_category_id)
         if (
             not country_category
-            or country_category.name not in _FINANCE_COUNTRY_CATEGORY_NAMES
-            or not country_category.is_shipping_dim
+            or country_category.finance_dimension_field != 'country'
         ):
-            raise ValueError('country_category_id 必须是已启用的地域（全球区域）标签分类')
+            raise ValueError('country_category_id 必须是财务国家维度')
 
         countries = []
         for value in params.get('countries') or []:
@@ -2719,8 +2725,8 @@ class ShippingRepository:
                 )
             except (TypeError, ValueError):
                 raise ValueError('breakdown_group_by 必须是 series 或品牌标签维度') from None
-            if not brand_category or brand_category.name != '品牌' or not brand_category.is_shipping_dim:
-                raise ValueError('breakdown_group_by 必须是已启用的品牌标签维度')
+            if not brand_category or brand_category.finance_dimension_field != 'brand':
+                raise ValueError('breakdown_group_by 必须是财务品牌维度')
 
         def parse_date(value, label):
             if not value:
@@ -2753,9 +2759,7 @@ class ShippingRepository:
                 value.strip() for value in (tag_filter.get('tag_names') or [])
                 if isinstance(value, str) and value.strip() and len(value.strip()) <= 100
             }
-            mapping_field = _finance_mapping_field_for_category(
-                tag_category.name if tag_category else None,
-            )
+            mapping_field = _finance_mapping_field_for_category_row(tag_category)
             if mapping_field is not None:
                 if tag_ids:
                     names.update(row[0] for row in db.session.query(ProductTag.name).filter(

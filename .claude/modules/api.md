@@ -106,7 +106,7 @@ POST   /api/category/models
 PUT    /api/category/models/:id
 DELETE /api/category/models/:id                       # 被成品或售后工单引用时返回 400，需先迁移关联数据
 
-GET    /api/product/tags/categories/                  # 标签分类列表（含旗下 tags[]）
+GET    /api/product/tags/categories/                  # 标签分类列表（含旗下 tags[]、finance_dimension_field: country|brand|null）
 POST   /api/product/tags/categories/                  # 新增分类 {name,color?,sort_order?}
 PUT    /api/product/tags/categories/:id                # 更新分类 {name,color?,sort_order?,is_shipping_dim?}
                                                       #   is_shipping_dim 未传则保留原值；传 true/false 控制该分类是否作为发货图表聚合维度
@@ -231,20 +231,21 @@ DELETE /api/shipping/equivalents/<id>                 # 删除通用件对，并
 上述仓库过滤、通用件对、以及成品-产成品关联写接口均复用发货数据变更租约：若导入或重算正在运行，返回 `409 { success:false, data:{task_id} }`。成功响应的 `data` 保留原字段，并新增 `stale_pairs`、`stale_limit`、`requires_full_resolve`。规则保存与 `is_stale` 标记在同一事务提交；当 `requires_full_resolve=true` 时，配置已保存且不会部分重算，调用方应引导用户执行完整重建。
 GET    /api/shipping/chart-options                    # 渠道名和省份去重列表；?source=shipping|finance 过滤来源
                                                       #   返回额外含 tag_dimensions: [{category_id,name,color,tags:[{id,name}],value_kind:'id'|'name'}]
-                                                      #   source=finance 的“地域”或“全球区域”/“品牌”取客户映射 country/brand 去重值，value_kind='name'（前端须传 tag_names）；其余维度为产品标签，value_kind='id'
+                                                      #   source=finance 的 finance_dimension_field=country/brand 分类取客户映射 country/brand 去重值，value_kind='name'（前端须传 tag_names）；其余维度为产品标签，value_kind='id'
+                                                      #   source=finance 另含 map_dimension_category_id（country 财务维度 id）；source=shipping 为 null，且不返回任一财务维度
                                                       #   （已配置 is_shipping_dim=1 的标签分类及其 shipping_dim_enabled=1 的标签，见 database.md product_tag_category）
 POST   /api/shipping/chart-data                       # 图表聚合数据，body 含 source('shipping'|'finance')、trade_type('all'|'domestic'|'foreign')
                                                       #   source=shipping：trade_type 保留历史 FTP 产品判断（前端固定传 all）
                                                       #   source=finance：domestic/foreign 仅按人工映射 status=domestic/export；pending、non_sales、未映射均不进入两者，all 仍包含全部
                                                       #   group_by 除固定维度外，可传 'tag:<category_id>' 按该标签分类聚合（需先在数据配置中启用该分类为发货维度）
-                                                      #   source=finance 且标签分类名为「地域」/「全球区域」或「品牌」时，按人工映射的 country/brand 聚合；仅 status=export 且值非空的数据参与
+                                                      #   source=finance 且标签分类 finance_dimension_field=country/brand 时，按人工映射的 country/brand 聚合；仅 status=export 且值非空的数据参与
                                                       #   按“品牌”聚合的 item 额外含 name（该品牌对应的一个或多个国家，以逗号分隔），供 tooltip 副标题显示；地域聚合不含 name
                                                       #   tag_filters?: [{category_id, tag_ids?, tag_names?}]，与 group_by 相互独立
-                                                      #   source=finance 且分类名为「地域」/「全球区域」/「品牌」时可直接传 tag_names（字符串数组，单项最长100，最多100项），按人工映射文本筛选
+                                                      #   source=finance 且分类 finance_dimension_field=country/brand 时可直接传 tag_names（字符串数组，单项最长100，最多100项），按人工映射文本筛选
                                                       #     tag_names 不要求 product_tag 中存在同名标签；与 tag_ids 同时传时取名称并集，同一分类内为 OR、不同分类之间为 AND
                                                       #   其他来源/分类忽略 tag_names，仍只支持 tag_ids，以保持产品标签筛选语义
 POST   /api/shipping/map-breakdown                    # shipping:view；财务端世界地图的批量悬浮细分
-                                                      #   body: source 固定 finance、country_category_id（已启用且名为「地域」）、
+                                                      #   body: source 固定 finance、country_category_id（finance_dimension_field='country'）、
                                                       #         countries（去重后 1..100 个国家）、breakdown_group_by（series 或 tag:<品牌分类ID>）
                                                       #   可附带与 chart-data 相同的 date_start/date_end/category_ids/series_ids/model_ids/
                                                       #         tag_filters/channel_names/channel_codes/provinces/cities/districts 筛选项；不接受 trade_type

@@ -26,7 +26,8 @@ SHIPPING_SCOPED_STALE_INDEX_REVISION = '20260727_01'
 AFTERSALE_CASE_MEDIA_REVISION = '20260727_02'
 PRODUCT_FINISHED_REMARK_REVISION = '20260728_01'
 DETAIL_PACKAGE_REVISION = '20260728_02'
-HEAD_REVISION = DETAIL_PACKAGE_REVISION
+FINANCE_DIMENSION_REVISION = '20260728_03'
+HEAD_REVISION = FINANCE_DIMENSION_REVISION
 CRITICAL_INDEXES = {
     'shipping_order_finished': {
         'ix_sof_source',
@@ -94,6 +95,7 @@ def test_baseline_has_linear_history_and_task_lease_is_the_only_head():
         == AFTERSALE_CASE_MEDIA_REVISION
     )
     assert scripts.get_revision(DETAIL_PACKAGE_REVISION).down_revision == PRODUCT_FINISHED_REMARK_REVISION
+    assert scripts.get_revision(FINANCE_DIMENSION_REVISION).down_revision == DETAIL_PACKAGE_REVISION
 
 
 def test_performance_critical_production_indexes_are_declared_in_metadata():
@@ -288,6 +290,36 @@ def test_baseline_upgrade_adds_only_task_schemas(tmp_path, monkeypatch):
     with engine.connect() as connection:
         current = MigrationContext.configure(connection).get_current_revision()
     assert current == HEAD_REVISION
+
+
+def test_finance_dimension_migration_backfills_category_configuration(tmp_path, monkeypatch):
+    database_path = tmp_path / 'finance-dimension.db'
+    database_url = f'sqlite:///{database_path.as_posix()}'
+    engine = sa.create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            'CREATE TABLE product_tag_category ('
+            'id INTEGER PRIMARY KEY, name VARCHAR(32) NOT NULL, '
+            'color VARCHAR(16) NOT NULL, sort_order INTEGER NOT NULL, '
+            'is_shipping_dim BOOLEAN NOT NULL, created_at DATETIME NOT NULL)'
+        ))
+        connection.execute(sa.text(
+            "INSERT INTO product_tag_category (id, name, color, sort_order, is_shipping_dim, created_at) "
+            "VALUES (1, '全球区域', '#c4883a', 0, 0, CURRENT_TIMESTAMP), "
+            "(2, '品牌', '#c4883a', 1, 0, CURRENT_TIMESTAMP), "
+            "(3, '普通标签', '#c4883a', 2, 1, CURRENT_TIMESTAMP)"
+        ))
+
+    monkeypatch.setenv('DATABASE_URL', database_url)
+    config = _config(database_url)
+    command.stamp(config, DETAIL_PACKAGE_REVISION)
+    command.upgrade(config, FINANCE_DIMENSION_REVISION)
+
+    with engine.connect() as connection:
+        rows = dict(connection.execute(sa.text(
+            'SELECT name, finance_dimension_field FROM product_tag_category'
+        )).fetchall())
+    assert rows == {'全球区域': 'country', '品牌': 'brand', '普通标签': None}
 
 
 def test_guest_role_migration_removes_role_and_associations(tmp_path, monkeypatch):
