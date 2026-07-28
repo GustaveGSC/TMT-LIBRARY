@@ -881,6 +881,9 @@ const {
 // 资料区 tab（当前选中类型 type_id）
 const resActiveTab   = ref(null)
 const resSelectedId  = ref(null)   // 单击选中的文件 id
+// "产品详情"类型在资料 tab 里单独隔开显示（视觉上与其它类型分组），不与说明书/安装视频等混排
+const normalTypeGroups      = computed(() => linkedByType.value.filter(g => g.type_name !== '产品详情'))
+const productDetailTypeGroup = computed(() => linkedByType.value.find(g => g.type_name === '产品详情') || null)
 
 // ── 产品详情（图片/视频画廊，复用"资料"库同一套上传/标签机制，但内容独立）──
 // 只展示"产品详情"这一资料类型下的条目，不混入说明书/安装视频/售后视频等其它既有类型；
@@ -1667,15 +1670,23 @@ function toggleSec(key) {
             <template v-else>
               <!-- 顶部 Tab + 文件网格布局 -->
               <div class="res-layout">
-                <!-- 顶部类型 tab -->
+                <!-- 顶部类型 tab："产品详情"与其它类型用竖线隔开，视觉上独立一块 -->
                 <div class="res-tabs">
                   <div
-                    v-for="g in linkedByType"
+                    v-for="g in normalTypeGroups"
                     :key="g.type_id"
                     class="res-tab"
                     :class="{ 'res-tab--active': resActiveTab === g.type_id }"
                     @click="resActiveTab = g.type_id; resSelectedId = null"
                   >{{ g.type_name }} ({{ g.items.length }})</div>
+                  <template v-if="productDetailTypeGroup">
+                    <div class="res-tab-divider" />
+                    <div
+                      class="res-tab res-tab--detail"
+                      :class="{ 'res-tab--active': resActiveTab === productDetailTypeGroup.type_id }"
+                      @click="resActiveTab = productDetailTypeGroup.type_id; resSelectedId = null"
+                    >{{ productDetailTypeGroup.type_name }} ({{ productDetailTypeGroup.items.length }})</div>
+                  </template>
                 </div>
                 <!-- 文件网格 -->
                 <div class="res-files" @click.self="resSelectedId = null">
@@ -2864,6 +2875,11 @@ function toggleSec(key) {
   color: #c4883a; font-weight: 600;
   background: #faf6ef;
 }
+/* "产品详情"类型用竖线和左边距与其它类型隔开，视觉上独立一块 */
+.res-tab-divider {
+  width: 1px; margin: 6px 6px 5px; background: #ddd0b8; flex-shrink: 0;
+}
+.res-tab--detail { margin-left: 2px; }
 
 .res-files {
   padding: 10px 12px;
