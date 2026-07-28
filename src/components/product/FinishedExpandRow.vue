@@ -91,6 +91,12 @@ let   shippingChartInst    = null
 
 async function loadShippingMonthly() {
   if (!canViewShipping) return
+  if (shippingLoaded.value) {
+    // 数据已缓存过（只是折叠时图表实例被销毁），不用重新请求，直接用缓存数据重新挂载图表
+    await nextTick()
+    initShippingChart()
+    return
+  }
   shippingChartLoading.value = true
   try {
     const res = await http.get(`/api/shipping/product/${props.row.code}/monthly`, { params: { source: shippingSource.value } })
@@ -167,7 +173,13 @@ const aftersaleMonthly      = ref([])   // [{ month, aftersale_count, shipping_a
 let   aftersaleChartInst    = null
 
 async function loadAftersaleMonthly() {
-  if (!canViewAftersale || aftersaleLoaded.value) return
+  if (!canViewAftersale) return
+  if (aftersaleLoaded.value) {
+    // 数据已缓存过（只是折叠时图表实例被销毁），不用重新请求，直接用缓存数据重新挂载图表
+    await nextTick()
+    initAftersaleChart()
+    return
+  }
   if (!props.row.model_id) return
   aftersaleChartLoading.value = true
   try {
@@ -1084,9 +1096,20 @@ function toggleSec(key) {
   if (key === 'params' && openSec[key] && !paramsLoaded.value && props.row.id) {
     loadParams(props.row.id)
   }
-  if (key === 'data' && openSec[key]) {
-    loadShippingMonthly()
-    loadAftersaleMonthly()
+  if (key === 'data') {
+    if (openSec[key]) {
+      loadShippingMonthly()
+      loadAftersaleMonthly()
+    } else {
+      // 折叠时 v-if 会把图表容器 DOM 一并销毁；echarts 实例仍留着旧的（已从文档里摘除的）
+      // canvas 引用，不主动清空的话，下次展开只会重新拿到一个新的空容器，
+      // 但 initXxxChart() 里的"实例已存在就不重建"判断会让图表实例还绑在旧 DOM 上，画面一片空白。
+      // 这里销毁实例（不清空已缓存的数据/loaded标记），下次展开时会检测到没有实例，重新绑定新容器。
+      shippingChartInst?.dispose()
+      shippingChartInst = null
+      aftersaleChartInst?.dispose()
+      aftersaleChartInst = null
+    }
   }
   if (key === 'resources' && openSec[key] && !linkedLoaded.value) {
     loadLinkedResources().then(() => {
