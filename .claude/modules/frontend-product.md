@@ -78,7 +78,7 @@ src/stores/product/
 - **型号简码说明按钮**：`?` 圆形按钮位于"型号简码"文字右侧，点击弹出 el-popover 显示 `src/assets/images/image_model_tip.png`
 - **保存失败反馈**：`res.success` 为 false 或图片上传失败时 `ElMessage.error(res.message)`
 - market checkbox → resolveMarket() → 'domestic'/'foreign'/'both'/''
-- **备注**（`ec-remark`）：全宽，位于标签行和折叠分组（参数/数据）之间；查看模式显示 `row.remark` 文本或"暂无备注"占位；编辑模式 `el-input type="textarea"` 绑定 `editForm.remark`；随现有保存流程一并提交（空值转 `null` 支持清空），无独立接口
+- **备注**（`ec-remark-card`）：全宽卡片，位于标签行和折叠分组（参数/数据）之间，不带"备注"文字标签；查看模式 `row.remark` 为空时整个区块不渲染；编辑模式始终显示 `el-input type="textarea"` 绑定 `editForm.remark`；随现有保存流程一并提交（空值转 `null` 支持清空），无独立接口
 - eg-lbl 宽80px，居中，背景#faf7f2，右边框分隔
 - eg-row min-height:34px，不用固定height
 
