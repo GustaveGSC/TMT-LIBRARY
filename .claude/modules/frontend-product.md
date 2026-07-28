@@ -19,7 +19,7 @@ src/stores/product/
 ## page-product.vue 说明
 - `onMounted`：调用 `maximizeApp()`
 - 返回按钮：先 `unmaximizeApp()` 再 `router.back()`
-- 顶部导航：概览(SVG inline) / 表格(PNG) / 图片(PNG) / 图表(PNG) / 资料(SVG) / 产品详情(SVG，`ProductDetailPackages.vue`，2026-07-28 新增)
+- 顶部导航：概览(SVG inline) / 表格(PNG) / 图片(PNG) / 图表(PNG) / 资料(SVG) / 产品详情管理(SVG，`ProductDetailPackages.vue`，2026-07-28 新增)
 - active 状态：文字加粗 + 主色 + 底部2px橙色指示线，无背景填充
 - 数据管理区：导入数据 / 编码规则 / 分类管理 / 标签管理 / **参数管理**
 - **数据管理区需要 `product:edit` 权限才显示**（`v-if="canEditProduct"`）
@@ -82,21 +82,33 @@ src/stores/product/
 - eg-lbl 宽80px，居中，背景#faf7f2，右边框分隔
 - eg-row min-height:34px，不用固定height
 
-## 产品详情包（独立于"资料"，2026-07-28 上线）
+## 产品详情文件夹（独立于"资料"，2026-07-28 上线）
+- **命名**：顶部导航 tab 叫"**产品详情管理**"（管理页 `ProductDetailPackages.vue`）；产品详情
+  页里的折叠区叫"**产品详情**"（`FinishedExpandRow.vue` 只读展示区块）——两者标签不同，不要
+  弄反。UI 文案统一用"文件夹"，不用"包"（后端字段名/接口路径仍是 `package`，只是前端展示文案
+  改了）。
 - **数据模型**：全新后端表（`product_detail_package`/`_media`/`_tag`/`_model`），不复用
-  `product_resource`；一个"包"=自由命名的容器，内部放若干图片/视频，通过设置"适用范围"
+  `product_resource`；一个文件夹=自由命名的容器，内部放若干图片/视频，通过设置"适用范围"
   （型号/标签）与产品自动匹配，不需要逐产品手动关联。
-- **管理页**：`ProductDetailPackages.vue`，产品库顶部导航新增"产品详情"tab（与"资料"同级，
-  同样需要 `canEditProduct` 才挂载）。Windows 文件夹图标网格展示所有包；点开包详情弹窗：改名
-  （失焦/回车即保存）、设置适用范围（型号 `el-cascader` 多选 + 标签简单多选，标签是 OR 语义，
-  未做 AND/OR/NOT 条件构建器）、拖拽或点击选择文件批量上传（presign 批量签名 + OSS 直传 +
-  confirm，跳过不支持类型）、媒体网格点击打开 `MediaViewer`（`delete-handler` 传入删除接口）。
-  **已知缺口**：重新打开一个已有媒体的包时依赖 `GET /api/product-detail-packages/:id` 加载
-  完整媒体列表，该接口后端尚未提供（见 `handoff/2026-07-28-claude-product-detail-package-single-get-request.md`），
-  在此之前重新打开旧包看不到已上传内容（同一次上传会话内本地维护的状态没有这个问题）。
-- **产品详情页展示区块**：`FinishedExpandRow.vue` 新增顶级折叠区"产品详情管理"（与资料/参数/
-  数据同级），懒加载 `GET /api/product-detail-packages/finished/:code`，按包分组展示只读画廊，
+- **管理页交互**（`ProductDetailPackages.vue`，`canEditProduct` 才挂载）：Windows 文件夹图标
+  网格，**双击**进入文件夹（原地切换视图，`insideFolder` ref 控制，不是弹窗）。进入后：顶部
+  返回按钮+改名输入框+删除按钮；左侧 `pkg-scope-panel` **常驻显示**适用范围设置（型号
+  `el-cascader` 多选 + 标签简单多选，标签是 OR 语义，未做 AND/OR/NOT 条件构建器）；右侧主区域
+  本身就是拖拽上传目标（`pkg-inside-main` 整个区域 `@dragover/@drop`），也可点击上传提示区选
+  文件，上传（presign 批量签名 + OSS 直传 + confirm）后直接追加到当前文件夹的媒体网格，点击
+  缩略图打开 `MediaViewer`（`delete-handler` 传入删除接口）。
+  **已知缺口**：重新打开一个已有媒体的文件夹时依赖 `GET /api/product-detail-packages/:id`
+  加载完整媒体列表，该接口后端尚未提供（见
+  `handoff/2026-07-28-claude-product-detail-package-single-get-request.md`），在此之前重新
+  打开旧文件夹看不到已上传内容（同一次上传会话内本地维护的状态没有这个问题）。
+- **产品详情页展示区块**：`FinishedExpandRow.vue` 新增顶级折叠区"产品详情"（与资料/参数/数据
+  同级），懒加载 `GET /api/product-detail-packages/finished/:code`，按文件夹分组展示只读画廊，
   点击打开 `MediaViewer`（不传 `delete-handler`，编辑走独立管理页，这里只读）。
+- **`MediaViewer` z-index**：改用 Element Plus 的 `useZIndex().nextZIndex()` 动态获取（每次
+  打开时取一次），不再写死数字——写死的值在查看器被嵌套宿主 `el-dialog`（比如 `ProductImage.vue`
+  详情弹窗内嵌 `FinishedExpandRow`，或本组件自己的其它弹窗）里打开时会被宿主盖住；
+  `nextZIndex()` 保证永远高于当前已打开的所有弹出层，且后续该查看器内弹出的 `ElMessageBox`
+  仍从同一个全局计数器继续递增，天然盖在查看器上方，不需要再手动协调两个数字的大小关系。
 - 旧的资料类型式方案（`product_resource_type` 加"产品详情"类型）已于同日撤销，所有相关记录
   不再适用。
 
