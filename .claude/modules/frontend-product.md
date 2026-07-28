@@ -82,13 +82,11 @@ src/stores/product/
 - eg-lbl 宽80px，居中，背景#faf7f2，右边框分隔
 - eg-row min-height:34px，不用固定height
 
-## FinishedExpandRow 产品详情区说明
-- **折叠区 ec-sections 新增子节**：产品详情，位于"数据"上方（当前实际渲染顺序：参数 / 资料 / 产品详情 / 数据）
-- 复用"资料"tab 同一份 `useProductResources(() => props.row.code).linkedResources`（同一 composable 实例，不新增接口/请求）；**内容独立**——只筛选 `type_name === '产品详情'` 且 `file_type` 为 `image`/`video` 的条目，不与说明书/安装使用视频/售后视频等既有类型混在一起；`product_resource_type` 表已新增"产品详情"类型（id=14，2026-07-28 通过既有 `POST /api/resources/types` 创建，非迁移种子数据）；编辑时在"资料"tab 新建资料时选择"产品详情"类型即可关联进这个区块
-- **分批渲染**：单产品详情文件可能较多，画廊默认渲染前 24 张，"加载更多"每次 +24（纯前端分页，数据已一次性加载完毕）；缩略图 `loading="lazy"`
-- **卡片样式**：`aspect-ratio:4/3` + `object-fit:contain`（与售后媒体卡片一致，不裁切原始比例）
-- **查看器**：点击卡片打开 `MediaViewer`（只读，不传 `delete-handler`），同一个框内左右切换、图片支持缩放平移
-- **批量上传**：资料区"产品详情"独立区块有「+ 批量上传」按钮（`canEditProduct && editing`），多选文件后逐个 `uploadFile→createResource(type_id=产品详情)→linkResource(silent:true)` 串行处理（不并发），全部完成后统一 `loadLinkedResources()` 刷新一次；显示"上传中 X/Y"进度和失败计数
+## FinishedExpandRow 产品详情管理（2026-07-28 重新设计，见对应 handoff 文档）
+资料类型式方案（`product_resource_type` 加一个"产品详情"类型 + 复用 `linkedResources` 过滤）已
+于 2026-07-28 撤销——用户反馈效果不理想。新方案是独立的"包"（Windows 文件夹外观，自由命名，
+拖拽上传图片/视频）+ 按系列/型号/标签设置适用范围的绑定机制，与"资料"完全独立、同级展示。
+设计与实现进度见 `handoff/2026-07-28-*-product-detail-package-*.md`，本节待新方案落地后补充。
 
 ## FinishedExpandRow 资料区说明
 - **折叠区 ec-sections 包含三个子节**：资料 / 参数 / 数据（资料在最前）
@@ -152,12 +150,11 @@ src/stores/product/
 ## ProductResources.vue 说明（资料库页面）
 - 产品库顶部导航新增"资料"tab，与表格/图片/图表平级
 - **布局**：左侧类型侧边栏（140px）+ 右侧资料卡片网格
-- **侧边栏**：「未分类」固定在最顶部（`type_id='none'` 传给后端），下方按 sort_order 排列各类型；「产品详情」系统内置类型固定在最底部，用横向分割线单独隔开（`normalTypes`/`productDetailType` 两个 computed 拆分 `types`），与 `FinishedExpandRow.vue` 资料区的隔开方式一致
+- **侧边栏**：「未分类」固定在最顶部（`type_id='none'` 传给后端），下方按 sort_order 排列各类型
 - **资料卡片**：预览区（图片缩略图 or PDF红色图标 or 文件类型图标）+ 标题（最多3行）+ 产品数
   - PDF：红色自定义图标（非 Element Plus 图标），与 FinishedExpandRow 保持一致
   - 卡片不显示类型和备注；备注在点击预览弹窗里显示
   - `linked_count` = 三路 UNION 计数（直接+标签继承+型号继承）
-- **"产品详情"类型隔开显示**（`FinishedExpandRow.vue` 资料 tab）：tab 栏用竖线分隔符把"产品详情"类型排在其它类型（说明书/安装使用视频/售后视频等）右侧，视觉上独立一块，不与常规资料类型混排；`normalTypeGroups`/`productDetailTypeGroup` 两个 computed 拆分 `linkedByType`，文件网格渲染逻辑不变
 - **新建/编辑资料弹窗**：标题和类型为必填（校验阻断保存）
   - 关联型号：el-cascader 多选，内部 tag 通过 CSS `:deep` 全隐藏，选中结果渲染为外部胶囊 chip（蓝色，model_code 加粗 + name 细体 + × 删除）；cascaderPlaceholder 动态显示"已选 N 个型号"
   - 关联标签：el-select 多选，标签按分类分组折叠展示（与 ProductTable 搜索筛选相同模式）
