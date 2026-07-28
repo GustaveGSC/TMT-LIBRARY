@@ -882,10 +882,14 @@ const {
 const resActiveTab   = ref(null)
 const resSelectedId  = ref(null)   // 单击选中的文件 id
 
-// ── 产品详情（图片/视频画廊，复用"资料"库同一份 linkedResources，只筛 image/video）──
+// ── 产品详情（图片/视频画廊，复用"资料"库同一套上传/标签机制，但内容独立）──
+// 只展示"产品详情"这一资料类型下的条目，不混入说明书/安装视频/售后视频等其它既有类型；
+// 编辑时在"资料"tab 用「新建资料」选择"产品详情"类型即可关联进这个区块。
 // 同一产品的详情文件可能较多，画廊分批渲染（"加载更多"），避免一次性渲染过多缩略图卡顿
 const detailMediaItems = computed(() =>
-  linkedResources.value.filter(r => r.file_type === 'image' || r.file_type === 'video'),
+  linkedResources.value.filter(r =>
+    r.type_name === '产品详情' && (r.file_type === 'image' || r.file_type === 'video'),
+  ),
 )
 const DETAIL_MEDIA_PAGE_SIZE = 24
 const detailMediaVisibleCount = ref(DETAIL_MEDIA_PAGE_SIZE)
