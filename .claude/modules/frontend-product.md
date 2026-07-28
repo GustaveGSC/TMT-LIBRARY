@@ -88,6 +88,7 @@ src/stores/product/
 - **分批渲染**：单产品详情文件可能较多，画廊默认渲染前 24 张，"加载更多"每次 +24（纯前端分页，数据已一次性加载完毕）；缩略图 `loading="lazy"`
 - **卡片样式**：`aspect-ratio:4/3` + `object-fit:contain`（与售后媒体卡片一致，不裁切原始比例）
 - **查看器**：点击卡片打开 `MediaViewer`（只读，不传 `delete-handler`），同一个框内左右切换、图片支持缩放平移
+- **批量上传**：资料区"产品详情"独立区块有「+ 批量上传」按钮（`canEditProduct && editing`），多选文件后逐个 `uploadFile→createResource(type_id=产品详情)→linkResource(silent:true)` 串行处理（不并发），全部完成后统一 `loadLinkedResources()` 刷新一次；显示"上传中 X/Y"进度和失败计数
 
 ## FinishedExpandRow 资料区说明
 - **折叠区 ec-sections 包含三个子节**：资料 / 参数 / 数据（资料在最前）
