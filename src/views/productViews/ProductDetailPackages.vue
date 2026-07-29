@@ -351,10 +351,11 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
                   <span class="tag-group-name">{{ cat.name }}</span>
                   <span class="tag-group-arrow" :class="{ collapsed: isTagCatCollapsed(cat.id) }">▾</span>
                 </el-option>
-                <template v-if="!isTagCatCollapsed(cat.id)">
-                  <el-option v-for="tag in cat.filteredTags" :key="tag.id"
-                    :value="tag.id" :label="tag.name" class="tag-group-item" />
-                </template>
+                <!-- v-show 而非 v-if：折叠分类里的标签选项也要保持挂载，否则 el-select 拿不到
+                     未展开过的分类下已选中标签的 label，选中项会显示成原始 id 数字 -->
+                <el-option v-for="tag in cat.filteredTags" :key="tag.id"
+                  v-show="!isTagCatCollapsed(cat.id)"
+                  :value="tag.id" :label="tag.name" class="tag-group-item" />
               </template>
               <template v-if="filteredUncategorizedTags.length">
                 <el-option value="__cat__uncategorized" label="未分类" disabled class="tag-group-hd"
@@ -363,10 +364,9 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
                   <span class="tag-group-name">未分类</span>
                   <span class="tag-group-arrow" :class="{ collapsed: isTagCatCollapsed('uncategorized') }">▾</span>
                 </el-option>
-                <template v-if="!isTagCatCollapsed('uncategorized')">
-                  <el-option v-for="tag in filteredUncategorizedTags" :key="tag.id"
-                    :value="tag.id" :label="tag.name" class="tag-group-item" />
-                </template>
+                <el-option v-for="tag in filteredUncategorizedTags" :key="tag.id"
+                  v-show="!isTagCatCollapsed('uncategorized')"
+                  :value="tag.id" :label="tag.name" class="tag-group-item" />
               </template>
             </el-select>
           </div>
