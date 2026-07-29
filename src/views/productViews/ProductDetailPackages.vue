@@ -570,8 +570,12 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
 .tag-group-name { font-size: 13px; font-weight: 700; color: #3a3028; flex: 1; }
 .tag-group-arrow { font-size: 12px; color: #8a7a6a; transition: transform 0.2s; display: inline-block; }
 .tag-group-arrow.collapsed { transform: rotate(-90deg); }
+/* display 不能加 !important：折叠靠 v-show 写内联 display:none 实现，
+   而带 !important 的样式表声明会盖过普通内联样式，导致选项永远收不起来。
+   本选择器是"两个类 + scoped 属性"，特异性已高于 Element Plus 的单类规则，
+   不加 !important 也能生效。 */
 .tag-group-item.el-select-dropdown__item {
-  padding-left: 24px !important; display: flex !important; align-items: center; gap: 7px;
+  padding-left: 24px !important; display: flex; align-items: center; gap: 7px;
 }
 .tag-item-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 </style>
