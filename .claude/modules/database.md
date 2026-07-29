@@ -344,6 +344,10 @@ product_detail_package_media
 product_detail_package_tag / product_detail_package_model
   package_id(FK→product_detail_package CASCADE), tag_id/model_id(FK CASCADE), PRIMARY KEY(package_id, tag_id/model_id)
 
+product_detail_package_series / product_detail_package_category
+  package_id(FK→product_detail_package CASCADE), series_id/category_id(FK CASCADE), PRIMARY KEY(package_id, series_id/category_id)
+  # 与型号/标签范围为 OR；关联系列或品类会动态覆盖其未来新增的型号与成品，不保存型号快照
+
 product_detail_package_cleanup_failure
   id, package_id(nullable), storage_key, error_message, created_at
   # 数据库删除成功但 OSS 对象删除失败时留痕；不将已完成的删除操作伪装成失败

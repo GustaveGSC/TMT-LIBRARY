@@ -5,9 +5,10 @@ from database.base import db
 from database.models.product.category import ProductCategory, ProductModel, ProductSeries
 from database.models.product.detail_package import (
     ProductDetailPackage, ProductDetailPackageCleanupFailure,
-    ProductDetailPackageMedia, package_model, package_tag,
+    ProductDetailPackageMedia, package_category, package_model, package_series, package_tag,
 )
-from database.models.product.finished import ProductTag, ProductTagCategory
+from database.models.product.finished import ProductFinished, ProductTag, ProductTagCategory, finished_tag
+from database.repository.product.detail_package import DetailPackageRepository
 from services.product.detail_package import DetailPackageService
 import services.product.detail_package as detail_package_service_module
 
@@ -40,7 +41,8 @@ def _create_tables():
     for table in (
         ProductCategory.__table__, ProductSeries.__table__, ProductModel.__table__,
         ProductTagCategory.__table__, ProductTag.__table__, ProductDetailPackage.__table__,
-        package_tag, package_model, ProductDetailPackageMedia.__table__,
+        ProductFinished.__table__, finished_tag, package_tag, package_model, package_series, package_category,
+        ProductDetailPackageMedia.__table__,
         ProductDetailPackageCleanupFailure.__table__,
     ):
         table.create(db.engine)
@@ -118,3 +120,49 @@ def test_get_one_returns_complete_package_and_its_media():
         assert [item['original_filename'] for item in result.data['media']] == ['b.mp4', 'a.jpg']
         assert result.data['media'][0]['file_type'] == 'video'
         assert not DetailPackageService().get_one(999).success
+
+
+def test_series_and_category_scopes_match_existing_and_future_models():
+    app = _app()
+    with app.app_context():
+        _create_tables()
+        category = ProductCategory(name='品类')
+        db.session.add(category)
+        db.session.flush()
+        series = ProductSeries(category_id=category.id, code='SER-A', name='系列A')
+        other_series = ProductSeries(category_id=category.id, code='SER-B', name='系列B')
+        db.session.add_all([series, other_series])
+        db.session.flush()
+        model = ProductModel(series_id=series.id, code='MOD-A', name='型号A', model_code='M-A')
+        db.session.add(model)
+        db.session.flush()
+        finished = ProductFinished(code='FIN-A', model_id=model.id)
+        series_package = ProductDetailPackage(name='系列范围包')
+        category_package = ProductDetailPackage(name='品类范围包')
+        db.session.add_all([finished, series_package, category_package])
+        db.session.commit()
+
+        assert DetailPackageService().set_series(series_package.id, [series.id]).success
+        assert DetailPackageService().set_categories(category_package.id, [category.id]).success
+        package = DetailPackageRepository.get(series_package.id)
+        assert package.to_dict()['series_ids'] == [series.id]
+        assert DetailPackageRepository.get(category_package.id).to_dict()['category_ids'] == [category.id]
+
+        _finished, matches = DetailPackageRepository.matching_finished_packages('FIN-A')
+        assert {package.name for package, _media in matches} == {'系列范围包', '品类范围包'}
+
+        # Subsequent models/finished products match through their hierarchy; no model-id snapshot is stored.
+        future_model = ProductModel(series_id=series.id, code='MOD-FUTURE', name='未来型号', model_code='M-F')
+        category_model = ProductModel(series_id=other_series.id, code='MOD-CAT', name='品类新增型号', model_code='M-C')
+        db.session.add_all([future_model, category_model])
+        db.session.flush()
+        db.session.add_all([
+            ProductFinished(code='FIN-FUTURE', model_id=future_model.id),
+            ProductFinished(code='FIN-CATEGORY', model_id=category_model.id),
+        ])
+        db.session.commit()
+
+        _finished, future_matches = DetailPackageRepository.matching_finished_packages('FIN-FUTURE')
+        _finished, category_matches = DetailPackageRepository.matching_finished_packages('FIN-CATEGORY')
+        assert {package.name for package, _media in future_matches} == {'系列范围包', '品类范围包'}
+        assert {package.name for package, _media in category_matches} == {'品类范围包'}

@@ -80,6 +80,24 @@ class DetailPackageService:
         DetailPackageRepository.set_models(package, model_ids)
         return Result.ok(data=package.to_dict())
 
+    def set_series(self, package_id, series_ids):
+        package = DetailPackageRepository.get(package_id)
+        if not package:
+            return Result.fail('产品详情包不存在')
+        if not isinstance(series_ids, list) or not all(isinstance(value, int) and value > 0 for value in series_ids):
+            return Result.fail('series_ids 必须为正整数数组')
+        DetailPackageRepository.set_series(package, series_ids)
+        return Result.ok(data=package.to_dict())
+
+    def set_categories(self, package_id, category_ids):
+        package = DetailPackageRepository.get(package_id)
+        if not package:
+            return Result.fail('产品详情包不存在')
+        if not isinstance(category_ids, list) or not all(isinstance(value, int) and value > 0 for value in category_ids):
+            return Result.fail('category_ids 必须为正整数数组')
+        DetailPackageRepository.set_categories(package, category_ids)
+        return Result.ok(data=package.to_dict())
+
     def presign_media(self, package_id, files):
         if not DetailPackageRepository.get(package_id):
             return Result.fail('产品详情包不存在')

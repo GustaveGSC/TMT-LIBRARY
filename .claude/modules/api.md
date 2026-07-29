@@ -146,11 +146,13 @@ PUT    /api/resources/finished/:code/order            # 更新排序 {ordered_id
 
 GET    /api/product-detail-packages                    # product:view；?search&page&size，返回 {items,total,page,size}
 POST   /api/product-detail-packages                    # product:edit；新建 {name}
-GET    /api/product-detail-packages/:id                # product:view；返回单个包完整信息（含 tag_ids/tag_condition/model_ids/media[]）
+GET    /api/product-detail-packages/:id                # product:view；返回单个包完整信息（含 tag_ids/tag_condition/model_ids/series_ids/category_ids/media[]）
 PUT    /api/product-detail-packages/:id                # product:edit；重命名 {name}
 DELETE /api/product-detail-packages/:id                # product:edit；删除包及 DB 媒体记录；OSS 清理失败留痕、不回滚成功删除
 PUT    /api/product-detail-packages/:id/tags           # product:edit；全量设置 {tag_ids:[int],tag_condition?:null|object|array}
 PUT    /api/product-detail-packages/:id/models         # product:edit；全量设置 {model_ids:[int]}
+PUT    /api/product-detail-packages/:id/series         # product:edit；全量设置 {series_ids:[int]}
+PUT    /api/product-detail-packages/:id/categories     # product:edit；全量设置 {category_ids:[int]}
 POST   /api/product-detail-packages/:id/media/presign  # product:edit；批量 {files:[{ext,original_filename,file_size}]}
                                                       #   返回每项 presign_url/storage_key/oss_url/file_type/file_size/required_headers；仅 image/video，单项上限500MB
 POST   /api/product-detail-packages/:id/media/confirm  # product:edit；{files:[{storage_key,original_filename,file_size}]}

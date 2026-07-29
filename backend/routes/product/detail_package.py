@@ -50,6 +50,16 @@ def set_models(package_id):
     return detail_package_service.set_models(package_id, (request.get_json() or {}).get('model_ids', [])).to_response()
 
 
+@detail_package_bp.put('/<int:package_id>/series')
+def set_series(package_id):
+    return detail_package_service.set_series(package_id, (request.get_json() or {}).get('series_ids', [])).to_response()
+
+
+@detail_package_bp.put('/<int:package_id>/categories')
+def set_categories(package_id):
+    return detail_package_service.set_categories(package_id, (request.get_json() or {}).get('category_ids', [])).to_response()
+
+
 @detail_package_bp.post('/<int:package_id>/media/presign')
 def presign_media(package_id):
     return detail_package_service.presign_media(package_id, (request.get_json() or {}).get('files')).to_response()

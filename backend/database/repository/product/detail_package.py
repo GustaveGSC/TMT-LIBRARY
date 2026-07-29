@@ -2,8 +2,10 @@ from collections import defaultdict
 
 from database.base import db
 from database.models.product.detail_package import (
-    ProductDetailPackage, ProductDetailPackageMedia, package_model, package_tag,
+    ProductDetailPackage, ProductDetailPackageMedia,
+    package_category, package_model, package_series, package_tag,
 )
+from database.models.product.category import ProductModel, ProductSeries
 from database.models.product.finished import ProductFinished, finished_tag
 from database.repository.product.resource import _matches_tag_condition
 
@@ -72,6 +74,26 @@ class DetailPackageRepository:
         db.session.commit()
 
     @staticmethod
+    def set_series(package, series_ids):
+        db.session.execute(package_series.delete().where(package_series.c.package_id == package.id))
+        if series_ids:
+            db.session.execute(package_series.insert(), [
+                {'package_id': package.id, 'series_id': series_id}
+                for series_id in sorted(set(series_ids))
+            ])
+        db.session.commit()
+
+    @staticmethod
+    def set_categories(package, category_ids):
+        db.session.execute(package_category.delete().where(package_category.c.package_id == package.id))
+        if category_ids:
+            db.session.execute(package_category.insert(), [
+                {'package_id': package.id, 'category_id': category_id}
+                for category_id in sorted(set(category_ids))
+            ])
+        db.session.commit()
+
+    @staticmethod
     def media_for_packages(package_ids):
         grouped = defaultdict(list)
         if not package_ids:
@@ -93,15 +115,26 @@ class DetailPackageRepository:
                 finished_tag.c.finished_id == finished.id,
             ).all()
         }
+        model_scope = None
+        if finished.model_id:
+            model_scope = db.session.query(
+                ProductModel.series_id, ProductSeries.category_id,
+            ).join(
+                ProductSeries, ProductSeries.id == ProductModel.series_id,
+            ).filter(ProductModel.id == finished.model_id).one_or_none()
+        series_id = model_scope.series_id if model_scope else None
+        category_id = model_scope.category_id if model_scope else None
         # Constant query count: all packages + selectin-loaded ranges, then exact
         # condition evaluation in Python. This preserves NOT-only conditions.
         packages = ProductDetailPackage.query.order_by(ProductDetailPackage.id).all()
         matched = []
         for package in packages:
             model_match = bool(finished.model_id and finished.model_id in {model.id for model in package.models})
+            series_match = bool(series_id and series_id in {series.id for series in package.series})
+            category_match = bool(category_id and category_id in {category.id for category in package.categories})
             tag_set = {tag.id for tag in package.tags}
             tag_match = bool(tag_set and _matches_tag_condition(package.tag_condition, tag_set, product_tag_set))
-            if model_match or tag_match:
+            if model_match or series_match or category_match or tag_match:
                 matched.append(package)
         media = DetailPackageRepository.media_for_packages([package.id for package in matched])
         return finished, [(package, media[package.id]) for package in matched]
