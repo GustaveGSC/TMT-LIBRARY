@@ -500,9 +500,11 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
   display: inline-flex; align-items: center; justify-content: center;
   width: 18px; height: 18px; padding: 0;
   background: none; border: none; cursor: pointer;
-  color: var(--text-muted); font-size: 15px;
+  color: #2c2420; font-size: 16px;
   transition: color 0.15s;
 }
+/* 加粗：Element Plus 图标是 SVG，字重靠描边宽度实现 */
+.pkg-icon-btn :deep(svg) { stroke: currentColor; stroke-width: 40; }
 .pkg-icon-btn:hover:not(:disabled) { color: var(--accent); }
 .pkg-icon-btn--ok:hover:not(:disabled) { color: #4a9a5a; }
 .pkg-icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
