@@ -2,7 +2,7 @@
 // ── 导入 ──────────────────────────────────────────
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Folder, Search, ArrowLeft, Delete } from '@element-plus/icons-vue'
+import { Plus, Folder, Search, ArrowLeft, Delete, Edit, Check, Close } from '@element-plus/icons-vue'
 import http from '@/api/http'
 import { usePermission } from '@/composables/usePermission'
 import { useCategoryTree } from '@/composables/useCategoryTree'
@@ -49,8 +49,7 @@ const tagCategories = computed(() => finishedStore.tagCategories)
 const tagSearchQuery = ref('')
 function onTagFilterMethod(q) { tagSearchQuery.value = q }
 function onTagSelectClose()   { tagSearchQuery.value = '' }
-// 集合记录"已折叠"的分类（默认全部展开，与产品库「筛选标签」默认全折叠相反——
-// 这里候选项本来就少，展开更方便直接勾选，不需要先逐个点开分类）
+// 集合记录"已展开"的分类，默认全部折叠（与产品库「筛选标签」一致）
 const collapsedTagCats = ref(new Set())
 function toggleTagCat(id) {
   const s = new Set(collapsedTagCats.value)
@@ -59,7 +58,7 @@ function toggleTagCat(id) {
 }
 function isTagCatCollapsed(id) {
   if (tagSearchQuery.value.trim()) return false
-  return collapsedTagCats.value.has(id)
+  return !collapsedTagCats.value.has(id)
 }
 const filteredTagGroups = computed(() => {
   const q = tagSearchQuery.value.trim().toLowerCase()
@@ -345,10 +344,10 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
           <div class="pkg-scope-title">
             适用范围
             <div class="pkg-scope-actions">
-              <el-button v-if="!scopeEditing" text type="primary" size="small" @click="startScopeEdit">编辑</el-button>
+              <el-button v-if="!scopeEditing" type="primary" size="small" :icon="Edit" @click="startScopeEdit">编辑</el-button>
               <template v-else>
-                <el-button text size="small" :disabled="scopeSaving" @click="cancelScopeEdit">取消</el-button>
-                <el-button text type="primary" size="small" :loading="scopeSaving" @click="confirmScopeEdit">确认</el-button>
+                <el-button type="danger" plain size="small" :icon="Close" :disabled="scopeSaving" @click="cancelScopeEdit">取消</el-button>
+                <el-button type="success" size="small" :icon="Check" :loading="scopeSaving" @click="confirmScopeEdit">确认</el-button>
               </template>
             </div>
           </div>
