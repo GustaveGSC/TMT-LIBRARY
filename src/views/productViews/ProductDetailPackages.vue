@@ -6,7 +6,10 @@ import { Plus, Folder, Search, ArrowLeft, Delete } from '@element-plus/icons-vue
 import http from '@/api/http'
 import { usePermission } from '@/composables/usePermission'
 import { useCategoryTree } from '@/composables/useCategoryTree'
+import { useFinishedStore } from '@/stores/product'
 import MediaViewer from '@/components/common/MediaViewer.vue'
+
+const finishedStore = useFinishedStore()
 
 // ── 权限 ──────────────────────────────────────────
 const { canEditProduct } = usePermission()
@@ -34,11 +37,32 @@ function modelIdsToPaths(modelIds) {
 }
 
 // ── 标签（简单多选，OR 语义：产品带任一标签即匹配）──
-const allTags = ref([])
-async function loadAllTags() {
-  const res = await http.get('/api/product/tags')
-  if (res.success) allTags.value = res.data || []
+// 候选面板复用产品库表格「筛选标签」的分类可折叠样式，数据源共享同一个 store
+const tagOptions    = computed(() => finishedStore.tagOptions)
+const tagCategories = computed(() => finishedStore.tagCategories)
+const tagSearchQuery = ref('')
+function onTagFilterMethod(q) { tagSearchQuery.value = q }
+function onTagSelectClose()   { tagSearchQuery.value = '' }
+const collapsedTagCats = ref(new Set())
+function toggleTagCat(id) {
+  const s = new Set(collapsedTagCats.value)
+  s.has(id) ? s.delete(id) : s.add(id)
+  collapsedTagCats.value = s
 }
+function isTagCatCollapsed(id) {
+  if (tagSearchQuery.value.trim()) return false
+  return !collapsedTagCats.value.has(id)
+}
+const filteredTagGroups = computed(() => {
+  const q = tagSearchQuery.value.trim().toLowerCase()
+  return tagCategories.value
+    .map(cat => ({ ...cat, filteredTags: (cat.tags || []).filter(t => !q || t.name.toLowerCase().includes(q)) }))
+    .filter(g => g.filteredTags.length > 0)
+})
+const filteredUncategorizedTags = computed(() => {
+  const q = tagSearchQuery.value.trim().toLowerCase()
+  return tagOptions.value.filter(t => !t.category_id && (!q || t.name.toLowerCase().includes(q)))
+})
 
 // ── 文件夹列表 ────────────────────────────────────────
 const folders      = ref([])
@@ -82,7 +106,7 @@ const tagIds         = ref([])
 const scopeSaving    = ref(false)
 
 async function openFolder(folder) {
-  await Promise.all([loadCategoryTreeOnce(), allTags.value.length ? Promise.resolve() : loadAllTags()])
+  await Promise.all([loadCategoryTreeOnce(), finishedStore.loadTagOptions()])
   activeFolder.value = folder
   nameEdit.value = folder.name
   cascaderValue.value = modelIdsToPaths(folder.model_ids || [])
@@ -244,7 +268,7 @@ async function deleteMedia(item) {
   return true
 }
 
-onMounted(() => { loadFolders(); loadAllTags(); loadCategoryTreeOnce() })
+onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTreeOnce() })
 </script>
 
 <template>
@@ -287,7 +311,9 @@ onMounted(() => { loadFolders(); loadAllTags(); loadCategoryTreeOnce() })
           <div class="pkg-scope-field">
             <div class="pkg-scope-lbl">适用型号</div>
             <el-cascader
-              :model-value="cascaderValue" :options="cascaderOptions" multiple
+              :model-value="cascaderValue" :options="cascaderOptions"
+              :props="{ multiple: true }"
+              :show-all-levels="false"
               filterable clearable collapse-tags collapse-tags-tooltip size="small"
               placeholder="选择型号" style="width:100%"
               @change="onCascaderChange"
@@ -296,11 +322,36 @@ onMounted(() => { loadFolders(); loadAllTags(); loadCategoryTreeOnce() })
           <div class="pkg-scope-field">
             <div class="pkg-scope-lbl">适用标签</div>
             <el-select
-              :model-value="tagIds" multiple filterable clearable size="small"
-              placeholder="选择标签" style="width:100%"
+              :model-value="tagIds" multiple filterable clearable collapse-tags collapse-tags-tooltip
+              size="small" :filter-method="onTagFilterMethod"
+              @visible-change="v => { if (!v) onTagSelectClose() }"
+              placeholder="选择标签" style="width:100%" class="pkg-tag-select"
               @change="onTagIdsChange"
             >
-              <el-option v-for="t in allTags" :key="t.id" :value="t.id" :label="t.name" />
+              <template v-for="cat in filteredTagGroups" :key="cat.id">
+                <el-option :value="`__cat__${cat.id}`" :label="cat.name" disabled class="tag-group-hd"
+                  @mousedown.stop.prevent="toggleTagCat(cat.id)">
+                  <span class="tag-group-dot" :style="{ background: cat.color }"></span>
+                  <span class="tag-group-name">{{ cat.name }}</span>
+                  <span class="tag-group-arrow" :class="{ collapsed: isTagCatCollapsed(cat.id) }">▾</span>
+                </el-option>
+                <template v-if="!isTagCatCollapsed(cat.id)">
+                  <el-option v-for="tag in cat.filteredTags" :key="tag.id"
+                    :value="tag.id" :label="tag.name" class="tag-group-item" />
+                </template>
+              </template>
+              <template v-if="filteredUncategorizedTags.length">
+                <el-option value="__cat__uncategorized" label="未分类" disabled class="tag-group-hd"
+                  @mousedown.stop.prevent="toggleTagCat('uncategorized')">
+                  <span class="tag-group-dot" style="background:#bbb"></span>
+                  <span class="tag-group-name">未分类</span>
+                  <span class="tag-group-arrow" :class="{ collapsed: isTagCatCollapsed('uncategorized') }">▾</span>
+                </el-option>
+                <template v-if="!isTagCatCollapsed('uncategorized')">
+                  <el-option v-for="tag in filteredUncategorizedTags" :key="tag.id"
+                    :value="tag.id" :label="tag.name" class="tag-group-item" />
+                </template>
+              </template>
             </el-select>
           </div>
           <div class="pkg-scope-hint">选中型号或标签的产品，会在其详情页自动展示这个文件夹里的图片/视频</div>
@@ -391,4 +442,19 @@ onMounted(() => { loadFolders(); loadAllTags(); loadCategoryTreeOnce() })
   overflow: hidden; cursor: pointer; background: #f5f0e8;
 }
 .pkg-media-thumb { width: 100%; height: 100%; object-fit: contain; background: #fff; display: block; }
+
+/* 适用标签候选面板：与产品库表格「筛选标签」一致的分类可折叠样式 */
+:deep(.tag-group-hd.el-select-dropdown__item) {
+  display: flex !important; align-items: center; gap: 7px;
+  padding: 0 12px !important; height: 32px !important;
+  background: #faf7f2 !important; cursor: pointer !important;
+  color: #3a3028 !important; font-weight: 700 !important;
+  font-size: 13px !important; border-top: 1px solid #f0e8dc;
+}
+:deep(.tag-group-hd.el-select-dropdown__item:first-child) { border-top: none; }
+:deep(.tag-group-dot) { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+:deep(.tag-group-name) { font-size: 13px; font-weight: 700; color: #3a3028; flex: 1; }
+:deep(.tag-group-arrow) { font-size: 12px; color: #8a7a6a; transition: transform 0.2s; display: inline-block; }
+:deep(.tag-group-arrow.collapsed) { transform: rotate(-90deg); }
+:deep(.tag-group-item.el-select-dropdown__item) { padding-left: 24px !important; }
 </style>
