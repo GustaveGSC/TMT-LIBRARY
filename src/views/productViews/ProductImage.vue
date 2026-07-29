@@ -20,7 +20,6 @@ const searchText      = ref('')
 // 市场、生命周期均为多选，默认全选（等价于原来的"全部"）
 const filterMarket    = ref(['domestic', 'foreign'])
 const filterLifecycle = ref(['listed', 'delisted', 'unknown'])
-const filterSeries    = ref([])   // 系列名称（多选）
 const filterTags      = ref([])   // 标签名称（多选）
 const sortBy          = ref('code') // 'code' | 'listed_yymm'
 
@@ -50,16 +49,6 @@ const filteredTagGroups = computed(() => {
 const filteredUncategorizedTags = computed(() => {
   const q = tagSearchQuery.value.trim().toLowerCase()
   return finishedStore.tagOptions.filter(t => !t.category_id && (!q || t.name.toLowerCase().includes(q)))
-})
-
-// 系列选项（从 activeItems 提取，已排除禁用编码规则对应的成品）
-const seriesOptions = computed(() => {
-  const seen = new Set()
-  for (const r of finishedStore.activeItems) {
-    if (r.status === 'unrecorded' || r.status === 'ignored') continue
-    if (r.series_name) seen.add(r.series_name)
-  }
-  return [...seen].sort()
 })
 
 // ── 筛选选项 ────────────────────────────────────────
@@ -93,7 +82,6 @@ const hasActiveFilter = computed(() =>
   !!searchText.value.trim()
   || filterMarket.value.length    < MARKET_TABS.length
   || filterLifecycle.value.length < LIFECYCLE_TABS.length
-  || filterSeries.value.length > 0
   || filterTags.value.length   > 0,
 )
 
@@ -115,9 +103,6 @@ const filteredItems = computed(() => {
   const mk = filterMarket.value
   if (mk.length < MARKET_TABS.length) {
     list = list.filter(r => r.market === 'both' || mk.includes(r.market))
-  }
-  if (filterSeries.value.length) {
-    list = list.filter(r => filterSeries.value.includes(r.series_name))
   }
   if (filterTags.value.length) {
     list = list.filter(r => {
@@ -231,20 +216,6 @@ onMounted(async () => {
         />
       </div>
 
-      <!-- 系列筛选 -->
-      <el-select
-        v-model="filterSeries"
-        multiple
-        filterable
-        collapse-tags
-        collapse-tags-tooltip
-        placeholder="筛选系列"
-        clearable
-        class="series-select"
-      >
-        <el-option v-for="s in seriesOptions" :key="s" :label="s" :value="s" />
-      </el-select>
-
       <!-- 标签筛选 -->
       <el-select
         v-model="filterTags"
@@ -253,7 +224,7 @@ onMounted(async () => {
         @visible-change="v => { if (!v) onTagSelectClose() }"
         collapse-tags collapse-tags-tooltip
         placeholder="筛选标签"
-        class="series-select"
+        class="filter-select"
       >
         <template v-for="cat in filteredTagGroups" :key="cat.id">
           <el-option :value="`__cat__${cat.id}`" :label="cat.name" disabled class="tag-group-hd"
@@ -533,10 +504,10 @@ onMounted(async () => {
 }
 .search-input::placeholder { color: var(--text-muted); }
 
-:deep(.series-select) {
+:deep(.filter-select) {
   width: 160px; flex-shrink: 0;
 }
-:deep(.series-select .el-input__wrapper) {
+:deep(.filter-select .el-input__wrapper) {
   border-radius: 10px;
   font-size: 12px;
 }
@@ -802,8 +773,8 @@ onMounted(async () => {
     min-width: 0;
     order: -1;
   }
-  :deep(.series-select) {
-    width: 130px;     /* 缩小系列筛选 */
+  :deep(.filter-select) {
+    width: 130px;     /* 缩小标签筛选 */
   }
   .img-count { display: none; }
   .cat-header { margin: 8px 12px 0; }
