@@ -18,7 +18,8 @@ const finishedStore = useFinishedStore()
 // ── 本地筛选（独立于表格视图的 store filters）────
 const searchText      = ref('')
 const filterMarket    = ref('')   // '' | 'domestic' | 'foreign'
-const filterLifecycle = ref('')   // '' | 'listed' | 'delisted' | 'unknown'
+// 生命周期多选，默认全选（等价于原来的"全部"）
+const filterLifecycle = ref(['listed', 'delisted', 'unknown'])
 const filterSeries    = ref([])   // 系列名称（多选）
 const filterTags      = ref([])   // 标签名称（多选）
 const sortBy          = ref('code') // 'code' | 'listed_yymm'
@@ -63,11 +64,17 @@ const seriesOptions = computed(() => {
 
 // ── 筛选选项 ────────────────────────────────────────
 const LIFECYCLE_TABS = [
-  { key: '',         label: '全部'     },
   { key: 'listed',   label: '已上市'   },
   { key: 'delisted', label: '已退市'   },
   { key: 'unknown',  label: '状态未知' },
 ]
+
+/** 生命周期多选：点击切换单项；全不选时不返回任何数据（与"取消所有筛选"区分开） */
+function toggleLifecycle(key) {
+  const i = filterLifecycle.value.indexOf(key)
+  if (i === -1) filterLifecycle.value = [...filterLifecycle.value, key]
+  else filterLifecycle.value = filterLifecycle.value.filter(k => k !== key)
+}
 
 const MARKET_TABS = [
   { key: '',         label: '全部' },
@@ -81,12 +88,13 @@ const filteredItems = computed(() => {
 
   // 始终过滤掉未录入和无需录入的成品
   list = list.filter(r => r.status !== 'unrecorded' && r.status !== 'ignored')
-  if (filterLifecycle.value === 'listed') {
-    list = list.filter(r => r.listed_yymm && !r.delisted_yymm)
-  } else if (filterLifecycle.value === 'delisted') {
-    list = list.filter(r => r.listed_yymm && r.delisted_yymm)
-  } else if (filterLifecycle.value === 'unknown') {
-    list = list.filter(r => !r.listed_yymm)
+  // 生命周期多选：命中任一勾选状态即保留（全选时等价于不过滤）
+  const lc = filterLifecycle.value
+  if (lc.length < LIFECYCLE_TABS.length) {
+    list = list.filter(r => {
+      const state = !r.listed_yymm ? 'unknown' : (r.delisted_yymm ? 'delisted' : 'listed')
+      return lc.includes(state)
+    })
   }
   if (filterMarket.value) {
     // 'both' 的产品同时属于内销和外贸
@@ -263,8 +271,8 @@ onMounted(async () => {
           v-for="tab in LIFECYCLE_TABS"
           :key="tab.key"
           class="filter-tab"
-          :class="{ active: filterLifecycle === tab.key }"
-          @click="filterLifecycle = tab.key"
+          :class="{ active: filterLifecycle.includes(tab.key) }"
+          @click="toggleLifecycle(tab.key)"
         >{{ tab.label }}</button>
       </div>
 
