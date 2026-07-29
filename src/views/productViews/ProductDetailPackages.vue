@@ -489,7 +489,9 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
 .pkg-set-section:first-of-type { border-top: none; padding-top: 0; }
 .pkg-set-danger { border-top: 1px solid #f0e8dc; }
 .pkg-scope-title {
-  display: flex; align-items: center; justify-content: space-between;
+  /* flex-direction 必须显式声明 row：本元素同时带 .pkg-set-section（column），
+     不覆盖的话按键会被挤到标题下一行 */
+  display: flex; flex-direction: row; align-items: center; justify-content: space-between;
   font-size: 13px; font-weight: 600; color: var(--text-primary);
 }
 .pkg-scope-actions { display: flex; align-items: center; gap: 10px; }
