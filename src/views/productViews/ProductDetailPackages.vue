@@ -49,6 +49,8 @@ const tagCategories = computed(() => finishedStore.tagCategories)
 const tagSearchQuery = ref('')
 function onTagFilterMethod(q) { tagSearchQuery.value = q }
 function onTagSelectClose()   { tagSearchQuery.value = '' }
+// 集合记录"已折叠"的分类（默认全部展开，与产品库「筛选标签」默认全折叠相反——
+// 这里候选项本来就少，展开更方便直接勾选，不需要先逐个点开分类）
 const collapsedTagCats = ref(new Set())
 function toggleTagCat(id) {
   const s = new Set(collapsedTagCats.value)
@@ -57,7 +59,7 @@ function toggleTagCat(id) {
 }
 function isTagCatCollapsed(id) {
   if (tagSearchQuery.value.trim()) return false
-  return !collapsedTagCats.value.has(id)
+  return collapsedTagCats.value.has(id)
 }
 const filteredTagGroups = computed(() => {
   const q = tagSearchQuery.value.trim().toLowerCase()
@@ -119,7 +121,7 @@ async function openFolder(folder) {
     categoryIds: folder.category_ids || [], seriesIds: folder.series_ids || [], modelIds: folder.model_ids || [],
   })
   tagIds.value = folder.tag_ids || []
-  tagIdsDraft.value = [...tagIds.value]
+  scopeEditing.value = false
   insideFolder.value = true
   await refreshActiveMedia()
 }
@@ -143,44 +145,50 @@ async function saveName() {
   else ElMessage.error(res.message || '保存失败')
 }
 
-async function onCascaderChange(paths) {
+// 适用范围整体走"编辑/确认/取消"：非编辑状态下级联/标签都禁用，点「编辑」才能改；
+// 「确认」一次性保存型号/系列/品类/标签四项；「取消」丢弃改动，回退到编辑前的快照
+const scopeEditing  = ref(false)
+let scopeSnapshot   = null
+function startScopeEdit() {
+  scopeSnapshot = { cascaderValue: [...cascaderValue.value], tagIds: [...tagIds.value] }
+  scopeEditing.value = true
+}
+function cancelScopeEdit() {
+  if (scopeSnapshot) { cascaderValue.value = scopeSnapshot.cascaderValue; tagIds.value = scopeSnapshot.tagIds }
+  scopeSnapshot = null
+  scopeEditing.value = false
+}
+function onCascaderChange(paths) {
   cascaderValue.value = paths
+}
+function onTagIdsChange(ids) {
+  tagIds.value = ids
+}
+async function confirmScopeEdit() {
   // checkStrictly 下路径深度即代表所选层级：1=品类，2=系列，3=型号
-  const categoryIds = (paths || []).filter(p => p.length === 1).map(p => p[0])
-  const seriesIds   = (paths || []).filter(p => p.length === 2).map(p => p[1])
-  const modelIds    = (paths || []).filter(p => p.length === 3).map(p => p[2])
+  const categoryIds = (cascaderValue.value || []).filter(p => p.length === 1).map(p => p[0])
+  const seriesIds   = (cascaderValue.value || []).filter(p => p.length === 2).map(p => p[1])
+  const modelIds    = (cascaderValue.value || []).filter(p => p.length === 3).map(p => p[2])
   scopeSaving.value = true
   try {
-    const [modelRes, seriesRes, categoryRes] = await Promise.all([
+    const [modelRes, seriesRes, categoryRes, tagRes] = await Promise.all([
       http.put(`/api/product-detail-packages/${activeFolder.value.id}/models`, { model_ids: modelIds }),
       http.put(`/api/product-detail-packages/${activeFolder.value.id}/series`, { series_ids: seriesIds }),
       http.put(`/api/product-detail-packages/${activeFolder.value.id}/categories`, { category_ids: categoryIds }),
+      http.put(`/api/product-detail-packages/${activeFolder.value.id}/tags`, {
+        tag_ids: tagIds.value,
+        tag_condition: tagIds.value.length ? { op: 'OR', items: tagIds.value.map(id => ({ tag_id: id })) } : null,
+      }),
     ])
-    const failed = [modelRes, seriesRes, categoryRes].find(r => !r.success)
-    if (failed) ElMessage.error(failed.message || '设置适用范围失败')
-  } finally {
-    scopeSaving.value = false
-  }
-}
-
-// 标签选择改为"选完后手动确认"再保存，避免多选过程中每点一下就发一次请求
-const tagIdsDraft = ref([])
-const tagIdsDirty = computed(() =>
-  tagIdsDraft.value.length !== tagIds.value.length ||
-  tagIdsDraft.value.some(id => !tagIds.value.includes(id)),
-)
-function onTagIdsDraftChange(ids) {
-  tagIdsDraft.value = ids
-}
-async function confirmTagIds() {
-  scopeSaving.value = true
-  try {
-    const res = await http.put(`/api/product-detail-packages/${activeFolder.value.id}/tags`, {
-      tag_ids: tagIdsDraft.value,
-      tag_condition: tagIdsDraft.value.length ? { op: 'OR', items: tagIdsDraft.value.map(id => ({ tag_id: id })) } : null,
-    })
-    if (res.success) { tagIds.value = [...tagIdsDraft.value]; ElMessage.success('已保存') }
-    else ElMessage.error(res.message || '设置标签范围失败')
+    const failed = [modelRes, seriesRes, categoryRes, tagRes].find(r => !r.success)
+    if (failed) { ElMessage.error(failed.message || '设置适用范围失败'); return }
+    activeFolder.value.model_ids    = modelIds
+    activeFolder.value.series_ids   = seriesIds
+    activeFolder.value.category_ids = categoryIds
+    activeFolder.value.tag_ids      = tagIds.value
+    ElMessage.success('已保存')
+    scopeSnapshot = null
+    scopeEditing.value = false
   } finally {
     scopeSaving.value = false
   }
@@ -334,30 +342,35 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
       <div class="pkg-inside-body">
         <!-- 左侧：适用范围设置，常驻显示 -->
         <aside v-if="canEditProduct" class="pkg-scope-panel">
-          <div class="pkg-scope-title">适用范围</div>
+          <div class="pkg-scope-title">
+            适用范围
+            <div class="pkg-scope-actions">
+              <el-button v-if="!scopeEditing" text type="primary" size="small" @click="startScopeEdit">编辑</el-button>
+              <template v-else>
+                <el-button text size="small" :disabled="scopeSaving" @click="cancelScopeEdit">取消</el-button>
+                <el-button text type="primary" size="small" :loading="scopeSaving" @click="confirmScopeEdit">确认</el-button>
+              </template>
+            </div>
+          </div>
           <div class="pkg-scope-field">
             <div class="pkg-scope-lbl">适用品类/系列/型号</div>
             <el-cascader
               :model-value="cascaderValue" :options="cascaderOptions"
               :props="{ multiple: true, checkStrictly: true }"
-              :show-all-levels="false"
+              :show-all-levels="false" :disabled="!scopeEditing"
               filterable clearable collapse-tags collapse-tags-tooltip size="small"
               placeholder="选择品类/系列/型号" style="width:100%"
               @change="onCascaderChange"
             />
           </div>
           <div class="pkg-scope-field">
-            <div class="pkg-scope-lbl">
-              适用标签
-              <el-button v-if="tagIdsDirty" text type="primary" size="small" class="pkg-tag-confirm-btn"
-                :loading="scopeSaving" @click="confirmTagIds">确认</el-button>
-            </div>
+            <div class="pkg-scope-lbl">适用标签</div>
             <el-select
-              :model-value="tagIdsDraft" multiple filterable clearable collapse-tags collapse-tags-tooltip
-              size="small" :filter-method="onTagFilterMethod"
+              :model-value="tagIds" multiple filterable clearable collapse-tags collapse-tags-tooltip
+              size="small" :disabled="!scopeEditing" :filter-method="onTagFilterMethod"
               @visible-change="v => { if (!v) onTagSelectClose() }"
               placeholder="选择标签" style="width:100%" class="pkg-tag-select"
-              @change="onTagIdsDraftChange"
+              @change="onTagIdsChange"
             >
               <template v-for="cat in filteredTagGroups" :key="cat.id">
                 <el-option :value="`__cat__${cat.id}`" :label="cat.name" disabled class="tag-group-hd"
@@ -452,9 +465,13 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
   width: 220px; flex-shrink: 0; background: #fff; border: 1px solid var(--border); border-radius: 12px;
   padding: 14px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto;
 }
-.pkg-scope-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.pkg-scope-title {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 13px; font-weight: 600; color: var(--text-primary);
+}
+.pkg-scope-actions { display: flex; align-items: center; gap: 2px; }
 .pkg-scope-field { display: flex; flex-direction: column; gap: 4px; }
-.pkg-scope-lbl { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--text-secondary); }
+.pkg-scope-lbl { font-size: 12px; color: var(--text-secondary); }
 .pkg-scope-hint { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
 
 .pkg-inside-main {
@@ -499,5 +516,4 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
   padding-left: 24px !important; display: flex !important; align-items: center; gap: 7px;
 }
 .tag-item-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-.pkg-tag-confirm-btn { padding: 0; height: auto; font-size: 12px; }
 </style>
