@@ -75,8 +75,13 @@ const MARKET_TABS = [
   { value: 'foreign',  label: '外贸' },
 ]
 
+// 按组名取 ref：模板里 storeToRefs 的 ref 会被自动解包成原始值，
+// 所以不能把 status/lifecycle/market 直接当参数传进来（传进去的是数组，没有 .value）
+const TAB_REFS = { status, lifecycle, market }
+
 /** 多选 tab 通用切换：点击已选则移除，未选则加入 */
-function toggleTab(target, value) {
+function toggleTab(name, value) {
+  const target = TAB_REFS[name]
   const cur = target.value
   target.value = cur.includes(value) ? cur.filter(v => v !== value) : [...cur, value]
 }
@@ -388,19 +393,19 @@ watch(
         <div class="filter-tabs">
           <button v-for="t in STATUS_TABS" :key="t.value"
             class="filter-tab" :class="{ active: status.includes(t.value) }"
-            @click="toggleTab(status, t.value)"
+            @click="toggleTab('status', t.value)"
           >{{ t.label }}</button>
         </div>
         <div class="filter-tabs">
           <button v-for="t in LIFECYCLE_TABS" :key="t.value"
             class="filter-tab" :class="{ active: lifecycle.includes(t.value) }"
-            @click="toggleTab(lifecycle, t.value)"
+            @click="toggleTab('lifecycle', t.value)"
           >{{ t.label }}</button>
         </div>
         <div class="filter-tabs">
           <button v-for="t in MARKET_TABS" :key="t.value"
             class="filter-tab" :class="{ active: market.includes(t.value) }"
-            @click="toggleTab(market, t.value)"
+            @click="toggleTab('market', t.value)"
           >{{ t.label }}</button>
         </div>
         <!-- 标签筛选 -->
