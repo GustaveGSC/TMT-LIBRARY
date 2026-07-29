@@ -119,6 +119,7 @@ async function openFolder(folder) {
     categoryIds: folder.category_ids || [], seriesIds: folder.series_ids || [], modelIds: folder.model_ids || [],
   })
   tagIds.value = folder.tag_ids || []
+  tagIdsDraft.value = [...tagIds.value]
   insideFolder.value = true
   await refreshActiveMedia()
 }
@@ -162,14 +163,24 @@ async function onCascaderChange(paths) {
   }
 }
 
-async function onTagIdsChange(ids) {
-  tagIds.value = ids
+// 标签选择改为"选完后手动确认"再保存，避免多选过程中每点一下就发一次请求
+const tagIdsDraft = ref([])
+const tagIdsDirty = computed(() =>
+  tagIdsDraft.value.length !== tagIds.value.length ||
+  tagIdsDraft.value.some(id => !tagIds.value.includes(id)),
+)
+function onTagIdsDraftChange(ids) {
+  tagIdsDraft.value = ids
+}
+async function confirmTagIds() {
   scopeSaving.value = true
   try {
     const res = await http.put(`/api/product-detail-packages/${activeFolder.value.id}/tags`, {
-      tag_ids: ids, tag_condition: ids.length ? { op: 'OR', items: ids.map(id => ({ tag_id: id })) } : null,
+      tag_ids: tagIdsDraft.value,
+      tag_condition: tagIdsDraft.value.length ? { op: 'OR', items: tagIdsDraft.value.map(id => ({ tag_id: id })) } : null,
     })
-    if (!res.success) ElMessage.error(res.message || '设置标签范围失败')
+    if (res.success) { tagIds.value = [...tagIdsDraft.value]; ElMessage.success('已保存') }
+    else ElMessage.error(res.message || '设置标签范围失败')
   } finally {
     scopeSaving.value = false
   }
@@ -336,13 +347,17 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
             />
           </div>
           <div class="pkg-scope-field">
-            <div class="pkg-scope-lbl">适用标签</div>
+            <div class="pkg-scope-lbl">
+              适用标签
+              <el-button v-if="tagIdsDirty" text type="primary" size="small" class="pkg-tag-confirm-btn"
+                :loading="scopeSaving" @click="confirmTagIds">确认</el-button>
+            </div>
             <el-select
-              :model-value="tagIds" multiple filterable clearable collapse-tags collapse-tags-tooltip
+              :model-value="tagIdsDraft" multiple filterable clearable collapse-tags collapse-tags-tooltip
               size="small" :filter-method="onTagFilterMethod"
               @visible-change="v => { if (!v) onTagSelectClose() }"
               placeholder="选择标签" style="width:100%" class="pkg-tag-select"
-              @change="onTagIdsChange"
+              @change="onTagIdsDraftChange"
             >
               <template v-for="cat in filteredTagGroups" :key="cat.id">
                 <el-option :value="`__cat__${cat.id}`" :label="cat.name" disabled class="tag-group-hd"
@@ -355,7 +370,10 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
                      未展开过的分类下已选中标签的 label，选中项会显示成原始 id 数字 -->
                 <el-option v-for="tag in cat.filteredTags" :key="tag.id"
                   v-show="!isTagCatCollapsed(cat.id)"
-                  :value="tag.id" :label="tag.name" class="tag-group-item" />
+                  :value="tag.id" :label="tag.name" class="tag-group-item">
+                  <span class="tag-item-dot" :style="{ background: tag.color }"></span>
+                  <span>{{ tag.name }}</span>
+                </el-option>
               </template>
               <template v-if="filteredUncategorizedTags.length">
                 <el-option value="__cat__uncategorized" label="未分类" disabled class="tag-group-hd"
@@ -366,7 +384,10 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
                 </el-option>
                 <el-option v-for="tag in filteredUncategorizedTags" :key="tag.id"
                   v-show="!isTagCatCollapsed('uncategorized')"
-                  :value="tag.id" :label="tag.name" class="tag-group-item" />
+                  :value="tag.id" :label="tag.name" class="tag-group-item">
+                  <span class="tag-item-dot" :style="{ background: tag.color }"></span>
+                  <span>{{ tag.name }}</span>
+                </el-option>
               </template>
             </el-select>
           </div>
@@ -433,7 +454,7 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
 }
 .pkg-scope-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
 .pkg-scope-field { display: flex; flex-direction: column; gap: 4px; }
-.pkg-scope-lbl { font-size: 12px; color: var(--text-secondary); }
+.pkg-scope-lbl { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--text-secondary); }
 .pkg-scope-hint { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
 
 .pkg-inside-main {
@@ -459,18 +480,24 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
 }
 .pkg-media-thumb { width: 100%; height: 100%; object-fit: contain; background: #fff; display: block; }
 
-/* 适用标签候选面板：与产品库表格「筛选标签」一致的分类可折叠样式 */
-:deep(.tag-group-hd.el-select-dropdown__item) {
+/* 适用标签候选面板：与产品库表格「筛选标签」一致的分类可折叠样式。
+   不加 :deep() ——el-option 是本组件模板直接渲染的，即使被 Element Plus 传送到 <body>，
+   元素本身仍带着 scoped 属性；:deep() 编译成祖先选择器，反而在传送门场景下永远匹配不到。 */
+.tag-group-hd.el-select-dropdown__item {
   display: flex !important; align-items: center; gap: 7px;
   padding: 0 12px !important; height: 32px !important;
   background: #faf7f2 !important; cursor: pointer !important;
   color: #3a3028 !important; font-weight: 700 !important;
   font-size: 13px !important; border-top: 1px solid #f0e8dc;
 }
-:deep(.tag-group-hd.el-select-dropdown__item:first-child) { border-top: none; }
-:deep(.tag-group-dot) { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-:deep(.tag-group-name) { font-size: 13px; font-weight: 700; color: #3a3028; flex: 1; }
-:deep(.tag-group-arrow) { font-size: 12px; color: #8a7a6a; transition: transform 0.2s; display: inline-block; }
-:deep(.tag-group-arrow.collapsed) { transform: rotate(-90deg); }
-:deep(.tag-group-item.el-select-dropdown__item) { padding-left: 24px !important; }
+.tag-group-hd.el-select-dropdown__item:first-child { border-top: none; }
+.tag-group-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.tag-group-name { font-size: 13px; font-weight: 700; color: #3a3028; flex: 1; }
+.tag-group-arrow { font-size: 12px; color: #8a7a6a; transition: transform 0.2s; display: inline-block; }
+.tag-group-arrow.collapsed { transform: rotate(-90deg); }
+.tag-group-item.el-select-dropdown__item {
+  padding-left: 24px !important; display: flex !important; align-items: center; gap: 7px;
+}
+.tag-item-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.pkg-tag-confirm-btn { padding: 0; height: auto; font-size: 12px; }
 </style>
