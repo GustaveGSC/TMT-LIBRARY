@@ -345,16 +345,15 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
 
     <!-- ── 文件夹内部视图（像 Windows 双击进入文件夹一样原地切换，不是弹窗）── -->
     <template v-else>
-      <div class="pkg-inside-hd">
-        <el-button text :icon="ArrowLeft" @click="backToGrid">返回</el-button>
-        <span class="pkg-inside-title">{{ activeFolder?.name }}</span>
-        <span class="pkg-inside-count">{{ activeMedia.length }} 个文件</span>
-      </div>
-
       <div class="pkg-inside-body">
-        <!-- 左侧：设置面板，常驻显示（名称/适用范围/删除） -->
+        <!-- 左侧：设置面板，常驻显示（返回/名称/适用范围/删除） -->
         <aside v-if="canEditProduct" class="pkg-scope-panel">
-          <div class="pkg-set-title">设置</div>
+          <div class="pkg-set-title">
+            设置
+            <button class="pkg-icon-btn" title="返回文件夹列表" @click="backToGrid">
+              <el-icon><ArrowLeft /></el-icon>
+            </button>
+          </div>
 
           <div class="pkg-set-section">
             <div class="pkg-scope-lbl">名称</div>
@@ -490,16 +489,16 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
 .pkg-meta { font-size: 11px; color: var(--text-muted); }
 
 /* ── 文件夹内部视图 ── */
-.pkg-inside-hd { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-shrink: 0; }
-.pkg-inside-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
-.pkg-inside-count { font-size: 12px; color: var(--text-muted); margin-left: auto; }
 .pkg-inside-body { flex: 1; display: flex; gap: 16px; overflow: hidden; }
 
 .pkg-scope-panel {
   width: 220px; flex-shrink: 0; background: #fff; border: 1px solid var(--border); border-radius: 12px;
   padding: 14px; display: flex; flex-direction: column; gap: 4px; overflow-y: auto;
 }
-.pkg-set-title { font-size: 14px; font-weight: 700; color: var(--text-primary); margin-bottom: 6px; }
+.pkg-set-title {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 14px; font-weight: 700; color: var(--text-primary); margin-bottom: 6px;
+}
 .pkg-set-section {
   display: flex; flex-direction: column; gap: 4px;
   padding: 12px 0; border-top: 1px solid #f0e8dc;
