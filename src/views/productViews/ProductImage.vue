@@ -17,8 +17,8 @@ const finishedStore = useFinishedStore()
 
 // ── 本地筛选（独立于表格视图的 store filters）────
 const searchText      = ref('')
-const filterMarket    = ref('')   // '' | 'domestic' | 'foreign'
-// 生命周期多选，默认全选（等价于原来的"全部"）
+// 市场、生命周期均为多选，默认全选（等价于原来的"全部"）
+const filterMarket    = ref(['domestic', 'foreign'])
 const filterLifecycle = ref(['listed', 'delisted', 'unknown'])
 const filterSeries    = ref([])   // 系列名称（多选）
 const filterTags      = ref([])   // 标签名称（多选）
@@ -77,10 +77,25 @@ function toggleLifecycle(key) {
 }
 
 const MARKET_TABS = [
-  { key: '',         label: '全部' },
   { key: 'domestic', label: '内销' },
   { key: 'foreign',  label: '外贸' },
 ]
+
+/** 市场多选：点击切换单项 */
+function toggleMarket(key) {
+  const i = filterMarket.value.indexOf(key)
+  if (i === -1) filterMarket.value = [...filterMarket.value, key]
+  else filterMarket.value = filterMarket.value.filter(k => k !== key)
+}
+
+/** 是否存在生效的筛选条件（多选项未全选才算生效，用于空状态提示） */
+const hasActiveFilter = computed(() =>
+  !!searchText.value.trim()
+  || filterMarket.value.length    < MARKET_TABS.length
+  || filterLifecycle.value.length < LIFECYCLE_TABS.length
+  || filterSeries.value.length > 0
+  || filterTags.value.length   > 0,
+)
 
 // ── 过滤后列表（基于 activeItems，已排除禁用编码规则对应的成品）
 const filteredItems = computed(() => {
@@ -96,9 +111,10 @@ const filteredItems = computed(() => {
       return lc.includes(state)
     })
   }
-  if (filterMarket.value) {
-    // 'both' 的产品同时属于内销和外贸
-    list = list.filter(r => r.market === filterMarket.value || r.market === 'both')
+  // 市场多选：命中任一勾选项即保留（'both' 的产品同时属于内销和外贸）；全选时跳过过滤
+  const mk = filterMarket.value
+  if (mk.length < MARKET_TABS.length) {
+    list = list.filter(r => r.market === 'both' || mk.includes(r.market))
   }
   if (filterSeries.value.length) {
     list = list.filter(r => filterSeries.value.includes(r.series_name))
@@ -282,8 +298,8 @@ onMounted(async () => {
           v-for="tab in MARKET_TABS"
           :key="tab.key"
           class="filter-tab"
-          :class="{ active: filterMarket === tab.key }"
-          @click="filterMarket = tab.key"
+          :class="{ active: filterMarket.includes(tab.key) }"
+          @click="toggleMarket(tab.key)"
         >{{ tab.label }}</button>
       </div>
 
@@ -320,7 +336,7 @@ onMounted(async () => {
       <div v-if="!groupedItems.length" class="empty-state">
         <el-icon class="empty-icon"><Picture /></el-icon>
         <div class="empty-text">{{ finishedStore.loaded ? '没有匹配的成品' : '暂无数据' }}</div>
-        <div v-if="searchText || filterMarket || filterSeries.length || filterTags.length" class="empty-hint">尝试清除筛选条件</div>
+        <div v-if="hasActiveFilter" class="empty-hint">尝试清除筛选条件</div>
       </div>
 
       <!-- 品类分组 -->
