@@ -350,10 +350,16 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
           <div class="pkg-set-section pkg-scope-title">
             适用范围
             <div class="pkg-scope-actions">
-              <el-button v-if="!scopeEditing" circle type="primary" size="small" :icon="Edit" title="编辑" @click="startScopeEdit" />
+              <button v-if="!scopeEditing" class="pkg-icon-btn" title="编辑" @click="startScopeEdit">
+                <el-icon><Edit /></el-icon>
+              </button>
               <template v-else>
-                <el-button circle type="danger" plain size="small" :icon="Close" title="取消" :disabled="scopeSaving" @click="cancelScopeEdit" />
-                <el-button circle type="success" size="small" :icon="Check" title="确认" :loading="scopeSaving" @click="confirmScopeEdit" />
+                <button class="pkg-icon-btn" title="取消" :disabled="scopeSaving" @click="cancelScopeEdit">
+                  <el-icon><Close /></el-icon>
+                </button>
+                <button class="pkg-icon-btn pkg-icon-btn--ok" title="确认" :disabled="scopeSaving" @click="confirmScopeEdit">
+                  <el-icon><Check /></el-icon>
+                </button>
               </template>
             </div>
           </div>
@@ -486,8 +492,18 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
   display: flex; align-items: center; justify-content: space-between;
   font-size: 13px; font-weight: 600; color: var(--text-primary);
 }
-.pkg-scope-actions { display: flex; align-items: center; gap: 6px; }
-.pkg-scope-actions .el-button.is-circle { width: 24px; height: 24px; padding: 0; }
+.pkg-scope-actions { display: flex; align-items: center; gap: 10px; }
+/* 扁平图标按钮：无背景无边框，只有图标本身（参考设计工具属性面板的图标排布） */
+.pkg-icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; padding: 0;
+  background: none; border: none; cursor: pointer;
+  color: var(--text-muted); font-size: 15px;
+  transition: color 0.15s;
+}
+.pkg-icon-btn:hover:not(:disabled) { color: var(--accent); }
+.pkg-icon-btn--ok:hover:not(:disabled) { color: #4a9a5a; }
+.pkg-icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .pkg-scope-field { display: flex; flex-direction: column; gap: 4px; }
 .pkg-scope-lbl { font-size: 12px; color: var(--text-secondary); }
 .pkg-scope-hint { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
