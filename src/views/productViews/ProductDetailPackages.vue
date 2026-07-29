@@ -109,8 +109,57 @@ const activeFolder = ref(null)
 const activeMedia   = ref([])
 const nameEdit      = ref('')
 const cascaderValue  = ref([])
-const tagIds         = ref([])
+// 标签条件组：组内 AND（产品需同时具备该组所有标签），组间 OR（命中任一组即匹配）
+// 形如 [[1, 5], [3]] → (1 AND 5) OR (3)
+const tagGroups      = ref([[]])
 const scopeSaving    = ref(false)
+
+/** 把后端 tag_condition 解析回"组"结构，兼容历史写法 */
+function tagConditionToGroups(cond, fallbackIds = []) {
+  // 无条件：退化成"任一标签即匹配"，即每个标签各自一组
+  if (!cond) return fallbackIds.length ? fallbackIds.map(id => [id]) : [[]]
+  // 旧的 OR-of-AND 数组格式 [[1,5],[3]]
+  if (Array.isArray(cond)) {
+    const groups = cond.filter(g => Array.isArray(g) && g.length)
+    return groups.length ? groups.map(g => [...g]) : [[]]
+  }
+  if (typeof cond !== 'object') return [[]]
+  const nodeIds = node => {
+    if (!node || typeof node !== 'object') return []
+    if ('tag_id' in node) return [node.tag_id]
+    return (node.items || []).flatMap(nodeIds)
+  }
+  // 顶层 OR：每个子项是一个 AND 组（上一版写的扁平 OR 也能正确还原成多个单标签组）
+  if (cond.op === 'OR') {
+    const groups = (cond.items || []).map(nodeIds).filter(g => g.length)
+    return groups.length ? groups : [[]]
+  }
+  // 顶层 AND 或单标签：整体就是一个组
+  const single = nodeIds(cond)
+  return single.length ? [single] : [[]]
+}
+
+/** 组结构 → 后端 tag_condition（组内 AND、组间 OR），无有效组时返回 null */
+function groupsToTagCondition(groups) {
+  const valid = groups.filter(g => g.length)
+  if (!valid.length) return null
+  return {
+    op: 'OR',
+    items: valid.map(g => ({ op: 'AND', items: g.map(id => ({ tag_id: id })) })),
+  }
+}
+
+/** 所有组里出现过的标签 id（去重）——后端用它做"是否有标签"的门槛和候选缩小 */
+const flatTagIds = computed(() => [...new Set(tagGroups.value.flat())])
+
+function addTagGroup()        { tagGroups.value = [...tagGroups.value, []] }
+function removeTagGroup(i)    {
+  const next = tagGroups.value.filter((_, idx) => idx !== i)
+  tagGroups.value = next.length ? next : [[]]
+}
+function onTagGroupChange(i, ids) {
+  tagGroups.value = tagGroups.value.map((g, idx) => (idx === i ? ids : g))
+}
 
 async function openFolder(folder) {
   await Promise.all([loadCategoryTreeOnce(), finishedStore.loadTagOptions()])
@@ -119,7 +168,7 @@ async function openFolder(folder) {
   cascaderValue.value = scopeIdsToPaths({
     categoryIds: folder.category_ids || [], seriesIds: folder.series_ids || [], modelIds: folder.model_ids || [],
   })
-  tagIds.value = folder.tag_ids || []
+  tagGroups.value = tagConditionToGroups(folder.tag_condition, folder.tag_ids || [])
   scopeEditing.value = false
   insideFolder.value = true
   await refreshActiveMedia()
@@ -153,32 +202,37 @@ const scopeSnapshot = ref(null)
 const scopeDirty = computed(() => {
   const snap = scopeSnapshot.value
   if (!snap) return false
-  const sameIdSet = (a, b) =>
-    a.length === b.length && a.every(id => b.includes(id))
+  // 组间顺序无关、组内顺序无关，但分组方式不同要算改动（(1 AND 5) 与 (1) OR (5) 语义不同）
+  const groupsKey = groups => JSON.stringify(
+    groups.filter(g => g.length).map(g => [...g].sort((a, b) => a - b)).sort(
+      (a, b) => a.join(',').localeCompare(b.join(',')),
+    ),
+  )
   const samePaths = (a, b) => {
     const keyOf = list => new Set(list.map(p => p.join('/')))
     const ka = keyOf(a), kb = keyOf(b)
     return ka.size === kb.size && [...ka].every(k => kb.has(k))
   }
-  return !samePaths(cascaderValue.value, snap.cascaderValue) || !sameIdSet(tagIds.value, snap.tagIds)
+  return !samePaths(cascaderValue.value, snap.cascaderValue)
+    || groupsKey(tagGroups.value) !== groupsKey(snap.tagGroups)
 })
 function startScopeEdit() {
-  scopeSnapshot.value = { cascaderValue: [...cascaderValue.value], tagIds: [...tagIds.value] }
+  scopeSnapshot.value = {
+    cascaderValue: [...cascaderValue.value],
+    tagGroups: tagGroups.value.map(g => [...g]),
+  }
   scopeEditing.value = true
 }
 function cancelScopeEdit() {
   if (scopeSnapshot.value) {
     cascaderValue.value = scopeSnapshot.value.cascaderValue
-    tagIds.value = scopeSnapshot.value.tagIds
+    tagGroups.value = scopeSnapshot.value.tagGroups.map(g => [...g])
   }
   scopeSnapshot.value = null
   scopeEditing.value = false
 }
 function onCascaderChange(paths) {
   cascaderValue.value = paths
-}
-function onTagIdsChange(ids) {
-  tagIds.value = ids
 }
 async function confirmScopeEdit() {
   // checkStrictly 下路径深度即代表所选层级：1=品类，2=系列，3=型号
@@ -192,8 +246,8 @@ async function confirmScopeEdit() {
       http.put(`/api/product-detail-packages/${activeFolder.value.id}/series`, { series_ids: seriesIds }),
       http.put(`/api/product-detail-packages/${activeFolder.value.id}/categories`, { category_ids: categoryIds }),
       http.put(`/api/product-detail-packages/${activeFolder.value.id}/tags`, {
-        tag_ids: tagIds.value,
-        tag_condition: tagIds.value.length ? { op: 'OR', items: tagIds.value.map(id => ({ tag_id: id })) } : null,
+        tag_ids: flatTagIds.value,
+        tag_condition: groupsToTagCondition(tagGroups.value),
       }),
     ])
     const failed = [modelRes, seriesRes, categoryRes, tagRes].find(r => !r.success)
@@ -201,7 +255,8 @@ async function confirmScopeEdit() {
     activeFolder.value.model_ids    = modelIds
     activeFolder.value.series_ids   = seriesIds
     activeFolder.value.category_ids = categoryIds
-    activeFolder.value.tag_ids      = tagIds.value
+    activeFolder.value.tag_ids      = flatTagIds.value
+    activeFolder.value.tag_condition = groupsToTagCondition(tagGroups.value)
     ElMessage.success('已保存')
     scopeSnapshot.value = null
     scopeEditing.value = false
@@ -392,47 +447,62 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
             />
           </div>
           <div class="pkg-scope-field">
-            <div class="pkg-scope-lbl">适用标签</div>
-            <el-select
-              :model-value="tagIds" multiple filterable clearable collapse-tags collapse-tags-tooltip
-              size="small" :disabled="!scopeEditing" :filter-method="onTagFilterMethod"
-              @visible-change="v => { if (!v) onTagSelectClose() }"
-              placeholder="选择标签" style="width:100%" class="pkg-tag-select"
-              @change="onTagIdsChange"
-            >
-              <template v-for="cat in filteredTagGroups" :key="cat.id">
-                <el-option :value="`__cat__${cat.id}`" :label="cat.name" disabled class="tag-group-hd"
-                  @mousedown.stop.prevent="toggleTagCat(cat.id)">
-                  <span class="tag-group-dot" :style="{ background: cat.color }"></span>
-                  <span class="tag-group-name">{{ cat.name }}</span>
-                  <span class="tag-group-arrow" :class="{ collapsed: isTagCatCollapsed(cat.id) }">▾</span>
-                </el-option>
-                <!-- v-show 而非 v-if：折叠分类里的标签选项也要保持挂载，否则 el-select 拿不到
-                     未展开过的分类下已选中标签的 label，选中项会显示成原始 id 数字 -->
-                <el-option v-for="tag in cat.filteredTags" :key="tag.id"
-                  v-show="!isTagCatCollapsed(cat.id)"
-                  :value="tag.id" :label="tag.name" class="tag-group-item">
-                  <span class="tag-item-dot" :style="{ background: tag.color }"></span>
-                  <span>{{ tag.name }}</span>
-                </el-option>
-              </template>
-              <template v-if="filteredUncategorizedTags.length">
-                <el-option value="__cat__uncategorized" label="未分类" disabled class="tag-group-hd"
-                  @mousedown.stop.prevent="toggleTagCat('uncategorized')">
-                  <span class="tag-group-dot" style="background:#bbb"></span>
-                  <span class="tag-group-name">未分类</span>
-                  <span class="tag-group-arrow" :class="{ collapsed: isTagCatCollapsed('uncategorized') }">▾</span>
-                </el-option>
-                <el-option v-for="tag in filteredUncategorizedTags" :key="tag.id"
-                  v-show="!isTagCatCollapsed('uncategorized')"
-                  :value="tag.id" :label="tag.name" class="tag-group-item">
-                  <span class="tag-item-dot" :style="{ background: tag.color }"></span>
-                  <span>{{ tag.name }}</span>
-                </el-option>
-              </template>
-            </el-select>
+            <div class="pkg-scope-lbl">
+              适用标签
+              <button v-if="scopeEditing" class="pkg-icon-btn" title="新增一组标签条件" @click="addTagGroup">
+                <el-icon><Plus /></el-icon>
+              </button>
+            </div>
+
+            <div v-for="(group, gi) in tagGroups" :key="gi" class="pkg-tag-group">
+              <div v-if="gi > 0" class="pkg-tag-or">或</div>
+              <div class="pkg-tag-row">
+                <el-select
+                  :model-value="group" multiple filterable clearable collapse-tags collapse-tags-tooltip
+                  size="small" :disabled="!scopeEditing" :filter-method="onTagFilterMethod"
+                  @visible-change="v => { if (!v) onTagSelectClose() }"
+                  placeholder="选择标签（组内需同时满足）" class="pkg-tag-select"
+                  @change="ids => onTagGroupChange(gi, ids)"
+                >
+                  <template v-for="cat in filteredTagGroups" :key="cat.id">
+                    <el-option :value="`__cat__${cat.id}`" :label="cat.name" disabled class="tag-group-hd"
+                      @mousedown.stop.prevent="toggleTagCat(cat.id)">
+                      <span class="tag-group-dot" :style="{ background: cat.color }"></span>
+                      <span class="tag-group-name">{{ cat.name }}</span>
+                      <span class="tag-group-arrow" :class="{ collapsed: isTagCatCollapsed(cat.id) }">▾</span>
+                    </el-option>
+                    <!-- v-show 而非 v-if：折叠分类里的标签选项也要保持挂载，否则 el-select 拿不到
+                         未展开过的分类下已选中标签的 label，选中项会显示成原始 id 数字 -->
+                    <el-option v-for="tag in cat.filteredTags" :key="tag.id"
+                      v-show="!isTagCatCollapsed(cat.id)"
+                      :value="tag.id" :label="tag.name" class="tag-group-item">
+                      <span class="tag-item-dot" :style="{ background: tag.color }"></span>
+                      <span>{{ tag.name }}</span>
+                    </el-option>
+                  </template>
+                  <template v-if="filteredUncategorizedTags.length">
+                    <el-option value="__cat__uncategorized" label="未分类" disabled class="tag-group-hd"
+                      @mousedown.stop.prevent="toggleTagCat('uncategorized')">
+                      <span class="tag-group-dot" style="background:#bbb"></span>
+                      <span class="tag-group-name">未分类</span>
+                      <span class="tag-group-arrow" :class="{ collapsed: isTagCatCollapsed('uncategorized') }">▾</span>
+                    </el-option>
+                    <el-option v-for="tag in filteredUncategorizedTags" :key="tag.id"
+                      v-show="!isTagCatCollapsed('uncategorized')"
+                      :value="tag.id" :label="tag.name" class="tag-group-item">
+                      <span class="tag-item-dot" :style="{ background: tag.color }"></span>
+                      <span>{{ tag.name }}</span>
+                    </el-option>
+                  </template>
+                </el-select>
+                <button v-if="scopeEditing && tagGroups.length > 1" class="pkg-icon-btn pkg-icon-btn--cancel"
+                  title="删除这组" @click="removeTagGroup(gi)">
+                  <el-icon><Close /></el-icon>
+                </button>
+              </div>
+            </div>
           </div>
-          <div class="pkg-scope-hint">命中所选品类/系列/型号/标签任意一项的产品，会在其详情页自动展示这个文件夹里的图片/视频；勾选品类/系列后，其下新增的型号也会自动生效</div>
+          <div class="pkg-scope-hint">命中所选品类/系列/型号/标签任意一项的产品，会在其详情页自动展示这个文件夹里的图片/视频；勾选品类/系列后，其下新增的型号也会自动生效。标签条件：同一组内需<b>同时具备</b>所有标签，多组之间满足<b>任一组</b>即可。</div>
 
           <div class="pkg-set-section pkg-set-danger">
             <el-button size="small" type="danger" plain :icon="Delete" style="width:100%" @click="deleteFolder(activeFolder)">删除文件夹</el-button>
@@ -492,16 +562,16 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
 .pkg-inside-body { flex: 1; display: flex; gap: 16px; overflow: hidden; }
 
 .pkg-scope-panel {
-  width: 220px; flex-shrink: 0; background: #fff; border: 1px solid var(--border); border-radius: 12px;
-  padding: 14px; display: flex; flex-direction: column; gap: 4px; overflow-y: auto;
+  width: 240px; flex-shrink: 0; background: #fff; border: 1px solid var(--border); border-radius: 12px;
+  padding: 16px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto;
 }
 .pkg-set-title {
   display: flex; align-items: center; justify-content: space-between;
-  font-size: 14px; font-weight: 700; color: var(--text-primary); margin-bottom: 6px;
+  font-size: 14px; font-weight: 700; color: var(--text-primary); margin-bottom: 10px;
 }
 .pkg-set-section {
-  display: flex; flex-direction: column; gap: 4px;
-  padding: 12px 0; border-top: 1px solid #f0e8dc;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 16px 0; border-top: 1px solid #f0e8dc;
 }
 .pkg-set-section:first-of-type { border-top: none; padding-top: 0; }
 .pkg-set-danger { border-top: 1px solid #f0e8dc; }
@@ -528,9 +598,27 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
 .pkg-icon-btn--ok { color: #2f6fb5; }
 .pkg-icon-btn--ok:hover:not(:disabled) { color: #4a8fc0; }
 .pkg-icon-btn:disabled { color: #c8bfb2; cursor: not-allowed; }
-.pkg-scope-field { display: flex; flex-direction: column; gap: 4px; }
-.pkg-scope-lbl { font-size: 12px; color: var(--text-secondary); }
-.pkg-scope-hint { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
+.pkg-scope-field { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.pkg-scope-lbl {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 12px; color: var(--text-secondary);
+}
+.pkg-scope-hint { font-size: 11px; color: var(--text-muted); line-height: 1.6; margin-top: 4px; }
+
+/* 标签条件组：组内 AND，组之间用"或"分隔 */
+.pkg-tag-group { display: flex; flex-direction: column; gap: 6px; }
+.pkg-tag-or {
+  font-size: 11px; color: var(--text-muted); text-align: center;
+  position: relative;
+}
+.pkg-tag-or::before,
+.pkg-tag-or::after {
+  content: ''; position: absolute; top: 50%; width: calc(50% - 14px); height: 1px; background: #f0e8dc;
+}
+.pkg-tag-or::before { left: 0; }
+.pkg-tag-or::after  { right: 0; }
+.pkg-tag-row { display: flex; align-items: center; gap: 6px; }
+.pkg-tag-row .pkg-tag-select { flex: 1; min-width: 0; }
 
 .pkg-inside-main {
   flex: 1; position: relative; overflow-y: auto; border: 1px solid var(--border); border-radius: 12px;
