@@ -606,8 +606,10 @@ class AftersaleRepository:
                 .join(ProductFinished, ProductFinished.model_id == ProductModel.id)
                 .join(_SOF, _SOF.finished_code == ProductFinished.code)
             )
+            # get_cases 是平铺关键字参数，没有 filters 字典；helper 只读
+            # date_start/date_end 决定索引提示，用局部变量现构造一个即可。
             _series_q = self._scope_shipping_denominator_query(
-                _series_q, _SOF, filters,
+                _series_q, _SOF, {'date_start': date_start, 'date_end': date_end},
             )
             if date_start:
                 _series_q = _series_q.filter(_SOF.shipped_date >= date_start)
