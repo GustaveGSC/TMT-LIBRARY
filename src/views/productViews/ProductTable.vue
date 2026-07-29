@@ -19,7 +19,7 @@ function onResize() { isMobile.value = window.innerWidth <= 768 }
 onBeforeUnmount(() => window.removeEventListener('resize', onResize))
 
 // storeToRefs 保证 sortField/sortOrder/status/lifecycle 响应式可读
-const { sortField, sortOrder, status, lifecycle } = storeToRefs(finishedStore)
+const { sortField, sortOrder, status, lifecycle, market } = storeToRefs(finishedStore)
 
 // 标签筛选（用 computed 避免 storeToRefs 在 Pinia v3 下对数组 ref 的兼容问题）
 const filterTags     = computed({ get: () => finishedStore.filterTags,     set: v => { finishedStore.filterTags = v } })
@@ -57,21 +57,60 @@ const filteredUncategorizedTags = computed(() => {
 // 挂载时懒加载标签选项
 onMounted(() => { finishedStore.loadTagOptions() })
 
-// ── 状态 tabs ─────────────────────────────────────
+// ── 顶部筛选 tabs（均为多选，默认全选，等价于原来的"全部"）────────
 const STATUS_TABS = [
-  { value: '',           label: '全部'     },
   { value: 'unrecorded', label: '未录入'   },
   { value: 'recorded',   label: '已录入'   },
   { value: 'ignored',    label: '无需录入' },
 ]
 
-// ── 生命周期 tabs ─────────────────────────────────
 const LIFECYCLE_TABS = [
-  { value: '',         label: '全部'     },
   { value: 'listed',   label: '已上市'   },
   { value: 'delisted', label: '已退市'   },
   { value: 'unknown',  label: '状态未知' },
 ]
+
+const MARKET_TABS = [
+  { value: 'domestic', label: '内销' },
+  { value: 'foreign',  label: '外贸' },
+]
+
+/** 多选 tab 通用切换：点击已选则移除，未选则加入 */
+function toggleTab(target, value) {
+  const cur = target.value
+  target.value = cur.includes(value) ? cur.filter(v => v !== value) : [...cur, value]
+}
+
+// ── 偏好持久化（状态/生命周期/市场三组选择）──────────────────────
+// 状态存在 store 里（离开产品库会被 reset），进页面时从 localStorage 恢复
+const TABLE_PREFS_KEY = 'product_table_prefs'
+const PREF_GROUPS = [
+  { name: 'status',    target: status,    keys: STATUS_TABS.map(t => t.value)    },
+  { name: 'lifecycle', target: lifecycle, keys: LIFECYCLE_TABS.map(t => t.value) },
+  { name: 'market',    target: market,    keys: MARKET_TABS.map(t => t.value)    },
+]
+
+function loadTablePrefs() {
+  try {
+    const raw = localStorage.getItem(TABLE_PREFS_KEY)
+    if (!raw) return
+    const prefs = JSON.parse(raw)
+    for (const { name, target, keys } of PREF_GROUPS) {
+      if (!Array.isArray(prefs[name])) continue
+      // 剔除已不存在的 key；全空则不恢复（回落默认全选），否则进页面
+      // 是一片空白且看不出原因，比丢掉"全不选"这个状态更糟
+      const v = prefs[name].filter(k => keys.includes(k))
+      if (v.length) target.value = v
+    }
+  } catch { /* 忽略损坏的偏好数据，保留默认值 */ }
+}
+function saveTablePrefs() {
+  localStorage.setItem(TABLE_PREFS_KEY, JSON.stringify(
+    Object.fromEntries(PREF_GROUPS.map(g => [g.name, g.target.value])),
+  ))
+}
+loadTablePrefs()   // setup 阶段即恢复，避免先按默认筛选渲染一帧
+watch([status, lifecycle, market], saveTablePrefs, { deep: true })
 
 // ── packaged 折叠 ─────────────────────────────────
 const packagedCollapsed = ref(false)
@@ -348,14 +387,20 @@ watch(
       <div class="card-topbar">
         <div class="filter-tabs">
           <button v-for="t in STATUS_TABS" :key="t.value"
-            class="filter-tab" :class="{ active: status === t.value }"
-            @click="status = t.value"
+            class="filter-tab" :class="{ active: status.includes(t.value) }"
+            @click="toggleTab(status, t.value)"
           >{{ t.label }}</button>
         </div>
         <div class="filter-tabs">
           <button v-for="t in LIFECYCLE_TABS" :key="t.value"
-            class="filter-tab" :class="{ active: lifecycle === t.value }"
-            @click="lifecycle = t.value"
+            class="filter-tab" :class="{ active: lifecycle.includes(t.value) }"
+            @click="toggleTab(lifecycle, t.value)"
+          >{{ t.label }}</button>
+        </div>
+        <div class="filter-tabs">
+          <button v-for="t in MARKET_TABS" :key="t.value"
+            class="filter-tab" :class="{ active: market.includes(t.value) }"
+            @click="toggleTab(market, t.value)"
           >{{ t.label }}</button>
         </div>
         <!-- 标签筛选 -->

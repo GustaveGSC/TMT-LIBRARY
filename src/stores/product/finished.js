@@ -41,12 +41,14 @@ export const useFinishedStore = defineStore('product/finished', () => {
     market:       '',
   })
 
-  // ── 状态筛选 ───────────────────────────────────────
-  const status = ref('')
-
-  // ── 生命周期筛选 ────────────────────────────────────
-  // '' = 全部  'listed' = 已上市  'delisted' = 已退市  'unknown' = 状态未知
-  const lifecycle = ref('')
+  // ── 状态 / 生命周期 / 市场筛选（均为多选，默认全选即"不过滤"）───────
+  // 取值集合见各视图的 TABS 常量；全选时跳过过滤，全不选则不返回数据
+  const STATUS_ALL    = ['unrecorded', 'recorded', 'ignored']
+  const LIFECYCLE_ALL = ['listed', 'delisted', 'unknown']
+  const MARKET_ALL    = ['domestic', 'foreign']
+  const status    = ref([...STATUS_ALL])
+  const lifecycle = ref([...LIFECYCLE_ALL])
+  const market    = ref([...MARKET_ALL])
 
   // ── 标签筛选（多选，tag name 数组）─────────────────
   const filterTags = ref([])   // string[]
@@ -117,18 +119,22 @@ export const useFinishedStore = defineStore('product/finished', () => {
   const items = computed(() => {
     let list = activeItems.value
 
-    // 状态筛选
-    if (status.value) {
-      list = list.filter(r => r.status === status.value)
+    // 状态筛选（多选，全选时跳过）
+    if (status.value.length < STATUS_ALL.length) {
+      list = list.filter(r => status.value.includes(r.status))
     }
 
-    // 生命周期筛选
-    if (lifecycle.value === 'listed') {
-      list = list.filter(r => r.listed_yymm && !r.delisted_yymm)
-    } else if (lifecycle.value === 'delisted') {
-      list = list.filter(r => r.listed_yymm && r.delisted_yymm)
-    } else if (lifecycle.value === 'unknown') {
-      list = list.filter(r => !r.listed_yymm)
+    // 生命周期筛选（多选，全选时跳过）
+    if (lifecycle.value.length < LIFECYCLE_ALL.length) {
+      list = list.filter(r => {
+        const state = !r.listed_yymm ? 'unknown' : (r.delisted_yymm ? 'delisted' : 'listed')
+        return lifecycle.value.includes(state)
+      })
+    }
+
+    // 市场筛选（多选，'both' 同属内销和外贸；全选时跳过，避免把 market 为空的记录排除）
+    if (market.value.length < MARKET_ALL.length) {
+      list = list.filter(r => r.market === 'both' || market.value.includes(r.market))
     }
 
     // 每列搜索
@@ -184,7 +190,7 @@ export const useFinishedStore = defineStore('product/finished', () => {
 
   // 过滤/排序条件变化时重置到第一页
   watch(
-    [() => ({ ...filters }), status, lifecycle, filterTags, sortField, sortOrder],
+    [() => ({ ...filters }), status, lifecycle, market, filterTags, sortField, sortOrder],
     () => { currentPage.value = 1 },
     { deep: true }
   )
@@ -339,8 +345,9 @@ export const useFinishedStore = defineStore('product/finished', () => {
     loaded.value     = false
     loadingMore.value = false
     error.value      = ''
-    status.value     = ''
-    lifecycle.value  = ''
+    status.value     = [...STATUS_ALL]
+    lifecycle.value  = [...LIFECYCLE_ALL]
+    market.value     = [...MARKET_ALL]
     filterTags.value = []
     sortField.value  = ''
     sortOrder.value  = ''
@@ -362,7 +369,8 @@ export const useFinishedStore = defineStore('product/finished', () => {
     rawItems, activeItems,
     items, pagedItems, total, currentPage, pageSize,
     loading, loadingMore, loaded, error,
-    filters, status, lifecycle, filterTags,
+    filters, status, lifecycle, market, filterTags,
+    STATUS_ALL, LIFECYCLE_ALL, MARKET_ALL,
     tagOptions, tagCategories, tagOptionsLoaded, loadTagOptions, reloadTagOptions,
     sortField, sortOrder,
     selected, selectedPackaged,
