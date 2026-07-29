@@ -170,9 +170,12 @@ class ProductPackaged(db.Model):
     length       = db.Column(db.Float,       nullable=True)
     width        = db.Column(db.Float,       nullable=True)
     height       = db.Column(db.Float,       nullable=True)
-    volume       = db.Column(DOUBLE,         nullable=True)
-    gross_weight = db.Column(DOUBLE,         nullable=True)
-    net_weight   = db.Column(DOUBLE,         nullable=True)
+    # asdecimal=False 必须显式指定：mysql.DOUBLE 默认 asdecimal=True（与通用
+    # sqlalchemy.Float 默认值相反），会把值取成 Decimal 并按标度 10 补零，
+    # JSON 序列化后变成 "40.0000000000" 这种一长串 0。列的 DDL 不受影响。
+    volume       = db.Column(DOUBLE(asdecimal=False), nullable=True)
+    gross_weight = db.Column(DOUBLE(asdecimal=False), nullable=True)
+    net_weight   = db.Column(DOUBLE(asdecimal=False), nullable=True)
     created_at   = db.Column(db.DateTime,    nullable=False, default=now_cst)
     updated_at   = db.Column(db.DateTime,    nullable=False, default=now_cst, onupdate=now_cst)
 
