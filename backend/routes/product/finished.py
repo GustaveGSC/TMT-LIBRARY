@@ -77,8 +77,12 @@ def save_finished():
                 category.id, series_code, series_name or series_code
             )
 
-        # 型号（按 model_code 查找）
-        model = CategoryRepository.get_model_by_model_code(model_code)
+        # 型号：先按 model_code 查；查不到再按 (series_id, code) 查——后者才是
+        # uq_model_code 唯一约束的实际键（code 即成品编码）。改动某个成品的
+        # model_code 时，按新 model_code 必然查不到，若直接 create 就会用同一
+        # (series_id, code) 再插一行，撞唯一约束报 500，此时应复用并改这一行。
+        model = (CategoryRepository.get_model_by_model_code(model_code)
+                 or CategoryRepository.get_model_by_code(series.id, code))
         if not model:
             model = CategoryRepository.create_model(
                 series_id=series.id,
@@ -88,11 +92,20 @@ def save_finished():
                 name_en=name_en or None,
             )
         else:
-            # 型号已存在 → 按需更新英文名 / 中文名
+            # 型号已存在 → 按需更新 model_code / 英文名 / 中文名
             updates = {}
+            if model_code and model.model_code != model_code:
+                updates['model_code'] = model_code
             if name_en and model.name_en != name_en:
                 updates['name_en'] = name_en
             if name_zh and model.name != name_zh:
+                # uq_model_name 是 (series_id, name)：同系列内改重名会撞约束，
+                # 与其抛 500 不如明确告知
+                clash = CategoryRepository.get_model_by_name(model.series_id, name_zh)
+                if clash and clash.id != model.id:
+                    return Result.fail(
+                        f'同系列下已存在名为「{name_zh}」的型号（{clash.model_code}），请改用其它名称'
+                    ).to_response()
                 updates['name'] = name_zh
             if updates:
                 CategoryRepository.update_model(model, **updates)
@@ -107,6 +120,11 @@ def save_finished():
             if name_en and model.name_en != name_en:
                 updates['name_en'] = name_en
             if name_zh and model.name != name_zh:
+                clash = CategoryRepository.get_model_by_name(model.series_id, name_zh)
+                if clash and clash.id != model.id:
+                    return Result.fail(
+                        f'同系列下已存在名为「{name_zh}」的型号（{clash.model_code}），请改用其它名称'
+                    ).to_response()
                 updates['name'] = name_zh
             if updates:
                 CategoryRepository.update_model(model, **updates)
