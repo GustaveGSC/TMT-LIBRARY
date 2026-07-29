@@ -748,6 +748,30 @@ const editVolume      = computed(() => sumPackaged('volume'))
 const editGrossWeight = computed(() => sumPackaged('gross_weight'))
 const editNetWeight   = computed(() => sumPackaged('net_weight'))
 
+// ── 包装参数：本成品对应的产成品明细 ────────────────
+// 数据直接取 packagedStore（进产品库时已全量预载），不额外发请求
+const packagedRows = computed(() => {
+  const codes = (props.row.packaged_list || []).map(p => p?.code ?? p).filter(Boolean)
+  return codes.map(code => {
+    const p = packagedStore.map[code]
+    // 清单里有编码但产成品档案缺失时仍占一行，避免静默少显示
+    return p ? { ...p, code } : { code, _missing: true }
+  })
+})
+const packagedTotals = computed(() => {
+  const sum = field => packagedRows.value.reduce(
+    (acc, r) => acc + (r[field] != null ? Number(r[field]) : 0), 0,
+  )
+  const round = (v, n) => (v > 0 ? parseFloat(v.toFixed(n)) : null)
+  return {
+    volume:       round(sum('volume'), 4),
+    gross_weight: round(sum('gross_weight'), 3),
+    net_weight:   round(sum('net_weight'), 3),
+  }
+})
+/** 数值展示：null/undefined 显示占位符，避免表格出现空白单元格 */
+function numOr(v, dash = '—') { return v == null || v === '' ? dash : v }
+
 // ── 分类树（编辑时懒加载，跨组件共享缓存）────────
 const { categoryTree, loadCategoryTreeOnce } = useCategoryTree()
 async function ensureTreeLoaded() {
@@ -1122,6 +1146,11 @@ function toggleSec(key) {
   }
   if (key === 'detailPackages' && openSec[key] && !detailPackagesLoaded.value) {
     loadDetailPackages()
+  }
+  // 包装参数取自 packagedStore 全量缓存。正常路径下进产品库时已预载，
+  // 但直接深链进来等场景可能还没载好——不兜这一手的话每行都会误显示"档案缺失"
+  if (key === 'packaging' && openSec[key] && !packagedStore.loaded) {
+    packagedStore.loadAll()
   }
 }
 </script>
@@ -1676,6 +1705,57 @@ function toggleSec(key) {
 
           </div>
         </div>
+
+        <!-- 包装参数 section ───────────────────────── -->
+        <div class="eg-sec">
+          <div class="eg-sec-hd" @click="toggleSec('packaging')">
+            <span class="eg-arr">{{ isSec('packaging') ? '▾' : '›' }}</span>包装参数
+            <span v-if="packagedRows.length" class="pk-sec-count">{{ packagedRows.length }} 件</span>
+          </div>
+          <div v-if="isSec('packaging')" class="eg-sec-bd eg-sec-bd-pk">
+            <div v-if="packagedStore.loading && !packagedStore.loaded" class="res-loading">加载中…</div>
+            <div v-else-if="!packagedRows.length" class="res-empty">暂无产成品清单</div>
+            <table v-else class="pk-table">
+              <thead>
+                <tr>
+                  <th class="pk-th-code">产成品编码</th>
+                  <th class="pk-th-name">名称</th>
+                  <th>长 (cm)</th>
+                  <th>宽 (cm)</th>
+                  <th>高 (cm)</th>
+                  <th>体积 (m³)</th>
+                  <th>毛重 (kg)</th>
+                  <th>净重 (kg)</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="r in packagedRows" :key="r.code">
+                  <td class="pk-td-code">{{ r.code }}</td>
+                  <td class="pk-td-name" :title="r.name">
+                    <span v-if="r._missing" class="pk-missing">产成品档案缺失</span>
+                    <template v-else>{{ numOr(r.name) }}</template>
+                  </td>
+                  <td>{{ numOr(r.length) }}</td>
+                  <td>{{ numOr(r.width) }}</td>
+                  <td>{{ numOr(r.height) }}</td>
+                  <td>{{ numOr(r.volume) }}</td>
+                  <td>{{ numOr(r.gross_weight) }}</td>
+                  <td>{{ numOr(r.net_weight) }}</td>
+                </tr>
+              </tbody>
+              <tfoot v-if="packagedRows.length > 1">
+                <tr>
+                  <td class="pk-td-code">合计</td>
+                  <td colspan="4"></td>
+                  <td>{{ numOr(packagedTotals.volume) }}</td>
+                  <td>{{ numOr(packagedTotals.gross_weight) }}</td>
+                  <td>{{ numOr(packagedTotals.net_weight) }}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+
         <!-- 资料 section ─────────────────────────── -->
         <div class="eg-sec">
           <div class="eg-sec-hd" @click="toggleSec('resources')">
@@ -2597,6 +2677,32 @@ function toggleSec(key) {
 /* ── 参数区 ───────────────────────────────────── */
 .eg-sec-bd-params { padding: 12px 14px; }
 .eg-sec-bd-data   { padding: 12px 14px; display: flex; gap: 12px; }
+
+/* ── 包装参数表格 ── */
+.eg-sec-bd-pk { padding: 12px 14px; overflow-x: auto; }
+.pk-sec-count { margin-left: 8px; font-size: 11px; color: var(--text-muted); font-weight: 400; }
+.pk-table {
+  border-collapse: collapse; font-size: 12px; min-width: 640px; width: 100%;
+  background: #fff;
+}
+.pk-table th, .pk-table td {
+  border: 1px solid #f0e8dc; padding: 6px 10px; text-align: right; white-space: nowrap;
+}
+.pk-table th {
+  background: #f5f0e8; color: #3a3028; font-weight: 600; text-align: right;
+}
+.pk-table th.pk-th-code, .pk-table th.pk-th-name,
+.pk-table td.pk-td-code, .pk-table td.pk-td-name { text-align: left; }
+.pk-table td.pk-td-code { color: #2c2420; font-weight: 500; }
+.pk-table td.pk-td-name {
+  color: var(--text-secondary); max-width: 260px;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.pk-table tbody tr:hover td { background: #faf7f2; }
+.pk-table tfoot td {
+  background: #faf7f2; font-weight: 600; color: #2c2420;
+}
+.pk-missing { color: #c06030; }
 .data-shipping-card {
   flex: 1; border: 1px solid #e8ddd0; border-radius: 10px; overflow: hidden;
   min-width: 0;

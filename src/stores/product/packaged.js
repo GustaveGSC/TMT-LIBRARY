@@ -32,7 +32,6 @@ export const usePackagedStore = defineStore('product/packaged', () => {
 
   // ── 根据 code 列表取详情 ──────────────────────────
   function getByCodeList(codes = []) {
-    console.log('getByCodeList', codes.map(code => map.value[code]).filter(Boolean))
     return codes.map(code => map.value[code]).filter(Boolean)
   }
 
