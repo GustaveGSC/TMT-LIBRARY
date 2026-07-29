@@ -27,12 +27,18 @@ const cascaderOptions = computed(() =>
     })),
   })),
 )
-function modelIdsToPaths(modelIds) {
+// checkStrictly 模式下，勾选路径可以停在品类/系列/型号任意一级，需要把三个维度的
+// id 各自还原成对应深度的路径，再合并成级联组件的回显值
+function scopeIdsToPaths({ categoryIds = [], seriesIds = [], modelIds = [] }) {
   const paths = []
-  for (const cat of categoryTree.value)
-    for (const ser of cat.series || [])
+  for (const cat of categoryTree.value) {
+    if (categoryIds.includes(cat.id)) paths.push([cat.id])
+    for (const ser of cat.series || []) {
+      if (seriesIds.includes(ser.id)) paths.push([cat.id, ser.id])
       for (const m of ser.models || [])
         if (modelIds.includes(m.id)) paths.push([cat.id, ser.id, m.id])
+    }
+  }
   return paths
 }
 
@@ -109,7 +115,9 @@ async function openFolder(folder) {
   await Promise.all([loadCategoryTreeOnce(), finishedStore.loadTagOptions()])
   activeFolder.value = folder
   nameEdit.value = folder.name
-  cascaderValue.value = modelIdsToPaths(folder.model_ids || [])
+  cascaderValue.value = scopeIdsToPaths({
+    categoryIds: folder.category_ids || [], seriesIds: folder.series_ids || [], modelIds: folder.model_ids || [],
+  })
   tagIds.value = folder.tag_ids || []
   insideFolder.value = true
   await refreshActiveMedia()
@@ -136,11 +144,19 @@ async function saveName() {
 
 async function onCascaderChange(paths) {
   cascaderValue.value = paths
-  const modelIds = (paths || []).map(p => p[p.length - 1])
+  // checkStrictly 下路径深度即代表所选层级：1=品类，2=系列，3=型号
+  const categoryIds = (paths || []).filter(p => p.length === 1).map(p => p[0])
+  const seriesIds   = (paths || []).filter(p => p.length === 2).map(p => p[1])
+  const modelIds    = (paths || []).filter(p => p.length === 3).map(p => p[2])
   scopeSaving.value = true
   try {
-    const res = await http.put(`/api/product-detail-packages/${activeFolder.value.id}/models`, { model_ids: modelIds })
-    if (!res.success) ElMessage.error(res.message || '设置型号范围失败')
+    const [modelRes, seriesRes, categoryRes] = await Promise.all([
+      http.put(`/api/product-detail-packages/${activeFolder.value.id}/models`, { model_ids: modelIds }),
+      http.put(`/api/product-detail-packages/${activeFolder.value.id}/series`, { series_ids: seriesIds }),
+      http.put(`/api/product-detail-packages/${activeFolder.value.id}/categories`, { category_ids: categoryIds }),
+    ])
+    const failed = [modelRes, seriesRes, categoryRes].find(r => !r.success)
+    if (failed) ElMessage.error(failed.message || '设置适用范围失败')
   } finally {
     scopeSaving.value = false
   }
@@ -309,13 +325,13 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
         <aside v-if="canEditProduct" class="pkg-scope-panel">
           <div class="pkg-scope-title">适用范围</div>
           <div class="pkg-scope-field">
-            <div class="pkg-scope-lbl">适用型号</div>
+            <div class="pkg-scope-lbl">适用品类/系列/型号</div>
             <el-cascader
               :model-value="cascaderValue" :options="cascaderOptions"
-              :props="{ multiple: true }"
+              :props="{ multiple: true, checkStrictly: true }"
               :show-all-levels="false"
               filterable clearable collapse-tags collapse-tags-tooltip size="small"
-              placeholder="选择型号" style="width:100%"
+              placeholder="选择品类/系列/型号" style="width:100%"
               @change="onCascaderChange"
             />
           </div>
@@ -354,7 +370,7 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
               </template>
             </el-select>
           </div>
-          <div class="pkg-scope-hint">选中型号或标签的产品，会在其详情页自动展示这个文件夹里的图片/视频</div>
+          <div class="pkg-scope-hint">命中所选品类/系列/型号/标签任意一项的产品，会在其详情页自动展示这个文件夹里的图片/视频；勾选品类/系列后，其下新增的型号也会自动生效</div>
         </aside>
 
         <!-- 右侧：文件区，整个区域都是拖拽上传目标 -->
