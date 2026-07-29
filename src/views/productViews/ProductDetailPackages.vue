@@ -147,14 +147,31 @@ async function saveName() {
 // 适用范围整体走"编辑/确认/取消"：非编辑状态下级联/标签都禁用，点「编辑」才能改；
 // 「确认」一次性保存型号/系列/品类/标签四项；「取消」丢弃改动，回退到编辑前的快照
 const scopeEditing  = ref(false)
-let scopeSnapshot   = null
+// 快照必须是 ref（不能用普通 let），否则 scopeDirty 这个 computed 追踪不到它的变化
+const scopeSnapshot = ref(null)
+// 有没有真实改动：无变动时「确认」按钮置灰不可点
+const scopeDirty = computed(() => {
+  const snap = scopeSnapshot.value
+  if (!snap) return false
+  const sameIdSet = (a, b) =>
+    a.length === b.length && a.every(id => b.includes(id))
+  const samePaths = (a, b) => {
+    const keyOf = list => new Set(list.map(p => p.join('/')))
+    const ka = keyOf(a), kb = keyOf(b)
+    return ka.size === kb.size && [...ka].every(k => kb.has(k))
+  }
+  return !samePaths(cascaderValue.value, snap.cascaderValue) || !sameIdSet(tagIds.value, snap.tagIds)
+})
 function startScopeEdit() {
-  scopeSnapshot = { cascaderValue: [...cascaderValue.value], tagIds: [...tagIds.value] }
+  scopeSnapshot.value = { cascaderValue: [...cascaderValue.value], tagIds: [...tagIds.value] }
   scopeEditing.value = true
 }
 function cancelScopeEdit() {
-  if (scopeSnapshot) { cascaderValue.value = scopeSnapshot.cascaderValue; tagIds.value = scopeSnapshot.tagIds }
-  scopeSnapshot = null
+  if (scopeSnapshot.value) {
+    cascaderValue.value = scopeSnapshot.value.cascaderValue
+    tagIds.value = scopeSnapshot.value.tagIds
+  }
+  scopeSnapshot.value = null
   scopeEditing.value = false
 }
 function onCascaderChange(paths) {
@@ -186,7 +203,7 @@ async function confirmScopeEdit() {
     activeFolder.value.category_ids = categoryIds
     activeFolder.value.tag_ids      = tagIds.value
     ElMessage.success('已保存')
-    scopeSnapshot = null
+    scopeSnapshot.value = null
     scopeEditing.value = false
   } finally {
     scopeSaving.value = false
@@ -354,10 +371,11 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
                 <el-icon><Edit /></el-icon>
               </button>
               <template v-else>
-                <button class="pkg-icon-btn" title="取消" :disabled="scopeSaving" @click="cancelScopeEdit">
+                <button class="pkg-icon-btn pkg-icon-btn--cancel" title="取消" :disabled="scopeSaving" @click="cancelScopeEdit">
                   <el-icon><Close /></el-icon>
                 </button>
-                <button class="pkg-icon-btn pkg-icon-btn--ok" title="确认" :disabled="scopeSaving" @click="confirmScopeEdit">
+                <button class="pkg-icon-btn pkg-icon-btn--ok" :title="scopeDirty ? '确认' : '没有变动'"
+                  :disabled="scopeSaving || !scopeDirty" @click="confirmScopeEdit">
                   <el-icon><Check /></el-icon>
                 </button>
               </template>
@@ -506,8 +524,11 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
 /* 加粗：Element Plus 图标是 SVG，字重靠描边宽度实现 */
 .pkg-icon-btn :deep(svg) { stroke: currentColor; stroke-width: 40; }
 .pkg-icon-btn:hover:not(:disabled) { color: var(--accent); }
-.pkg-icon-btn--ok:hover:not(:disabled) { color: #4a9a5a; }
-.pkg-icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.pkg-icon-btn--cancel { color: #c03030; }
+.pkg-icon-btn--cancel:hover:not(:disabled) { color: #e04040; }
+.pkg-icon-btn--ok { color: #2f6fb5; }
+.pkg-icon-btn--ok:hover:not(:disabled) { color: #4a8fc0; }
+.pkg-icon-btn:disabled { color: #c8bfb2; cursor: not-allowed; }
 .pkg-scope-field { display: flex; flex-direction: column; gap: 4px; }
 .pkg-scope-lbl { font-size: 12px; color: var(--text-secondary); }
 .pkg-scope-hint { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
