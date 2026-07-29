@@ -17,6 +17,9 @@ backend/dist/
 # Logs
 backend/logs/
 
+# 分析用临时数据导出（含客户备注等生产数据，禁止提交）
+tmp/
+
 # Environment & secrets
 backend/.env
 .env
