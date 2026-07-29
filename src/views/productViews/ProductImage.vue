@@ -85,6 +85,38 @@ const hasActiveFilter = computed(() =>
   || filterTags.value.length   > 0,
 )
 
+// ── 偏好持久化（生命周期/市场/排序，不含搜索词与标签筛选）──
+const IMAGE_PREFS_KEY = 'product_image_prefs'
+const LIFECYCLE_KEYS = LIFECYCLE_TABS.map(t => t.key)
+const MARKET_KEYS    = MARKET_TABS.map(t => t.key)
+
+function loadPrefsFromStorage() {
+  try {
+    const raw = localStorage.getItem(IMAGE_PREFS_KEY)
+    if (!raw) return
+    const prefs = JSON.parse(raw)
+    // 逐项校验并剔除已不存在的 key；全空则不恢复（回落到默认全选）——
+    // 否则下次进页面会是一片空白且看不出原因，比丢掉"全不选"这个状态更糟
+    if (Array.isArray(prefs.lifecycle)) {
+      const v = prefs.lifecycle.filter(k => LIFECYCLE_KEYS.includes(k))
+      if (v.length) filterLifecycle.value = v
+    }
+    if (Array.isArray(prefs.market)) {
+      const v = prefs.market.filter(k => MARKET_KEYS.includes(k))
+      if (v.length) filterMarket.value = v
+    }
+    if (prefs.sortBy === 'code' || prefs.sortBy === 'listed_yymm') sortBy.value = prefs.sortBy
+  } catch { /* 忽略损坏的偏好数据，保留默认值 */ }
+}
+function savePrefsToStorage() {
+  localStorage.setItem(IMAGE_PREFS_KEY, JSON.stringify({
+    lifecycle: filterLifecycle.value,
+    market:    filterMarket.value,
+    sortBy:    sortBy.value,
+  }))
+}
+watch([filterLifecycle, filterMarket, sortBy], savePrefsToStorage, { deep: true })
+
 // ── 过滤后列表（基于 activeItems，已排除禁用编码规则对应的成品）
 const filteredItems = computed(() => {
   let list = finishedStore.activeItems
@@ -192,6 +224,8 @@ async function onSaved() {
 
 // ── 生命周期 ──────────────────────────────────────
 onMounted(async () => {
+  // 先恢复偏好，再等数据（放在 await 之前，避免恢复前先按默认筛选渲染一帧）
+  loadPrefsFromStorage()
   // 如果 store 尚未加载，触发加载（表格页已加载则直接复用）
   if (!finishedStore.loaded) {
     await ensureTableData()
