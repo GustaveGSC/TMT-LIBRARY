@@ -330,24 +330,30 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
     <template v-else>
       <div class="pkg-inside-hd">
         <el-button text :icon="ArrowLeft" @click="backToGrid">返回</el-button>
-        <el-input
-          v-model="nameEdit" size="small" style="width:240px" :disabled="!canEditProduct"
-          @blur="saveName" @keyup.enter="saveName"
-        />
+        <span class="pkg-inside-title">{{ activeFolder?.name }}</span>
         <span class="pkg-inside-count">{{ activeMedia.length }} 个文件</span>
-        <el-button v-if="canEditProduct" size="small" type="danger" plain :icon="Delete" style="margin-left:auto" @click="deleteFolder(activeFolder)">删除文件夹</el-button>
       </div>
 
       <div class="pkg-inside-body">
-        <!-- 左侧：适用范围设置，常驻显示 -->
+        <!-- 左侧：设置面板，常驻显示（名称/适用范围/删除） -->
         <aside v-if="canEditProduct" class="pkg-scope-panel">
-          <div class="pkg-scope-title">
+          <div class="pkg-set-title">设置</div>
+
+          <div class="pkg-set-section">
+            <div class="pkg-scope-lbl">名称</div>
+            <el-input
+              v-model="nameEdit" size="small" :disabled="!canEditProduct"
+              @blur="saveName" @keyup.enter="saveName"
+            />
+          </div>
+
+          <div class="pkg-set-section pkg-scope-title">
             适用范围
             <div class="pkg-scope-actions">
-              <el-button v-if="!scopeEditing" type="primary" size="small" :icon="Edit" @click="startScopeEdit">编辑</el-button>
+              <el-button v-if="!scopeEditing" circle type="primary" size="small" :icon="Edit" title="编辑" @click="startScopeEdit" />
               <template v-else>
-                <el-button type="danger" plain size="small" :icon="Close" :disabled="scopeSaving" @click="cancelScopeEdit">取消</el-button>
-                <el-button type="success" size="small" :icon="Check" :loading="scopeSaving" @click="confirmScopeEdit">确认</el-button>
+                <el-button circle type="danger" plain size="small" :icon="Close" title="取消" :disabled="scopeSaving" @click="cancelScopeEdit" />
+                <el-button circle type="success" size="small" :icon="Check" title="确认" :loading="scopeSaving" @click="confirmScopeEdit" />
               </template>
             </div>
           </div>
@@ -404,6 +410,10 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
             </el-select>
           </div>
           <div class="pkg-scope-hint">命中所选品类/系列/型号/标签任意一项的产品，会在其详情页自动展示这个文件夹里的图片/视频；勾选品类/系列后，其下新增的型号也会自动生效</div>
+
+          <div class="pkg-set-section pkg-set-danger">
+            <el-button size="small" type="danger" plain :icon="Delete" style="width:100%" @click="deleteFolder(activeFolder)">删除文件夹</el-button>
+          </div>
         </aside>
 
         <!-- 右侧：文件区，整个区域都是拖拽上传目标 -->
@@ -457,18 +467,27 @@ onMounted(() => { loadFolders(); finishedStore.loadTagOptions(); loadCategoryTre
 
 /* ── 文件夹内部视图 ── */
 .pkg-inside-hd { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-shrink: 0; }
-.pkg-inside-count { font-size: 12px; color: var(--text-muted); }
+.pkg-inside-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.pkg-inside-count { font-size: 12px; color: var(--text-muted); margin-left: auto; }
 .pkg-inside-body { flex: 1; display: flex; gap: 16px; overflow: hidden; }
 
 .pkg-scope-panel {
   width: 220px; flex-shrink: 0; background: #fff; border: 1px solid var(--border); border-radius: 12px;
-  padding: 14px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto;
+  padding: 14px; display: flex; flex-direction: column; gap: 4px; overflow-y: auto;
 }
+.pkg-set-title { font-size: 14px; font-weight: 700; color: var(--text-primary); margin-bottom: 6px; }
+.pkg-set-section {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 12px 0; border-top: 1px solid #f0e8dc;
+}
+.pkg-set-section:first-of-type { border-top: none; padding-top: 0; }
+.pkg-set-danger { border-top: 1px solid #f0e8dc; }
 .pkg-scope-title {
   display: flex; align-items: center; justify-content: space-between;
   font-size: 13px; font-weight: 600; color: var(--text-primary);
 }
-.pkg-scope-actions { display: flex; align-items: center; gap: 2px; }
+.pkg-scope-actions { display: flex; align-items: center; gap: 6px; }
+.pkg-scope-actions .el-button.is-circle { width: 24px; height: 24px; padding: 0; }
 .pkg-scope-field { display: flex; flex-direction: column; gap: 4px; }
 .pkg-scope-lbl { font-size: 12px; color: var(--text-secondary); }
 .pkg-scope-hint { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
