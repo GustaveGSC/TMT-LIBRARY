@@ -26,21 +26,37 @@ DATE_RE = re.compile(r'(20\d{2})[.\-/年](\d{1,2})[.\-/月]?(\d{1,2})?')
 LIFT_WORDS = {'手摇', '电动', '落地', '夹式', '夹子', '底座', '固定'}
 PARAM_ORDER = ('series', 'version', 'size', 'color', 'material', 'lift')
 
-# 备注里的写法 → 系统系列名。录入人员的简称、销售名与系统录入名不统一造成的
-# 大量未匹配，必须显式对齐（长的写法放前面，匹配时优先）。
-SERIES_ALIASES = [
+# 两类不同的名称对齐，来源不同，都要处理：
+#
+# 1) 销售名 ↔ 系统名：权威来源是产品标签的「别名」分类（category「别名」），
+#    由业务维护，映射到具体【系列编码】（如 领航员Pro → LH21），比按系列名
+#    匹配更精确。通过 alias_links 参数传入，不在代码里硬编码。
+# 2) 录入简称：录入人员的习惯写法（如把「领航员」写成「领航」），不在别名表里，
+#    只能在代码里维护。长写法放前面，匹配时优先。
+ENTRY_SHORTHANDS = [
     ('领航员Z', '领航员Z'), ('领航Z', '领航员Z'),
-    ('领航员S阳光版', '领航员S阳光版'),
-    ('领航员S', '领航员S'), ('领航S', '领航员S'),
     ('领航员A', '领航员A'), ('领航A', '领航员A'),
+    ('领航员S', '领航员S'), ('领航S', '领航员S'),
     ('领航员', '领航员'), ('领航', '领航员'),
 ]
 
+# 同义写法归一：「款」与「版」只是写法不同（用户确认）
+def _norm_text(t):
+    return (t or '').replace('款', '版')
+
 
 class ModelMatcher:
-    def __init__(self, models, reference_rows):
-        """models: models-with-lifecycle.json；reference_rows: 不含持出月的已确认原因行"""
+    def __init__(self, models, reference_rows, alias_links=None):
+        """models: models-with-lifecycle.json；reference_rows: 不含持出月的已确认原因行；
+        alias_links: 别名标签关联行（alias-tags.json 的 links），销售名→系列编码的权威来源"""
         self.pool = [m for m in models if (m.get('market') or '') != 'foreign']
+        # 别名 → 系列编码集合；按别名长度降序，长的优先（避免"领航员Pro"被"领航员"截断）
+        self.alias_series = {}
+        for r in (alias_links or []):
+            if r.get('alias') and r.get('series_code'):
+                self.alias_series.setdefault(r['alias'], set()).add(r['series_code'])
+        self.alias_order = sorted(self.alias_series, key=len, reverse=True)
+        self.series_code_of = {m['model_code']: m.get('series_code') for m in models}
         self.freq = Counter(r['model_code'] for r in reference_rows if r.get('model_code'))
         self.params = {m['model_code']: self._model_params(m) for m in self.pool}
         self.vocab = self._build_vocab(models)
@@ -88,26 +104,41 @@ class ModelMatcher:
 
     def parse_remark(self, text):
         """抽取备注里显式出现的参数。只认字面，不做语义猜测。"""
-        t = text or ''
+        t = _norm_text(text)
         got = {}
-        # 先按别名表匹配（覆盖录入简称/销售名），命中即用其规范系列名
-        for alias, canon in SERIES_ALIASES:
-            if alias in t and canon in self.vocab['series']:
-                got['series'] = canon
+        # ① 先把录入简称展开成规范名（必须在查别名之前：备注写「领航pro」，
+        #    而别名表里是「领航员Pro」，不先展开就永远匹配不上）
+        expanded = t
+        matched_short = None
+        for short, canon in ENTRY_SHORTHANDS:
+            if short.lower() in expanded.lower():
+                expanded = re.sub(re.escape(short), canon, expanded, flags=re.I)
+                matched_short = canon
                 break
-        else:
-            hits = sorted([s for s in self.vocab['series'] if s and s in t],
-                          key=len, reverse=True)
-            if hits:
-                got['series'] = hits[0]
+        low = expanded.lower()
+        # ② 销售名别名（权威）：命中即锁定到具体系列编码，精度高于按系列名匹配
+        for alias in self.alias_order:
+            if alias.lower() in low:
+                got['series_codes'] = self.alias_series[alias]
+                got['_alias'] = alias
+                break
+        # ③ 系列名：在展开后的文本上对词表取【最长匹配】。
+        #    不能因为简称命中就直接用它——例如「领航S阳光款」展开为「领航员S阳光版」后，
+        #    词表里既有「领航员S」也有更长的「领航员S阳光版」（独立系列 LY11），必须取长的。
+        hits = sorted([s for s in self.vocab['series'] if s and s.lower() in low],
+                      key=len, reverse=True)
+        if hits:
+            got['series'] = hits[0]
+        elif matched_short and matched_short in self.vocab['series']:
+            got['series'] = matched_short
         # 先抠掉购买日期，否则 '2023.11' 会被当成版本号 3.1
-        cleaned = DATE_RE.sub(' ', t)
-        mv = (re.search(r'V\s*(\d+\.\d+)', t)
+        cleaned = DATE_RE.sub(' ', expanded)
+        mv = (re.search(r'V\s*(\d+\.\d+)', expanded)
               # 裸数字当版本号时，必须排除紧跟 米/m 的（那是尺寸，如 '领航员PRO1.2米'）
               or re.search(r'(?<![\d.])(\d\.\d)(?![\d])(?!\s*[米mM])', cleaned))
         if mv:
             got['version'] = mv.group(1)
-        ms = SIZE_RE.search(t)
+        ms = SIZE_RE.search(expanded)
         if ms:
             got['size'] = ms.group(1)
         else:
@@ -115,21 +146,21 @@ class ModelMatcher:
             if mc and 60 <= int(mc.group(1)) <= 200:
                 got['size'] = str(int(mc.group(1)) / 100)
         for c in sorted(self.vocab['color'], key=len, reverse=True):
-            if c in t:
+            if c in expanded:
                 got['color'] = c
                 break
         else:
             for ch, full in (('蓝', '蓝色'), ('绿', '绿色'), ('粉', '粉色'),
                              ('黄', '黄色'), ('灰', '灰色')):
-                if ch in t:
+                if ch in expanded:
                     got['color'] = full
                     break
         for mt in sorted(self.vocab['material'], key=len, reverse=True):
-            if mt in t:
+            if mt in expanded:
                 got['material'] = mt
                 break
         for lf in LIFT_WORDS:
-            if lf in t:
+            if lf in expanded:
                 got['lift'] = lf
                 break
         return got
@@ -145,6 +176,11 @@ class ModelMatcher:
         """→ (model_code 或 None, 抽到的参数dict, 候选数)"""
         got = self.parse_remark(remark_text)
         cands = self.pool
+        # 别名锁定的系列编码优先收窄（比系列名更精确）
+        if got.get('series_codes'):
+            nxt = [m for m in cands if self.series_code_of.get(m['model_code']) in got['series_codes']]
+            if nxt:
+                cands = nxt
         for key in PARAM_ORDER:
             if key not in got:
                 continue
