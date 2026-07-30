@@ -3211,8 +3211,17 @@ class AftersaleRepository:
     # ── 发货物料简称库 ─────────────────────────────────────────────────────────
 
     def get_all_shipping_aliases(self):
+        from sqlalchemy import func
         return (
-            AftersaleShippingAlias.query
+            db.session.query(
+                AftersaleShippingAlias,
+                func.count(AftersaleCaseReason.id).label('use_count'),
+            )
+            .outerjoin(
+                AftersaleCaseReason,
+                AftersaleCaseReason.shipping_alias_id == AftersaleShippingAlias.id,
+            )
+            .group_by(AftersaleShippingAlias.id)
             .order_by(AftersaleShippingAlias.sort_order.asc(),
                       AftersaleShippingAlias.id.asc())
             .all()

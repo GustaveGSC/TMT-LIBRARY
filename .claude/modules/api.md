@@ -328,7 +328,7 @@ GET    /api/aftersale/reason-categories               # 所有一级分类
 GET    /api/aftersale/shipping-ignore-terms           # 发货物料匹配过滤词列表
 POST   /api/aftersale/shipping-ignore-terms           # 新增过滤词 {term}
 DELETE /api/aftersale/shipping-ignore-terms/:id       # 删除过滤词
-GET    /api/aftersale/shipping-aliases                # 发货物料简称列表
+GET    /api/aftersale/shipping-aliases                # 发货物料简称列表；每项含实时 use_count（工单原因引用次数）
 POST   /api/aftersale/shipping-aliases                # 新增发货物料简称 {name}
 PUT    /api/aftersale/shipping-aliases/:id            # 更新发货物料简称
 DELETE /api/aftersale/shipping-aliases/:id            # 删除发货物料简称

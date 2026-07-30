@@ -350,7 +350,12 @@ class AftersaleService:
     # ── 发货物料简称库 ─────────────────────────────────────────────────────────
 
     def get_shipping_aliases(self):
-        return Result.ok(data=[a.to_dict() for a in _repo.get_all_shipping_aliases()])
+        data = []
+        for alias, use_count in _repo.get_all_shipping_aliases():
+            item = alias.to_dict()
+            item['use_count'] = int(use_count or 0)
+            data.append(item)
+        return Result.ok(data=data)
 
     def create_shipping_alias(self, data):
         name = (data.get('name') or '').strip()
