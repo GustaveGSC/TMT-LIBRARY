@@ -38,6 +38,8 @@ ENTRY_SHORTHANDS = [
     ('领航员A', '领航员A'), ('领航A', '领航员A'),
     ('领航员S', '领航员S'), ('领航S', '领航员S'),
     ('领航员', '领航员'), ('领航', '领航员'),
+    ('学习工厂', '学习工场'),        # 录入常写"厂"，系统名是"场"
+    ('大白2代', '大白二代'), ('大白1代', '大白'),   # 阿拉伯数字写法
 ]
 
 # 同义写法归一：「款」与「版」只是写法不同（用户确认）
@@ -45,11 +47,22 @@ def _norm_text(t):
     return (t or '').replace('款', '版')
 
 
+def _is_foreign(m):
+    """是否外贸型号（售后不涉外贸）。market 字段 + 系列标识双信号，缺一会漏。"""
+    if (m.get('market') or '') == 'foreign':
+        return True
+    return ('FTP' in (m.get('series_code') or '')
+            or '外贸' in (m.get('series_name') or ''))
+
+
 class ModelMatcher:
     def __init__(self, models, reference_rows, alias_links=None):
         """models: models-with-lifecycle.json；reference_rows: 不含持出月的已确认原因行；
         alias_links: 别名标签关联行（alias-tags.json 的 links），销售名→系列编码的权威来源"""
-        self.pool = [m for m in models if (m.get('market') or '') != 'foreign']
+        # 外贸判定必须双信号并用：market 字段有空值（8 个型号，其中 1 个
+        # JQ43FD120-YL-asknoa-A 属外贸系列却是空值，只看 market 会漏掉）；
+        # 反过来也有 1 个 market=foreign 但系列名无外贸标识，只看系列同样会漏。
+        self.pool = [m for m in models if not _is_foreign(m)]
         # 别名 → 系列编码集合；按别名长度降序，长的优先（避免"领航员Pro"被"领航员"截断）
         self.alias_series = {}
         for r in (alias_links or []):
