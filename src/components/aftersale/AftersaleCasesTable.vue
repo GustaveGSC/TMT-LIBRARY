@@ -45,6 +45,7 @@ const rowEdits      = ref({
   categoryId:        null,
   reasonId:          null,   // number id 或 null
   reasonNewName:     null,   // 字符串：待新增的原因名（未提交）
+  categoryNewName:   null,   // 字符串：待新增的原因分类名（未提交）
   aliasId:           null,   // number id 或 null
   aliasNewName:      null,   // 字符串：待新增的简称名（未提交）
   shippedDate:       null,   // YYYY-MM-DD 字符串
@@ -467,6 +468,7 @@ function startRowEdit(row) {
     categoryId:        row._categoryId,
     reasonId:          row._reasonId,
     reasonNewName:     null,
+    categoryNewName:   null,
     aliasId:           row._aliasId,
     aliasNewName:      null,
     shippedDate:       row.shipped_date || null,
@@ -502,7 +504,25 @@ function onEditModel(val) {
   } else if (!val) { rowEdits.value.seriesId = null; rowEdits.value.productCategoryId = null }
 }
 
-function onEditCategory(val) { rowEdits.value.categoryId = val; rowEdits.value.reasonId = null }
+function onEditCategory(val) {
+  // 换分类时清掉已选原因（原因隶属于分类），也清掉待新增的原因名
+  rowEdits.value.reasonId = null
+  rowEdits.value.reasonNewName = null
+  if (!val) {
+    rowEdits.value.categoryId = null
+    rowEdits.value.categoryNewName = null
+    return
+  }
+  // 数字 id → 已有分类
+  if (typeof val === 'number') {
+    rowEdits.value.categoryId = val
+    rowEdits.value.categoryNewName = null
+    return
+  }
+  // 字符串 → 暂存，提交时再创建（与新增原因/简称一致的延迟创建策略）
+  rowEdits.value.categoryId = null
+  rowEdits.value.categoryNewName = String(val).trim() || null
+}
 
 function onEditReason(val) {
   if (!val) {
@@ -553,6 +573,9 @@ function getEditReasons() {
   if (!editOptions.value) return []
   const cid = rowEdits.value.categoryId
   if (cid) { const g = editOptions.value.reasons.find(g => g.category_id === cid); return g?.reasons ?? [] }
+  // 正在新建分类：该分类下还没有原因，不能把别的分类的原因列出来误导选择
+  // （原因下拉本身带 allow-create，选项为空仍可直接输入新原因）
+  if (rowEdits.value.categoryNewName) return []
   return editOptions.value.reasons.flatMap(g => g.reasons)
 }
 
@@ -561,6 +584,29 @@ async function confirmRowEdit(row) {
   if (productCategoryId && !seriesId) { ElMessage.error('已选品类，请继续选择系列'); return }
   if (seriesId && !modelId)           { ElMessage.error('已选系列，请继续选择产品型号'); return }
   if (!row._caseReasonId) { editingRowKey.value = null; return }
+
+  // 提交前：先创建新原因分类（如有）——必须在创建新原因之前，新原因要引用它的 id
+  if (rowEdits.value.categoryNewName) {
+    const name = rowEdits.value.categoryNewName
+    const res = await http.post('/api/aftersale/reason-categories', { name })
+    if (res.success) {
+      const nc = res.data
+      if (editOptions.value && !editOptions.value.reasons.some(g => g.category_id === nc.id)) {
+        editOptions.value.reasons.push({
+          category_id: nc.id, category_name: nc.name, reasons: [],
+        })
+      }
+      rowEdits.value.categoryId = nc.id
+      rowEdits.value.categoryNewName = null
+    } else {
+      // 重名 → 复用已有分类
+      const existing = editOptions.value?.reasons.find(g => g.category_name === name)
+      if (existing) {
+        rowEdits.value.categoryId = existing.category_id
+        rowEdits.value.categoryNewName = null
+      } else { ElMessage.error(res.message || '新增原因分类失败'); return }
+    }
+  }
 
   // 提交前：创建新原因（如有）
   if (rowEdits.value.reasonNewName) {
@@ -927,7 +973,7 @@ async function exportData() {
           <template #default="{ row }">
             <span v-if="!row._reasonsLoaded" class="loading-cell">…</span>
             <template v-else-if="editingRowKey === row._key">
-              <el-select :model-value="rowEdits.categoryId" size="small" filterable clearable placeholder="选择分类" style="width:100%" @change="onEditCategory">
+              <el-select :model-value="rowEdits.categoryId ?? rowEdits.categoryNewName" size="small" filterable clearable allow-create default-first-option placeholder="选择或输入新分类" style="width:100%" @change="onEditCategory">
                 <el-option v-for="g in editOptions?.reasons ?? []" :key="g.category_id" :value="g.category_id" :label="g.category_name" />
               </el-select>
             </template>
