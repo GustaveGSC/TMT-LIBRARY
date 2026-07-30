@@ -2,7 +2,7 @@
 // ── 导入 ──────────────────────────────────────────
 import { ref, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Edit, Delete, Check, Close } from '@element-plus/icons-vue'
+import { Edit, Delete, Check, Close, Refresh } from '@element-plus/icons-vue'
 import http from '@/api/http.js'
 import AftersaleCasesDrawer from '@/components/aftersale/AftersaleCasesDrawer.vue'
 
@@ -131,20 +131,28 @@ const visible = computed({
   set: (v) => emit('update:modelValue', v),
 })
 
-// 当前分类下的原因
+/** 按使用次数降序（缺失视为 0），次数相同按名称升序保持顺序稳定 */
+function byUseCountDesc(a, b) {
+  const d = (b.use_count || 0) - (a.use_count || 0)
+  return d !== 0 ? d : (a.name || '').localeCompare(b.name || '', 'zh-Hans-CN')
+}
+
+// 当前分类下的原因（按使用次数降序，常用的排前面）
 const currentReasons = computed(() => {
   const g = groups.value.find(g => g.category_id === activeCatId.value)
-  return g ? g.reasons : []
+  return g ? [...g.reasons].sort(byUseCountDesc) : []
 })
 
 const filteredShippingAliases = computed(() => {
   const q = (shippingSearch.value || '').trim().toLowerCase()
-  if (!q) return shippingAliases.value
-  return shippingAliases.value.filter(item => {
+  const list = !q ? shippingAliases.value : shippingAliases.value.filter(item => {
     const name = (item.name || '').toLowerCase()
     const kws = (item.keywords || []).join(' ').toLowerCase()
     return name.includes(q) || kws.includes(q)
   })
+  // 同样按使用次数降序。后端尚未返回 use_count 时全部为 0，退化为按名称排序，
+  // 待后端在列表接口补上该字段后自动生效，无需再改前端。
+  return [...list].sort(byUseCountDesc)
 })
 
 // ── Watch ─────────────────────────────────────────
@@ -799,6 +807,9 @@ async function deleteAmbiguousTerm(item) {
         <div class="col-cats">
           <div class="col-header">
             <span class="col-title">一级分类</span>
+            <button class="btn-refresh-lib" title="刷新原因库" :disabled="loading" @click="loadAll">
+              <el-icon :class="{ 'is-loading': loading }"><Refresh /></el-icon>
+            </button>
             <button class="btn-add" title="新建分类" @click="startNewCategory">＋</button>
           </div>
 
@@ -959,6 +970,9 @@ async function deleteAmbiguousTerm(item) {
         <div class="alias-list-col">
           <div class="col-header">
             <span class="col-title">发货物料简称（{{ filteredShippingAliases.length }}/{{ shippingAliases.length }}）</span>
+            <button class="btn-refresh-lib" title="刷新简称库" :disabled="loading" @click="loadAll">
+              <el-icon :class="{ 'is-loading': loading }"><Refresh /></el-icon>
+            </button>
             <button class="btn-add" title="新建简称" @click="startNewShipping">＋</button>
           </div>
           <el-input
@@ -977,6 +991,7 @@ async function deleteAmbiguousTerm(item) {
               <div class="alias-item-main">
                 <span class="alias-name">{{ item.name }}</span>
                 <span class="alias-meta">
+                  <span v-if="item.use_count > 0" class="use-count">已用 {{ item.use_count }} 次</span>
                   {{ item.keywords?.length ? item.keywords.length + ' 个关键词' : '暂无关键词' }}
                 </span>
               </div>
@@ -1474,6 +1489,21 @@ async function deleteAmbiguousTerm(item) {
   transition: all 0.15s; flex-shrink: 0;
 }
 .btn-add:hover { border-color: var(--accent); color: var(--accent); }
+
+/* 刷新按钮：与 btn-add 同尺寸，放在标题与「＋」之间 */
+.btn-refresh-lib {
+  width: 22px; height: 22px; border-radius: 5px;
+  border: none; background: transparent;
+  color: var(--text-muted); cursor: pointer; font-size: 13px;
+  display: flex; align-items: center; justify-content: center;
+  transition: color 0.15s; flex-shrink: 0;
+  /* col-header 是 space-between，靠 auto 外边距把「刷新+新增」一起挤到右侧 */
+  margin-left: auto; margin-right: 4px;
+}
+.btn-refresh-lib:hover:not(:disabled) { color: var(--accent); }
+.btn-refresh-lib:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-refresh-lib .is-loading { animation: rlib-spin 0.8s linear infinite; }
+@keyframes rlib-spin { to { transform: rotate(360deg); } }
 
 .col-empty {
   font-size: 12px; color: var(--text-muted);
