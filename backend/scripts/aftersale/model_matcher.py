@@ -18,11 +18,23 @@
 import re
 from collections import Counter
 
-VER_RE = re.compile(r'（V(\d+(?:\.\d+)?)）')
+# 括号全半角混用是字典里的既有脏数据（如 '蜻蜓 (V1.2）'），四种组合都要认，
+# 否则系列名剥不干净 → 与备注抽出的系列名对不上 → 收窄失败 → 掉回全局最高频
+VER_RE = re.compile(r'[（(]\s*V(\d+(?:\.\d+)?)\s*[）)]')
 SIZE_RE = re.compile(r'(\d+(?:\.\d+)?)米')
 DATE_RE = re.compile(r'(20\d{2})[.\-/年](\d{1,2})[.\-/月]?(\d{1,2})?')
 LIFT_WORDS = {'手摇', '电动', '落地', '夹式', '夹子', '底座', '固定'}
 PARAM_ORDER = ('series', 'version', 'size', 'color', 'material', 'lift')
+
+# 备注里的写法 → 系统系列名。录入人员的简称、销售名与系统录入名不统一造成的
+# 大量未匹配，必须显式对齐（长的写法放前面，匹配时优先）。
+SERIES_ALIASES = [
+    ('领航员Z', '领航员Z'), ('领航Z', '领航员Z'),
+    ('领航员S阳光版', '领航员S阳光版'),
+    ('领航员S', '领航员S'), ('领航S', '领航员S'),
+    ('领航员A', '领航员A'), ('领航A', '领航员A'),
+    ('领航员', '领航员'), ('领航', '领航员'),
+]
 
 
 class ModelMatcher:
@@ -78,12 +90,21 @@ class ModelMatcher:
         """抽取备注里显式出现的参数。只认字面，不做语义猜测。"""
         t = text or ''
         got = {}
-        hits = sorted([s for s in self.vocab['series'] if s and s in t], key=len, reverse=True)
-        if hits:
-            got['series'] = hits[0]
+        # 先按别名表匹配（覆盖录入简称/销售名），命中即用其规范系列名
+        for alias, canon in SERIES_ALIASES:
+            if alias in t and canon in self.vocab['series']:
+                got['series'] = canon
+                break
+        else:
+            hits = sorted([s for s in self.vocab['series'] if s and s in t],
+                          key=len, reverse=True)
+            if hits:
+                got['series'] = hits[0]
         # 先抠掉购买日期，否则 '2023.11' 会被当成版本号 3.1
         cleaned = DATE_RE.sub(' ', t)
-        mv = re.search(r'V\s*(\d+\.\d+)', t) or re.search(r'(?<![\d.])(\d\.\d)(?![\d])', cleaned)
+        mv = (re.search(r'V\s*(\d+\.\d+)', t)
+              # 裸数字当版本号时，必须排除紧跟 米/m 的（那是尺寸，如 '领航员PRO1.2米'）
+              or re.search(r'(?<![\d.])(\d\.\d)(?![\d])(?!\s*[米mM])', cleaned))
         if mv:
             got['version'] = mv.group(1)
         ms = SIZE_RE.search(t)
