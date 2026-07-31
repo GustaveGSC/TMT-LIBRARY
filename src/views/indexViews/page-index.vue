@@ -46,6 +46,8 @@ import iconProduct   from '@/assets/icons/icon_product.png'
 import iconShipping  from '@/assets/icons/icon_shipping.png'
 import iconAftersale from '@/assets/icons/icon_aftersale.png'
 import iconRdTools      from '@/assets/icons/icon_rd_tools.png'
+// 暂用售后数据的图标，待补一张售后工具专用图标后替换
+import iconAftersaleTools from '@/assets/icons/icon_aftersale.png'
 import iconGeneralTools from '@/assets/icons/icon_general_tools.png'
 
 const router = useRouter()
@@ -114,6 +116,16 @@ const moduleGroups = computed(() => [
         route: '/rd-tools',
         disabled: false,
         visible: canViewRd,
+      },
+      // 售后工具：售后记录填写与导出，页面尚未开发，先占位
+      {
+        key: 'aftersale-tools',
+        name: '售后工具',
+        desc: '售后记录 · 数据导出',
+        icon: iconAftersaleTools,
+        route: '/aftersale-tools',
+        disabled: true,
+        visible: canViewAftersale,
       },
       {
         key: 'general-tools',
