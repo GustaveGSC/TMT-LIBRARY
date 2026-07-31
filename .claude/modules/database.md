@@ -248,12 +248,14 @@ erp_group_category
   remark, updated_by, created_at, updated_at
   # ERP 分组默认大类；不存在记录或五项全 false 均表示未分类
   # 前缀例外规则命中时不再使用分组默认；大类允许多选
+  # group_code 在 MySQL 显式使用 utf8mb4_0900_ai_ci，与 import_product_raw 对齐
 
 product_material
   id, code(UNIQUE), short_name, category, spec, cover_image, cover_image_original,
   img_updated_at, remark, is_disabled(INDEX), created_at, updated_at
   # 只存人工属性，按首次保存/传图创建；ERP name/group_code/group_name 不复制
   # is_disabled 三态：NULL 跟随 ERP/关键词，true 强制停用，false 强制启用
+  # code 在 MySQL 显式使用 utf8mb4_0900_ai_ci，与 import_product_raw 对齐
 
 material_disable_keyword
   id, keyword(VARCHAR 64 UNIQUE), is_disabled, remark, created_at

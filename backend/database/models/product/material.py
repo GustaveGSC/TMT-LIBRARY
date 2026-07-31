@@ -1,5 +1,13 @@
 from database.base import db
+from sqlalchemy.dialects import mysql
 from utils import now_cst
+
+
+def _join_key_string(length):
+    """JOIN 键在 MySQL 对齐 ERP 历史表；其他数据库保留普通 String。"""
+    return db.String(length).with_variant(
+        mysql.VARCHAR(length, collation='utf8mb4_0900_ai_ci'), 'mysql'
+    )
 
 
 class ErpGroupCategory(db.Model):
@@ -10,7 +18,7 @@ class ErpGroupCategory(db.Model):
     """
     __tablename__ = 'erp_group_category'
     id          = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    group_code  = db.Column(db.String(64), nullable=False, unique=True)
+    group_code  = db.Column(_join_key_string(64), nullable=False, unique=True)
     is_finished = db.Column(db.Boolean, nullable=False, default=False)
     is_packaged = db.Column(db.Boolean, nullable=False, default=False)
     is_semi     = db.Column(db.Boolean, nullable=False, default=False)
@@ -38,7 +46,7 @@ class ProductMaterial(db.Model):
     """
     __tablename__ = 'product_material'
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    code = db.Column(db.String(255), nullable=False, unique=True)
+    code = db.Column(_join_key_string(255), nullable=False, unique=True)
     short_name = db.Column(db.String(255), nullable=True)
     category = db.Column(db.String(100), nullable=True)
     spec = db.Column(db.String(512), nullable=True)

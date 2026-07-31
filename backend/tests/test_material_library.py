@@ -3,6 +3,8 @@ import io
 import openpyxl
 import pytest
 from flask import Flask
+from sqlalchemy.dialects import mysql
+from sqlalchemy.schema import CreateTable
 
 from database.base import db
 from database.models.product.erp_code_rules import ErpCodeRule
@@ -63,6 +65,13 @@ def test_material_routes_accept_codes_containing_slash():
     routes = app.url_map.bind('localhost')
     assert routes.match('/api/material/items/A/B')[1] == {'code': 'A/B'}
     assert routes.match('/api/material/items/A/B/image', method='POST')[1] == {'code': 'A/B'}
+
+
+def test_material_join_keys_declare_mysql_0900_collation():
+    material_ddl = str(CreateTable(ProductMaterial.__table__).compile(dialect=mysql.dialect()))
+    group_ddl = str(CreateTable(ErpGroupCategory.__table__).compile(dialect=mysql.dialect()))
+    assert 'code VARCHAR(255) COLLATE utf8mb4_0900_ai_ci' in material_ddl
+    assert 'group_code VARCHAR(64) COLLATE utf8mb4_0900_ai_ci' in group_ddl
 
 
 def test_product_reimport_updates_changed_erp_fields(material_app):
