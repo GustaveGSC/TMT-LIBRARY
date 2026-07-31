@@ -45,8 +45,7 @@ import iconProduct   from '@/assets/icons/icon_product.png'
 import iconShipping  from '@/assets/icons/icon_shipping.png'
 import iconAftersale from '@/assets/icons/icon_aftersale.png'
 import iconRdTools      from '@/assets/icons/icon_rd_tools.png'
-// 暂用售后数据的图标，待补一张售后工具专用图标后替换
-import iconAftersaleTools from '@/assets/icons/icon_aftersale.png'
+import iconAftersaleTools from '@/assets/icons/icon_aftersale_tools.png'
 import iconGeneralTools from '@/assets/icons/icon_general_tools.png'
 
 const router = useRouter()
