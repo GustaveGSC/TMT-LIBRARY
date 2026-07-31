@@ -6,7 +6,7 @@ import WindowControls from '@/components/common/WindowControls.vue'
 import ProductTable  from './ProductTable.vue'
 import ProductImage  from './ProductImage.vue'
 import ProductChart  from './ProductChart.vue'
-import { ArrowLeft, Upload, Setting, Folder, Collection, Memo, Timer, Tools } from '@element-plus/icons-vue'
+import { ArrowLeft, Upload, Setting, Folder, Collection, Memo, Timer, Tools, HomeFilled } from '@element-plus/icons-vue'
 import { usePermission } from '@/composables/usePermission'
 import http from '@/api/http'
 import { pollProductLifecycleTask } from '@/utils/productLifecyclePoll'
@@ -197,6 +197,13 @@ function handleBack() {
   router.back()
 }
 
+// 返回主页：与 handleBack 一样要重置产品 store，只是目标固定为 /index
+function handleHome() {
+  resetProductStore()
+  window.electronAPI?.unmaximizeApp?.()
+  router.push('/index')
+}
+
 // ── 生命周期 ──────────────────────────────────────
 onMounted(async () => {
   window.electronAPI?.maximizeApp?.()
@@ -231,6 +238,9 @@ onMounted(async () => {
 
       <!-- 左：返回 + 标题 -->
       <div class="top-left">
+        <button class="btn-home" title="返回主页" @click="handleHome">
+          <el-icon><HomeFilled /></el-icon>
+        </button>
         <button class="btn-back" @click="handleBack">
           <el-icon><ArrowLeft /></el-icon>
         </button>
@@ -485,14 +495,14 @@ onMounted(async () => {
   display: flex; align-items: center;
   gap: 8px; flex-shrink: 0;
 }
-.btn-back {
+.btn-back, .btn-home {
   width: 30px; height: 30px;
   border: 1px solid var(--border); border-radius: 7px;
   background: transparent; color: var(--text-muted);
   cursor: pointer; display: flex; align-items: center; justify-content: center;
   transition: all 0.2s;
 }
-.btn-back:hover { background: var(--bg-card); color: var(--text-primary); }
+.btn-back:hover, .btn-home:hover { background: var(--bg-card); color: var(--text-primary); }
 .page-title { font-size: 14px; font-weight: 600; color: var(--text-primary); letter-spacing: 0.05em; }
 .title-divider { width: 1px; height: 16px; background: var(--border); margin-left: 8px; }
 

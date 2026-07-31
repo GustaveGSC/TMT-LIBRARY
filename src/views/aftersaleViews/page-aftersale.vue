@@ -2,7 +2,7 @@
 // ── 导入 ──────────────────────────────────────────
 import { ref, reactive, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowLeft } from '@element-plus/icons-vue'
+import { ArrowLeft, HomeFilled } from '@element-plus/icons-vue'
 import WindowControls        from '@/components/common/WindowControls.vue'
 import AftersaleOverview     from './AftersaleOverview.vue'
 import AftersaleProcess      from './AftersaleProcess.vue'
@@ -55,6 +55,12 @@ function handleBack() {
   router.back()
 }
 
+// 返回主页：与 handleBack 区别是不依赖浏览历史，始终回到 /index
+function handleHome() {
+  window.electronAPI?.unmaximizeApp?.()
+  router.push('/index')
+}
+
 async function loadPendingCount() {
   const res = await http.get('/api/aftersale/pending/count')
   if (res.success) pendingCount.value = res.data.count
@@ -76,6 +82,9 @@ function onCaseConfirmed() {
     <!-- ── 顶部导航栏 ──────────────────────────── -->
     <header class="top-bar">
       <div class="top-left">
+        <button class="btn-home" title="返回主页" @click="handleHome">
+          <el-icon><HomeFilled /></el-icon>
+        </button>
         <button class="btn-back" title="返回" @click="handleBack">
           <el-icon><ArrowLeft /></el-icon>
         </button>
@@ -146,14 +155,14 @@ function onCaseConfirmed() {
   flex-shrink: 0; z-index: 10;
 }
 .top-left { display: flex; align-items: center; gap: 8px; }
-.btn-back {
+.btn-back, .btn-home {
   width: 30px; height: 30px;
   border: 1px solid var(--border); border-radius: 7px;
   background: transparent; color: var(--text-muted);
   cursor: pointer; display: flex; align-items: center; justify-content: center;
   transition: all 0.2s;
 }
-.btn-back:hover { background: var(--bg-card); color: var(--text-primary); }
+.btn-back:hover, .btn-home:hover { background: var(--bg-card); color: var(--text-primary); }
 .page-title { font-size: 14px; font-weight: 600; color: var(--text-primary); letter-spacing: 0.05em; }
 .title-divider { width: 1px; height: 16px; background: var(--border); margin-left: 8px; }
 

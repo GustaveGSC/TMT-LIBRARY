@@ -148,6 +148,7 @@ function fmtTime(iso) {
 
     <!-- 页头 -->
     <div class="page-header">
+      <button class="btn-back" @click="router.push('/index')">⌂ 主页</button>
       <button class="btn-back" @click="router.back()">← 返回</button>
       <h1 class="page-title">用户分析</h1>
     </div>

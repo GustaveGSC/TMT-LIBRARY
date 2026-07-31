@@ -3,7 +3,7 @@
 import { ref, computed, watch, onBeforeUnmount, onMounted } from 'vue'
 import WindowControls from '@/components/common/WindowControls.vue'
 import { useRouter, useRoute } from 'vue-router'
-import { VideoPlay, CopyDocument, Back, Folder, ArrowRight } from '@element-plus/icons-vue'
+import { VideoPlay, CopyDocument, Back, Folder, ArrowRight, HomeFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { isElectron } from '@/utils/platform'
 import AppBottomBar from '@/components/common/AppBottomBar.vue'
@@ -301,7 +301,10 @@ function copyText(text) {
 
     <!-- 顶部栏 -->
     <div class="top-bar">
-      <el-button link @click="router.push('/index')" style="color:#6b5e4e;padding:0 4px">
+      <el-button link title="返回主页" @click="router.push('/index')" style="color:#6b5e4e;padding:0 4px">
+        <el-icon><HomeFilled /></el-icon> 主页
+      </el-button>
+      <el-button link @click="router.back()" style="color:#6b5e4e;padding:0 4px">
         <el-icon><Back /></el-icon> 返回
       </el-button>
       <span class="page-title">通用工具</span>

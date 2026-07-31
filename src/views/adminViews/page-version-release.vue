@@ -203,6 +203,7 @@ onMounted(loadHistory)
 
     <!-- 页头 -->
     <div class="page-header">
+      <button class="btn-back" @click="router.push('/index')">⌂ 主页</button>
       <button class="btn-back" @click="router.back()">← 返回</button>
       <h1 class="page-title">发布新版本</h1>
     </div>

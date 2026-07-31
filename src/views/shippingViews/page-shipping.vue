@@ -2,7 +2,7 @@
 // ── 导入 ──────────────────────────────────────────
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft } from '@element-plus/icons-vue'
+import { ArrowLeft, HomeFilled } from '@element-plus/icons-vue'
 import WindowControls from '@/components/common/WindowControls.vue'
 import { usePermission } from '@/composables/usePermission'
 import AppBottomBar from '@/components/common/AppBottomBar.vue'
@@ -35,6 +35,12 @@ function handleBack() {
   router.push('/index')
 }
 
+// 返回主页：本页 handleBack 本身就回 /index，这里保持独立函数便于两者行为各自调整
+function handleHome() {
+  window.electronAPI?.unmaximizeApp?.()
+  router.push('/index')
+}
+
 function isActive(navPath) {
   // /shipping 本身是精确匹配（分析看板），其余子路径用前缀匹配保持刷新/深层链接下的高亮
   return navPath === '/shipping' ? route.path === '/shipping' : route.path.startsWith(navPath)
@@ -52,6 +58,9 @@ function goTo(navPath) {
     <!-- ── 顶部导航栏 ──────────────────────────── -->
     <header class="top-bar">
       <div class="top-left">
+        <button class="btn-home" title="返回主页" @click="handleHome">
+          <el-icon><HomeFilled /></el-icon>
+        </button>
         <button class="btn-back" title="返回" @click="handleBack">
           <el-icon><ArrowLeft /></el-icon>
         </button>
@@ -100,14 +109,14 @@ function goTo(navPath) {
   overflow: hidden;
 }
 .top-left { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.btn-back {
+.btn-back, .btn-home {
   width: 30px; height: 30px;
   border: 1px solid var(--border); border-radius: 7px;
   background: transparent; color: var(--text-muted);
   cursor: pointer; display: flex; align-items: center; justify-content: center;
   transition: all 0.2s;
 }
-.btn-back:hover { background: var(--bg-card); color: var(--text-primary); }
+.btn-back:hover, .btn-home:hover { background: var(--bg-card); color: var(--text-primary); }
 .page-title { font-size: 14px; font-weight: 600; color: var(--text-primary); letter-spacing: 0.05em; white-space: nowrap; }
 .title-divider { width: 1px; height: 16px; background: var(--border); margin-left: 8px; flex-shrink: 0; }
 
