@@ -99,13 +99,13 @@ const moduleGroups = computed(() => [
         disabled: false,
         visible: canViewAftersale,
       },
-      // 物料库：ERP 导入数据与编码规则的归属地，页面尚未开发，先占位
+      // 物料库：ERP 导入数据与编码规则的归属地
       {
         key: 'material',
         name: '物料库',
         icon: iconMaterial,
         route: '/material',
-        disabled: true,
+        disabled: false,
         visible: canViewProduct,
       },
     ].filter(mod => mod.visible),

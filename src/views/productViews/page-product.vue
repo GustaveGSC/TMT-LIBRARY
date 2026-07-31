@@ -6,7 +6,7 @@ import WindowControls from '@/components/common/WindowControls.vue'
 import ProductTable  from './ProductTable.vue'
 import ProductImage  from './ProductImage.vue'
 import ProductChart  from './ProductChart.vue'
-import { ArrowLeft, Upload, Setting, Folder, Collection, Memo, Timer, Tools, HomeFilled } from '@element-plus/icons-vue'
+import { ArrowLeft, Upload, Folder, Collection, Memo, Timer, Tools, HomeFilled } from '@element-plus/icons-vue'
 import { usePermission } from '@/composables/usePermission'
 import http from '@/api/http'
 import { pollProductLifecycleTask } from '@/utils/productLifecyclePoll'
@@ -15,7 +15,6 @@ import { getConflictTaskId } from '@/utils/taskConflict'
 // ── 权限 ──────────────────────────────────────────
 const { canEditProduct } = usePermission()
 import ProductImport    from './ProductImport.vue'
-import ProductRules     from './ProductRules.vue'
 import ProductCategory  from './ProductCategory.vue'
 import ProductTag     from './ProductTag.vue'
 import ProductParam     from './ProductParam.vue'
@@ -74,7 +73,6 @@ async function navigateTo(page) {
 
 // ── 弹窗状态 ──────────────────────────────────────
 const showImportDialog   = ref(false)
-const showRulesDialog    = ref(false)
 const showCategoryDialog = ref(false)
 const showTagDialog    = ref(false)
 const showParamDialog  = ref(false)
@@ -362,13 +360,6 @@ onMounted(async () => {
                 <div class="tool-btn-desc">从 ERP 导出的 Excel 文件导入</div>
               </div>
             </button>
-            <button class="tool-btn" @click="showRulesDialog = true">
-              <div class="tool-btn-icon"><el-icon><Setting /></el-icon></div>
-              <div class="tool-btn-body">
-                <div class="tool-btn-title">编码规则</div>
-                <div class="tool-btn-desc">维护品号前缀与类型的映射</div>
-              </div>
-            </button>
             <button class="tool-btn" @click="showCategoryDialog = true">
               <div class="tool-btn-icon"><el-icon><Folder /></el-icon></div>
               <div class="tool-btn-body">
@@ -422,11 +413,6 @@ onMounted(async () => {
     <!-- ── 导入数据弹窗 ────────────────────────────── -->
     <el-dialog v-model="showImportDialog" title="导入 ERP 数据" width="640" align-center>
       <ProductImport />
-    </el-dialog>
-
-    <!-- ── 编码规则弹窗 ────────────────────────────── -->
-    <el-dialog v-model="showRulesDialog" title="编码规则" width="600" align-center>
-      <ProductRules />
     </el-dialog>
 
     <!-- ── 分类管理弹窗 ────────────────────────────── -->

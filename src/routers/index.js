@@ -46,6 +46,11 @@ const router = createRouter({
       meta: { permission: 'product:view' }
     },
     {
+      path: '/material',
+      component: () => import('@/views/materialViews/page-material.vue'),
+      meta: { permission: 'product:view' }
+    },
+    {
       path: '/shipping',
       component: () => import('@/views/shippingViews/page-shipping.vue'),
       meta: { permission: 'shipping:view' },
