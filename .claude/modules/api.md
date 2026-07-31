@@ -107,6 +107,11 @@ GET  /api/material/items
 GET  /api/material/items/:code
 PUT  /api/material/items/:code
 POST /api/material/items/:code/image
+GET  /api/material/disable-keywords
+POST /api/material/disable-keywords
+PUT  /api/material/disable-keywords/:id
+DELETE /api/material/disable-keywords/:id
+GET  /api/material/disable-preview
 ```
 
 - `GET group-categories` 返回全部 ERP 分组：
@@ -117,9 +122,16 @@ POST /api/material/items/:code/image
   `is_disabled=0|1`、`unclassified=0|1`。data 为 `{items,total,page,page_size}`。
 - `PUT items/:code` 可写 `short_name/category/spec/remark/is_disabled`；
   首次保存时按需创建 `product_material`。
+- 物料项返回 `is_disabled`（最终生效值）和
+  `is_disabled_override`（`null|true|false`）。默认值由 ERP `status=失效` 或启用的原始品名关键词
+  判定；人工三态覆盖优先。保存时传 `is_disabled:null` 可恢复“跟随默认”。
 - `POST items/:code/image` 沿用产品封面图 JSON base64 契约：
   `{data_url,orig_data_url?}`；仅 PNG/JPEG/WebP，单张解码后最大 10MB。成功 data：
   `{url,orig_url,img_updated_at,cover_image,cover_image_original}`。
+- 停用关键词写接口字段为 `{keyword,is_disabled?,remark?}`；`is_disabled=true` 表示该规则停用。
+  `GET disable-preview` 返回 `{status_inactive,keyword_hit,union}`，为 ERP 状态、启用关键词及并集
+  的实时命中数；关键词表为空时只按 ERP 状态判定。
+- `:code` 支持包含 `/` 的 ERP 编码；OSS 对象名使用编码 SHA-256，不直接拼接原编码。
 
 GET    /api/erp-code-rules/
 POST   /api/erp-code-rules/

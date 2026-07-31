@@ -46,7 +46,8 @@ class ProductMaterial(db.Model):
     cover_image_original = db.Column(db.String(500), nullable=True)
     img_updated_at = db.Column(db.Integer, nullable=True)
     remark = db.Column(db.Text, nullable=True)
-    is_disabled = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    # NULL 跟随 ERP/关键词默认；True/False 分别为人工强制停用/启用。
+    is_disabled = db.Column(db.Boolean, nullable=True, default=None, index=True)
     created_at = db.Column(db.DateTime, nullable=False, default=now_cst)
     updated_at = db.Column(db.DateTime, nullable=False, default=now_cst, onupdate=now_cst)
 
@@ -56,5 +57,23 @@ class ProductMaterial(db.Model):
             'spec': self.spec, 'cover_image': self.cover_image,
             'cover_image_original': self.cover_image_original,
             'img_updated_at': self.img_updated_at, 'remark': self.remark,
-            'is_disabled': bool(self.is_disabled),
+            'is_disabled_override': self.is_disabled,
+        }
+
+
+class MaterialDisableKeyword(db.Model):
+    """物料名称停用判定关键词；规则由界面维护，不在业务代码中写死。"""
+    __tablename__ = 'material_disable_keyword'
+    id          = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    keyword     = db.Column(db.String(64), nullable=False, unique=True)
+    is_disabled = db.Column(db.Boolean, nullable=False, default=False)
+    remark      = db.Column(db.String(255), nullable=True)
+    created_at  = db.Column(db.DateTime, nullable=False, default=now_cst)
+
+    def to_dict(self):
+        return {
+            'id': self.id, 'keyword': self.keyword,
+            'is_disabled': bool(self.is_disabled), 'remark': self.remark,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S')
+            if self.created_at else None,
         }

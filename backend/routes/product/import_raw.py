@@ -13,11 +13,12 @@ product_bp = Blueprint('product', __name__)
 product_bp.before_request(make_blueprint_guard('product:view', 'product:edit'))
 
 _HEADER_ALIASES = {
-    'code':       {'品号', '物料编码', '编码'},
-    'name':       {'品名', '物料名称', '名称'},
-    'spec':       {'规格', '规格型号'},
-    'group_code': {'分组编码', '物料分组编码', '分组代码'},
-    'group_name': {'分组名称', '物料分组名称'},
+    'code':       ('品号', '物料编码', '编码'),
+    'name':       ('品名', '物料名称', '名称'),
+    'spec':       ('规格', '规格型号'),
+    'status':     ('状态',),
+    'group_code': ('品号群组', '分组编码', '物料分组编码', '分组代码'),
+    'group_name': ('群组名称', '分组名称', '物料分组名称'),
 }
 _REQUIRED_HEADERS = {'code', 'name', 'group_code', 'group_name'}
 
@@ -59,6 +60,7 @@ def _parse_excel(file_bytes: bytes) -> list:
             return row[index] if index is not None and index < len(row) else None
         rows.append({
             'code': value('code'), 'name': value('name'), 'spec': value('spec'),
+            'status': value('status'),
             'group_code': value('group_code'), 'group_name': value('group_name'),
         })
     wb.close()

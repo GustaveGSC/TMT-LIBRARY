@@ -8,7 +8,9 @@ class ImportProductRaw(db.Model):
     id          = db.Column(db.Integer,     primary_key=True, autoincrement=True)
     code        = db.Column(db.String(255), nullable=False, unique=True)
     name        = db.Column(db.String(255), nullable=False)
+    raw_name    = db.Column(db.String(255), nullable=True)
     spec        = db.Column(db.String(512), nullable=True)
+    status      = db.Column(db.String(32),  nullable=True)
     group_code  = db.Column(db.String(255), nullable=False)
     group_name  = db.Column(db.String(255), nullable=False)
     imported_at = db.Column(db.DateTime,    nullable=False)
@@ -18,7 +20,9 @@ class ImportProductRaw(db.Model):
             'id':          self.id,
             'code':        self.code,
             'name':        self.name,
+            'raw_name':    self.raw_name,
             'spec':        self.spec,
+            'status':      self.status,
             'group_code':  self.group_code,
             'group_name':  self.group_name,
             'imported_at': self.imported_at.strftime('%Y-%m-%d %H:%M:%S') if self.imported_at else None,

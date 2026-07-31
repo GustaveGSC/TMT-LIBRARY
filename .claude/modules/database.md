@@ -231,9 +231,10 @@ aftersale_case_reason
 ## 产品库
 ```
 import_product_raw
-  id, code(UNIQUE), name, spec(NULL), group_code, group_name, imported_at
+  id, code(UNIQUE), name, raw_name(NULL), spec(NULL), status(NULL), group_code, group_name, imported_at
   # Excel 按表头名称映射列，缺少品号/品名/分组编码/分组名称时整单拒绝
   # name = 品名（去除「（已停用）」）+ 规格
+  # raw_name = ERP 原始品名，仅供停用关键词等原始语义判定；不替代既有 name
   # 重导按 code 做差异更新；内容完全相同的行不写库
 
 erp_code_rules
@@ -252,6 +253,11 @@ product_material
   id, code(UNIQUE), short_name, category, spec, cover_image, cover_image_original,
   img_updated_at, remark, is_disabled(INDEX), created_at, updated_at
   # 只存人工属性，按首次保存/传图创建；ERP name/group_code/group_name 不复制
+  # is_disabled 三态：NULL 跟随 ERP/关键词，true 强制停用，false 强制启用
+
+material_disable_keyword
+  id, keyword(VARCHAR 64 UNIQUE), is_disabled, remark, created_at
+  # 名称停用规则由界面维护；迁移预置“停用”“作废”，可增删改/停用
 
 product_category
   id, name(UNIQUE), sort_order, created_at

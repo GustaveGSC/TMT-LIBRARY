@@ -1,4 +1,6 @@
 from database.models.product.erp_code_rules import ErpCodeRule, TYPE_LABELS
+from database.models.product.import_raw import ImportProductRaw
+from database.models.product.material import MaterialDisableKeyword
 from database.repository.product.material import MaterialRepository
 from result import Result
 
@@ -9,10 +11,22 @@ CATEGORY_TYPES = ('finished', 'packaged', 'semi', 'material', 'useless')
 
 class MaterialService:
     _rule_cache = None
+    _disable_keyword_cache = None
 
     @classmethod
     def invalidate_rule_cache(cls):
         cls._rule_cache = None
+
+    @classmethod
+    def invalidate_disable_keyword_cache(cls):
+        cls._disable_keyword_cache = None
+
+    def _disable_keywords(self):
+        if self._disable_keyword_cache is None:
+            self.__class__._disable_keyword_cache = [
+                row.keyword for row in MaterialRepository.disable_keywords(enabled_only=True)
+            ]
+        return self._disable_keyword_cache
 
     def _rules(self):
         if self._rule_cache is not None:
@@ -73,24 +87,37 @@ class MaterialService:
         return Result.ok(data=data)
 
     def list_items(self, page, page_size, **filters):
-        query = MaterialRepository.raw_query(filters.get('keyword'), filters.get('group_code'))
-        raw_rows = query.all()
+        query = MaterialRepository.raw_query(
+            filters.get('keyword'), filters.get('group_code'), filters.get('is_disabled'),
+            self._disable_keywords(),
+        )
         configs, rules = MaterialRepository.group_configs(), self._rules()
-        classified = [(raw, self._categories(raw.code, raw.group_code, rules, configs)) for raw in raw_rows]
         category = filters.get('category')
-        if category:
-            classified = [x for x in classified if category in x[1]]
-        if filters.get('unclassified'):
-            classified = [x for x in classified if not x[1]]
-        materials = MaterialRepository.materials_for_codes([raw.code for raw, _ in classified])
-        disabled = filters.get('is_disabled')
-        if disabled is not None:
-            classified = [
-                x for x in classified
-                if bool(materials.get(x[0].code) and materials[x[0].code].is_disabled) == disabled
+        if not category and not filters.get('unclassified'):
+            total = query.order_by(None).count()
+            raw_rows = query.offset((page - 1) * page_size).limit(page_size).all()
+            selected = [
+                (raw, self._categories(raw.code, raw.group_code, rules, configs))
+                for raw in raw_rows
             ]
-        total = len(classified)
-        selected = classified[(page - 1) * page_size:page * page_size]
+        else:
+            identities = query.with_entities(
+                ImportProductRaw.code, ImportProductRaw.group_code,
+            ).all()
+            classified = [
+                (code, self._categories(code, group_code, rules, configs))
+                for code, group_code in identities
+            ]
+            if category:
+                classified = [item for item in classified if category in item[1]]
+            else:
+                classified = [item for item in classified if not item[1]]
+            total = len(classified)
+            page_pairs = classified[(page - 1) * page_size:page * page_size]
+            categories_by_code = dict(page_pairs)
+            raw_rows = MaterialRepository.raw_for_codes([code for code, _cats in page_pairs])
+            selected = [(raw, categories_by_code[raw.code]) for raw in raw_rows]
+        materials = MaterialRepository.materials_for_codes([raw.code for raw, _ in selected])
         return Result.ok(data={
             'items': [self._serialize(raw, cats, materials.get(raw.code)) for raw, cats in selected],
             'total': total, 'page': page, 'page_size': page_size,
@@ -104,6 +131,66 @@ class MaterialService:
         material = MaterialRepository.materials_for_codes([code]).get(code)
         return Result.ok(data=self._serialize(raw, cats, material))
 
+    def disable_keywords(self):
+        return Result.ok(data=[row.to_dict() for row in MaterialRepository.disable_keywords()])
+
+    def create_disable_keyword(self, body):
+        keyword = (body.get('keyword') or '').strip()
+        if not keyword:
+            return Result.fail('关键词不能为空')
+        if len(keyword) > 64:
+            return Result.fail('关键词不能超过 64 个字符')
+        if MaterialDisableKeyword.query.filter_by(keyword=keyword).first():
+            return Result.fail('关键词已存在')
+        row = MaterialRepository.save_disable_keyword(None, {
+            'keyword': keyword, 'is_disabled': bool(body.get('is_disabled', False)),
+            'remark': (body.get('remark') or '').strip() or None,
+        })
+        self.invalidate_disable_keyword_cache()
+        return Result.ok(data=row.to_dict())
+
+    def update_disable_keyword(self, keyword_id, body):
+        row = MaterialRepository.disable_keyword(keyword_id)
+        if not row:
+            return Result.fail('关键词规则不存在')
+        values = {}
+        if 'keyword' in body:
+            keyword = (body.get('keyword') or '').strip()
+            if not keyword or len(keyword) > 64:
+                return Result.fail('关键词必须为 1 到 64 个字符')
+            duplicate = MaterialDisableKeyword.query.filter(
+                MaterialDisableKeyword.keyword == keyword,
+                MaterialDisableKeyword.id != keyword_id,
+            ).first()
+            if duplicate:
+                return Result.fail('关键词已存在')
+            values['keyword'] = keyword
+        if 'is_disabled' in body:
+            values['is_disabled'] = bool(body['is_disabled'])
+        if 'remark' in body:
+            values['remark'] = (body.get('remark') or '').strip() or None
+        row = MaterialRepository.save_disable_keyword(row, values)
+        self.invalidate_disable_keyword_cache()
+        return Result.ok(data=row.to_dict())
+
+    def delete_disable_keyword(self, keyword_id):
+        row = MaterialRepository.disable_keyword(keyword_id)
+        if not row:
+            return Result.fail('关键词规则不存在')
+        MaterialRepository.delete_disable_keyword(row)
+        self.invalidate_disable_keyword_cache()
+        return Result.ok()
+
+    def disable_preview(self):
+        status_inactive, keyword_hit, union = MaterialRepository.disable_preview(
+            self._disable_keywords()
+        )
+        return Result.ok(data={
+            'status_inactive': int(status_inactive or 0),
+            'keyword_hit': int(keyword_hit or 0),
+            'union': int(union or 0),
+        })
+
     def save_item(self, code, body):
         raw = MaterialRepository.raw_by_code(code)
         if not raw:
@@ -115,16 +202,17 @@ class MaterialService:
             if key in values:
                 values[key] = (values[key] or '').strip() or None
         if 'is_disabled' in values:
-            values['is_disabled'] = bool(values['is_disabled'])
+            values['is_disabled'] = (
+                None if values['is_disabled'] is None else bool(values['is_disabled'])
+            )
         MaterialRepository.save_material(code, values)
         return self.detail(code)
 
-    @staticmethod
-    def _serialize(raw, categories, material):
+    def _serialize(self, raw, categories, material):
         manual = material.to_dict() if material else {
             'code': raw.code, 'short_name': None, 'category': None, 'spec': raw.spec,
             'cover_image': None, 'cover_image_original': None, 'img_updated_at': None,
-            'remark': None, 'is_disabled': False,
+            'remark': None, 'is_disabled_override': None,
         }
         if manual.get('spec') is None:
             manual['spec'] = raw.spec
@@ -132,7 +220,14 @@ class MaterialService:
             'code': raw.code, 'name': raw.name, 'group_code': raw.group_code,
             'group_name': raw.group_name, 'erp_spec': raw.spec, 'categories': categories,
             'category_labels': [TYPE_LABELS[x] for x in categories],
+            'status': raw.status,
         })
+        default_disabled = raw.status == '失效' or any(
+            keyword in (raw.raw_name or raw.name or '').strip()
+            for keyword in self._disable_keywords()
+        )
+        override = manual.get('is_disabled_override')
+        manual['is_disabled'] = default_disabled if override is None else bool(override)
         return manual
 
 

@@ -21,7 +21,9 @@ class ImportProductRepository:
             ImportProductRaw(
                 code        = row['code'],
                 name        = row['name'],
+                raw_name    = row.get('raw_name'),
                 spec        = row.get('spec'),
+                status      = row.get('status'),
                 group_code  = row['group_code'],
                 group_name  = row['group_name'],
                 imported_at = imported_at,
@@ -30,7 +32,7 @@ class ImportProductRepository:
             if row['code'] not in existing
         ]
         to_update = []
-        fields = ('name', 'spec', 'group_code', 'group_name')
+        fields = ('name', 'raw_name', 'spec', 'status', 'group_code', 'group_name')
         for row in rows:
             current = existing.get(row['code'])
             if current is None or all(getattr(current, key) == row.get(key) for key in fields):

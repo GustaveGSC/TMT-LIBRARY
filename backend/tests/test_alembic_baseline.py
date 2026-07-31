@@ -260,6 +260,7 @@ def test_baseline_upgrade_adds_only_task_schemas(tmp_path, monkeypatch):
         'product_detail_package_category',
         'erp_group_category',
         'product_material',
+        'material_disable_keyword',
     }
     inspector = sa.inspect(engine)
     shipping_task_columns = {
@@ -273,6 +274,11 @@ def test_baseline_upgrade_adds_only_task_schemas(tmp_path, monkeypatch):
     assert 'cancel_requested_at' in shipping_task_columns
     assert 'cancel_requested_by' in shipping_task_columns
     assert ('lease_key',) in shipping_task_uniques
+    with engine.connect() as connection:
+        seeded_keywords = connection.execute(sa.text(
+            'SELECT keyword, is_disabled FROM material_disable_keyword ORDER BY keyword'
+        )).all()
+    assert seeded_keywords == [('作废', 0), ('停用', 0)]
     lifecycle_task_columns = {
         column['name']
         for column in inspector.get_columns('product_lifecycle_task')

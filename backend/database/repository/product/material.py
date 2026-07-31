@@ -1,8 +1,10 @@
-from sqlalchemy import or_
+from sqlalchemy import case, false, func, or_
 
 from database.base import db
 from database.models.product.import_raw import ImportProductRaw
-from database.models.product.material import ErpGroupCategory, ProductMaterial
+from database.models.product.material import (
+    ErpGroupCategory, MaterialDisableKeyword, ProductMaterial,
+)
 
 
 class MaterialRepository:
@@ -28,14 +30,42 @@ class MaterialRepository:
         return row
 
     @staticmethod
-    def raw_query(keyword=None, group_code=None):
-        query = ImportProductRaw.query
+    def effective_disabled_expression(keywords):
+        source_name = func.coalesce(ImportProductRaw.raw_name, ImportProductRaw.name)
+        keyword_match = or_(*[
+            source_name.like(f'%{keyword}%') for keyword in keywords
+        ]) if keywords else false()
+        default_disabled = func.coalesce(
+            or_(ImportProductRaw.status == '失效', keyword_match), false()
+        )
+        return case(
+            (ProductMaterial.is_disabled.is_not(None), ProductMaterial.is_disabled),
+            else_=default_disabled,
+        )
+
+    @staticmethod
+    def raw_query(keyword=None, group_code=None, disabled=None, disable_keywords=()):
+        query = ImportProductRaw.query.outerjoin(
+            ProductMaterial, ProductMaterial.code == ImportProductRaw.code,
+        )
         if keyword:
             like = f'%{keyword}%'
             query = query.filter(or_(ImportProductRaw.code.like(like), ImportProductRaw.name.like(like)))
         if group_code:
             query = query.filter(ImportProductRaw.group_code == group_code)
+        if disabled is not None:
+            query = query.filter(
+                MaterialRepository.effective_disabled_expression(disable_keywords) == disabled
+            )
         return query.order_by(ImportProductRaw.code.asc())
+
+    @staticmethod
+    def raw_for_codes(codes):
+        if not codes:
+            return []
+        rows = ImportProductRaw.query.filter(ImportProductRaw.code.in_(codes)).all()
+        by_code = {row.code: row for row in rows}
+        return [by_code[code] for code in codes if code in by_code]
 
     @staticmethod
     def materials_for_codes(codes):
@@ -60,3 +90,42 @@ class MaterialRepository:
             setattr(row, key, value)
         db.session.commit()
         return row
+
+    @staticmethod
+    def disable_keywords(enabled_only=False):
+        query = MaterialDisableKeyword.query
+        if enabled_only:
+            query = query.filter_by(is_disabled=False)
+        return query.order_by(MaterialDisableKeyword.id.asc()).all()
+
+    @staticmethod
+    def disable_keyword(keyword_id):
+        return db.session.get(MaterialDisableKeyword, keyword_id)
+
+    @staticmethod
+    def save_disable_keyword(row, values):
+        if row is None:
+            row = MaterialDisableKeyword()
+            db.session.add(row)
+        for key, value in values.items():
+            setattr(row, key, value)
+        db.session.commit()
+        return row
+
+    @staticmethod
+    def delete_disable_keyword(row):
+        db.session.delete(row)
+        db.session.commit()
+
+    @staticmethod
+    def disable_preview(keywords):
+        source_name = func.coalesce(ImportProductRaw.raw_name, ImportProductRaw.name)
+        keyword_match = or_(*[
+            source_name.like(f'%{keyword}%') for keyword in keywords
+        ]) if keywords else false()
+        status_match = func.coalesce(ImportProductRaw.status == '失效', false())
+        return db.session.query(
+            func.sum(case((status_match, 1), else_=0)),
+            func.sum(case((keyword_match, 1), else_=0)),
+            func.sum(case((or_(status_match, keyword_match), 1), else_=0)),
+        ).one()

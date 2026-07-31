@@ -23,6 +23,7 @@ def _parse_rows(raw_rows: List[Dict]) -> Tuple[List[Dict], int]:
         code       = (row.get('code')       or '').strip()
         name       = (row.get('name')       or '').strip()
         spec       = (row.get('spec')       or '').strip()
+        status     = (row.get('status')     or '').strip()
         group_code = (row.get('group_code') or '').strip()
         group_name = (row.get('group_name') or '').strip()
 
@@ -33,7 +34,10 @@ def _parse_rows(raw_rows: List[Dict]) -> Tuple[List[Dict], int]:
         parsed.append({
             'code':       code,
             'name':       _clean_name(name, spec),
+            # 保留 ERP 原始品名供可配置停用关键词判定；既有 name 语义不变。
+            'raw_name':   name,
             'spec':       spec or None,
+            'status':     status or None,
             'group_code': group_code,
             'group_name': group_name,
         })

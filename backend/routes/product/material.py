@@ -1,5 +1,6 @@
 import os
 import time
+import hashlib
 
 from flask import Blueprint, g, request
 
@@ -48,17 +49,44 @@ def list_items():
     ).to_response()
 
 
-@material_bp.get('/items/<code>')
+@material_bp.get('/disable-keywords')
+def disable_keywords():
+    return material_service.disable_keywords().to_response()
+
+
+@material_bp.post('/disable-keywords')
+def create_disable_keyword():
+    return material_service.create_disable_keyword(request.get_json() or {}).to_response()
+
+
+@material_bp.put('/disable-keywords/<int:keyword_id>')
+def update_disable_keyword(keyword_id):
+    return material_service.update_disable_keyword(
+        keyword_id, request.get_json() or {}
+    ).to_response()
+
+
+@material_bp.delete('/disable-keywords/<int:keyword_id>')
+def delete_disable_keyword(keyword_id):
+    return material_service.delete_disable_keyword(keyword_id).to_response()
+
+
+@material_bp.get('/disable-preview')
+def disable_preview():
+    return material_service.disable_preview().to_response()
+
+
+@material_bp.get('/items/<path:code>')
 def material_detail(code):
     return material_service.detail(code).to_response()
 
 
-@material_bp.put('/items/<code>')
+@material_bp.put('/items/<path:code>')
 def save_material(code):
     return material_service.save_item(code, request.get_json() or {}).to_response()
 
 
-@material_bp.post('/items/<code>/image')
+@material_bp.post('/items/<path:code>/image')
 def upload_material_image(code):
     body = request.get_json() or {}
     try:
@@ -74,13 +102,14 @@ def upload_material_image(code):
     try:
         bucket = get_bucket()
         base_url = os.getenv('OSS_BASE_URL', '').rstrip('/')
-        rel_path = f'materials/{code}.{ext}'
+        safe_code = hashlib.sha256(code.encode('utf-8')).hexdigest()
+        rel_path = f'materials/{safe_code}.{ext}'
         bucket.put_object(f'tmt-library/{rel_path}', image_bytes)
         url = f'{base_url}/{rel_path}'
         orig_url = None
         if original:
             orig_bytes, orig_ext = original
-            orig_path = f'materials/{code}_orig.{orig_ext}'
+            orig_path = f'materials/{safe_code}_orig.{orig_ext}'
             bucket.put_object(f'tmt-library/{orig_path}', orig_bytes)
             orig_url = f'{base_url}/{orig_path}'
         timestamp = int(time.time())
