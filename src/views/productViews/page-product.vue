@@ -25,6 +25,7 @@ import iconTable  from '@/assets/icons/icon_table.png'
 import iconImage  from '@/assets/icons/icon_image.png'
 import iconEchart from '@/assets/icons/icon_echart.png'
 import { initProductStore, resetProductStore, ensureTableData, useFinishedStore, usePackagedStore } from '@/stores/product'
+import AppBottomBar from '@/components/common/AppBottomBar.vue'
 
 // ── 路由 ──────────────────────────────────────────
 const router = useRouter()
@@ -458,6 +459,7 @@ onMounted(async () => {
       </div>
     </el-dialog>
 
+    <AppBottomBar />
   </div>
 </template>
 

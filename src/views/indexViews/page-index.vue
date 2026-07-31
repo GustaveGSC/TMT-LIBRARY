@@ -30,86 +30,25 @@
       </div>
     </main>
 
-    <footer class="bottom-bar">
-      <!-- 左：作者图片 -->
-      <div class="bar-left">
-        <el-tooltip
-          placement="top"
-          :show-after="300"
-          effect="light"
-          popper-class="author-tooltip"
-        >
-          <template #content>
-            <div class="author-tip">
-              <div class="author-tip-title">遇到问题了？</div>
-              <div class="author-tip-body">联系管理员获取帮助</div>
-              <div class="author-tip-email">gusc@2m2.cc</div>
-            </div>
-          </template>
-          <img src="@/assets/author.png" class="bar-author" alt="author" />
-        </el-tooltip>
-      </div>
-
-      <!-- 中：横版 logo -->
-      <div class="bar-center">
-        <img src="@/assets/logo-banner.png" class="bar-logo-banner" alt="logo" />
-      </div>
-
-      <!-- 右：版本徽章 + 用户（管理者/开发者/运维入口在用户设置抽屉里，按权限码显示） -->
-      <div class="bar-right">
-
-        <!-- 版本徽章：点击检查/查看更新（桌面端） -->
-        <button v-if="isElectron" class="version-badge" :class="{ 'has-update': updateType !== 'none' }" @click="handleUpdate">
-          <span class="version-text">v{{ version }}</span>
-          <span v-if="updateType !== 'none'" class="version-dot"></span>
-        </button>
-
-        <!-- 下载桌面版按钮（Web 端）：桌面端当前生产环境不可用，暂时隐藏，见 handoff/2026-07-20-claude-progress.md -->
-        <button
-          v-if="false"
-          class="download-badge"
-          @click="router.push('/download')"
-        >↓ 下载桌面版</button>
-
-        <div class="bar-divider"></div>
-
-        <!-- 用户按钮 -->
-        <button class="bar-btn" @click="handleUserSetting">
-          <span class="bar-btn-avatar">{{ userInitial }}</span>
-          <span>{{ userName }}</span>
-        </button>
-      </div>
-    </footer>
+    <AppBottomBar />
   </div>
-
-  <UserSettingsDrawer ref="settingsDrawer" />
-  <UpdateDialog ref="updateDialog" />
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessageBox, ElMessage } from 'element-plus'
-import http from '@/api/http'
-import { checkUpdateType } from '@/utils/version'
+import { ElMessage } from 'element-plus'
 import { usePermission } from '@/composables/usePermission'
 import { isElectron } from '@/utils/platform'
-import UserSettingsDrawer from '@/components/user/UserSettingsDrawer.vue'
-import UpdateDialog from '@/components/update/UpdateDialog.vue'
 import WindowControls from '@/components/common/WindowControls.vue'
+import AppBottomBar from '@/components/common/AppBottomBar.vue'
 import iconProduct   from '@/assets/icons/icon_product.png'
 import iconShipping  from '@/assets/icons/icon_shipping.png'
 import iconAftersale from '@/assets/icons/icon_aftersale.png'
 import iconRdTools      from '@/assets/icons/icon_rd_tools.png'
 import iconGeneralTools from '@/assets/icons/icon_general_tools.png'
 
-const router         = useRouter()
-const version        = ref('1.0.0')
-const settingsDrawer = ref(null)
-const updateDialog   = ref(null)
-
-const updateType = ref('none')
-const latestInfo = ref(null)
+const router = useRouter()
 
 // 移动端 web：本页需要纵向滚动，临时解除全局 overflow:hidden
 if (!isElectron) {
@@ -123,37 +62,9 @@ if (!isElectron) {
   })
 }
 
-onMounted(async () => {
-  if (window.electronAPI) {
-    version.value = await window.electronAPI.getVersion()
-  }
-
-  try {
-    const res = await http.get('/api/version/latest')
-    if (res.success && res.data) {
-      latestInfo.value = res.data
-      const type = checkUpdateType(version.value, res.data.version)
-      updateType.value = type
-
-      if (type === 'force' && window.electronAPI) {
-        await window.electronAPI.updater.check()
-        updateDialog.value?.open({
-          latestVersion:  res.data.version,
-          currentVersion: version.value,
-          releaseDate:    res.data.releaseDate,
-          description:    res.data.description,
-          isForce:        true,
-        })
-      }
-    }
-  } catch { }
-})
+// 版本检查、用户信息、用户设置抽屉与更新弹窗均已移入 AppBottomBar 组件
 
 const { canViewProduct, canViewShipping, canViewAftersale, canViewRd } = usePermission()
-
-const userInfo    = JSON.parse(localStorage.getItem('user') || '{}')
-const userName    = computed(() => userInfo.display_name || userInfo.username || '用户')
-const userInitial = computed(() => (userName.value?.[0] ?? '?').toUpperCase())
 
 // 模块分组，各组独立渲染
 // 无权限的功能入口直接不渲染（不显示"无权限"标签），与全站其他位置的权限处理方式统一。
@@ -228,29 +139,6 @@ function handleEnter(mod) {
   router.push(mod.route)
 }
 
-async function handleUpdate() {
-  if (updateType.value === 'none') {
-    ElMessageBox.alert('当前已是最新版本', '检查更新', {
-      confirmButtonText: '确定',
-      type: 'success',
-    })
-    return
-  }
-  // optional 更新未在 onMounted 触发 electron-updater，此处确保 updateInfo 已加载
-  // force 更新重复调用无害
-  if (updateType.value === 'optional') {
-    await window.electronAPI?.updater.check()
-  }
-  updateDialog.value?.open({
-    latestVersion:  latestInfo.value?.version    || '',
-    currentVersion: version.value,
-    releaseDate:    latestInfo.value?.releaseDate || '',
-    description:    latestInfo.value?.description || '',
-    isForce:        updateType.value === 'force',
-  })
-}
-
-function handleUserSetting() { settingsDrawer.value?.open() }
 </script>
 
 <style scoped>
@@ -363,105 +251,6 @@ function handleUserSetting() { settingsDrawer.value?.open() }
   font-size: 10px; color: var(--text-muted);
 }
 
-.bottom-bar {
-  position: relative; z-index: 1;
-  height: 50px; display: flex;
-  align-items: center; justify-content: space-between;
-  padding: 0 18px;
-  background: rgba(255,255,255,0.5);
-  border-top: 1px solid var(--border);
-  backdrop-filter: blur(12px);
-}
-
-/* 左：作者图片 */
-.bar-left { display: flex; align-items: center; }
-.bar-author {
-  height: 28px;
-  object-fit: contain;
-  opacity: 0.75;
-  border-radius: 4px;
-}
-
-/* 中：横版logo */
-.bar-center {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-}
-.bar-logo-banner {
-  height: 22px;
-  object-fit: contain;
-  opacity: 0.6;
-}
-
-/* 右：版本徽章 + 用户 */
-.bar-right { display: flex; align-items: center; gap: 4px; }
-.bar-divider { width: 1px; height: 13px; background: var(--border); margin: 0 4px; }
-
-/* 版本徽章 */
-.version-badge {
-  position: relative;
-  display: flex; align-items: center;
-  padding: 4px 9px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-card);
-  cursor: pointer;
-  transition: all 0.2s;
-  font-family: inherit;
-}
-.version-badge:hover { border-color: var(--accent); }
-.version-badge.has-update { border-color: rgba(200,60,50,0.3); }
-
-.version-text {
-  font-size: 11px;
-  color: var(--text-muted);
-  font-family: monospace;
-}
-
-.version-dot {
-  position: absolute;
-  top: -3px; right: -3px;
-  width: 7px; height: 7px;
-  border-radius: 50%;
-  background: #e05040;
-  border: 1.5px solid var(--bg);
-}
-
-.download-badge {
-  display: flex; align-items: center;
-  padding: 4px 9px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-card);
-  font-size: 11px;
-  color: var(--text-muted);
-  text-decoration: none;
-  font-family: inherit;
-  transition: all 0.2s;
-  white-space: nowrap;
-}
-.download-badge:hover { border-color: var(--accent); color: var(--accent); }
-
-.bar-btn {
-  position: relative;
-  display: flex; align-items: center; gap: 5px;
-  padding: 5px 10px; border: none;
-  background: transparent; color: var(--text-muted);
-  font-size: 12px; font-family: inherit;
-  cursor: pointer; border-radius: 6px;
-  transition: all 0.2s; letter-spacing: 0.03em;
-}
-.bar-btn:hover { background: rgba(196,136,58,0.08); color: var(--accent); }
-
-.bar-btn-avatar {
-  width: 18px; height: 18px; border-radius: 50%;
-  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
-  display: flex; align-items: center; justify-content: center;
-  font-size: 10px; font-weight: 700; color: #fff; flex-shrink: 0;
-}
 
 /* ── 移动端响应式（≤768px 竖屏）────────────────────────── */
 @media (max-width: 768px) {
@@ -520,36 +309,4 @@ function handleUserSetting() { settingsDrawer.value?.open() }
   .module-name { font-size: 11px; }
   .module-desc { display: none; }
 }
-</style>
-
-<!-- 全局样式：tooltip popper 穿透 scoped -->
-<style>
-.author-tooltip.el-popper {
-  border-radius: 10px !important;
-  border: 1px solid #e8dece !important;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.1) !important;
-  padding: 0 !important;
-}
-.author-tip {
-  padding: 12px 16px;
-  font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  min-width: 160px;
-}
-.author-tip-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: #3a2e22;
-  margin-bottom: 4px;
-}
-.author-tip-body {
-  font-size: 12px;
-  color: #8a7a68;
-  margin-bottom: 8px;
-}
-.author-tip-email {
-  font-size: 12px;
-  color: #c4883a;
-  letter-spacing: 0.02em;
-}
-
 </style>

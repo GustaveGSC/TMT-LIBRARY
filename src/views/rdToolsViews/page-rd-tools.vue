@@ -9,6 +9,7 @@ import EcrForm from '@/components/rdTools/EcrForm.vue'
 import EcnForm from '@/components/rdTools/EcnForm.vue'
 import PdmToBomForm from '@/components/rdTools/PdmToBomForm.vue'
 import BomCost from '@/components/rdTools/BomCost.vue'
+import AppBottomBar from '@/components/common/AppBottomBar.vue'
 
 // ── 路由 ──────────────────────────────────────────
 const router = useRouter()
@@ -104,6 +105,7 @@ function handleBack() {
       </div>
 
     </main>
+    <AppBottomBar />
   </div>
 </template>
 

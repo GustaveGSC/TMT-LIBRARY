@@ -6,6 +6,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { VideoPlay, CopyDocument, Back, Folder, ArrowRight } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { isElectron } from '@/utils/platform'
+import AppBottomBar from '@/components/common/AppBottomBar.vue'
 
 // ── 路由 ──────────────────────────────────────────
 const router = useRouter()
@@ -533,6 +534,7 @@ function copyText(text) {
         </div>
       </div>
     </div>
+    <AppBottomBar />
   </div>
 </template>
 

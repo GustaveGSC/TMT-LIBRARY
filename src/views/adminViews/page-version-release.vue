@@ -10,6 +10,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import http from '@/api/http'
 import WindowControls from '@/components/common/WindowControls.vue'
+import AppBottomBar from '@/components/common/AppBottomBar.vue'
 
 // ── 路由 ──────────────────────────────────
 const router = useRouter()
@@ -419,6 +420,7 @@ onMounted(loadHistory)
       </div>
 
     </div>
+    <AppBottomBar />
   </div>
 </template>
 

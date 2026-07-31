@@ -12,6 +12,7 @@ import ModelDownloadDialog   from '@/components/aftersale/ModelDownloadDialog.vu
 import http                  from '@/api/http.js'
 import { usePermission }     from '@/composables/usePermission'
 import { isElectron }        from '@/utils/platform'
+import AppBottomBar from '@/components/common/AppBottomBar.vue'
 
 // ── 路由 ──────────────────────────────────────────
 const router = useRouter()
@@ -121,6 +122,7 @@ function onCaseConfirmed() {
       />
     </main>
 
+    <AppBottomBar />
   </div>
 
   <ModelDownloadDialog ref="modelDownloadDialog" />

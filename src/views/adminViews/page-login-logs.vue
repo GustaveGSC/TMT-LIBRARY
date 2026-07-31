@@ -6,6 +6,7 @@ import { ElMessage } from 'element-plus'
 import * as echarts from 'echarts'
 import http from '@/api/http'
 import WindowControls from '@/components/common/WindowControls.vue'
+import AppBottomBar from '@/components/common/AppBottomBar.vue'
 
 // ── 路由 ──────────────────────────────────────────
 const router = useRouter()
@@ -245,6 +246,7 @@ function fmtTime(iso) {
       </el-table>
     </div>
 
+    <AppBottomBar />
   </div>
 </template>
 

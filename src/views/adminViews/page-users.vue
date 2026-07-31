@@ -13,6 +13,7 @@ import { Search } from '@element-plus/icons-vue'
 import http from '@/api/http'
 import WindowControls from '@/components/common/WindowControls.vue'
 import { usePermission } from '@/composables/usePermission'
+import AppBottomBar from '@/components/common/AppBottomBar.vue'
 
 // ── 权限 ──────────────────────────────────
 const { canEditUsers } = usePermission()
@@ -443,6 +444,7 @@ onMounted(() => {
       </template>
     </el-dialog>
 
+    <AppBottomBar />
   </div>
 </template>
 

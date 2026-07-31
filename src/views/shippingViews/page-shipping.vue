@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import WindowControls from '@/components/common/WindowControls.vue'
 import { usePermission } from '@/composables/usePermission'
+import AppBottomBar from '@/components/common/AppBottomBar.vue'
 
 // ── 路由 ──────────────────────────────────────────
 const route  = useRoute()
@@ -75,6 +76,7 @@ function goTo(navPath) {
       <router-view />
     </main>
 
+    <AppBottomBar />
   </div>
 </template>
 
