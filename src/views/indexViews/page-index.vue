@@ -44,6 +44,8 @@ import AppBottomBar from '@/components/common/AppBottomBar.vue'
 import iconProduct   from '@/assets/icons/icon_product.png'
 import iconShipping  from '@/assets/icons/icon_shipping.png'
 import iconAftersale from '@/assets/icons/icon_aftersale.png'
+// 暂用数据管理的图标（该图标当前无处引用），待补一张物料库专用图标后替换
+import iconMaterial from '@/assets/icons/icon_data_mgmt.png'
 import iconRdTools      from '@/assets/icons/icon_rd_tools.png'
 import iconAftersaleTools from '@/assets/icons/icon_aftersale_tools.png'
 import iconGeneralTools from '@/assets/icons/icon_general_tools.png'
@@ -96,6 +98,15 @@ const moduleGroups = computed(() => [
         route: '/aftersale',
         disabled: false,
         visible: canViewAftersale,
+      },
+      // 物料库：ERP 导入数据与编码规则的归属地，页面尚未开发，先占位
+      {
+        key: 'material',
+        name: '物料库',
+        icon: iconMaterial,
+        route: '/material',
+        disabled: true,
+        visible: canViewProduct,
       },
     ].filter(mod => mod.visible),
   },
