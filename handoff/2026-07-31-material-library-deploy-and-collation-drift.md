@@ -3,7 +3,7 @@
 日期：2026-07-31
 部署人：Claude
 后端提交：`b0ea8f4` → 返工 `08db6e1`
-状态：**已部署并通过生产功能验收**，但存在一处**手工 schema 改动尚未回写到迁移**，需 Codex 收口。
+状态：**已部署并通过生产功能验收；排序规则漂移已于同日由 `8c0474b` / revision `20260731_02` 收口。**
 
 ---
 
@@ -53,6 +53,22 @@ ALTER TABLE erp_group_category MODIFY group_code  VARCHAR(64)
 （`erp_group_category.group_code` 目前只在 Python 侧做字典匹配、没有 SQL JOIN，
 是**预防性**对齐——将来一旦有人给它加 JOIN 就会踩同样的坑。
 `material_disable_keyword.keyword` 只作为 Python 字面量参与 `LIKE`，未改。）
+
+### ✅ 已收口（2026-07-31，Codex 提交 `8c0474b`）
+
+新增 revision **`20260731_02`**，保留已 stamp 的 `20260731_01` 不变，
+模型层用 `String(n).with_variant(mysql.VARCHAR(n, collation=...), 'mysql')` 声明，
+SQLite 不受影响、测试仍可跑，并补了 DDL 编译断言测试。
+**未改动 `import_product_raw`**，符合要求。
+
+部署选择：**实跑 `upgrade` 而非 `stamp`**。
+迁移内容与我手工那两条 ALTER 完全等价，所以在生产上是幂等空操作；
+实跑能顺带验证迁移本身可用，而 `stamp` 只记版本不执行、验证不到。
+结果：`20260731_01` → **`20260731_02 (head)`**，排序规则核对一致，
+master PID 2091 未变，功能复验数字（8,089 / 3,026 / 3,353 / 43）与修复前完全一致，
+确认无副作用。**schema 漂移已消除，全新环境 upgrade 后即为正确状态。**
+
+以下为当时提给 Codex 的要求，留档：
 
 ### 需要 Codex 做的
 
