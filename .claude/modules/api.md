@@ -90,6 +90,37 @@ GET    /api/product/finished/:id/packaged
 POST   /api/product/finished/:id/packaged/:id
 DELETE /api/product/finished/:id/packaged/:id
 
+产品 Excel 导入按表头名识别 `品号/品名/规格/分组编码/分组名称`，不依赖固定列号；
+缺少四个必需表头时返回 400。正式导入按品号执行差异更新，响应 data 为
+`{total,inserted,updated,unchanged,skipped_dup,skipped_invalid}`，其中
+`skipped_dup` 是兼容旧前端的别名，与 `unchanged` 相同。
+
+## /api/material（物料库）
+
+权限：GET 需要 `product:view`，PUT/POST 需要 `product:edit`；响应统一为
+`{success,message,data}`。
+
+```
+GET  /api/material/group-categories
+PUT  /api/material/group-categories/:group_code
+GET  /api/material/items
+GET  /api/material/items/:code
+PUT  /api/material/items/:code
+POST /api/material/items/:code/image
+```
+
+- `GET group-categories` 返回全部 ERP 分组：
+  `{group_code,group_name,material_count,override_count,is_finished,is_packaged,is_semi,is_material,is_useless,remark}`。
+- `PUT group-categories/:group_code` 接收五个 `is_*` 布尔字段及可选 `remark`。
+- `GET items` 参数：`page`（默认 1）、`page_size`（默认 20，上限 100）、
+  `category=finished|packaged|semi|material|useless`、`group_code`、`keyword`、
+  `is_disabled=0|1`、`unclassified=0|1`。data 为 `{items,total,page,page_size}`。
+- `PUT items/:code` 可写 `short_name/category/spec/remark/is_disabled`；
+  首次保存时按需创建 `product_material`。
+- `POST items/:code/image` 沿用产品封面图 JSON base64 契约：
+  `{data_url,orig_data_url?}`；仅 PNG/JPEG/WebP，单张解码后最大 10MB。成功 data：
+  `{url,orig_url,img_updated_at,cover_image,cover_image_original}`。
+
 GET    /api/erp-code-rules/
 POST   /api/erp-code-rules/
 PUT    /api/erp-code-rules/:id

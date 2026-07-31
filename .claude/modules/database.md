@@ -231,15 +231,27 @@ aftersale_case_reason
 ## 产品库
 ```
 import_product_raw
-  id, code(UNIQUE), name, group_code, group_name, imported_at
-  # Excel列：品号(0)/品名(1)/规格(2)/品号群组(7)/群组名称(8)
+  id, code(UNIQUE), name, spec(NULL), group_code, group_name, imported_at
+  # Excel 按表头名称映射列，缺少品号/品名/分组编码/分组名称时整单拒绝
   # name = 品名（去除「（已停用）」）+ 规格
+  # 重导按 code 做差异更新；内容完全相同的行不写库
 
 erp_code_rules
-  id, prefix, type(finished/packaged/semi/material), description, is_disabled(TINYINT 0/1 DEFAULT 0), created_at
+  id, prefix, type(finished/packaged/semi/material/useless), description, is_disabled(TINYINT 0/1 DEFAULT 0), created_at
   # UNIQUE(prefix, type)，同一前缀可对应多个类型，无优先级
-  # type含义：finished=成品，packaged=产成品，semi=半成品，material=物料
+  # type含义：finished=成品，packaged=产成品，semi=半成品，material=原材料，useless=无用物料
   # is_disabled=1 时，成品表/图片/图表视图过滤掉该前缀的成品（全局生效）
+
+erp_group_category
+  id, group_code(UNIQUE), is_finished, is_packaged, is_semi, is_material, is_useless,
+  remark, updated_by, created_at, updated_at
+  # ERP 分组默认大类；不存在记录或五项全 false 均表示未分类
+  # 前缀例外规则命中时不再使用分组默认；大类允许多选
+
+product_material
+  id, code(UNIQUE), short_name, category, spec, cover_image, cover_image_original,
+  img_updated_at, remark, is_disabled(INDEX), created_at, updated_at
+  # 只存人工属性，按首次保存/传图创建；ERP name/group_code/group_name 不复制
 
 product_category
   id, name(UNIQUE), sort_order, created_at

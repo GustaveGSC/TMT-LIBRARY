@@ -28,7 +28,8 @@ PRODUCT_FINISHED_REMARK_REVISION = '20260728_01'
 DETAIL_PACKAGE_REVISION = '20260728_02'
 FINANCE_DIMENSION_REVISION = '20260728_03'
 DETAIL_PACKAGE_SCOPE_REVISION = '20260729_01'
-HEAD_REVISION = DETAIL_PACKAGE_SCOPE_REVISION
+MATERIAL_LIBRARY_REVISION = '20260731_01'
+HEAD_REVISION = MATERIAL_LIBRARY_REVISION
 CRITICAL_INDEXES = {
     'shipping_order_finished': {
         'ix_sof_source',
@@ -57,6 +58,10 @@ def test_baseline_has_linear_history_and_task_lease_is_the_only_head():
     assert scripts.get_heads() == [HEAD_REVISION]
     assert scripts.get_revision(BASELINE_REVISION).down_revision is None
     assert scripts.get_revision(TASK_REVISION).down_revision == BASELINE_REVISION
+    assert (
+        scripts.get_revision(MATERIAL_LIBRARY_REVISION).down_revision
+        == DETAIL_PACKAGE_SCOPE_REVISION
+    )
     assert scripts.get_revision(PERMISSION_REVISION).down_revision == TASK_REVISION
     assert scripts.get_revision(CUSTOMER_MAPPING_REVISION).down_revision == PERMISSION_REVISION
     assert scripts.get_revision(ORDER_ALIAS_REVISION).down_revision == CUSTOMER_MAPPING_REVISION
@@ -253,6 +258,8 @@ def test_baseline_upgrade_adds_only_task_schemas(tmp_path, monkeypatch):
         'product_detail_package_cleanup_failure',
         'product_detail_package_series',
         'product_detail_package_category',
+        'erp_group_category',
+        'product_material',
     }
     inspector = sa.inspect(engine)
     shipping_task_columns = {

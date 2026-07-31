@@ -10,19 +10,18 @@ CST = timezone(timedelta(hours=8))
 class ImportProductRepository:
 
     @staticmethod
-    def get_existing_codes() -> set:
-        """获取所有已存在的品号"""
-        rows = db.session.query(ImportProductRaw.code).all()
-        return {r.code for r in rows}
-
-    @staticmethod
-    def bulk_insert(rows: List[Dict], imported_at: datetime) -> int:
-        """批量插入，跳过已存在的 code，返回实际插入行数"""
-        existing = ImportProductRepository.get_existing_codes()
+    def bulk_upsert(rows: List[Dict], imported_at: datetime) -> Dict[str, int]:
+        """批量新增或更新 ERP 权威字段；完全相同的行不写库。"""
+        codes = [row['code'] for row in rows]
+        existing = {
+            row.code: row for row in ImportProductRaw.query
+            .filter(ImportProductRaw.code.in_(codes)).all()
+        }
         to_insert = [
             ImportProductRaw(
                 code        = row['code'],
                 name        = row['name'],
+                spec        = row.get('spec'),
                 group_code  = row['group_code'],
                 group_name  = row['group_name'],
                 imported_at = imported_at,
@@ -30,10 +29,28 @@ class ImportProductRepository:
             for row in rows
             if row['code'] not in existing
         ]
+        to_update = []
+        fields = ('name', 'spec', 'group_code', 'group_name')
+        for row in rows:
+            current = existing.get(row['code'])
+            if current is None or all(getattr(current, key) == row.get(key) for key in fields):
+                continue
+            to_update.append({
+                'id': current.id,
+                **{key: row.get(key) for key in fields},
+                'imported_at': imported_at,
+            })
         if to_insert:
             db.session.bulk_save_objects(to_insert)
+        if to_update:
+            db.session.bulk_update_mappings(ImportProductRaw, to_update)
+        if to_insert or to_update:
             db.session.commit()
-        return len(to_insert)
+        return {
+            'inserted': len(to_insert),
+            'updated': len(to_update),
+            'unchanged': len(rows) - len(to_insert) - len(to_update),
+        }
 
     @staticmethod
     def get_stats() -> Dict:

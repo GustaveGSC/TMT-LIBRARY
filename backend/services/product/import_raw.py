@@ -33,6 +33,7 @@ def _parse_rows(raw_rows: List[Dict]) -> Tuple[List[Dict], int]:
         parsed.append({
             'code':       code,
             'name':       _clean_name(name, spec),
+            'spec':       spec or None,
             'group_code': group_code,
             'group_name': group_name,
         })
@@ -44,12 +45,12 @@ class ImportProductService:
     def import_rows(self, raw_rows: List[Dict]) -> Dict:
         parsed, skipped_invalid = _parse_rows(raw_rows)
         imported_at  = now_cst()
-        inserted     = ImportProductRepository.bulk_insert(parsed, imported_at)
-        skipped_dup  = len(parsed) - inserted
+        result       = ImportProductRepository.bulk_upsert(parsed, imported_at)
         return {
             'total':           len(raw_rows),
-            'inserted':        inserted,
-            'skipped_dup':     skipped_dup,
+            **result,
+            # 兼容旧前端字段；现在仅代表内容完全相同、无需写入的重复行。
+            'skipped_dup':     result['unchanged'],
             'skipped_invalid': skipped_invalid,
         }
 

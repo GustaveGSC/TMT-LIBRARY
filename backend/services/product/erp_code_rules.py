@@ -4,6 +4,10 @@ from result import Result
 
 
 class ErpCodeRuleService:
+    @staticmethod
+    def _invalidate_material_cache():
+        from services.product.material import material_service
+        material_service.invalidate_rule_cache()
 
     def get_all(self) -> Result:
         rules = ErpCodeRuleRepository.get_all()
@@ -19,6 +23,7 @@ class ErpCodeRuleService:
             return Result.fail(f'前缀 "{prefix}" 的 {TYPE_LABELS[type_]} 规则已存在')
 
         rule = ErpCodeRuleRepository.create(prefix, type_, description)
+        self._invalidate_material_cache()
         return Result.ok(data=rule.to_dict(), message='规则创建成功')
 
     def update(self, rule_id: int, **kwargs) -> Result:
@@ -38,6 +43,7 @@ class ErpCodeRuleService:
         if 'prefix' in kwargs:
             kwargs['prefix'] = new_prefix
         rule = ErpCodeRuleRepository.update(rule, **kwargs)
+        self._invalidate_material_cache()
         return Result.ok(data=rule.to_dict(), message='更新成功')
 
     def toggle_disabled(self, rule_id: int) -> Result:
@@ -45,6 +51,7 @@ class ErpCodeRuleService:
         if not rule:
             return Result.fail(f'规则 {rule_id} 不存在')
         rule = ErpCodeRuleRepository.update(rule, is_disabled=not rule.is_disabled)
+        self._invalidate_material_cache()
         return Result.ok(data=rule.to_dict(), message='已' + ('禁用' if rule.is_disabled else '启用'))
 
     def delete(self, rule_id: int) -> Result:
@@ -52,6 +59,7 @@ class ErpCodeRuleService:
         if not rule:
             return Result.fail(f'规则 {rule_id} 不存在')
         ErpCodeRuleRepository.delete(rule)
+        self._invalidate_material_cache()
         return Result.ok(message='删除成功')
 
 

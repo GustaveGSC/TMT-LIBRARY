@@ -6,14 +6,16 @@ TYPE_FINISHED  = 'finished'   # 成品
 TYPE_PACKAGED  = 'packaged'   # 产成品
 TYPE_SEMI      = 'semi'       # 半成品
 TYPE_MATERIAL  = 'material'   # 物料
+TYPE_USELESS   = 'useless'    # 无用物料
 
-VALID_TYPES = {TYPE_FINISHED, TYPE_PACKAGED, TYPE_SEMI, TYPE_MATERIAL}
+VALID_TYPES = {TYPE_FINISHED, TYPE_PACKAGED, TYPE_SEMI, TYPE_MATERIAL, TYPE_USELESS}
 
 TYPE_LABELS = {
     TYPE_FINISHED: '成品',
     TYPE_PACKAGED: '产成品',
     TYPE_SEMI:     '半成品',
-    TYPE_MATERIAL: '物料',
+    TYPE_MATERIAL: '原材料',
+    TYPE_USELESS:  '无用物料',
 }
 
 
