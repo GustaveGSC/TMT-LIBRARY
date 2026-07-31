@@ -22,7 +22,6 @@
                 <img :src="mod.icon" class="module-icon-img" alt="" />
               </div>
               <div class="module-name">{{ mod.name }}</div>
-              <div class="module-desc">{{ mod.desc }}</div>
               <div v-if="mod.disabled" class="module-badge">即将上线</div>
             </div>
           </div>
@@ -78,7 +77,6 @@ const moduleGroups = computed(() => [
       {
         key: 'product',
         name: '产品库',
-        desc: '产品信息管理与检索',
         icon: iconProduct,
         route: '/product',
         disabled: false,
@@ -87,7 +85,6 @@ const moduleGroups = computed(() => [
       {
         key: 'shipping',
         name: '发货数据',
-        desc: '发货记录查询与统计',
         icon: iconShipping,
         route: '/shipping',
         disabled: false,
@@ -96,7 +93,6 @@ const moduleGroups = computed(() => [
       {
         key: 'aftersale',
         name: '售后数据',
-        desc: '售后记录查询与分析',
         icon: iconAftersale,
         route: '/aftersale',
         disabled: false,
@@ -111,7 +107,6 @@ const moduleGroups = computed(() => [
       {
         key: 'rd-tools',
         name: '研发部工具',
-        desc: 'PDM转BOM · 变更单填写',
         icon: iconRdTools,
         route: '/rd-tools',
         disabled: false,
@@ -121,7 +116,6 @@ const moduleGroups = computed(() => [
       {
         key: 'aftersale-tools',
         name: '售后工具',
-        desc: '售后记录 · 数据导出',
         icon: iconAftersaleTools,
         route: '/aftersale-tools',
         disabled: true,
@@ -130,7 +124,6 @@ const moduleGroups = computed(() => [
       {
         key: 'general-tools',
         name: '通用工具',
-        desc: '视频压缩 · 更多工具',
         icon: iconGeneralTools,
         route: '/general-tools',
         disabled: false,
@@ -255,7 +248,6 @@ function handleEnter(mod) {
 .module-icon-img { width: 56px; height: 56px; object-fit: contain; }
 .module-emoji { font-size: 38px; line-height: 1; }
 .module-name { font-size: 13px; font-weight: 600; color: var(--text-primary); letter-spacing: 0.04em; transition: color 0.2s; }
-.module-desc { font-size: 11px; color: var(--text-muted); text-align: center; margin-top: -4px; }
 .module-badge {
   position: absolute; top: -6px; right: 8px;
   background: var(--accent-bg); border: 1px solid var(--border);
@@ -286,7 +278,6 @@ function handleEnter(mod) {
   .module-icon { width: 72px; height: 72px; border-radius: 18px; }
   .module-icon-img { width: 40px; height: 40px; }
   .module-name { font-size: 12px; }
-  .module-desc { font-size: 10px; }
   .bottom-bar { padding: 0 12px; }
   .bar-logo-banner { height: 18px; }
 }
@@ -319,6 +310,5 @@ function handleEnter(mod) {
   .module-icon { width: 60px; height: 60px; border-radius: 16px; }
   .module-icon-img { width: 34px; height: 34px; }
   .module-name { font-size: 11px; }
-  .module-desc { display: none; }
 }
 </style>
