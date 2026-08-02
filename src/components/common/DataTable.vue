@@ -1,6 +1,6 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, watch } from 'vue'
 
 /**
  * DataTable — 全局统一样式的数据表格封装（基于 el-table）
@@ -14,13 +14,19 @@ import { ref, reactive, computed } from 'vue'
  *   { prop, label, width, minWidth, align, fixed,
  *     sortable,                    // 本地排序，默认按值大小/字符串比较；数组等特殊值传 sortMethod(a, b)
  *     sortMethod,
- *     filterable,                  // 显示筛选下拉；未传 filterOptions 时自动从 data 里取该列去重值
+ *     filterable,                  // 显示筛选控件；未传 filterOptions 时自动从 data 里取该列去重值
+ *     filterType,                  // 'select'(默认，下拉精确匹配) | 'text'(文本框模糊匹配)
  *     filterOptions,               // [{ label, value }]，不传则自动生成
  *     filterValue,                 // 自定义取筛选比较值的函数 (row) => any，默认取 row[prop]
  *     formatter,                   // 自定义显示格式 (row) => string，默认原样显示（空值显示"—"）
  *     showOverflowTooltip }
  *
  * 单元格自定义：#cell-{prop} 具名 slot，作用域 { row, $index }
+ *
+ * serverMode：数据量大到不能整体塞进浏览器时（如物料库 8000+ 行走服务端分页），
+ *   本组件不再本地筛选/排序，而是把筛选值与排序状态通过 filter-change / sort-change
+ *   抛给调用方去请求服务端。对当前页做本地筛选排序是无意义的——用户要找的行
+ *   大概率不在当页。默认 false，既有调用方行为完全不变。
  */
 
 const props = defineProps({
@@ -36,9 +42,13 @@ const props = defineProps({
   resizable: { type: Boolean, default: true },
   showOverflowTooltip: { type: Boolean, default: true },
   emptyText: { type: String, default: '暂无数据' },
+  // 服务端筛选排序模式：本组件只负责 UI，不做本地筛选排序
+  serverMode: { type: Boolean, default: false },
+  // serverMode 下文本筛选的防抖毫秒数，避免逐字符打爆请求队列
+  filterDebounce: { type: Number, default: 350 },
 })
 
-defineEmits(['row-click'])
+const emit = defineEmits(['row-click', 'filter-change', 'sort-change'])
 
 function slotKey(col) {
   return col.prop || col.label
@@ -57,10 +67,15 @@ function filterValueOf(col, row) {
   return col.filterValue ? col.filterValue(row) : row[col.prop]
 }
 
+function isTextFilter(col) {
+  return col.filterType === 'text'
+}
+
 const filterOptionsOf = computed(() => {
   const map = {}
   for (const col of props.columns) {
-    if (!col.filterable) continue
+    // 文本筛选不需要候选项；serverMode 下也无法从当页数据推出完整候选
+    if (!col.filterable || isTextFilter(col) || props.serverMode) continue
     if (col.filterOptions) { map[slotKey(col)] = col.filterOptions; continue }
     const seen = new Map()
     for (const row of props.data) {
@@ -89,6 +104,7 @@ function toggleSort(col) {
   const cur = sortState.value.prop === key ? sortState.value.order : null
   const next = orders[(orders.indexOf(cur) + 1) % orders.length]
   sortState.value = { prop: key, order: next }
+  if (props.serverMode) emit('sort-change', { prop: key, order: next })
 }
 
 function defaultCompare(a, b) {
@@ -99,8 +115,21 @@ function defaultCompare(a, b) {
   return String(a).localeCompare(String(b), 'zh')
 }
 
+// ── serverMode：筛选值变化抛给调用方 ────────────────
+let filterTimer = null
+watch(colFilters, () => {
+  if (!props.serverMode) return
+  clearTimeout(filterTimer)
+  // 文本筛选防抖；下拉是明确动作，立即触发
+  const hasText = props.columns.some(c => isTextFilter(c))
+  const delay = hasText ? props.filterDebounce : 0
+  filterTimer = setTimeout(() => emit('filter-change', { ...colFilters }), delay)
+}, { deep: true })
+
 // ── 组合筛选 + 排序后的展示数据 ─────────────────────
 const displayData = computed(() => {
+  // serverMode 下数据已由服务端筛选、排序、分页，原样呈现
+  if (props.serverMode) return props.data
   let rows = props.data
   const activeFilters = props.columns.filter(c => c.filterable && colFilters[slotKey(c)] != null && colFilters[slotKey(c)] !== '')
   if (activeFilters.length) {
@@ -151,8 +180,15 @@ const displayData = computed(() => {
               @click.stop="toggleSort(col)"
             />
           </div>
+          <input
+            v-if="col.filterable && col.filterType === 'text'"
+            v-model="colFilters[slotKey(col)]"
+            class="th-txt"
+            placeholder="筛选…"
+            @click.stop
+          />
           <el-select
-            v-if="col.filterable"
+            v-else-if="col.filterable"
             v-model="colFilters[slotKey(col)]"
             filterable clearable size="small" placeholder="筛选…" class="th-sel" :teleported="true"
           >
@@ -196,6 +232,16 @@ const displayData = computed(() => {
 .sort-btn.sort-desc::after  { border-color: var(--accent) transparent transparent transparent; }
 
 .th-sel { width: 100%; }
+/* 文本筛选框：高度与 .th-sel 下拉保持一致，视觉上同一排 */
+.th-txt {
+  width: 100%; height: 24px; padding: 0 6px;
+  border: 1px solid var(--border); border-radius: 5px;
+  background: var(--bg-card); color: var(--text-primary);
+  font-size: 11px; font-family: inherit; outline: none;
+  transition: border-color 0.15s;
+}
+.th-txt:focus { border-color: var(--accent); }
+.th-txt::placeholder { color: var(--text-muted); }
 .app-data-table :deep(.th-sel .el-input__wrapper) { padding: 0 6px; height: 24px; border-radius: 5px; box-shadow: 0 0 0 1px var(--border) inset; }
 .app-data-table :deep(.th-sel .el-input__wrapper:hover), .app-data-table :deep(.th-sel .el-input__wrapper.is-focus) { box-shadow: 0 0 0 1px var(--accent) inset; }
 .app-data-table :deep(.th-sel .el-input__inner) { font-size: 11px; height: 22px; line-height: 22px; }
