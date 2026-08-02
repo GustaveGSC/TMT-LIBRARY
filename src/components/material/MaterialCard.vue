@@ -78,10 +78,12 @@ watch(() => props.visible, v => { if (v) loadDetail() })
 </script>
 
 <template>
-  <el-drawer
+  <el-dialog
     :model-value="props.visible"
     title="物料卡片"
-    size="460px"
+    width="560"
+    align-center
+    append-to-body
     @update:model-value="emit('update:visible', $event)"
   >
     <div class="material-card">
@@ -152,7 +154,7 @@ watch(() => props.visible, v => { if (v) loadDetail() })
         </div>
       </template>
     </div>
-  </el-drawer>
+  </el-dialog>
 </template>
 
 <style scoped>
@@ -160,7 +162,7 @@ watch(() => props.visible, v => { if (v) loadDetail() })
   font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
   font-size: 13px; color: var(--text-primary);
 }
-.state-tip { font-size: 13px; color: var(--text-muted); padding: 32px 0; text-align: center; }
+.state-tip { font-size: 13px; color: #6b5e4e; padding: 32px 0; text-align: center; }
 .error-bar {
   display: flex; align-items: center; gap: 8px;
   margin-bottom: 12px; padding: 8px 12px;
@@ -197,11 +199,11 @@ watch(() => props.visible, v => { if (v) loadDetail() })
 .mc-field-top { align-items: flex-start; }
 .mc-field label {
   width: 42px; flex-shrink: 0;
-  font-size: 12px; color: var(--text-muted); text-align: right;
+  font-size: 12px; color: #6b5e4e; text-align: right;
 }
 .mc-field > span { flex: 1; min-width: 0; word-break: break-all; }
 .mono { font-family: monospace; font-size: 12px; }
-.muted { color: var(--text-muted); }
+.muted { color: #6b5e4e; }
 
 .mc-input {
   flex: 1; height: 30px; padding: 0 10px;
@@ -224,7 +226,7 @@ watch(() => props.visible, v => { if (v) loadDetail() })
   display: flex; align-items: center; gap: 6px;
   margin-top: 12px; padding-top: 10px;
   border-top: 1px solid var(--border);
-  font-size: 12px; color: var(--text-muted); cursor: pointer;
+  font-size: 12px; color: #3a3028; cursor: pointer;
 }
 
 /* ── 操作 ─────────────────────────────────────── */
@@ -235,7 +237,7 @@ watch(() => props.visible, v => { if (v) loadDetail() })
   cursor: pointer; transition: all 0.2s; border: none;
 }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-secondary { background: var(--bg); border: 1px solid var(--border); color: var(--text-muted); }
+.btn-secondary { background: var(--bg); border: 1px solid var(--border); color: #6b5e4e; }
 .btn-secondary:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .btn-primary { background: var(--accent); color: #fff; }
 .btn-primary:hover:not(:disabled) { filter: brightness(1.1); }

@@ -1,7 +1,7 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
 import { ref, computed, watch, onMounted } from 'vue'
-import { WarningFilled, Refresh, Search } from '@element-plus/icons-vue'
+import { WarningFilled, Refresh } from '@element-plus/icons-vue'
 import http from '@/api/http'
 import MaterialCard from './MaterialCard.vue'
 
@@ -20,17 +20,39 @@ const catMap = Object.fromEntries(CATEGORIES.map(c => [c.key, c]))
 // ── 数据 ──────────────────────────────────────────
 const items    = ref([])
 const total    = ref(0)
+const groups   = ref([])
 const loading  = ref(false)
 const errorMsg = ref('')
 
-// ── 筛选与分页 ────────────────────────────────────
-const activeCat   = ref('')        // '' 全部 / 大类 key / 'unclassified'
-const keyword     = ref('')
-const showDisabled = ref(false)    // 默认不显示已停用
-const page        = ref(1)
-const pageSize    = ref(20)
+// ── 筛选（走服务端参数；8089 条是服务端分页，客户端筛选只能筛到当页 20 条，没有意义）──
+const filters = ref({
+  code: '', name: '', short_name: '',
+  group_code: '', category: '', disabled: '',
+})
 
+// ── 排序 ──────────────────────────────────────────
+const sortBy  = ref('code')
+const sortDir = ref('asc')
+
+function toggleSort(prop) {
+  if (sortBy.value === prop) {
+    sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    sortBy.value  = prop
+    sortDir.value = 'asc'
+  }
+}
+function sortState(prop) {
+  return sortBy.value === prop ? sortDir.value : 'none'
+}
+
+// ── 分页 ──────────────────────────────────────────
+const page     = ref(1)
+const pageSize = ref(50)
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
+
+const hasFilter = computed(() =>
+  Object.values(filters.value).some(v => String(v || '').trim() !== ''))
 
 // ── 物料卡片 ──────────────────────────────────────
 const cardCode    = ref('')
@@ -41,22 +63,36 @@ function openCard(row) {
   cardVisible.value = true
 }
 
-// 卡片里保存成功后，把变更回写到列表行，避免整表重新拉一次
+// 卡片保存成功后把变更回写到列表行，避免整表重新拉一次
 function onCardSaved(updated) {
   const row = items.value.find(i => i.code === updated.code)
   if (row) Object.assign(row, updated)
 }
 
-// ── 加载列表 ──────────────────────────────────────
+// ── 加载 ──────────────────────────────────────────
+async function loadGroups() {
+  try {
+    const res = await http.get('/api/material/group-categories')
+    if (res.success) groups.value = res.data || []
+  } catch { /* 分组下拉拿不到不影响主表格 */ }
+}
+
 async function loadItems() {
   loading.value  = true
   errorMsg.value = ''
   try {
-    const params = { page: page.value, page_size: pageSize.value }
-    if (keyword.value.trim()) params.keyword = keyword.value.trim()
-    if (activeCat.value === 'unclassified') params.unclassified = 1
-    else if (activeCat.value)              params.category = activeCat.value
-    if (!showDisabled.value)               params.is_disabled = 0
+    const f = filters.value
+    const params = {
+      page: page.value, page_size: pageSize.value,
+      sort_by: sortBy.value, sort_dir: sortDir.value,
+    }
+    if (f.code.trim())       params.code       = f.code.trim()
+    if (f.name.trim())       params.name       = f.name.trim()
+    if (f.short_name.trim()) params.short_name = f.short_name.trim()
+    if (f.group_code)        params.group_code = f.group_code
+    if (f.category === 'unclassified') params.unclassified = 1
+    else if (f.category)               params.category     = f.category
+    if (f.disabled !== '')   params.is_disabled = f.disabled
 
     const res = await http.get('/api/material/items', { params })
     if (res.success) {
@@ -72,264 +108,350 @@ async function loadItems() {
   }
 }
 
-// 筛选变化回到第 1 页再查。关键词单独走搜索按钮/回车，
-// 不做 watch 自动请求——8000 多条物料，逐字符触发会打爆请求队列。
-watch([activeCat, showDisabled, pageSize], () => {
+// 文本筛选防抖：8089 条物料，逐字符触发会打爆请求队列
+let debounceTimer = null
+function onTextFilter() {
+  clearTimeout(debounceTimer)
+  debounceTimer = setTimeout(() => { page.value = 1; loadItems() }, 350)
+}
+
+// 下拉筛选与排序是明确的用户动作，立即请求
+watch([() => filters.value.group_code, () => filters.value.category,
+       () => filters.value.disabled, pageSize], () => {
   page.value = 1
   loadItems()
 })
+watch([sortBy, sortDir], () => { page.value = 1; loadItems() })
 watch(page, loadItems)
 
-function doSearch() {
-  page.value = 1
+function resetAll() {
+  filters.value = { code: '', name: '', short_name: '', group_code: '', category: '', disabled: '' }
+  sortBy.value  = 'code'
+  sortDir.value = 'asc'
+  page.value    = 1
   loadItems()
 }
 
 // ── 生命周期 ──────────────────────────────────────
-onMounted(loadItems)
+onMounted(() => { loadGroups(); loadItems() })
 </script>
 
 <template>
   <div class="material-items">
 
-    <!-- ── 左侧大类筛选 ──────────────────────────── -->
-    <aside class="cat-side">
-      <div class="cat-side-title">物料大类</div>
-      <button class="cat-item" :class="{ active: activeCat === '' }"
-              @click="activeCat = ''">全部</button>
-      <button
-        v-for="c in CATEGORIES"
-        :key="c.key"
-        class="cat-item"
-        :class="{ active: activeCat === c.key }"
-        :style="activeCat === c.key ? { color: c.color, borderColor: c.color, background: c.color + '14' } : {}"
-        @click="activeCat = c.key"
-      >
-        <span class="cat-dot" :style="{ background: c.color }"></span>
-        {{ c.label }}
-      </button>
-      <button class="cat-item cat-unclassified" :class="{ active: activeCat === 'unclassified' }"
-              @click="activeCat = 'unclassified'">未分类</button>
-
-      <label class="cat-toggle">
-        <input v-model="showDisabled" type="checkbox" />
-        <span>显示已停用</span>
-      </label>
-    </aside>
-
-    <!-- ── 右侧主区 ──────────────────────────────── -->
-    <section class="items-main">
-
-      <div class="toolbar">
-        <div class="search-wrap">
-          <input
-            v-model="keyword"
-            class="search-input"
-            placeholder="搜索 ERP 编码或名称，回车搜索"
-            @keyup.enter="doSearch"
-          />
-          <button class="btn-search" title="搜索" @click="doSearch">
-            <el-icon><Search /></el-icon>
-          </button>
-        </div>
-        <span class="total-hint">共 {{ total }} 条</span>
-        <button class="btn-refresh" title="刷新" :disabled="loading" @click="loadItems">
+    <!-- ── 工具条 ────────────────────────────────── -->
+    <div class="toolbar">
+      <span class="total-hint">共 <b>{{ total }}</b> 条</span>
+      <button v-if="hasFilter || sortBy !== 'code' || sortDir !== 'asc'"
+              class="btn-plain" @click="resetAll">重置筛选与排序</button>
+      <div class="tb-right">
+        <select v-model.number="pageSize" class="tb-select">
+          <option :value="20">20 条/页</option>
+          <option :value="50">50 条/页</option>
+          <option :value="100">100 条/页</option>
+        </select>
+        <button class="btn-icon" title="刷新" :disabled="loading" @click="loadItems">
           <el-icon :class="{ spinning: loading }"><Refresh /></el-icon>
         </button>
       </div>
+    </div>
 
-      <div v-if="errorMsg" class="error-bar">
-        <el-icon><WarningFilled /></el-icon>
-        <span>{{ errorMsg }}</span>
-      </div>
+    <div v-if="errorMsg" class="error-bar">
+      <el-icon><WarningFilled /></el-icon>
+      <span>{{ errorMsg }}</span>
+    </div>
 
-      <div v-if="loading" class="state-tip">加载中...</div>
-
-      <div v-else-if="items.length" class="mi-table">
-        <div class="mi-head">
-          <div class="mi-col col-code">ERP 编码</div>
-          <div class="mi-col col-name">ERP 名称</div>
-          <div class="mi-col col-short">短名</div>
-          <div class="mi-col col-group">分组</div>
-          <div class="mi-col col-cats">大类</div>
-        </div>
-        <div class="mi-body">
-          <div
-            v-for="row in items"
-            :key="row.code"
-            class="mi-row"
-            :class="{ 'row-disabled': row.is_disabled }"
-            @click="openCard(row)"
-          >
-            <div class="mi-col col-code"><span class="code-tag">{{ row.code }}</span></div>
-            <div class="mi-col col-name" :title="row.name">{{ row.name }}</div>
-            <div class="mi-col col-short" :title="row.short_name || ''">
-              <span v-if="row.short_name">{{ row.short_name }}</span>
-              <span v-else class="muted">未填</span>
+    <!-- ── 表格 ──────────────────────────────────── -->
+    <div class="table-wrap">
+      <el-table
+        :data="items"
+        v-loading="loading"
+        size="small"
+        height="100%"
+        border
+        :row-key="r => r.code"
+        :tooltip-effect="'light'"
+        :show-overflow-tooltip="true"
+        scrollbar-always-on
+      >
+        <!-- ERP 编码：点击打开物料卡片 -->
+        <el-table-column resizable width="200" fixed="left" class-name="col-fixed-left">
+          <template #header>
+            <div class="th-top">
+              <span class="th-lbl">ERP 编码</span>
+              <button :class="['sort-btn', 'sort-' + sortState('code')]" @click.stop="toggleSort('code')"></button>
             </div>
-            <div class="mi-col col-group" :title="row.group_name">{{ row.group_name || '—' }}</div>
-            <div class="mi-col col-cats">
-              <span
-                v-for="c in (row.categories || [])"
-                :key="c"
-                class="cat-badge"
-                :style="{
-                  color: catMap[c]?.color,
-                  background: (catMap[c]?.color || '#999') + '18',
-                  borderColor: (catMap[c]?.color || '#999') + '40',
-                }"
-              >{{ catMap[c]?.label || c }}</span>
-              <span v-if="!(row.categories || []).length" class="cat-badge badge-none">未分类</span>
+            <div class="th-filter-wrap" @click.stop>
+              <input v-model="filters.code" class="th-fi" placeholder="筛选..." @input="onTextFilter" />
             </div>
-          </div>
-        </div>
-      </div>
+          </template>
+          <template #default="{ row }">
+            <span class="code-link" title="点击查看物料卡片" @click.stop="openCard(row)">{{ row.code }}</span>
+          </template>
+        </el-table-column>
 
-      <div v-else class="state-tip">没有符合条件的物料</div>
+        <!-- ERP 名称 -->
+        <el-table-column resizable min-width="260">
+          <template #header>
+            <div class="th-top">
+              <span class="th-lbl">ERP 名称</span>
+              <button :class="['sort-btn', 'sort-' + sortState('name')]" @click.stop="toggleSort('name')"></button>
+            </div>
+            <div class="th-filter-wrap" @click.stop>
+              <input v-model="filters.name" class="th-fi" placeholder="筛选..." @input="onTextFilter" />
+            </div>
+          </template>
+          <template #default="{ row }">{{ row.name }}</template>
+        </el-table-column>
 
-      <!-- 分页 -->
-      <div v-if="!loading && total > pageSize" class="pager">
-        <button class="pg-btn" :disabled="page <= 1" @click="page--">上一页</button>
-        <span class="pg-info">{{ page }} / {{ totalPages }}</span>
-        <button class="pg-btn" :disabled="page >= totalPages" @click="page++">下一页</button>
-      </div>
+        <!-- 短名 -->
+        <el-table-column resizable width="170">
+          <template #header>
+            <div class="th-top">
+              <span class="th-lbl">短名</span>
+              <button :class="['sort-btn', 'sort-' + sortState('short_name')]" @click.stop="toggleSort('short_name')"></button>
+            </div>
+            <div class="th-filter-wrap" @click.stop>
+              <input v-model="filters.short_name" class="th-fi" placeholder="筛选..." @input="onTextFilter" />
+            </div>
+          </template>
+          <template #default="{ row }">
+            <span v-if="row.short_name">{{ row.short_name }}</span>
+            <span v-else class="cell-empty">未填</span>
+          </template>
+        </el-table-column>
 
-    </section>
+        <!-- 分组 -->
+        <el-table-column resizable width="180">
+          <template #header>
+            <div class="th-top">
+              <span class="th-lbl">分组</span>
+              <button :class="['sort-btn', 'sort-' + sortState('group_code')]" @click.stop="toggleSort('group_code')"></button>
+            </div>
+            <div class="th-filter-wrap" @click.stop>
+              <select v-model="filters.group_code" class="th-fs">
+                <option value="">全部</option>
+                <option v-for="g in groups" :key="g.group_code" :value="g.group_code">
+                  {{ g.group_code }} {{ g.group_name }}
+                </option>
+              </select>
+            </div>
+          </template>
+          <template #default="{ row }">{{ row.group_code }} · {{ row.group_name || '—' }}</template>
+        </el-table-column>
 
-    <!-- 物料卡片 -->
+        <!-- 大类 -->
+        <el-table-column resizable width="170">
+          <template #header>
+            <div class="th-top"><span class="th-lbl">大类</span></div>
+            <div class="th-filter-wrap" @click.stop>
+              <select v-model="filters.category" class="th-fs">
+                <option value="">全部</option>
+                <option v-for="c in CATEGORIES" :key="c.key" :value="c.key">{{ c.label }}</option>
+                <option value="unclassified">未分类</option>
+              </select>
+            </div>
+          </template>
+          <template #default="{ row }">
+            <span
+              v-for="c in (row.categories || [])"
+              :key="c"
+              class="cat-badge"
+              :style="{
+                color: catMap[c]?.color,
+                background: (catMap[c]?.color || '#8a7a6a') + '1a',
+                borderColor: (catMap[c]?.color || '#8a7a6a') + '55',
+              }"
+            >{{ catMap[c]?.label || c }}</span>
+            <span v-if="!(row.categories || []).length" class="cat-badge badge-none">未分类</span>
+          </template>
+        </el-table-column>
+
+        <!-- 停用状态 -->
+        <el-table-column resizable width="130">
+          <template #header>
+            <div class="th-top"><span class="th-lbl">停用状态</span></div>
+            <div class="th-filter-wrap" @click.stop>
+              <select v-model="filters.disabled" class="th-fs">
+                <option value="">全部</option>
+                <option value="0">启用</option>
+                <option value="1">停用</option>
+              </select>
+            </div>
+          </template>
+          <template #default="{ row }">
+            <!-- is_disabled 是最终生效值；is_disabled_override 是人工设定值（null=跟随 ERP 默认）。
+                 两者结合才能区分「ERP 默认停用」与「人工强制停用/启用」。 -->
+            <span v-if="row.is_disabled" class="st-badge st-off">停用</span>
+            <span v-else class="st-badge st-on">启用</span>
+            <span v-if="row.is_disabled_override !== null && row.is_disabled_override !== undefined"
+                  class="st-manual" title="人工覆盖，未跟随 ERP 默认">人工</span>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
+
+    <!-- ── 分页 ──────────────────────────────────── -->
+    <div class="pager">
+      <button class="pg-btn" :disabled="page <= 1 || loading" @click="page--">上一页</button>
+      <span class="pg-info">{{ page }} / {{ totalPages }}</span>
+      <button class="pg-btn" :disabled="page >= totalPages || loading" @click="page++">下一页</button>
+    </div>
+
+    <!-- 物料卡片（dialog） -->
     <MaterialCard v-model:visible="cardVisible" :code="cardCode" @saved="onCardSaved" />
   </div>
 </template>
 
 <style scoped>
 .material-items {
-  display: flex; gap: 14px;
+  display: flex; flex-direction: column;
   height: 100%; min-height: 0;
   font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
 
-/* ── 左侧大类 ─────────────────────────────────── */
-.cat-side {
-  width: 150px; flex-shrink: 0;
-  display: flex; flex-direction: column; gap: 4px;
-  padding: 12px 10px;
-  background: var(--bg-card);
-  border: 1px solid var(--border); border-radius: 12px;
-  align-self: flex-start;
+/* ── 工具条 ───────────────────────────────────── */
+.toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; flex-shrink: 0; }
+.total-hint { font-size: 12px; color: var(--text-secondary, #6b5e4e); }
+.total-hint b { color: var(--text-primary); font-size: 13px; }
+.tb-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.tb-select {
+  height: 28px; padding: 0 6px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg-card); color: var(--text-primary);
+  font-size: 12px; font-family: inherit; cursor: pointer; outline: none;
 }
-.cat-side-title {
-  font-size: 11px; font-weight: 700; color: var(--accent);
-  letter-spacing: 0.08em; margin-bottom: 6px; padding-left: 4px;
-}
-.cat-item {
-  display: flex; align-items: center; gap: 7px;
-  padding: 6px 10px; border-radius: 7px;
-  border: 1px solid transparent;
-  background: transparent; color: var(--text-muted);
-  font-size: 12px; font-family: inherit; text-align: left;
-  cursor: pointer; transition: all 0.15s;
-}
-.cat-item:hover { background: var(--accent-bg); color: var(--accent); }
-.cat-item.active { font-weight: 600; }
-.cat-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-.cat-unclassified { margin-top: 2px; border-top: 1px solid var(--border); border-radius: 0 0 7px 7px; padding-top: 9px; }
-
-.cat-toggle {
-  display: flex; align-items: center; gap: 6px;
-  margin-top: 10px; padding: 6px 4px 0;
-  border-top: 1px solid var(--border);
-  font-size: 11px; color: var(--text-muted); cursor: pointer;
-}
-
-/* ── 右侧主区 ─────────────────────────────────── */
-.items-main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
-
-.toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-.search-wrap { display: flex; gap: 6px; }
-.search-input {
-  width: 260px; height: 30px; padding: 0 10px;
-  border: 1px solid var(--border); border-radius: 7px;
-  background: var(--bg); color: var(--text-primary);
-  font-size: 12px; font-family: inherit; outline: none;
-  transition: border-color 0.2s;
-}
-.search-input:focus { border-color: var(--accent); }
-.btn-search, .btn-refresh {
-  width: 30px; height: 30px; border-radius: 7px;
+.btn-plain {
+  padding: 4px 12px; border-radius: 6px;
   border: 1px solid var(--border);
-  background: transparent; color: var(--text-muted);
+  background: var(--bg-card); color: var(--text-secondary, #6b5e4e);
+  font-size: 12px; font-family: inherit; cursor: pointer; transition: all 0.15s;
+}
+.btn-plain:hover { border-color: var(--accent); color: var(--accent); }
+.btn-icon {
+  width: 28px; height: 28px; border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent; color: var(--text-secondary, #6b5e4e);
   display: flex; align-items: center; justify-content: center;
   cursor: pointer; transition: all 0.15s;
 }
-.btn-search:hover, .btn-refresh:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-.btn-refresh { margin-left: auto; }
-.btn-refresh:disabled { opacity: 0.5; cursor: not-allowed; }
-.total-hint { font-size: 12px; color: var(--text-muted); }
+.btn-icon:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.btn-icon:disabled { opacity: 0.5; cursor: not-allowed; }
 .spinning { animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .error-bar {
   display: flex; align-items: center; gap: 8px;
-  margin-bottom: 12px; padding: 8px 12px;
+  margin-bottom: 10px; padding: 8px 12px;
   background: rgba(208,90,60,0.06); border: 1px solid rgba(208,90,60,0.2);
-  border-radius: 7px; color: #d05a3c; font-size: 12px;
+  border-radius: 7px; color: #d05a3c; font-size: 12px; flex-shrink: 0;
 }
-.state-tip { font-size: 13px; color: var(--text-muted); padding: 32px 0; text-align: center; }
 
 /* ── 表格 ─────────────────────────────────────── */
-.mi-table {
-  border: 1px solid var(--border); border-radius: 10px;
-  overflow: hidden; display: flex; flex-direction: column; min-height: 0;
-}
-.mi-body { overflow-y: auto; min-height: 0; }
-.mi-body::-webkit-scrollbar { width: 4px; }
-.mi-body::-webkit-scrollbar-track { background: transparent; }
-.mi-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.table-wrap { flex: 1; min-height: 0; }
 
-.mi-head {
-  display: flex; align-items: center; height: 34px;
-  background: var(--table-head, #f5f0e8);
-  border-bottom: 1px solid var(--border); padding: 0 14px;
-  position: sticky; top: 0; z-index: 1;
+/* 表头：标签 + 排序按钮 + 筛选输入，与产品库表格一致 */
+.th-top { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+.th-lbl { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+.sort-btn {
+  width: 14px; height: 14px; flex-shrink: 0;
+  border: none; background: transparent; cursor: pointer;
+  position: relative; opacity: 0.35; transition: opacity 0.15s;
 }
-.mi-col { font-size: 12px; color: var(--text-muted); padding-right: 10px; }
-.col-code  { width: 170px; flex-shrink: 0; }
-.col-name  { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.col-short { width: 150px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.col-group { width: 130px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.col-cats  { width: 180px; flex-shrink: 0; display: flex; gap: 4px; flex-wrap: wrap; padding-right: 0; }
-
-.mi-row {
-  display: flex; align-items: center; min-height: 42px;
-  padding: 7px 14px; border-bottom: 1px solid var(--border);
-  font-size: 12px; color: var(--text-primary);
-  cursor: pointer; transition: background 0.15s;
+.sort-btn:hover { opacity: 0.8; }
+.sort-btn::before {
+  content: '⇅'; font-size: 11px; color: var(--text-primary);
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
 }
-.mi-row:last-child { border-bottom: none; }
-.mi-row:hover { background: rgba(196,136,58,0.04); }
-.mi-row.row-disabled { opacity: 0.45; }
+.sort-btn.sort-asc  { opacity: 1; }
+.sort-btn.sort-desc { opacity: 1; }
+.sort-btn.sort-asc::before  { content: '↑'; color: var(--accent); font-weight: 700; }
+.sort-btn.sort-desc::before { content: '↓'; color: var(--accent); font-weight: 700; }
 
-.code-tag {
+.th-filter-wrap { margin-top: 3px; }
+.th-fi, .th-fs {
+  width: 100%; height: 22px; padding: 0 5px;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: #fff; color: #2c2420;
+  font-size: 11px; font-family: inherit; outline: none;
+  transition: border-color 0.15s;
+}
+.th-fi:focus, .th-fs:focus { border-color: var(--accent); }
+.th-fs { cursor: pointer; }
+
+/* 单元格内容 */
+.code-link {
   font-family: monospace; font-size: 11px;
-  color: var(--accent); background: var(--accent-bg);
-  border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px;
+  color: var(--accent); cursor: pointer;
+  border-bottom: 1px dashed var(--accent);
 }
+.code-link:hover { color: var(--accent-hover, #e09050); }
+.cell-empty { color: #a89a8a; }
+
 .cat-badge {
+  display: inline-block; margin-right: 3px;
   font-size: 10px; font-weight: 500;
   border: 1px solid; border-radius: 4px; padding: 1px 6px;
 }
-.cat-badge.badge-none { color: var(--text-muted); background: var(--bg); border-color: var(--border); }
-.muted { color: var(--text-muted); }
+.cat-badge.badge-none { color: #8a7a6a; background: #f5f0e8; border-color: var(--border); }
+
+.st-badge {
+  font-size: 10px; font-weight: 600;
+  border: 1px solid; border-radius: 4px; padding: 1px 7px;
+}
+.st-badge.st-on  { color: #4a8f6a; background: rgba(74,143,106,0.12); border-color: rgba(74,143,106,0.4); }
+.st-badge.st-off { color: #d05a3c; background: rgba(208,90,60,0.1);  border-color: rgba(208,90,60,0.35); }
+.st-manual {
+  margin-left: 4px; font-size: 10px;
+  color: #9c6fba; background: rgba(156,111,186,0.12);
+  border: 1px solid rgba(156,111,186,0.3); border-radius: 4px; padding: 1px 5px;
+  cursor: help;
+}
 
 /* ── 分页 ─────────────────────────────────────── */
-.pager { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 12px 0 4px; }
+.pager {
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  padding: 10px 0 2px; flex-shrink: 0;
+}
 .pg-btn {
   padding: 4px 14px; border-radius: 6px;
   border: 1px solid var(--border);
-  background: var(--bg-card); color: var(--text-muted);
+  background: var(--bg-card); color: var(--text-primary);
   font-size: 12px; font-family: inherit; cursor: pointer; transition: all 0.15s;
 }
 .pg-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .pg-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.pg-info { font-size: 12px; color: var(--text-muted); }
+.pg-info { font-size: 12px; color: var(--text-primary); }
+</style>
+
+<!-- 非 scoped：el-table 的内部结构由组件渲染，scoped 选择器匹配不到。
+     用祖先类名 .material-items 限定作用域，避免影响其他页面的表格。
+     表格正文文字统一用主文字色（深黑褐），不用 Element 默认的浅灰。 -->
+<style>
+.material-items .el-table {
+  --el-table-border-color: var(--border);
+  --el-table-header-bg-color: #f5f0e8;
+  --el-table-row-hover-bg-color: #faf7f2;
+  font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+.material-items .el-table th.el-table__cell {
+  background: #f5f0e8 !important;
+  color: #2c2420;
+  padding: 5px 0;
+  vertical-align: top;
+}
+.material-items .el-table td.el-table__cell {
+  color: #2c2420;
+  padding: 6px 0;
+}
+.material-items .el-table .cell {
+  color: #2c2420;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.material-items .el-table__body tr:hover > td.el-table__cell { background: #faf7f2; }
+.material-items .el-table__inner-wrapper::before { display: none; }
+.material-items .el-table ::-webkit-scrollbar { width: 6px; height: 6px; }
+.material-items .el-table ::-webkit-scrollbar-track { background: transparent; }
+.material-items .el-table ::-webkit-scrollbar-thumb { background: #d8cbb6; border-radius: 3px; }
 </style>
