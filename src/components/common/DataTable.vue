@@ -50,6 +50,15 @@ const props = defineProps({
 
 const emit = defineEmits(['row-click', 'filter-change', 'sort-change'])
 
+// el-table 的 height 是百分比时，必须让本组件根元素也拿到同一高度，
+// 否则百分比对着 auto 高度的父元素解析不出来，el-table 会退化成内容高度、
+// 撑破容器且无法滚动（height="65vh" 这类视口单位不受影响，所以以前没暴露）。
+const rootStyle = computed(() => {
+  if (props.height == null || props.height === '') return null
+  const h = typeof props.height === 'number' ? `${props.height}px` : props.height
+  return { height: h, minHeight: 0 }
+})
+
 function slotKey(col) {
   return col.prop || col.label
 }
@@ -147,7 +156,7 @@ const displayData = computed(() => {
 </script>
 
 <template>
-  <div class="app-data-table" :class="{ 'app-data-table--bordered': border }">
+  <div class="app-data-table" :class="{ 'app-data-table--bordered': border }" :style="rootStyle">
     <el-table
       :data="displayData"
       :row-key="rowKey"
@@ -212,7 +221,7 @@ const displayData = computed(() => {
 </template>
 
 <style scoped>
-.app-data-table { width: 100%; }
+.app-data-table { width: 100%; box-sizing: border-box; }
 
 /* ── 两行表头：标题+排序 / 筛选下拉 ────────────────── */
 .th-top { display: flex; align-items: center; justify-content: center; gap: 4px; white-space: nowrap; }
