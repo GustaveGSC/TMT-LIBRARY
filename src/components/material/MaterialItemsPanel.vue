@@ -31,6 +31,10 @@ const errorMsg = ref('')
 const colFilters = ref({})
 const sortBy     = ref('code')
 const sortDir    = ref('asc')
+// 底部开关：默认不显示停用数据（重导后停用占比将达 36%，默认藏起来更实用）
+const hideDisabled = ref(true)
+// 文本筛选按正则匹配（服务端用 REGEXP 而非 LIKE）
+const useRegex = ref(false)
 
 // ── 分页 ──────────────────────────────────────────
 const page     = ref(1)
@@ -44,11 +48,11 @@ const isSorted = computed(() => sortBy.value !== 'code' || sortDir.value !== 'as
 // ── 列配置 ────────────────────────────────────────
 const columns = computed(() => [
   { prop: 'code',       label: 'ERP 编码', width: 200, fixed: 'left',
-    sortable: true, filterable: true, filterType: 'text' },
+    sortable: true, filterable: true, filterType: 'text', filterSuggest: true },
   { prop: 'name',       label: 'ERP 名称', minWidth: 260,
-    sortable: true, filterable: true, filterType: 'text' },
+    sortable: true, filterable: true, filterType: 'text', filterSuggest: true },
   { prop: 'short_name', label: '简称',     width: 170,
-    sortable: true, filterable: true, filterType: 'text' },
+    sortable: true, filterable: true, filterType: 'text', filterSuggest: true },
   { prop: 'group_code', label: '分组',     width: 190,
     sortable: true, filterable: true,
     filterOptions: groups.value.map(g => ({
@@ -102,7 +106,11 @@ async function loadItems() {
     if (f.group_code)      params.group_code = f.group_code
     if (f.categories === 'unclassified') params.unclassified = 1
     else if (f.categories)               params.category     = f.categories
+    // 停用筛选：列筛选显式选了就以它为准（便于专门查看停用项），
+    // 没选时才套用底部「不显示停用状态数据」开关。
     if (txt(f.is_disabled)) params.is_disabled = f.is_disabled
+    else if (hideDisabled.value) params.is_disabled = '0'
+    if (useRegex.value) params.match_mode = 'regex'
 
     const res = await http.get('/api/material/items', { params })
     if (res.success) {
@@ -115,6 +123,19 @@ async function loadItems() {
     errorMsg.value = e.message || '网络错误'
   } finally {
     loading.value = false
+  }
+}
+
+// ── 候选面板数据源 ─────────────────────────────────
+// 8089 条物料的候选值只能由服务端给（当页 50 行推不出完整候选）。
+async function fetchSuggestions(field, keyword) {
+  try {
+    const res = await http.get('/api/material/suggest', {
+      params: { field, q: keyword, limit: 20 },
+    })
+    return res.success ? (res.data || []) : []
+  } catch {
+    return []
   }
 }
 
@@ -133,7 +154,7 @@ function onSortChange({ prop, order }) {
   loadItems()
 }
 
-watch([pageSize], () => { page.value = 1; loadItems() })
+watch([pageSize, hideDisabled, useRegex], () => { page.value = 1; loadItems() })
 watch(page, loadItems)
 
 // ── 生命周期 ──────────────────────────────────────
@@ -155,6 +176,7 @@ onMounted(() => { loadGroups(); loadItems() })
         :columns="columns"
         :loading="loading"
         server-mode
+        :suggest-provider="fetchSuggestions"
         size="small"
         height="100%"
         row-key="code"
@@ -205,8 +227,14 @@ onMounted(() => { loadGroups(); loadItems() })
     <div class="footbar">
       <div class="fb-left">
         <span class="total-hint">共 <b>{{ total }}</b> 条</span>
-        <span class="tip">点击 ERP 编码查看物料卡片</span>
-        <span v-if="hasFilter || isSorted" class="tip">筛选/排序由服务端执行，跨全部数据生效</span>
+        <label class="fb-check">
+          <input v-model="hideDisabled" type="checkbox" />
+          <span>不显示停用状态数据</span>
+        </label>
+        <label class="fb-check">
+          <input v-model="useRegex" type="checkbox" />
+          <span>正则筛选</span>
+        </label>
       </div>
       <div class="fb-pager">
         <button class="pg-btn" :disabled="page <= 1" @click="page--">上一页</button>
@@ -247,6 +275,12 @@ onMounted(() => { loadGroups(); loadItems() })
 .total-hint { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
 .total-hint b { color: var(--text-primary); font-size: 13px; }
 .tip { font-size: 11px; color: var(--text-secondary); }
+.fb-check {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 12px; color: var(--text-primary);
+  cursor: pointer; white-space: nowrap; user-select: none;
+}
+.fb-check input { cursor: pointer; margin: 0; }
 .tb-select {
   height: 28px; padding: 0 6px;
   border: 1px solid var(--border); border-radius: 6px;
@@ -264,11 +298,11 @@ onMounted(() => { loadGroups(); loadItems() })
 .table-wrap { flex: 1 1 auto; min-height: 0; overflow: hidden; }
 
 .code-link {
-  font-family: monospace; font-size: 11px; font-weight: 600;
-  color: var(--accent); cursor: pointer;
-  border-bottom: 1px dashed var(--accent);
+  font-family: 'Microsoft YaHei UI', 'Microsoft YaHei', monospace;
+  font-size: 12px; font-weight: 700;
+  color: var(--text-primary); cursor: pointer;
 }
-.code-link:hover { color: var(--accent-hover); }
+.code-link:hover { color: var(--accent); }
 .cell-empty { color: var(--text-muted); }
 
 .cat-badge {
