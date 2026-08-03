@@ -151,9 +151,6 @@ class MaterialService:
             'total': total, 'page': page, 'page_size': page_size,
         })
 
-    def suggest(self, field, keyword, limit):
-        return Result.ok(data=MaterialRepository.suggest(field, keyword, limit))
-
     def detail(self, code):
         raw = MaterialRepository.raw_by_code(code)
         if not raw:

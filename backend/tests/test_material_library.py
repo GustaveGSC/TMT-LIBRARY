@@ -6,6 +6,7 @@ from flask import Flask
 from sqlalchemy import event
 from sqlalchemy.dialects import mysql
 from sqlalchemy.schema import CreateTable
+from sqlalchemy.exc import DBAPIError
 
 from auth import generate_token
 from database.base import db
@@ -296,33 +297,6 @@ def test_default_sorted_list_keeps_three_business_queries_when_caches_are_warm(m
         assert len(statements) == 3
 
 
-def test_material_suggest_is_distinct_limited_and_one_query(material_app):
-    with material_app.app_context():
-        db.session.add_all([
-            ImportProductRaw(code='A1', name='桌面', group_code='G', group_name='组',
-                             imported_at=now_cst()),
-            ImportProductRaw(code='A2', name='桌面', group_code='G', group_name='组',
-                             imported_at=now_cst()),
-            ImportProductRaw(code='B1', name='桌腿', group_code='G', group_name='组',
-                             imported_at=now_cst()),
-        ])
-        db.session.commit()
-        statements = []
-
-        def capture(_conn, _cursor, statement, _parameters, _context, _executemany):
-            if statement.lstrip().upper().startswith('SELECT'):
-                statements.append(statement)
-
-        event.listen(db.engine, 'before_cursor_execute', capture)
-        try:
-            result = material_service.suggest('name', '桌', 2)
-        finally:
-            event.remove(db.engine, 'before_cursor_execute', capture)
-        assert set(result.data) == {'桌腿', '桌面'}
-        assert len(result.data) == 2
-        assert len(statements) == 1
-
-
 def test_material_regex_filters_preserve_keyword_like_behavior(material_app):
     with material_app.app_context():
         db.session.add_all([
@@ -358,7 +332,7 @@ def test_material_route_rejects_invalid_regex_before_query(material_app, monkeyp
     assert response.get_json()['message'] == '正则表达式无效'
 
 
-def test_material_suggest_route_validates_field_and_empty_query(material_app, monkeypatch):
+def test_material_route_converts_mysql_3685_regex_error_to_400(material_app, monkeypatch):
     material_app.register_blueprint(material_bp, url_prefix='/api/material')
     monkeypatch.setattr(UserRepository, 'get_auth_state', lambda _id: (True, 0))
     client = material_app.test_client()
@@ -367,9 +341,11 @@ def test_material_suggest_route_validates_field_and_empty_query(material_app, mo
         'permissions': ['product:view'], 'token_version': 0,
     }
     client.set_cookie('tmt_session', generate_token(viewer, csrf_token='csrf'))
-    invalid = client.get('/api/material/suggest?field=remark&q=x')
-    empty = client.get('/api/material/suggest?field=code&q=%20')
-    assert invalid.status_code == 400
-    assert invalid.get_json()['message'] == '字段无效'
-    assert empty.status_code == 200
-    assert empty.get_json()['data'] == []
+    database_error = DBAPIError(
+        'SELECT ... REGEXP ...', {}, Exception(3685, 'Illegal argument to a regular expression'),
+        False,
+    )
+    monkeypatch.setattr(material_service, 'list_items', lambda *_args, **_kwargs: (_ for _ in ()).throw(database_error))
+    response = client.get('/api/material/items?match_mode=regex&code=%5B%5B%3Anosuch%3A%5D%5D')
+    assert response.status_code == 400
+    assert response.get_json()['message'] == '正则表达式无效'

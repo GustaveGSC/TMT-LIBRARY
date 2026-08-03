@@ -2,6 +2,7 @@ import os
 import time
 import hashlib
 import re
+import warnings
 
 from flask import Blueprint, g, request
 from sqlalchemy.exc import DBAPIError
@@ -58,9 +59,12 @@ def list_items():
     }
     if match_mode == 'regex':
         try:
-            for value in text_filters.values():
-                if value:
-                    re.compile(value)
+            with warnings.catch_warnings():
+                # Python 对 ICU/POSIX 字符类可能给 FutureWarning，但 MySQL 才是最终执行方。
+                warnings.simplefilter('ignore', FutureWarning)
+                for value in text_filters.values():
+                    if value:
+                        re.compile(value)
         except re.error:
             return Result.fail('正则表达式无效').to_response()
     try:
@@ -77,26 +81,11 @@ def list_items():
         error_code = exc.orig.args[0] if getattr(exc.orig, 'args', None) else None
         if match_mode == 'regex' and (
             error_code == 1139
-            or (isinstance(error_code, int) and 3690 <= error_code <= 3699)
+            or (isinstance(error_code, int) and 3685 <= error_code <= 3699)
         ):
             return Result.fail('正则表达式无效').to_response()
         raise
     return result.to_response()
-
-
-@material_bp.get('/suggest')
-def suggest():
-    field = request.args.get('field', '').strip()
-    if field not in ('code', 'name', 'short_name'):
-        return Result.fail('字段无效').to_response()
-    keyword = request.args.get('q', '').strip()
-    if not keyword:
-        return Result.ok(data=[]).to_response()
-    try:
-        limit = min(50, max(1, int(request.args.get('limit', 20))))
-    except ValueError:
-        return Result.fail('limit 参数无效').to_response()
-    return material_service.suggest(field, keyword, limit).to_response()
 
 
 @material_bp.get('/disable-keywords')

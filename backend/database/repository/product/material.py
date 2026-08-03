@@ -89,20 +89,6 @@ class MaterialRepository:
         return query.order_by(direction)
 
     @staticmethod
-    def suggest(field, keyword, limit):
-        columns = {
-            'code': ImportProductRaw.code,
-            'name': ImportProductRaw.name,
-            'short_name': ProductMaterial.short_name,
-        }
-        column = columns[field]
-        # code/name 不需要 JOIN；short_name 直接查人工属性表，保证始终只有一条 SQL。
-        query = db.session.query(column)
-        return [row[0] for row in query.filter(
-            column.is_not(None), column != '', column.like(f'%{keyword}%'),
-        ).distinct().order_by(column.asc()).limit(limit).all()]
-
-    @staticmethod
     def raw_for_codes(codes):
         if not codes:
             return []
