@@ -208,12 +208,10 @@ onMounted(() => { loadGroups(); loadItems() })
         <span class="tip">点击 ERP 编码查看物料卡片</span>
         <span v-if="hasFilter || isSorted" class="tip">筛选/排序由服务端执行，跨全部数据生效</span>
       </div>
-      <div class="fb-center">
+      <div class="fb-pager">
         <button class="pg-btn" :disabled="page <= 1" @click="page--">上一页</button>
         <span class="pg-info">第 {{ page }} / {{ totalPages }} 页</span>
         <button class="pg-btn" :disabled="page >= totalPages" @click="page++">下一页</button>
-      </div>
-      <div class="fb-right">
         <select v-model.number="pageSize" class="tb-select">
           <option :value="20">20 条/页</option>
           <option :value="50">50 条/页</option>
@@ -243,10 +241,9 @@ onMounted(() => { loadGroups(); loadItems() })
   min-height: 40px; padding: 8px 0 2px;
   flex: 0 0 auto;
 }
-/* 左右两段等宽，中间的分页才能真正居中 */
-.fb-left, .fb-right { flex: 1; display: flex; align-items: center; gap: 10px; min-width: 0; }
-.fb-right { justify-content: flex-end; }
-.fb-center { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+.fb-left { flex: 1; display: flex; align-items: center; gap: 10px; min-width: 0; }
+/* 分页与「每页条数」是一组控件，紧挨在一起 */
+.fb-pager { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
 .total-hint { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
 .total-hint b { color: var(--text-primary); font-size: 13px; }
 .tip { font-size: 11px; color: var(--text-secondary); }
