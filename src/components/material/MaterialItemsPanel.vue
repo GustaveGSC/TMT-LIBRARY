@@ -1,7 +1,7 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
 import { ref, computed, watch, onMounted } from 'vue'
-import { WarningFilled, Refresh } from '@element-plus/icons-vue'
+import { WarningFilled } from '@element-plus/icons-vue'
 import http from '@/api/http'
 import DataTable from '@/components/common/DataTable.vue'
 import MaterialCard from './MaterialCard.vue'
@@ -209,9 +209,9 @@ onMounted(() => { loadGroups(); loadItems() })
         <span v-if="hasFilter || isSorted" class="tip">筛选/排序由服务端执行，跨全部数据生效</span>
       </div>
       <div class="fb-center">
-        <button class="pg-btn" :disabled="page <= 1 || loading" @click="page--">上一页</button>
-        <span class="pg-info">{{ page }} / {{ totalPages }}</span>
-        <button class="pg-btn" :disabled="page >= totalPages || loading" @click="page++">下一页</button>
+        <button class="pg-btn" :disabled="page <= 1" @click="page--">上一页</button>
+        <span class="pg-info">第 {{ page }} / {{ totalPages }} 页</span>
+        <button class="pg-btn" :disabled="page >= totalPages" @click="page++">下一页</button>
       </div>
       <div class="fb-right">
         <select v-model.number="pageSize" class="tb-select">
@@ -219,9 +219,6 @@ onMounted(() => { loadGroups(); loadItems() })
           <option :value="50">50 条/页</option>
           <option :value="100">100 条/页</option>
         </select>
-        <button class="btn-icon" title="刷新" :disabled="loading" @click="loadItems">
-          <el-icon :class="{ spinning: loading }"><Refresh /></el-icon>
-        </button>
       </div>
     </div>
 
@@ -231,15 +228,20 @@ onMounted(() => { loadGroups(); loadItems() })
 </template>
 
 <style scoped>
+/* 本组件是 page-material 里 .tab-panel（flex column）的直接子项，
+   所以用 flex 主轴分配高度，而不是 height:100% ——
+   百分比高度要求父级高度确定，flex 分配不依赖这一点，更可靠。 */
 .material-items {
   display: flex; flex-direction: column;
-  height: 100%; min-height: 0;
+  flex: 1 1 0; min-height: 0;
+  height: 100%;
 }
 
 /* ── 表格下方底栏：左信息 / 中分页 / 右每页条数 ───── */
 .footbar {
   display: flex; align-items: center; gap: 12px;
-  padding: 10px 0 2px; flex-shrink: 0;
+  min-height: 40px; padding: 8px 0 2px;
+  flex: 0 0 auto;
 }
 /* 左右两段等宽，中间的分页才能真正居中 */
 .fb-left, .fb-right { flex: 1; display: flex; align-items: center; gap: 10px; min-width: 0; }
@@ -254,18 +256,6 @@ onMounted(() => { loadGroups(); loadItems() })
   background: var(--bg-card); color: var(--text-primary);
   font-size: 12px; font-family: inherit; cursor: pointer; outline: none;
 }
-.btn-icon {
-  width: 28px; height: 28px; border-radius: 6px;
-  border: 1px solid var(--border);
-  background: transparent; color: var(--text-secondary);
-  display: flex; align-items: center; justify-content: center;
-  cursor: pointer; transition: all 0.15s;
-}
-.btn-icon:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-.btn-icon:disabled { opacity: 0.5; cursor: not-allowed; }
-.spinning { animation: spin 0.9s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-
 .error-bar {
   display: flex; align-items: center; gap: 8px;
   margin-bottom: 10px; padding: 8px 12px;
@@ -274,7 +264,7 @@ onMounted(() => { loadGroups(); loadItems() })
 }
 
 /* ── 表格 ─────────────────────────────────────── */
-.table-wrap { flex: 1; min-height: 0; }
+.table-wrap { flex: 1 1 auto; min-height: 0; overflow: hidden; }
 
 .code-link {
   font-family: monospace; font-size: 11px; font-weight: 600;
