@@ -47,7 +47,7 @@ const columns = computed(() => [
     sortable: true, filterable: true, filterType: 'text' },
   { prop: 'name',       label: 'ERP 名称', minWidth: 260,
     sortable: true, filterable: true, filterType: 'text' },
-  { prop: 'short_name', label: '短名',     width: 170,
+  { prop: 'short_name', label: '简称',     width: 170,
     sortable: true, filterable: true, filterType: 'text' },
   { prop: 'group_code', label: '分组',     width: 190,
     sortable: true, filterable: true,
@@ -143,22 +143,6 @@ onMounted(() => { loadGroups(); loadItems() })
 <template>
   <div class="material-items">
 
-    <!-- ── 工具条 ────────────────────────────────── -->
-    <div class="toolbar">
-      <span class="total-hint">共 <b>{{ total }}</b> 条</span>
-      <span class="tip">点击 ERP 编码查看物料卡片</span>
-      <div class="tb-right">
-        <select v-model.number="pageSize" class="tb-select">
-          <option :value="20">20 条/页</option>
-          <option :value="50">50 条/页</option>
-          <option :value="100">100 条/页</option>
-        </select>
-        <button class="btn-icon" title="刷新" :disabled="loading" @click="loadItems">
-          <el-icon :class="{ spinning: loading }"><Refresh /></el-icon>
-        </button>
-      </div>
-    </div>
-
     <div v-if="errorMsg" class="error-bar">
       <el-icon><WarningFilled /></el-icon>
       <span>{{ errorMsg }}</span>
@@ -217,12 +201,28 @@ onMounted(() => { loadGroups(); loadItems() })
       </DataTable>
     </div>
 
-    <!-- ── 分页 ──────────────────────────────────── -->
-    <div class="pager">
-      <button class="pg-btn" :disabled="page <= 1 || loading" @click="page--">上一页</button>
-      <span class="pg-info">{{ page }} / {{ totalPages }}</span>
-      <button class="pg-btn" :disabled="page >= totalPages || loading" @click="page++">下一页</button>
-      <span v-if="hasFilter || isSorted" class="pg-note">（筛选/排序由服务端执行，跨全部 {{ total }} 条生效）</span>
+    <!-- ── 表格下方：统计信息 + 分页 + 每页条数 ──────── -->
+    <div class="footbar">
+      <div class="fb-left">
+        <span class="total-hint">共 <b>{{ total }}</b> 条</span>
+        <span class="tip">点击 ERP 编码查看物料卡片</span>
+        <span v-if="hasFilter || isSorted" class="tip">筛选/排序由服务端执行，跨全部数据生效</span>
+      </div>
+      <div class="fb-center">
+        <button class="pg-btn" :disabled="page <= 1 || loading" @click="page--">上一页</button>
+        <span class="pg-info">{{ page }} / {{ totalPages }}</span>
+        <button class="pg-btn" :disabled="page >= totalPages || loading" @click="page++">下一页</button>
+      </div>
+      <div class="fb-right">
+        <select v-model.number="pageSize" class="tb-select">
+          <option :value="20">20 条/页</option>
+          <option :value="50">50 条/页</option>
+          <option :value="100">100 条/页</option>
+        </select>
+        <button class="btn-icon" title="刷新" :disabled="loading" @click="loadItems">
+          <el-icon :class="{ spinning: loading }"><Refresh /></el-icon>
+        </button>
+      </div>
     </div>
 
     <!-- 物料卡片（dialog） -->
@@ -236,12 +236,18 @@ onMounted(() => { loadGroups(); loadItems() })
   height: 100%; min-height: 0;
 }
 
-/* ── 工具条 ───────────────────────────────────── */
-.toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; flex-shrink: 0; }
-.total-hint { font-size: 12px; color: var(--text-secondary); }
+/* ── 表格下方底栏：左信息 / 中分页 / 右每页条数 ───── */
+.footbar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 0 2px; flex-shrink: 0;
+}
+/* 左右两段等宽，中间的分页才能真正居中 */
+.fb-left, .fb-right { flex: 1; display: flex; align-items: center; gap: 10px; min-width: 0; }
+.fb-right { justify-content: flex-end; }
+.fb-center { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+.total-hint { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
 .total-hint b { color: var(--text-primary); font-size: 13px; }
 .tip { font-size: 11px; color: var(--text-secondary); }
-.tb-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .tb-select {
   height: 28px; padding: 0 6px;
   border: 1px solid var(--border); border-radius: 6px;
@@ -298,11 +304,6 @@ onMounted(() => { loadGroups(); loadItems() })
   cursor: help;
 }
 
-/* ── 分页 ─────────────────────────────────────── */
-.pager {
-  display: flex; align-items: center; justify-content: center; gap: 12px;
-  padding: 10px 0 2px; flex-shrink: 0;
-}
 .pg-btn {
   padding: 4px 14px; border-radius: 6px;
   border: 1px solid var(--border);
@@ -312,5 +313,4 @@ onMounted(() => { loadGroups(); loadItems() })
 .pg-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .pg-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .pg-info { font-size: 12px; color: var(--text-primary); }
-.pg-note { font-size: 11px; color: var(--text-secondary); }
 </style>

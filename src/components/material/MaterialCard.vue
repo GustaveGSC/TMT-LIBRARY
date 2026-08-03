@@ -125,8 +125,8 @@ watch(() => props.visible, v => { if (v) loadDetail() })
         <div class="mc-section">
           <div class="mc-section-title">人工维护</div>
           <div class="mc-field">
-            <label>短名</label>
-            <input v-model="form.short_name" class="mc-input" placeholder="录入/挑选时显示的短名称" />
+            <label>简称</label>
+            <input v-model="form.short_name" class="mc-input" placeholder="录入/挑选时显示的简称" />
           </div>
           <div class="mc-field">
             <label>分类</label>

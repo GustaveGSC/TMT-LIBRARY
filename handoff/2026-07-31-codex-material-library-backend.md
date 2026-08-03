@@ -83,7 +83,7 @@
 |---|---|---|---|
 | `id` | Integer | PK | |
 | `code` | String(255) | **NOT NULL, UNIQUE** | ERP 编码，与 `import_product_raw.code` 同值 |
-| `short_name` | String(255) | NULL | **短名**，人工维护，录入/挑选时显示 |
+| `short_name` | String(255) | NULL | **简称**，人工维护，录入/挑选时显示 |
 | `category` | String(100) | NULL | 人工维护的物料分类（自由文本，非大类） |
 | `spec` | String(512) | NULL | 规格，见 §4.2 |
 | `cover_image` | String(500) | NULL | 图片 OSS URL |
@@ -100,7 +100,7 @@
   归 `import_product_raw` 所有，重新导入时会更新；复制会产生两份真相。
   查询时按 `code` 关联取用即可。
 - 这张表只存**人工附加的属性**。8,089 条物料里绝大多数不需要人工维护，
-  所以**按需创建行**（用户第一次给某物料填短名/传图才 INSERT），不要预先灌 8,089 条空行。
+  所以**按需创建行**（用户第一次给某物料填简称/传图才 INSERT），不要预先灌 8,089 条空行。
 - 图片字段参考 `ProductFinished.cover_image` 的既有 OSS 实现，不要另造一套。
 
 ### 2.3 `erp_code_rules` — 保持不动
@@ -210,7 +210,7 @@ return f"{cleaned} {spec}" if spec else cleaned
 |---|---|---|---|
 | GET | `/api/material/items` | `product:view` | 分页；筛选 `category`(大类)/`group_code`/`keyword`(编码或名称模糊)/`is_disabled`/`unclassified`；返回 ERP 字段 + 大类标签 + `product_material` 的人工字段 |
 | GET | `/api/material/items/<code>` | `product:view` | 单条详情（物料卡片用） |
-| PUT | `/api/material/items/<code>` | `product:edit` | 保存短名/分类/规格/备注/停用；**行不存在时按需创建**（§2.2） |
+| PUT | `/api/material/items/<code>` | `product:edit` | 保存简称/分类/规格/备注/停用；**行不存在时按需创建**（§2.2） |
 | POST | `/api/material/items/<code>/image` | `product:edit` | 上传图片，复用产品库既有 OSS 实现 |
 
 列表接口默认每页 20，`page_size` 上限 100。
@@ -233,7 +233,7 @@ POST 都是写操作，**不要**加进 `make_blueprint_guard` 的 `view_post_pa
 
 ## 七、本期不做（用户明确表示「先不考虑，后续再做决定」）
 
-- 物料卡片上除图片/短名/分类/规格/备注之外还要放什么
+- 物料卡片上除图片/简称/分类/规格/备注之外还要放什么
 - 「无用物料」是否在页面默认隐藏
 - `cost_bom_node` / `cost_material_price` / `cost_material_supplier` 的合并与迁移
   → **本期完全不动**，研发工具的 BOM 成本功能照常运行

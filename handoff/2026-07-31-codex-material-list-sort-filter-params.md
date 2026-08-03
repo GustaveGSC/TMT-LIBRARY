@@ -30,7 +30,7 @@
 | `sort_dir` | `asc` / `desc` | ❌ 未实现 |
 | `code` | 按 ERP 编码模糊筛选 | ❌ 未实现（现有 `keyword` 同时搜编码和名称，无法分列） |
 | `name` | 按 ERP 名称模糊筛选 | ❌ 未实现 |
-| `short_name` | 按短名模糊筛选 | ❌ 未实现 |
+| `short_name` | 按简称模糊筛选 | ❌ 未实现 |
 
 `group_code` / `category` / `unclassified` / `is_disabled` 前端已在用，**这四个已可用**。
 
@@ -52,7 +52,7 @@
 - `short_name` 筛选必须走已有的 `LEFT OUTER JOIN product_material`，
   **不要**为此再拉一遍全量 `product_material`。
 
-⚠️ **`short_name` 筛选与「未填短名」的语义**：`product_material` 是按需创建的，
+⚠️ **`short_name` 筛选与「未填简称」的语义**：`product_material` 是按需创建的，
 绝大多数物料没有对应行 → `short_name` 为 NULL。`LIKE` 对 NULL 不匹配，
 所以筛 `short_name` 时这些行会被正确排除，符合预期。请确认实现后确实如此。
 
@@ -67,7 +67,7 @@
 - **必须是白名单校验**，不能把参数直接拼进 `order_by`（SQL 注入面）；
 - 默认排序保持现在的 `code ASC`，不传参数时行为不变；
 - `short_name` 排序涉及 NULL：请统一让 **NULL 排在最后**（无论升降序），
-  否则用户按短名排序时会先看到几千行空值。MySQL 里 `ORDER BY col IS NULL, col ASC/DESC` 即可；
+  否则用户按简称排序时会先看到几千行空值。MySQL 里 `ORDER BY col IS NULL, col ASC/DESC` 即可；
 - 排序要在 **SQL 层**完成，不要取出来在 Python 里排——那会退回全表加载。
 
 ### 3. 与「按大类筛选」路径的关系（重要）
@@ -90,7 +90,7 @@
 
 `src/components/material/MaterialItemsPanel.vue` 已改为 `el-table`：
 
-- 列：**ERP 编码 / ERP 名称 / 短名 / 分组 / 大类 / 停用状态**；
+- 列：**ERP 编码 / ERP 名称 / 简称 / 分组 / 大类 / 停用状态**；
 - 表头形态与产品库一致：标签 + 排序按钮 + 筛选控件（文本框或下拉）；
 - 文本筛选**带 350ms 防抖**（8,089 条，逐字符请求会打爆队列）；
   下拉筛选与排序是明确动作，立即请求；
