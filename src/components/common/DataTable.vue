@@ -223,6 +223,23 @@ const displayData = computed(() => {
 <style scoped>
 .app-data-table { width: 100%; box-sizing: border-box; }
 
+/* ── 外轮廓与圆角 ─────────────────────────────────── */
+/* border prop 为真时给整表一个圆角轮廓。overflow:hidden 让圆角能裁掉
+   内部单元格的方角；el-table 自己用伪元素画的外框线要隐藏，否则与这里
+   的轮廓叠成双线。 */
+.app-data-table--bordered {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.app-data-table--bordered :deep(.el-table) { border-radius: 10px; }
+.app-data-table--bordered :deep(.el-table--border::after),
+.app-data-table--bordered :deep(.el-table--border::before),
+.app-data-table--bordered :deep(.el-table__inner-wrapper::before),
+.app-data-table--bordered :deep(.el-table__border-left-patch) { display: none; }
+/* 最右侧单元格的右边框与轮廓重合，去掉避免加粗 */
+.app-data-table--bordered :deep(.el-table__cell:last-child) { border-right: none; }
+
 /* ── 两行表头：标题+排序 / 筛选下拉 ────────────────── */
 .th-top { display: flex; align-items: center; justify-content: center; gap: 4px; white-space: nowrap; }
 .th-top:not(.th-top--plain) { margin-bottom: 5px; }
