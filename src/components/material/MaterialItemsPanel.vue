@@ -33,8 +33,10 @@ const sortBy     = ref('code')
 const sortDir    = ref('asc')
 // 底部开关：默认不显示停用数据（重导后停用占比将达 36%，默认藏起来更实用）
 const hideDisabled = ref(true)
-// 文本筛选按正则匹配（服务端用 REGEXP 而非 LIKE）
-const useRegex = ref(false)
+// 文本筛选按「与或非」表达式解析（& 与 / | 或 / ! 非 / () 分组）。
+// 必须是显式开关，不能自动识别：半角括号出现在 4385 条物料名称里
+// （如「π桌 (V1.1)」占 54%），自动解析会把 (V1.1) 当成分组。
+const useExpr = ref(false)
 
 // ── 分页 ──────────────────────────────────────────
 const page     = ref(1)
@@ -110,7 +112,7 @@ async function loadItems() {
     // 没选时才套用底部「不显示停用状态数据」开关。
     if (txt(f.is_disabled)) params.is_disabled = f.is_disabled
     else if (hideDisabled.value) params.is_disabled = '0'
-    if (useRegex.value) params.match_mode = 'regex'
+    if (useExpr.value) params.match_mode = 'expr'
 
     const res = await http.get('/api/material/items', { params })
     if (res.success) {
@@ -141,7 +143,7 @@ function onSortChange({ prop, order }) {
   loadItems()
 }
 
-watch([pageSize, hideDisabled, useRegex], () => { page.value = 1; loadItems() })
+watch([pageSize, hideDisabled, useExpr], () => { page.value = 1; loadItems() })
 watch(page, loadItems)
 
 // ── 生命周期 ──────────────────────────────────────
@@ -218,10 +220,13 @@ onMounted(() => { loadGroups(); loadItems() })
           <span>不显示停用状态数据</span>
         </label>
         <label class="fb-check">
-          <input v-model="useRegex" type="checkbox" />
-          <span>正则筛选</span>
+          <input v-model="useExpr" type="checkbox" />
+          <span>高级筛选</span>
         </label>
-        <span v-if="useRegex" class="tip-on">已启用正则，如 ^14ME 或 14ME|14WD</span>
+        <span v-if="useExpr" class="tip-on">
+          <b>&amp;</b> 与　<b>|</b> 或　<b>!</b> 非　<b>( )</b> 分组　
+          <b>"…"</b> 内为字面量。例：<code>桌腿 &amp; !红色</code>
+        </span>
       </div>
       <div class="fb-pager">
         <button class="pg-btn" :disabled="page <= 1" @click="page--">上一页</button>
@@ -275,9 +280,14 @@ onMounted(() => { loadGroups(); loadItems() })
 }
 .fb-check input { cursor: pointer; margin: 0; }
 .tip-on {
-  font-size: 11px; color: var(--accent);
+  font-size: 11px; color: var(--text-primary);
   background: var(--accent-bg); border: 1px solid var(--border);
-  border-radius: 5px; padding: 2px 7px; white-space: nowrap;
+  border-radius: 5px; padding: 2px 8px; white-space: nowrap;
+}
+.tip-on b { color: var(--accent); font-weight: 700; }
+.tip-on code {
+  font-family: monospace; background: var(--bg);
+  border: 1px solid var(--border); border-radius: 3px; padding: 0 4px;
 }
 .tb-select {
   height: 28px; padding: 0 6px;
