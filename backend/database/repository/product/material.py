@@ -44,7 +44,10 @@ class MaterialRepository:
         )
 
     @staticmethod
-    def raw_query(keyword=None, group_code=None, disabled=None, disable_keywords=()):
+    def raw_query(
+        keyword=None, group_code=None, disabled=None, disable_keywords=(),
+        code=None, name=None, short_name=None, sort_by='code', sort_dir='asc',
+    ):
         query = ImportProductRaw.query.outerjoin(
             ProductMaterial, ProductMaterial.code == ImportProductRaw.code,
         )
@@ -53,11 +56,28 @@ class MaterialRepository:
             query = query.filter(or_(ImportProductRaw.code.like(like), ImportProductRaw.name.like(like)))
         if group_code:
             query = query.filter(ImportProductRaw.group_code == group_code)
+        if code:
+            query = query.filter(ImportProductRaw.code.like(f'%{code}%'))
+        if name:
+            query = query.filter(ImportProductRaw.name.like(f'%{name}%'))
+        if short_name:
+            query = query.filter(ProductMaterial.short_name.like(f'%{short_name}%'))
         if disabled is not None:
             query = query.filter(
                 MaterialRepository.effective_disabled_expression(disable_keywords) == disabled
             )
-        return query.order_by(ImportProductRaw.code.asc())
+        sort_columns = {
+            'code': ImportProductRaw.code,
+            'name': ImportProductRaw.name,
+            'short_name': ProductMaterial.short_name,
+            'group_code': ImportProductRaw.group_code,
+        }
+        column = sort_columns[sort_by]
+        direction = column.desc() if sort_dir == 'desc' else column.asc()
+        if sort_by == 'short_name':
+            # MySQL 的 NULL 默认会在 ASC 最前；两个方向均显式放到最后。
+            return query.order_by(ProductMaterial.short_name.is_(None).asc(), direction)
+        return query.order_by(direction)
 
     @staticmethod
     def raw_for_codes(codes):

@@ -1,6 +1,6 @@
 from database.models.product.erp_code_rules import ErpCodeRule, TYPE_LABELS
 from database.models.product.import_raw import ImportProductRaw
-from database.models.product.material import MaterialDisableKeyword
+from database.models.product.material import MaterialDisableKeyword, ProductMaterial
 from database.repository.product.material import MaterialRepository
 from result import Result
 
@@ -12,6 +12,7 @@ CATEGORY_TYPES = ('finished', 'packaged', 'semi', 'material', 'useless')
 class MaterialService:
     _rule_cache = None
     _disable_keyword_cache = None
+    _group_config_cache = None
 
     @classmethod
     def invalidate_rule_cache(cls):
@@ -20,6 +21,15 @@ class MaterialService:
     @classmethod
     def invalidate_disable_keyword_cache(cls):
         cls._disable_keyword_cache = None
+
+    @classmethod
+    def invalidate_group_config_cache(cls):
+        cls._group_config_cache = None
+
+    def _group_configs(self):
+        if self._group_config_cache is None:
+            self.__class__._group_config_cache = MaterialRepository.group_configs()
+        return self._group_config_cache
 
     def _disable_keywords(self):
         if self._disable_keyword_cache is None:
@@ -54,7 +64,7 @@ class MaterialService:
 
     def group_categories(self):
         raw_rows = MaterialRepository.all_raw_identity_rows()
-        configs, rules = MaterialRepository.group_configs(), self._rules()
+        configs, rules = self._group_configs(), self._rules()
         aggregates = {}
         for code, group_code, group_name in raw_rows:
             item = aggregates.setdefault(group_code, {'names': set(), 'count': 0, 'override_count': 0})
@@ -82,6 +92,7 @@ class MaterialService:
         values = {key: bool(body.get(key, False)) for key in BOOLEAN_KEYS}
         values.update({'remark': (body.get('remark') or '').strip() or None, 'updated_by': updated_by})
         row = MaterialRepository.save_group(group_code, values)
+        self.invalidate_group_config_cache()
         data = row.to_dict()
         data.update({key: bool(getattr(row, key)) for key in BOOLEAN_KEYS})
         return Result.ok(data=data)
@@ -89,9 +100,11 @@ class MaterialService:
     def list_items(self, page, page_size, **filters):
         query = MaterialRepository.raw_query(
             filters.get('keyword'), filters.get('group_code'), filters.get('is_disabled'),
-            self._disable_keywords(),
+            self._disable_keywords(), code=filters.get('code'), name=filters.get('name'),
+            short_name=filters.get('short_name'), sort_by=filters.get('sort_by', 'code'),
+            sort_dir=filters.get('sort_dir', 'asc'),
         )
-        configs, rules = MaterialRepository.group_configs(), self._rules()
+        configs, rules = self._group_configs(), self._rules()
         category = filters.get('category')
         if not category and not filters.get('unclassified'):
             total = query.order_by(None).count()
@@ -103,19 +116,34 @@ class MaterialService:
         else:
             identities = query.with_entities(
                 ImportProductRaw.code, ImportProductRaw.group_code,
+                ImportProductRaw.name, ProductMaterial.short_name,
             ).all()
             classified = [
-                (code, self._categories(code, group_code, rules, configs))
-                for code, group_code in identities
+                {
+                    'code': code, 'group_code': group_code, 'name': name,
+                    'short_name': short_name,
+                    'categories': self._categories(code, group_code, rules, configs),
+                }
+                for code, group_code, name, short_name in identities
             ]
             if category:
-                classified = [item for item in classified if category in item[1]]
+                classified = [item for item in classified if category in item['categories']]
             else:
-                classified = [item for item in classified if not item[1]]
+                classified = [item for item in classified if not item['categories']]
+            sort_by = filters.get('sort_by', 'code')
+            non_null = [item for item in classified if item[sort_by] is not None]
+            nulls = [item for item in classified if item[sort_by] is None]
+            non_null.sort(
+                key=lambda item: item[sort_by],
+                reverse=filters.get('sort_dir') == 'desc',
+            )
+            classified = non_null + nulls
             total = len(classified)
-            page_pairs = classified[(page - 1) * page_size:page * page_size]
-            categories_by_code = dict(page_pairs)
-            raw_rows = MaterialRepository.raw_for_codes([code for code, _cats in page_pairs])
+            page_rows = classified[(page - 1) * page_size:page * page_size]
+            categories_by_code = {
+                item['code']: item['categories'] for item in page_rows
+            }
+            raw_rows = MaterialRepository.raw_for_codes([item['code'] for item in page_rows])
             selected = [(raw, categories_by_code[raw.code]) for raw in raw_rows]
         materials = MaterialRepository.materials_for_codes([raw.code for raw, _ in selected])
         return Result.ok(data={
@@ -127,7 +155,7 @@ class MaterialService:
         raw = MaterialRepository.raw_by_code(code)
         if not raw:
             return Result.fail('物料不存在')
-        cats = self._categories(code, raw.group_code, self._rules(), MaterialRepository.group_configs())
+        cats = self._categories(code, raw.group_code, self._rules(), self._group_configs())
         material = MaterialRepository.materials_for_codes([code]).get(code)
         return Result.ok(data=self._serialize(raw, cats, material))
 

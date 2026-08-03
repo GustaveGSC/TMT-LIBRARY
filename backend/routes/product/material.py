@@ -40,10 +40,21 @@ def list_items():
         return Result.fail('大类参数无效').to_response()
     disabled_arg = request.args.get('is_disabled')
     disabled = None if disabled_arg is None else disabled_arg in ('1', 'true', 'True')
+    sort_by = request.args.get('sort_by', 'code').strip() or 'code'
+    if sort_by not in ('code', 'name', 'short_name', 'group_code'):
+        return Result.fail('排序字段无效').to_response()
+    sort_dir = request.args.get('sort_dir', 'asc').strip().lower()
+    if sort_dir not in ('asc', 'desc'):
+        sort_dir = 'asc'
     return material_service.list_items(
         page, page_size, category=category,
         group_code=request.args.get('group_code', '').strip() or None,
         keyword=request.args.get('keyword', '').strip() or None,
+        code=request.args.get('code', '').strip() or None,
+        name=request.args.get('name', '').strip() or None,
+        short_name=request.args.get('short_name', '').strip() or None,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
         is_disabled=disabled,
         unclassified=request.args.get('unclassified') in ('1', 'true', 'True'),
     ).to_response()

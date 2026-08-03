@@ -119,7 +119,11 @@ GET  /api/material/disable-preview
 - `PUT group-categories/:group_code` 接收五个 `is_*` 布尔字段及可选 `remark`。
 - `GET items` 参数：`page`（默认 1）、`page_size`（默认 20，上限 100）、
   `category=finished|packaged|semi|material|useless`、`group_code`、`keyword`、
-  `is_disabled=0|1`、`unclassified=0|1`。data 为 `{items,total,page,page_size}`。
+  `is_disabled=0|1`、`unclassified=0|1`，以及以下服务端分列筛选/排序参数：
+  - `code/name/short_name`：分别对 ERP 编码、ERP 名称、简称做包含匹配；可与 keyword 叠加（AND）。
+  - `sort_by=code|name|short_name|group_code`，默认 code；非法字段返回 400。
+  - `sort_dir=asc|desc`，非法值回退 asc；简称无论升降序均把 NULL 放末尾。
+  data 为 `{items,total,page,page_size}`。
 - `PUT items/:code` 可写 `short_name/category/spec/remark/is_disabled`；
   首次保存时按需创建 `product_material`。
 - 物料项返回 `is_disabled`（最终生效值）和

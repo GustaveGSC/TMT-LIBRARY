@@ -3,9 +3,11 @@ import io
 import openpyxl
 import pytest
 from flask import Flask
+from sqlalchemy import event
 from sqlalchemy.dialects import mysql
 from sqlalchemy.schema import CreateTable
 
+from auth import generate_token
 from database.base import db
 from database.models.product.erp_code_rules import ErpCodeRule
 import database.models.product.category  # noqa: F401
@@ -15,6 +17,7 @@ from database.models.product.import_raw import ImportProductRaw
 from database.models.product.material import (
     ErpGroupCategory, MaterialDisableKeyword, ProductMaterial,
 )
+from database.repository.account import UserRepository
 from routes.product.import_raw import _parse_excel
 from routes.product.material import material_bp
 from services.product.import_raw import import_product_service
@@ -109,8 +112,14 @@ def material_app():
     ]
     with app.app_context():
         db.metadata.create_all(bind=db.engine, tables=material_tables)
+        material_service.invalidate_rule_cache()
+        material_service.invalidate_disable_keyword_cache()
+        material_service.invalidate_group_config_cache()
         yield app
         db.session.remove()
+        material_service.invalidate_rule_cache()
+        material_service.invalidate_disable_keyword_cache()
+        material_service.invalidate_group_config_cache()
         db.metadata.drop_all(bind=db.engine, tables=list(reversed(material_tables)))
 
 
@@ -207,3 +216,81 @@ def test_default_list_only_loads_manual_rows_for_current_page(material_app, monk
         assert result.data['total'] == 25
         assert len(result.data['items']) == 10
         assert seen == [[f'C{i:03d}' for i in range(10, 20)]]
+
+
+def test_material_list_column_filters_and_short_name_nulls_last(material_app):
+    with material_app.app_context():
+        db.session.add_all([
+            ImportProductRaw(code='A', name='甲物料', group_code='G', group_name='组',
+                             imported_at=now_cst()),
+            ImportProductRaw(code='B', name='乙物料', group_code='G', group_name='组',
+                             imported_at=now_cst()),
+            ImportProductRaw(code='C', name='丙物料', group_code='G', group_name='组',
+                             imported_at=now_cst()),
+            ProductMaterial(code='B', short_name='Zeta'),
+            ProductMaterial(code='C', short_name='Alpha'),
+            ErpGroupCategory(group_code='G', is_material=True),
+        ])
+        db.session.commit()
+
+        asc = material_service.list_items(
+            1, 20, sort_by='short_name', sort_dir='asc', is_disabled=False,
+        ).data['items']
+        desc = material_service.list_items(
+            1, 20, sort_by='short_name', sort_dir='desc', is_disabled=False,
+        ).data['items']
+        filtered = material_service.list_items(
+            1, 20, code='B', name='乙', short_name='Ze', is_disabled=False,
+        ).data['items']
+        category_sorted = material_service.list_items(
+            1, 20, category='material', sort_by='short_name', sort_dir='asc',
+            is_disabled=False,
+        ).data['items']
+
+        assert [item['code'] for item in asc] == ['C', 'B', 'A']
+        assert [item['code'] for item in desc] == ['B', 'C', 'A']
+        assert [item['code'] for item in filtered] == ['B']
+        assert [item['code'] for item in category_sorted] == ['C', 'B', 'A']
+
+
+def test_material_route_rejects_invalid_sort_field(material_app, monkeypatch):
+    material_app.register_blueprint(material_bp, url_prefix='/api/material')
+    monkeypatch.setattr(UserRepository, 'get_auth_state', lambda _id: (True, 0))
+    client = material_app.test_client()
+    viewer = {
+        'id': 1, 'username': 'viewer', 'roles': [],
+        'permissions': ['product:view'], 'token_version': 0,
+    }
+    client.set_cookie('tmt_session', generate_token(viewer, csrf_token='csrf'))
+    response = client.get('/api/material/items?sort_by=code;DROP TABLE product_material')
+    assert response.status_code == 400
+    assert response.get_json()['message'] == '排序字段无效'
+
+
+def test_default_sorted_list_keeps_three_business_queries_when_caches_are_warm(material_app):
+    with material_app.app_context():
+        db.session.add_all([
+            ImportProductRaw(code='A', name='甲', group_code='G', group_name='组',
+                             imported_at=now_cst()),
+            ProductMaterial(code='A', short_name='简称'),
+        ])
+        db.session.commit()
+        material_service._rules()
+        material_service._disable_keywords()
+        material_service._group_configs()
+        statements = []
+
+        def capture(_conn, _cursor, statement, _parameters, _context, _executemany):
+            if statement.lstrip().upper().startswith('SELECT'):
+                statements.append(statement)
+
+        event.listen(db.engine, 'before_cursor_execute', capture)
+        try:
+            material_service.list_items(
+                1, 50, code='A', short_name='简称', sort_by='short_name',
+                sort_dir='asc', is_disabled=False,
+            )
+        finally:
+            event.remove(db.engine, 'before_cursor_execute', capture)
+
+        assert len(statements) == 3
