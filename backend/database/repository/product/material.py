@@ -47,6 +47,7 @@ class MaterialRepository:
     def raw_query(
         keyword=None, group_code=None, disabled=None, disable_keywords=(),
         code=None, name=None, short_name=None, sort_by='code', sort_dir='asc',
+        match_mode='like',
     ):
         query = ImportProductRaw.query.outerjoin(
             ProductMaterial, ProductMaterial.code == ImportProductRaw.code,
@@ -56,12 +57,20 @@ class MaterialRepository:
             query = query.filter(or_(ImportProductRaw.code.like(like), ImportProductRaw.name.like(like)))
         if group_code:
             query = query.filter(ImportProductRaw.group_code == group_code)
-        if code:
-            query = query.filter(ImportProductRaw.code.like(f'%{code}%'))
-        if name:
-            query = query.filter(ImportProductRaw.name.like(f'%{name}%'))
-        if short_name:
-            query = query.filter(ProductMaterial.short_name.like(f'%{short_name}%'))
+        text_filters = (
+            (ImportProductRaw.code, code),
+            (ImportProductRaw.name, name),
+            (ProductMaterial.short_name, short_name),
+        )
+        for column, value in text_filters:
+            if not value:
+                continue
+            condition = (
+                column.op('REGEXP')(value)
+                if match_mode == 'regex'
+                else column.like(f'%{value}%')
+            )
+            query = query.filter(condition)
         if disabled is not None:
             query = query.filter(
                 MaterialRepository.effective_disabled_expression(disable_keywords) == disabled
@@ -78,6 +87,20 @@ class MaterialRepository:
             # MySQL 的 NULL 默认会在 ASC 最前；两个方向均显式放到最后。
             return query.order_by(ProductMaterial.short_name.is_(None).asc(), direction)
         return query.order_by(direction)
+
+    @staticmethod
+    def suggest(field, keyword, limit):
+        columns = {
+            'code': ImportProductRaw.code,
+            'name': ImportProductRaw.name,
+            'short_name': ProductMaterial.short_name,
+        }
+        column = columns[field]
+        # code/name 不需要 JOIN；short_name 直接查人工属性表，保证始终只有一条 SQL。
+        query = db.session.query(column)
+        return [row[0] for row in query.filter(
+            column.is_not(None), column != '', column.like(f'%{keyword}%'),
+        ).distinct().order_by(column.asc()).limit(limit).all()]
 
     @staticmethod
     def raw_for_codes(codes):

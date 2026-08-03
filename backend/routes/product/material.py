@@ -1,8 +1,10 @@
 import os
 import time
 import hashlib
+import re
 
 from flask import Blueprint, g, request
+from sqlalchemy.exc import DBAPIError
 
 from auth import make_blueprint_guard
 from error_handling import internal_error_response
@@ -11,6 +13,7 @@ from routes.product.finished import _decode_image_data_url
 from services.product.material import CATEGORY_TYPES, material_service
 from storage.client import get_bucket
 from upload_validation import UploadValidationError
+from database.base import db
 
 
 material_bp = Blueprint('material', __name__)
@@ -46,18 +49,54 @@ def list_items():
     sort_dir = request.args.get('sort_dir', 'asc').strip().lower()
     if sort_dir not in ('asc', 'desc'):
         sort_dir = 'asc'
-    return material_service.list_items(
-        page, page_size, category=category,
-        group_code=request.args.get('group_code', '').strip() or None,
-        keyword=request.args.get('keyword', '').strip() or None,
-        code=request.args.get('code', '').strip() or None,
-        name=request.args.get('name', '').strip() or None,
-        short_name=request.args.get('short_name', '').strip() or None,
-        sort_by=sort_by,
-        sort_dir=sort_dir,
-        is_disabled=disabled,
-        unclassified=request.args.get('unclassified') in ('1', 'true', 'True'),
-    ).to_response()
+    match_mode = request.args.get('match_mode', 'like').strip().lower() or 'like'
+    if match_mode not in ('like', 'regex'):
+        return Result.fail('匹配模式无效').to_response()
+    text_filters = {
+        key: request.args.get(key, '').strip() or None
+        for key in ('code', 'name', 'short_name')
+    }
+    if match_mode == 'regex':
+        try:
+            for value in text_filters.values():
+                if value:
+                    re.compile(value)
+        except re.error:
+            return Result.fail('正则表达式无效').to_response()
+    try:
+        result = material_service.list_items(
+            page, page_size, category=category,
+            group_code=request.args.get('group_code', '').strip() or None,
+            keyword=request.args.get('keyword', '').strip() or None,
+            **text_filters, sort_by=sort_by, sort_dir=sort_dir, match_mode=match_mode,
+            is_disabled=disabled,
+            unclassified=request.args.get('unclassified') in ('1', 'true', 'True'),
+        )
+    except DBAPIError as exc:
+        db.session.rollback()
+        error_code = exc.orig.args[0] if getattr(exc.orig, 'args', None) else None
+        if match_mode == 'regex' and (
+            error_code == 1139
+            or (isinstance(error_code, int) and 3690 <= error_code <= 3699)
+        ):
+            return Result.fail('正则表达式无效').to_response()
+        raise
+    return result.to_response()
+
+
+@material_bp.get('/suggest')
+def suggest():
+    field = request.args.get('field', '').strip()
+    if field not in ('code', 'name', 'short_name'):
+        return Result.fail('字段无效').to_response()
+    keyword = request.args.get('q', '').strip()
+    if not keyword:
+        return Result.ok(data=[]).to_response()
+    try:
+        limit = min(50, max(1, int(request.args.get('limit', 20))))
+    except ValueError:
+        return Result.fail('limit 参数无效').to_response()
+    return material_service.suggest(field, keyword, limit).to_response()
 
 
 @material_bp.get('/disable-keywords')

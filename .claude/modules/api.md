@@ -123,7 +123,10 @@ GET  /api/material/disable-preview
   - `code/name/short_name`：分别对 ERP 编码、ERP 名称、简称做包含匹配；可与 keyword 叠加（AND）。
   - `sort_by=code|name|short_name|group_code`，默认 code；非法字段返回 400。
   - `sort_dir=asc|desc`，非法值回退 asc；简称无论升降序均把 NULL 放末尾。
+  - `match_mode=like|regex`，默认 like；仅影响 code/name/short_name，旧 keyword 始终保持 LIKE。
   data 为 `{items,total,page,page_size}`。
+- `GET /api/material/suggest?field=code|name|short_name&q=关键词&limit=20` 返回去重候选字符串数组；
+  q 为空返回空数组，limit 上限 50。非法字段或正则返回 400，不暴露数据库错误。
 - `PUT items/:code` 可写 `short_name/category/spec/remark/is_disabled`；
   首次保存时按需创建 `product_material`。
 - 物料项返回 `is_disabled`（最终生效值）和

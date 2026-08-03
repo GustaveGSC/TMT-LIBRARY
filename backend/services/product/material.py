@@ -102,7 +102,7 @@ class MaterialService:
             filters.get('keyword'), filters.get('group_code'), filters.get('is_disabled'),
             self._disable_keywords(), code=filters.get('code'), name=filters.get('name'),
             short_name=filters.get('short_name'), sort_by=filters.get('sort_by', 'code'),
-            sort_dir=filters.get('sort_dir', 'asc'),
+            sort_dir=filters.get('sort_dir', 'asc'), match_mode=filters.get('match_mode', 'like'),
         )
         configs, rules = self._group_configs(), self._rules()
         category = filters.get('category')
@@ -150,6 +150,9 @@ class MaterialService:
             'items': [self._serialize(raw, cats, materials.get(raw.code)) for raw, cats in selected],
             'total': total, 'page': page, 'page_size': page_size,
         })
+
+    def suggest(self, field, keyword, limit):
+        return Result.ok(data=MaterialRepository.suggest(field, keyword, limit))
 
     def detail(self, code):
         raw = MaterialRepository.raw_by_code(code)
