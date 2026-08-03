@@ -16,7 +16,6 @@ import { ref, reactive, computed, watch } from 'vue'
  *     sortMethod,
  *     filterable,                  // 显示筛选控件；未传 filterOptions 时自动从 data 里取该列去重值
  *     filterType,                  // 'select'(默认，下拉精确匹配) | 'text'(文本框模糊匹配)
- *     filterSuggest,               // 文本筛选时显示候选面板；候选值由 suggestProvider 提供
  *     filterOptions,               // [{ label, value }]，不传则自动生成
  *     filterValue,                 // 自定义取筛选比较值的函数 (row) => any，默认取 row[prop]
  *     formatter,                   // 自定义显示格式 (row) => string，默认原样显示（空值显示"—"）
@@ -47,9 +46,6 @@ const props = defineProps({
   serverMode: { type: Boolean, default: false },
   // serverMode 下文本筛选的防抖毫秒数，避免逐字符打爆请求队列
   filterDebounce: { type: Number, default: 350 },
-  // 候选面板数据源：(prop, keyword) => Promise<string[]>
-  // 大数据量下候选值只能由服务端给，不能从当页数据里推。
-  suggestProvider: { type: Function, default: null },
 })
 
 const emit = defineEmits(['row-click', 'filter-change', 'sort-change'])
@@ -128,52 +124,6 @@ function defaultCompare(a, b) {
   return String(a).localeCompare(String(b), 'zh')
 }
 
-// ── 候选面板 ──────────────────────────────────────
-const suggest = reactive({})     // { [key]: { show, list, loading } }
-const suggestTimers = {}
-
-function suggestOf(col) {
-  const key = slotKey(col)
-  if (!suggest[key]) suggest[key] = { show: false, list: [], loading: false }
-  return suggest[key]
-}
-
-function fetchSuggest(col) {
-  if (!props.suggestProvider || !col.filterSuggest) return
-  const key = slotKey(col)
-  const state = suggestOf(col)
-  const q = String(colFilters[key] ?? '').trim()
-  clearTimeout(suggestTimers[key])
-  if (!q) { state.show = false; state.list = []; return }
-  suggestTimers[key] = setTimeout(async () => {
-    state.loading = true
-    try {
-      const list = await props.suggestProvider(col.prop, q)
-      state.list = Array.isArray(list) ? list : []
-      state.show = state.list.length > 0
-    } catch {
-      state.list = []
-      state.show = false
-    } finally {
-      state.loading = false
-    }
-  }, props.filterDebounce)
-}
-
-function applySuggest(col, value) {
-  const key = slotKey(col)
-  colFilters[key] = value
-  suggestOf(col).show = false
-}
-
-// 延迟隐藏，否则 blur 会先于候选项的点击触发，导致点不中
-function hideSuggest(col) {
-  setTimeout(() => { suggestOf(col).show = false }, 160)
-}
-
-const hasSuggestColumn = computed(() =>
-  props.columns.some(c => c.filterable && c.filterType === 'text' && c.filterSuggest))
-
 // ── serverMode：筛选值变化抛给调用方 ────────────────
 let filterTimer = null
 watch(colFilters, () => {
@@ -206,11 +156,7 @@ const displayData = computed(() => {
 </script>
 
 <template>
-  <div
-    class="app-data-table"
-    :class="{ 'app-data-table--bordered': border, 'app-data-table--suggest': hasSuggestColumn }"
-    :style="rootStyle"
-  >
+  <div class="app-data-table" :class="{ 'app-data-table--bordered': border }" :style="rootStyle">
     <el-table
       :data="displayData"
       :row-key="rowKey"
@@ -243,25 +189,13 @@ const displayData = computed(() => {
               @click.stop="toggleSort(col)"
             />
           </div>
-          <div v-if="col.filterable && col.filterType === 'text'" class="th-txt-wrap" @click.stop>
-            <input
-              v-model="colFilters[slotKey(col)]"
-              class="th-txt"
-              placeholder="筛选…"
-              @input="fetchSuggest(col)"
-              @focus="fetchSuggest(col)"
-              @blur="hideSuggest(col)"
-            />
-            <ul v-if="suggestOf(col).show" class="sg-list">
-              <li
-                v-for="item in suggestOf(col).list"
-                :key="item"
-                class="sg-item"
-                :title="item"
-                @mousedown.prevent="applySuggest(col, item)"
-              >{{ item }}</li>
-            </ul>
-          </div>
+          <input
+            v-if="col.filterable && col.filterType === 'text'"
+            v-model="colFilters[slotKey(col)]"
+            class="th-txt"
+            placeholder="筛选…"
+            @click.stop
+          />
           <el-select
             v-else-if="col.filterable"
             v-model="colFilters[slotKey(col)]"
@@ -317,27 +251,6 @@ const displayData = computed(() => {
 }
 .th-txt:focus { border-color: var(--accent); }
 .th-txt::placeholder { color: var(--text-muted); }
-
-/* 候选面板 ─ 绝对定位浮在表头下方 */
-.th-txt-wrap { position: relative; }
-.sg-list {
-  position: absolute; top: calc(100% + 2px); left: 0; right: 0; z-index: 9999;
-  margin: 0; padding: 4px 0; list-style: none; text-align: left;
-  background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.10); max-height: 220px; overflow-y: auto;
-}
-.sg-list::-webkit-scrollbar { width: 4px; }
-.sg-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-.sg-item {
-  padding: 5px 9px; font-size: 11px; color: var(--text-primary); cursor: pointer;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background 0.1s;
-}
-.sg-item:hover { background: var(--accent-bg); color: var(--accent); }
-
-/* 候选面板会被表头单元格的 overflow:hidden 裁掉，只在启用候选的表格上放开，
-   避免影响其他调用方（如产品库产成品清单）的表头裁剪行为 */
-.app-data-table--suggest :deep(.el-table__header th.el-table__cell .cell) { overflow: visible; }
-.app-data-table--suggest :deep(.el-table__header-wrapper) { overflow: visible; }
 .app-data-table :deep(.th-sel .el-input__wrapper) { padding: 0 6px; height: 24px; border-radius: 5px; box-shadow: 0 0 0 1px var(--border) inset; }
 .app-data-table :deep(.th-sel .el-input__wrapper:hover), .app-data-table :deep(.th-sel .el-input__wrapper.is-focus) { box-shadow: 0 0 0 1px var(--accent) inset; }
 .app-data-table :deep(.th-sel .el-input__inner) { font-size: 11px; height: 22px; line-height: 22px; }

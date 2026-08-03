@@ -48,11 +48,11 @@ const isSorted = computed(() => sortBy.value !== 'code' || sortDir.value !== 'as
 // ── 列配置 ────────────────────────────────────────
 const columns = computed(() => [
   { prop: 'code',       label: 'ERP 编码', width: 200, fixed: 'left',
-    sortable: true, filterable: true, filterType: 'text', filterSuggest: true },
+    sortable: true, filterable: true, filterType: 'text' },
   { prop: 'name',       label: 'ERP 名称', minWidth: 260,
-    sortable: true, filterable: true, filterType: 'text', filterSuggest: true },
+    sortable: true, filterable: true, filterType: 'text' },
   { prop: 'short_name', label: '简称',     width: 170,
-    sortable: true, filterable: true, filterType: 'text', filterSuggest: true },
+    sortable: true, filterable: true, filterType: 'text' },
   { prop: 'group_code', label: '分组',     width: 190,
     sortable: true, filterable: true,
     filterOptions: groups.value.map(g => ({
@@ -126,19 +126,6 @@ async function loadItems() {
   }
 }
 
-// ── 候选面板数据源 ─────────────────────────────────
-// 8089 条物料的候选值只能由服务端给（当页 50 行推不出完整候选）。
-async function fetchSuggestions(field, keyword) {
-  try {
-    const res = await http.get('/api/material/suggest', {
-      params: { field, q: keyword, limit: 20 },
-    })
-    return res.success ? (res.data || []) : []
-  } catch {
-    return []
-  }
-}
-
 // ── DataTable 事件（serverMode）─────────────────────
 function onFilterChange(next) {
   colFilters.value = next
@@ -176,7 +163,6 @@ onMounted(() => { loadGroups(); loadItems() })
         :columns="columns"
         :loading="loading"
         server-mode
-        :suggest-provider="fetchSuggestions"
         size="small"
         height="100%"
         row-key="code"
@@ -235,6 +221,7 @@ onMounted(() => { loadGroups(); loadItems() })
           <input v-model="useRegex" type="checkbox" />
           <span>正则筛选</span>
         </label>
+        <span v-if="useRegex" class="tip-on">已启用正则，如 ^14ME 或 14ME|14WD</span>
       </div>
       <div class="fb-pager">
         <button class="pg-btn" :disabled="page <= 1" @click="page--">上一页</button>
@@ -267,9 +254,15 @@ onMounted(() => { loadGroups(); loadItems() })
 .footbar {
   display: flex; align-items: center; gap: 12px;
   min-height: 40px; padding: 8px 0 2px;
-  flex: 0 0 auto;
+  flex: 0 0 auto; flex-wrap: wrap;
 }
-.fb-left { flex: 1; display: flex; align-items: center; gap: 10px; min-width: 0; }
+/* 用 margin-right:auto 把分页推到右侧，而不是靠 flex-grow ——
+   之前 .fb-left 是 flex:1 + min-width:0，后者允许它被压缩到零宽，
+   结果整块（含两个复选框）在实际窗口里看不见。 */
+.fb-left {
+  display: flex; align-items: center; gap: 12px;
+  margin-right: auto; flex-wrap: wrap;
+}
 /* 分页与「每页条数」是一组控件，紧挨在一起 */
 .fb-pager { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
 .total-hint { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
@@ -281,6 +274,11 @@ onMounted(() => { loadGroups(); loadItems() })
   cursor: pointer; white-space: nowrap; user-select: none;
 }
 .fb-check input { cursor: pointer; margin: 0; }
+.tip-on {
+  font-size: 11px; color: var(--accent);
+  background: var(--accent-bg); border: 1px solid var(--border);
+  border-radius: 5px; padding: 2px 7px; white-space: nowrap;
+}
 .tb-select {
   height: 28px; padding: 0 6px;
   border: 1px solid var(--border); border-radius: 6px;
