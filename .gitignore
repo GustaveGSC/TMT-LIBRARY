@@ -55,3 +55,6 @@ electron/resources/python-backend/backend.exe
 /test-results/
 /playwright-report/
 /playwright/.cache/
+
+# Codex 工作树（嵌套 git 仓库，不入库）
+.codex/
