@@ -6,7 +6,6 @@ from flask import Flask
 from sqlalchemy import event
 from sqlalchemy.dialects import mysql
 from sqlalchemy.schema import CreateTable
-from sqlalchemy.exc import DBAPIError
 
 from auth import generate_token
 from database.base import db
@@ -22,6 +21,7 @@ from database.repository.account import UserRepository
 from routes.product.import_raw import _parse_excel
 from routes.product.material import material_bp
 from services.product.import_raw import import_product_service
+from services.product.material_filter import FilterExpressionError, parse_filter_expression
 from services.product.material import material_service
 from upload_validation import UploadValidationError
 from utils import now_cst
@@ -297,28 +297,65 @@ def test_default_sorted_list_keeps_three_business_queries_when_caches_are_warm(m
         assert len(statements) == 3
 
 
-def test_material_regex_filters_preserve_keyword_like_behavior(material_app):
+def test_material_expression_filters_and_literal_like_escaping(material_app):
     with material_app.app_context():
         db.session.add_all([
-            ImportProductRaw(code='14ME001', name='金属桌腿', group_code='14ME', group_name='金属',
+            ImportProductRaw(code='MJ120_A', name='红色桌腿', group_code='14ME', group_name='金属',
                              imported_at=now_cst()),
-            ImportProductRaw(code='14WD001', name='木质桌面', group_code='14WD', group_name='木器',
+            ImportProductRaw(code='MJ120XA', name='黑色桌腿', group_code='14ME', group_name='金属',
                              imported_at=now_cst()),
-            ImportProductRaw(code='15XX001', name='其他', group_code='15XX', group_name='其他',
+            ImportProductRaw(code='14WD001', name='桌面 (V1.1)', group_code='14WD', group_name='木器',
                              imported_at=now_cst()),
         ])
         db.session.commit()
-        regex = material_service.list_items(
-            1, 20, code='^(14ME|14WD)', match_mode='regex', is_disabled=False,
+        expression = material_service.list_items(
+            1, 20, name='桌腿 & !红色', match_mode='expr', is_disabled=False,
         ).data['items']
-        combined = material_service.list_items(
-            1, 20, keyword='桌', code='^14ME', match_mode='regex', is_disabled=False,
+        grouped = material_service.list_items(
+            1, 20, name='(桌腿 | 桌面) & !红色', match_mode='expr', is_disabled=False,
         ).data['items']
-        assert [item['code'] for item in regex] == ['14ME001', '14WD001']
-        assert [item['code'] for item in combined] == ['14ME001']
+        quoted = material_service.list_items(
+            1, 20, name='"(V1.1)"', match_mode='expr', is_disabled=False,
+        ).data['items']
+        escaped_like = material_service.list_items(
+            1, 20, code='MJ120_A', match_mode='like', is_disabled=False,
+        ).data['items']
+        single_expr = material_service.list_items(
+            1, 20, name='桌腿', match_mode='expr', is_disabled=False,
+        ).data['items']
+        single_like = material_service.list_items(
+            1, 20, name='桌腿', match_mode='like', is_disabled=False,
+        ).data['items']
+        assert [item['code'] for item in expression] == ['MJ120XA']
+        assert [item['code'] for item in grouped] == ['14WD001', 'MJ120XA']
+        assert [item['code'] for item in quoted] == ['14WD001']
+        assert [item['code'] for item in escaped_like] == ['MJ120_A']
+        assert [item['code'] for item in single_expr] == [item['code'] for item in single_like]
 
 
-def test_material_route_rejects_invalid_regex_before_query(material_app, monkeypatch):
+@pytest.mark.parametrize(('expression', 'message'), [
+    ('(桌腿', '括号不匹配'),
+    ('桌腿)', '括号不匹配'),
+    ('桌腿 &', '缺少操作数'),
+    ('& 桌腿', '缺少操作数'),
+    ('!', '缺少操作数'),
+    ('""', '操作数不能为空'),
+    ('   ', '操作数不能为空'),
+    ('"桌腿', '引号不匹配'),
+])
+def test_material_expression_parser_errors(expression, message):
+    with pytest.raises(FilterExpressionError, match=message):
+        parse_filter_expression(expression)
+
+
+def test_material_expression_complexity_limits():
+    with pytest.raises(FilterExpressionError, match='表达式过于复杂'):
+        parse_filter_expression('(' * 11 + 'A' + ')' * 11)
+    with pytest.raises(FilterExpressionError, match='表达式过于复杂'):
+        parse_filter_expression(' | '.join(f'A{i}' for i in range(30)))
+
+
+def test_material_route_returns_expression_error_as_400(material_app, monkeypatch):
     material_app.register_blueprint(material_bp, url_prefix='/api/material')
     monkeypatch.setattr(UserRepository, 'get_auth_state', lambda _id: (True, 0))
     client = material_app.test_client()
@@ -327,25 +364,8 @@ def test_material_route_rejects_invalid_regex_before_query(material_app, monkeyp
         'permissions': ['product:view'], 'token_version': 0,
     }
     client.set_cookie('tmt_session', generate_token(viewer, csrf_token='csrf'))
-    response = client.get('/api/material/items?match_mode=regex&code=%5B')
-    assert response.status_code == 400
-    assert response.get_json()['message'] == '正则表达式无效'
-
-
-def test_material_route_converts_mysql_3685_regex_error_to_400(material_app, monkeypatch):
-    material_app.register_blueprint(material_bp, url_prefix='/api/material')
-    monkeypatch.setattr(UserRepository, 'get_auth_state', lambda _id: (True, 0))
-    client = material_app.test_client()
-    viewer = {
-        'id': 1, 'username': 'viewer', 'roles': [],
-        'permissions': ['product:view'], 'token_version': 0,
-    }
-    client.set_cookie('tmt_session', generate_token(viewer, csrf_token='csrf'))
-    database_error = DBAPIError(
-        'SELECT ... REGEXP ...', {}, Exception(3685, 'Illegal argument to a regular expression'),
-        False,
+    response = client.get(
+        '/api/material/items', query_string={'match_mode': 'expr', 'code': '(桌腿'},
     )
-    monkeypatch.setattr(material_service, 'list_items', lambda *_args, **_kwargs: (_ for _ in ()).throw(database_error))
-    response = client.get('/api/material/items?match_mode=regex&code=%5B%5B%3Anosuch%3A%5D%5D')
     assert response.status_code == 400
-    assert response.get_json()['message'] == '正则表达式无效'
+    assert response.get_json()['message'] == '括号不匹配'

@@ -1,11 +1,8 @@
 import os
 import time
 import hashlib
-import re
-import warnings
 
 from flask import Blueprint, g, request
-from sqlalchemy.exc import DBAPIError
 
 from auth import make_blueprint_guard
 from error_handling import internal_error_response
@@ -14,7 +11,7 @@ from routes.product.finished import _decode_image_data_url
 from services.product.material import CATEGORY_TYPES, material_service
 from storage.client import get_bucket
 from upload_validation import UploadValidationError
-from database.base import db
+from services.product.material_filter import FilterExpressionError
 
 
 material_bp = Blueprint('material', __name__)
@@ -51,22 +48,17 @@ def list_items():
     if sort_dir not in ('asc', 'desc'):
         sort_dir = 'asc'
     match_mode = request.args.get('match_mode', 'like').strip().lower() or 'like'
-    if match_mode not in ('like', 'regex'):
+    if match_mode not in ('like', 'expr'):
         return Result.fail('匹配模式无效').to_response()
-    text_filters = {
-        key: request.args.get(key, '').strip() or None
-        for key in ('code', 'name', 'short_name')
-    }
-    if match_mode == 'regex':
-        try:
-            with warnings.catch_warnings():
-                # Python 对 ICU/POSIX 字符类可能给 FutureWarning，但 MySQL 才是最终执行方。
-                warnings.simplefilter('ignore', FutureWarning)
-                for value in text_filters.values():
-                    if value:
-                        re.compile(value)
-        except re.error:
-            return Result.fail('正则表达式无效').to_response()
+    text_filters = {}
+    for key in ('code', 'name', 'short_name'):
+        raw_value = request.args.get(key)
+        if raw_value is None:
+            text_filters[key] = None
+        elif match_mode == 'expr':
+            text_filters[key] = raw_value
+        else:
+            text_filters[key] = raw_value.strip() or None
     try:
         result = material_service.list_items(
             page, page_size, category=category,
@@ -76,15 +68,8 @@ def list_items():
             is_disabled=disabled,
             unclassified=request.args.get('unclassified') in ('1', 'true', 'True'),
         )
-    except DBAPIError as exc:
-        db.session.rollback()
-        error_code = exc.orig.args[0] if getattr(exc.orig, 'args', None) else None
-        if match_mode == 'regex' and (
-            error_code == 1139
-            or (isinstance(error_code, int) and 3685 <= error_code <= 3699)
-        ):
-            return Result.fail('正则表达式无效').to_response()
-        raise
+    except FilterExpressionError as exc:
+        return Result.fail(str(exc)).to_response()
     return result.to_response()
 
 

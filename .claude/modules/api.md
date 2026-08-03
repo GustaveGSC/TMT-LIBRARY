@@ -120,10 +120,13 @@ GET  /api/material/disable-preview
 - `GET items` 参数：`page`（默认 1）、`page_size`（默认 20，上限 100）、
   `category=finished|packaged|semi|material|useless`、`group_code`、`keyword`、
   `is_disabled=0|1`、`unclassified=0|1`，以及以下服务端分列筛选/排序参数：
-  - `code/name/short_name`：分别对 ERP 编码、ERP 名称、简称做包含匹配；可与 keyword 叠加（AND）。
+  - `code/name/short_name`：分别对 ERP 编码、ERP 名称、简称做字面量包含匹配；
+    `%`、`_`、反斜杠不会作为 LIKE 通配符；可与 keyword 叠加（AND）。
   - `sort_by=code|name|short_name|group_code`，默认 code；非法字段返回 400。
   - `sort_dir=asc|desc`，非法值回退 asc；简称无论升降序均把 NULL 放末尾。
-  - `match_mode=like|regex`，默认 like；仅影响 code/name/short_name，旧 keyword 始终保持 LIKE。
+  - `match_mode=like|expr`，默认 like；expr 支持 `&` 与、`|` 或、`!` 非、括号分组和
+    `"..."` 字面量。嵌套上限 10、节点上限 50；语法错误返回可展示的中文 400。
+    仅影响 code/name/short_name，旧 keyword 始终保持原 LIKE 行为。
   data 为 `{items,total,page,page_size}`。
 - `PUT items/:code` 可写 `short_name/category/spec/remark/is_disabled`；
   首次保存时按需创建 `product_material`。

@@ -46,8 +46,7 @@ class MaterialRepository:
     @staticmethod
     def raw_query(
         keyword=None, group_code=None, disabled=None, disable_keywords=(),
-        code=None, name=None, short_name=None, sort_by='code', sort_dir='asc',
-        match_mode='like',
+        text_conditions=(), sort_by='code', sort_dir='asc',
     ):
         query = ImportProductRaw.query.outerjoin(
             ProductMaterial, ProductMaterial.code == ImportProductRaw.code,
@@ -57,20 +56,8 @@ class MaterialRepository:
             query = query.filter(or_(ImportProductRaw.code.like(like), ImportProductRaw.name.like(like)))
         if group_code:
             query = query.filter(ImportProductRaw.group_code == group_code)
-        text_filters = (
-            (ImportProductRaw.code, code),
-            (ImportProductRaw.name, name),
-            (ProductMaterial.short_name, short_name),
-        )
-        for column, value in text_filters:
-            if not value:
-                continue
-            condition = (
-                column.op('REGEXP')(value)
-                if match_mode == 'regex'
-                else column.like(f'%{value}%')
-            )
-            query = query.filter(condition)
+        if text_conditions:
+            query = query.filter(*text_conditions)
         if disabled is not None:
             query = query.filter(
                 MaterialRepository.effective_disabled_expression(disable_keywords) == disabled

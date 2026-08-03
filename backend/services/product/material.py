@@ -3,6 +3,7 @@ from database.models.product.import_raw import ImportProductRaw
 from database.models.product.material import MaterialDisableKeyword, ProductMaterial
 from database.repository.product.material import MaterialRepository
 from result import Result
+from services.product.material_filter import expression_condition, literal_contains
 
 
 BOOLEAN_KEYS = ('is_finished', 'is_packaged', 'is_semi', 'is_material', 'is_useless')
@@ -98,11 +99,25 @@ class MaterialService:
         return Result.ok(data=data)
 
     def list_items(self, page, page_size, **filters):
+        text_columns = {
+            'code': ImportProductRaw.code,
+            'name': ImportProductRaw.name,
+            'short_name': ProductMaterial.short_name,
+        }
+        text_conditions = []
+        for key, column in text_columns.items():
+            value = filters.get(key)
+            if value is None:
+                continue
+            text_conditions.append(
+                expression_condition(column, value)
+                if filters.get('match_mode') == 'expr'
+                else literal_contains(column, value)
+            )
         query = MaterialRepository.raw_query(
             filters.get('keyword'), filters.get('group_code'), filters.get('is_disabled'),
-            self._disable_keywords(), code=filters.get('code'), name=filters.get('name'),
-            short_name=filters.get('short_name'), sort_by=filters.get('sort_by', 'code'),
-            sort_dir=filters.get('sort_dir', 'asc'), match_mode=filters.get('match_mode', 'like'),
+            self._disable_keywords(), text_conditions=text_conditions,
+            sort_by=filters.get('sort_by', 'code'), sort_dir=filters.get('sort_dir', 'asc'),
         )
         configs, rules = self._group_configs(), self._rules()
         category = filters.get('category')
