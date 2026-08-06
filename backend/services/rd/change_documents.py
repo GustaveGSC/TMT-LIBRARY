@@ -187,13 +187,13 @@ def _numeric_code_text(cell):
     if isinstance(value, int):
         text = str(value)
     elif isinstance(value, float):
-        if not value.is_integer():
-            raise UploadValidationError(f'第 {cell.row} 行物料编码为非整数数值，请在 PDM 中设为文本')
-        text = str(int(value))
+        # PDM 偶尔会把带点的子件编码存成数值。这类编码会在后续按既有
+        # 规则跳过，不应为了一个不参与 BOM 比对的值阻断整份文件。
+        text = str(int(value)) if value.is_integer() else repr(value)
     else:
         return str(value).strip()
     number_format = str(cell.number_format or '').strip()
-    if number_format and set(number_format) == {'0'}:
+    if '.' not in text and number_format and set(number_format) == {'0'}:
         text = text.zfill(len(number_format))
     return text
 
@@ -211,9 +211,7 @@ def _pdm_spec(get_value, version, is_packaged):
         body = ''.join(str(get_value(name) or '').strip() for name in (
             '备注', '类别', '尺寸', '材料', '颜色',
         ))
-        match = re.match(r'^([A-Za-z]+)', effective_version)
-        suffix = match.group(1) if match else effective_version
-        return f'{prefix}{body}_{suffix}'
+        return f'{prefix}{body}_{effective_version}'
     third = next((
         str(get_value(name) or '').strip()
         for name in ('表面处理', '备注', '颜色')

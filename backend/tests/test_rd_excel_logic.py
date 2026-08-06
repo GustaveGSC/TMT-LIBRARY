@@ -2,7 +2,6 @@
 
 import io
 
-import pytest
 from openpyxl import Workbook, load_workbook
 
 import routes.rd as rd_routes
@@ -16,7 +15,6 @@ from services.rd.change_documents import (
     parse_ecr_rows_xlsx,
 )
 from services.rd.pdm_to_bom import build_bom_data, build_erp_data
-from upload_validation import UploadValidationError
 
 
 def _write_bom(path, rows):
@@ -122,7 +120,7 @@ def test_pdm_packaged_spec_and_three_status_versions(tmp_path):
     ]])
     item = next(iter(_parse_bom(path).values()))
     assert item['name'] == '产成品_桌类_学习工场_桌面'
-    assert item['spec'] == '(V2.3)倾斜款手摇1.2米榉木木色_A'
+    assert item['spec'] == '(V2.3)倾斜款手摇1.2米榉木木色_A02'
     assert _derive_new_drawing({'status': '审核中', 'code': 'N', 'drawing': '', 'version': ''}) == 'N-A01'
     assert _derive_new_drawing({'status': '通用变更审核中', 'code': 'P', 'drawing': 'P-A01', 'version': 'A01'}) == 'P-A02'
     assert _derive_new_drawing({'status': '非通用变更审核中', 'code': 'P', 'drawing': 'P-A01', 'version': 'A01'}) == 'P-B01'
@@ -158,7 +156,7 @@ def test_pdm_numeric_code_preserves_zero_number_format(tmp_path):
     assert item['code'] == '001234'
 
 
-def test_bom_unknown_format_and_non_integer_numeric_code_are_rejected(tmp_path):
+def test_bom_unknown_format_is_rejected_and_decimal_code_is_skipped(tmp_path):
     unknown_path = tmp_path / 'unknown-format.xlsx'
     workbook = Workbook()
     workbook.active.append(['任意列', '状态'])
@@ -168,13 +166,20 @@ def test_bom_unknown_format_and_non_integer_numeric_code_are_rejected(tmp_path):
         unknown_path, role='any',
     )
 
-    numeric_path = tmp_path / 'non-integer-code.xlsx'
-    _write_pdm_bom(numeric_path, [[
-        '1', 1234.5, 'A01', '14_原材料', 'WD_木器', '', '桌面',
-        1, 'PCS', '已发布', '', '', '', '', '', '', '', '', '',
-    ]])
-    with pytest.raises(UploadValidationError, match='非整数数值'):
-        _parse_bom(numeric_path)
+    numeric_path = tmp_path / 'decimal-code.xlsx'
+    _write_pdm_bom(numeric_path, [
+        [
+            '1', 1399088.01, 'A01', '14_原材料', 'WD_木器', '', '跳过的子件',
+            1, 'PCS', '已发布', '', '', '', '', '', '', '', '', '',
+        ],
+        [
+            '1.1', 'VALID001', 'A01', '14_原材料', 'WD_木器', '', '有效物料',
+            1, 'PCS', '已发布', '', '', '', '', '', '', '', '', '',
+        ],
+    ])
+    parsed = _parse_bom(numeric_path)
+    assert len(parsed) == 1
+    assert next(iter(parsed.values()))['code'] == 'VALID001'
 
 
 def test_ecr_xlsx_round_trip_preserves_key_fields_and_detail():
