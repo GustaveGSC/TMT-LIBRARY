@@ -9,6 +9,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from error_handling import report_internal_error
+from upload_validation import UploadValidationError
 
 _THIN  = Side(style='thin')
 _THICK = Side(style='medium')
@@ -35,6 +36,15 @@ FILL_HEADER = _fill('F0EDE6')
 FILL_WHITE  = _fill('FFFFFF')
 FILL_CANCEL = _fill('FDECEA')   # 取消行：浅红
 BORDER_ALL  = _border()
+
+STATUS_PUBLISHED = '已发布'
+STATUS_NEW = '审核中'
+STATUS_COMMON_CHANGE = '通用变更审核中'
+STATUS_NON_COMMON_CHANGE = '非通用变更审核中'
+CHANGE_STATUSES = {STATUS_COMMON_CHANGE, STATUS_NON_COMMON_CHANGE}
+VALID_BOM_STATUSES = {
+    STATUS_PUBLISHED, STATUS_NEW, STATUS_COMMON_CHANGE, STATUS_NON_COMMON_CHANGE,
+}
 
 
 def _set(ws, row, col, value, font=None, align=None, border=None, fill=None):
@@ -129,7 +139,92 @@ def _level_sort_key(level_str):
         return (0,)
 
 
-_BOM_REQUIRED_COLS = ['层次', '图号', '品名', '规格', '数量', '单位', '状态']
+_ERP_BOM_REQUIRED_COLS = ['层次', '图号', '品名', '规格', '数量', '单位', '状态']
+_PDM_BOM_REQUIRED_COLS = [
+    '层次', '物料编码', '版本', '一级分类', '二级分类', '描述', '数量', '单位', '状态',
+]
+
+
+def _bom_columns(ws):
+    """返回 (格式, 首个同名表头映射)，必需表头重复时明确拒绝。"""
+    occurrences = {}
+    for column in range(1, ws.max_column + 1):
+        value = ws.cell(1, column).value
+        if value is None or not str(value).strip():
+            continue
+        occurrences.setdefault(str(value).strip(), []).append(column)
+
+    names = set(occurrences)
+    if '图号' in names:
+        format_name = 'erp'
+        required = _ERP_BOM_REQUIRED_COLS
+    elif {'物料编码', '一级分类'} <= names:
+        format_name = 'pdm'
+        required = _PDM_BOM_REQUIRED_COLS
+    else:
+        raise UploadValidationError('无法识别的 BOM 文件格式')
+
+    duplicates = [name for name in required if len(occurrences.get(name, [])) > 1]
+    if duplicates:
+        name = duplicates[0]
+        columns = '、'.join(str(column) for column in occurrences[name])
+        raise UploadValidationError(
+            f'表头中「{name}」出现了 {len(occurrences[name])} 次（第 {columns} 列），请确认导出模板'
+        )
+    missing = [name for name in required if name not in occurrences]
+    if missing:
+        raise UploadValidationError('缺少必要列：' + ', '.join(missing))
+    return format_name, {name: columns[0] for name, columns in occurrences.items()}
+
+
+def _numeric_code_text(cell):
+    """读取混合类型编码；纯 0 数字格式用于恢复 Excel 展示中的前导零。"""
+    value = cell.value
+    if value is None:
+        return ''
+    if isinstance(value, bool):
+        raise UploadValidationError(f'第 {cell.row} 行物料编码不是有效文本')
+    if isinstance(value, int):
+        text = str(value)
+    elif isinstance(value, float):
+        if not value.is_integer():
+            raise UploadValidationError(f'第 {cell.row} 行物料编码为非整数数值，请在 PDM 中设为文本')
+        text = str(int(value))
+    else:
+        return str(value).strip()
+    number_format = str(cell.number_format or '').strip()
+    if number_format and set(number_format) == {'0'}:
+        text = text.zfill(len(number_format))
+    return text
+
+
+def _category_name(value):
+    text = str(value or '').strip()
+    return text.split('_', 1)[1] if '_' in text else text
+
+
+def _pdm_spec(get_value, version, is_packaged):
+    effective_version = version or 'A01'
+    if is_packaged:
+        series_version = str(get_value('系列版本') or '').strip()
+        prefix = f'({series_version})' if series_version else ''
+        body = ''.join(str(get_value(name) or '').strip() for name in (
+            '备注', '类别', '尺寸', '材料', '颜色',
+        ))
+        match = re.match(r'^([A-Za-z]+)', effective_version)
+        suffix = match.group(1) if match else effective_version
+        return f'{prefix}{body}_{suffix}'
+    third = next((
+        str(get_value(name) or '').strip()
+        for name in ('表面处理', '备注', '颜色')
+        if str(get_value(name) or '').strip()
+    ), '')
+    return '_'.join([
+        str(get_value('适配产品') or '').strip(),
+        str(get_value('规格') or '').strip(),
+        third,
+        effective_version,
+    ])
 
 def validate_bom(path, role='before'):
     """校验 BOM 文件合法性，返回错误消息字符串；无误返回 None。
@@ -146,17 +241,12 @@ def validate_bom(path, role='before'):
         return f'{label}无法读取（错误编号：{error_id}）'
     ws = wb.active
 
-    # 1. 列名核验
-    col_map = {}
-    for c in range(1, ws.max_column + 1):
-        h = ws.cell(1, c).value
-        if h is not None:
-            col_map[str(h).strip()] = c
-    missing = [col for col in _BOM_REQUIRED_COLS if col not in col_map]
     label = '变更前文件' if role == 'before' else '变更审核中文件'
-    if missing:
+    try:
+        _format_name, col_map = _bom_columns(ws)
+    except UploadValidationError as exc:
         wb.close()
-        return f'{label}缺少必要列：{", ".join(missing)}'
+        return f'{label}{exc}'
 
     # 2. 状态列校验（跳过空行）
     status_col = col_map['状态']
@@ -170,8 +260,12 @@ def validate_bom(path, role='before'):
     if not statuses:
         return f'{label}中未找到任何有效数据行'
 
+    unknown = sorted(set(statuses) - VALID_BOM_STATUSES)
+    if unknown:
+        return f'{label}包含未知状态：{"、".join(unknown)}'
+
     if role == 'after':
-        if all(s == '已发布' for s in statuses):
+        if all(s == STATUS_PUBLISHED for s in statuses):
             return '变更审核中文件的状态列全部为「已发布」，该文件应包含处于审核中状态的物料'
 
     return None
@@ -187,12 +281,7 @@ def _parse_bom(path):
     wb = load_workbook(path, data_only=True)
     ws = wb.active
 
-    # 表头 → 列号映射
-    col_map = {}
-    for c in range(1, ws.max_column + 1):
-        h = ws.cell(1, c).value
-        if h is not None:
-            col_map[str(h).strip()] = c
+    format_name, col_map = _bom_columns(ws)
 
     def _get(row, name, default=''):
         c = col_map.get(name)
@@ -201,15 +290,42 @@ def _parse_bom(path):
     # 第一遍：按行顺序收集所有有效行（保留 level 供第二遍查父级）
     rows = []
     for r in range(2, ws.max_row + 1):
-        level   = _level_str(_get(r, '层次'))
-        drawing = str(_get(r, '图号') or '').strip()
-
-        if not level or not drawing:
+        level = _level_str(_get(r, '层次'))
+        status = str(_get(r, '状态') or '').strip()
+        if not level:
             continue
+        if status and status not in VALID_BOM_STATUSES:
+            wb.close()
+            raise UploadValidationError(f'第 {r} 行包含未知状态：{status}')
 
-        idx = drawing.rfind('-')
-        code    = drawing[:idx]  if idx > 0 else drawing
-        version = drawing[idx+1:] if idx > 0 else ''
+        if format_name == 'erp':
+            drawing = str(_get(r, '图号') or '').strip()
+            if not drawing:
+                continue
+            idx = drawing.rfind('-')
+            code = drawing[:idx] if idx > 0 else drawing
+            version = drawing[idx + 1:] if idx > 0 else ''
+            name = str(_get(r, '品名') or '').strip()
+            spec = _complete_spec_version(str(_get(r, '规格') or '').strip(), version)
+        else:
+            code = _numeric_code_text(ws.cell(r, col_map['物料编码']))
+            version = str(_get(r, '版本') or '').strip()
+            if not code:
+                continue
+            if not version and status != STATUS_NEW:
+                continue
+            drawing = f'{code}-{version}' if version else ''
+            categories = [
+                _category_name(_get(r, column))
+                for column in ('一级分类', '二级分类', '三级分类')
+                if _category_name(_get(r, column))
+            ]
+            description = str(_get(r, '描述') or '').strip()
+            name = '_'.join([*categories, description] if description else categories)
+            spec = _pdm_spec(
+                lambda column: _get(r, column), version,
+                bool(categories and categories[0] == '产成品'),
+            )
 
         if not code:
             continue
@@ -223,17 +339,16 @@ def _parse_bom(path):
         except (TypeError, ValueError):
             qty = 1.0
 
-        raw_spec = str(_get(r, '规格') or '').strip()
         rows.append({
             'level':   level,
             'code':    code,
             'version': version,
             'drawing': drawing,
-            'name':    str(_get(r, '品名') or '').strip(),
-            'spec':    _complete_spec_version(raw_spec, version),
+            'name':    name,
+            'spec':    spec,
             'qty':     qty,
             'unit':    str(_get(r, '单位') or 'PCS').strip(),
-            'status':  str(_get(r, '状态') or '').strip(),
+            'status':  status,
         })
 
     # 第二遍：建立 level → code 映射，用于查找父级编码
@@ -248,6 +363,7 @@ def _parse_bom(path):
         key = (parent_code, row['code'])
         items[key] = row
 
+    wb.close()
     return items
 
 
@@ -297,9 +413,11 @@ def _next_version(version, is_non_common):
 def _derive_new_drawing(item):
     """根据 item 的状态推算新图号；若非审核中则返回原图号"""
     status = item.get('status', '')
-    if status not in ('通用变更审核中', '非通用变更审核中'):
+    if status == STATUS_NEW:
+        return f"{item['code']}-A01"
+    if status not in CHANGE_STATUSES:
         return item['drawing']
-    is_non_common = (status == '非通用变更审核中')
+    is_non_common = status == STATUS_NON_COMMON_CHANGE
     new_ver = _next_version(item['version'], is_non_common)
     return f"{item['code']}-{new_ver}"
 
@@ -370,7 +488,7 @@ def compare_bom(before_path, after_path):
             # 在两个 BOM 中都存在：检查是否为审核中（即将变更）
             a = after[key]
             b = before[key]
-            is_ecr = a['status'] in ('通用变更审核中', '非通用变更审核中')
+            is_ecr = a['status'] in CHANGE_STATUSES
             qty_changed = abs(b['qty'] - a['qty']) > 1e-9
 
             if not (is_ecr or qty_changed):
@@ -380,7 +498,7 @@ def compare_bom(before_path, after_path):
 
             if is_ecr:
                 # 版本变更（含通用/非通用）：生成取消+新增两行
-                is_non_common = (a['status'] == '非通用变更审核中')
+                is_non_common = a['status'] == STATUS_NON_COMMON_CHANGE
                 kind = '非通用变更' if is_non_common else '通用变更'
 
                 old_drawing = a['drawing']
@@ -457,12 +575,18 @@ def compare_bom(before_path, after_path):
             # 仅在 after 中存在（新增）
             a = after[key]
             n_added += 1
-            is_ecr_new    = a['status'] in ('通用变更审核中', '非通用变更审核中')
-            is_non_common = (a['status'] == '非通用变更审核中')
+            is_brand_new  = a['status'] == STATUS_NEW
+            is_ecr_new    = a['status'] in CHANGE_STATUSES
+            is_non_common = a['status'] == STATUS_NON_COMMON_CHANGE
             old_version   = a['version']
-            new_version   = _next_version(old_version, is_non_common) if is_ecr_new else old_version
-            new_drawing   = f"{a['code']}-{new_version}" if is_ecr_new else a['drawing']
-            new_spec      = _update_spec_version(a['spec'], old_version, new_version)
+            if is_brand_new:
+                new_version = 'A01'
+                new_drawing = f"{a['code']}-A01"
+                new_spec = a['spec']
+            else:
+                new_version = _next_version(old_version, is_non_common) if is_ecr_new else old_version
+                new_drawing = f"{a['code']}-{new_version}" if is_ecr_new else a['drawing']
+                new_spec = _update_spec_version(a['spec'], old_version, new_version)
             changes.append({
                 'row_type':      'added',
                 'change_kind':   '新增',

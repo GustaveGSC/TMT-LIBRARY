@@ -145,6 +145,8 @@ def compare_bom():
 
         result = compare_bom_files(before_path, after_path)
         return Result.ok(result).to_response()
+    except UploadValidationError as exc:
+        return Result.fail(str(exc)).to_response(400)
     except Exception:
         return internal_error_response('BOM 文件比对失败', '比对失败')
     finally:

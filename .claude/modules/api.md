@@ -470,6 +470,11 @@ POST   /api/rd/ecr/compare-bom           # bom_before + bom_after：两个 BOM x
 POST   /api/rd/pdm2bom/process            # pdm_file：PDM xlsx；返回 columns/table_data/error_map/total_level
 ```
 
+`compare-bom` 同时兼容旧 ERP BOM（特征列：图号/品名）与新 PDM BOM（特征列：
+物料编码/一级分类）。PDM 的 `状态=审核中` 且版本为空表示新物料，输出图号固定为
+`{物料编码}-A01`；通用/非通用变更仍分别执行数字递增/字母递增。重复必需表头、未知状态、
+无法识别格式均返回 400，不静默跳过或覆盖。
+
 - 缺文件、非法类型/文件头返回 400，文件超限返回 413。
 - `ecr_path`、`bom_before_path`、`bom_after_path`、`file_path` 旧 Electron JSON 协议已下线；非 multipart 请求返回 400，服务端不会检查或读取请求中指定的路径。
 
