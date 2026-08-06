@@ -142,6 +142,42 @@ def test_pdm_duplicate_required_header_and_unknown_status_are_rejected(tmp_path)
     assert '未知状态：草稿' in change_documents.validate_bom(unknown_path, role='any')
 
 
+def test_inactive_is_published_semantics_and_unknown_statuses_are_aggregated(tmp_path):
+    before_path = tmp_path / 'before-inactive.xlsx'
+    after_path = tmp_path / 'after-inactive.xlsx'
+    rows = [
+        ['1', 'ROOT-A01', '整机', 'ROOT_A01', 1, 'PCS', '已发布'],
+        ['1.1', 'PART-A01', '停用标准件', 'PART_A01', 2, 'PCS', '已停用'],
+    ]
+    _write_bom(before_path, rows)
+    _write_bom(after_path, rows)
+
+    assert change_documents.validate_bom(before_path, role='any') is None
+    error = change_documents.validate_bom(after_path, role='after')
+    assert '全部为「已发布」（含「已停用」）' in error
+
+    result = compare_bom(before_path, after_path)
+    assert result['changes'] == []
+    assert result['stats'] == {'version': 0, 'added': 0, 'deleted': 0, 'total': 0}
+
+    unknown_path = tmp_path / 'multiple-unknown.xlsx'
+    _write_pdm_bom(unknown_path, [
+        [
+            '1', 'CODE1', 'A01', '14_原材料', 'WD_木器', '', '桌面',
+            1, 'PCS', '草稿', '', '', '', '', '', '', '', '', '',
+        ],
+        [
+            '1.1', 'CODE2', 'A01', '14_原材料', 'WD_木器', '', '桌腿',
+            1, 'PCS', '待批准', '', '', '', '', '', '', '', '', '',
+        ],
+    ])
+    try:
+        _parse_bom(unknown_path)
+        raise AssertionError('未知状态应阻止解析')
+    except change_documents.UploadValidationError as exc:
+        assert str(exc) == '包含未知状态：待批准、草稿'
+
+
 def test_pdm_numeric_code_preserves_zero_number_format(tmp_path):
     path = tmp_path / 'numeric.xlsx'
     _write_pdm_bom(path, [[

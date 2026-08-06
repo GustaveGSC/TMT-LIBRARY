@@ -38,12 +38,15 @@ FILL_CANCEL = _fill('FDECEA')   # 取消行：浅红
 BORDER_ALL  = _border()
 
 STATUS_PUBLISHED = '已发布'
+STATUS_DISABLED = '已停用'
 STATUS_NEW = '审核中'
 STATUS_COMMON_CHANGE = '通用变更审核中'
 STATUS_NON_COMMON_CHANGE = '非通用变更审核中'
 CHANGE_STATUSES = {STATUS_COMMON_CHANGE, STATUS_NON_COMMON_CHANGE}
-VALID_BOM_STATUSES = {
-    STATUS_PUBLISHED, STATUS_NEW, STATUS_COMMON_CHANGE, STATUS_NON_COMMON_CHANGE,
+# “已停用”是已发布物料仍保留在 BOM 中的另一种写法，不代表本次变更。
+PUBLISHED_STATUSES = {STATUS_PUBLISHED, STATUS_DISABLED}
+VALID_BOM_STATUSES = PUBLISHED_STATUSES | {
+    STATUS_NEW, STATUS_COMMON_CHANGE, STATUS_NON_COMMON_CHANGE,
 }
 
 
@@ -227,8 +230,8 @@ def _pdm_spec(get_value, version, is_packaged):
 def validate_bom(path, role='before'):
     """校验 BOM 文件合法性，返回错误消息字符串；无误返回 None。
     role='any'   ：只校验列名，不校验状态
-    role='before'：变更前文件，要求状态列全部为「已发布」（已废弃，保留供兼容）
-    role='after' ：变更审核中文件，要求状态列不能全是「已发布」
+    role='before'：变更前文件，要求状态列全部为发布态（已废弃，保留供兼容）
+    role='after' ：变更审核中文件，要求状态列不能全是发布态
     """
     from openpyxl import load_workbook
     try:
@@ -263,8 +266,11 @@ def validate_bom(path, role='before'):
         return f'{label}包含未知状态：{"、".join(unknown)}'
 
     if role == 'after':
-        if all(s == STATUS_PUBLISHED for s in statuses):
-            return '变更审核中文件的状态列全部为「已发布」，该文件应包含处于审核中状态的物料'
+        if all(s in PUBLISHED_STATUSES for s in statuses):
+            return (
+                '变更审核中文件的状态列全部为「已发布」（含「已停用」），'
+                '该文件应包含处于审核中状态的物料'
+            )
 
     return None
 
@@ -285,6 +291,17 @@ def _parse_bom(path):
         c = col_map.get(name)
         return ws.cell(row, c).value if c else default
 
+    # 与 validate_bom 一致，一次报告文件里的全部未知状态，避免逐项修正。
+    statuses = {
+        str(_get(r, '状态') or '').strip()
+        for r in range(2, ws.max_row + 1)
+        if str(_get(r, '状态') or '').strip()
+    }
+    unknown = sorted(statuses - VALID_BOM_STATUSES)
+    if unknown:
+        wb.close()
+        raise UploadValidationError(f'包含未知状态：{"、".join(unknown)}')
+
     # 第一遍：按行顺序收集所有有效行（保留 level 供第二遍查父级）
     rows = []
     for r in range(2, ws.max_row + 1):
@@ -292,10 +309,6 @@ def _parse_bom(path):
         status = str(_get(r, '状态') or '').strip()
         if not level:
             continue
-        if status and status not in VALID_BOM_STATUSES:
-            wb.close()
-            raise UploadValidationError(f'第 {r} 行包含未知状态：{status}')
-
         if format_name == 'erp':
             drawing = str(_get(r, '图号') or '').strip()
             if not drawing:
