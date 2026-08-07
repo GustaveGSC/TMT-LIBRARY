@@ -77,7 +77,7 @@ class MaterialComboService:
         for item in items:
             detail = material_details.get(item.material_code, {
                 'material_name': None, 'short_name': None,
-                'group_name': None, 'is_missing': True,
+                'group_name': None, 'is_missing': True, 'is_disabled': False,
             })
             payload = item.to_dict()
             payload.update(detail)

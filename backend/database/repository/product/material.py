@@ -35,12 +35,8 @@ class MaterialRepository:
         keyword_match = or_(*[
             source_name.like(f'%{keyword}%') for keyword in keywords
         ]) if keywords else false()
-        default_disabled = func.coalesce(
+        return func.coalesce(
             or_(ImportProductRaw.status == '失效', keyword_match), false()
-        )
-        return case(
-            (ProductMaterial.is_disabled.is_not(None), ProductMaterial.is_disabled),
-            else_=default_disabled,
         )
 
     @staticmethod

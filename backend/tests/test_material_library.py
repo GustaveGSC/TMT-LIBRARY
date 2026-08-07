@@ -149,15 +149,13 @@ def test_material_save_is_lazy_and_list_filters_disabled(material_app):
         db.session.commit()
 
         assert ProductMaterial.query.count() == 0
-        saved = material_service.save_item('14WD001', {
-            'short_name': '桌面', 'is_disabled': True,
-        })
+        saved = material_service.save_item('14WD001', {'short_name': '桌面'})
         assert saved.success and ProductMaterial.query.count() == 1
-        assert material_service.list_items(1, 20, is_disabled=False).data['total'] == 0
-        assert material_service.list_items(1, 20, is_disabled=True).data['total'] == 1
+        assert material_service.list_items(1, 20, is_disabled=False).data['total'] == 1
+        assert material_service.list_items(1, 20, is_disabled=True).data['total'] == 0
 
 
-def test_material_default_disabled_and_manual_override(material_app):
+def test_material_disabled_is_readonly_and_ignores_legacy_override_input(material_app):
     with material_app.app_context():
         db.session.add_all([
             ImportProductRaw(
@@ -170,10 +168,13 @@ def test_material_default_disabled_and_manual_override(material_app):
         db.session.commit()
         material_service.invalidate_disable_keyword_cache()
         assert material_service.detail('A1').data['is_disabled'] is True
-        assert material_service.detail('A1').data['is_disabled_override'] is None
-        material_service.save_item('A1', {'is_disabled': False})
-        assert material_service.detail('A1').data['is_disabled'] is False
-        assert material_service.detail('A1').data['is_disabled_override'] is False
+        saved = material_service.save_item('A1', {
+            'short_name': '测试简称', 'is_disabled': False,
+        })
+        row = ProductMaterial.query.filter_by(code='A1').one()
+        assert row.is_disabled is None
+        assert saved.data['is_disabled'] is True
+        assert 'is_disabled_override' not in saved.data
 
 
 def test_disable_preview_uses_union_not_sum(material_app):

@@ -254,7 +254,7 @@ product_material
   id, code(UNIQUE), short_name, category, spec, cover_image, cover_image_original,
   img_updated_at, remark, is_disabled(INDEX), created_at, updated_at
   # 只存人工属性，按首次保存/传图创建；ERP name/group_code/group_name 不复制
-  # is_disabled 三态：NULL 跟随 ERP/关键词，true 强制停用，false 强制启用
+  # is_disabled 为保留列，当前运行时不读写；停用只读状态由 ERP status/关键词实时判定
   # code 在 MySQL 显式使用 utf8mb4_0900_ai_ci，与 import_product_raw 对齐
 
 material_disable_keyword

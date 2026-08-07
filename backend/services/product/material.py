@@ -238,16 +238,12 @@ class MaterialService:
         raw = MaterialRepository.raw_by_code(code)
         if not raw:
             return Result.fail('物料不存在')
-        allowed = ('short_name', 'category', 'spec', 'remark', 'is_disabled',
+        allowed = ('short_name', 'category', 'spec', 'remark',
                    'cover_image', 'cover_image_original', 'img_updated_at')
         values = {key: body[key] for key in allowed if key in body}
         for key in ('short_name', 'category', 'spec', 'remark'):
             if key in values:
                 values[key] = (values[key] or '').strip() or None
-        if 'is_disabled' in values:
-            values['is_disabled'] = (
-                None if values['is_disabled'] is None else bool(values['is_disabled'])
-            )
         MaterialRepository.save_material(code, values)
         return self.detail(code)
 
@@ -255,7 +251,7 @@ class MaterialService:
         manual = material.to_dict() if material else {
             'code': raw.code, 'short_name': None, 'category': None, 'spec': raw.spec,
             'cover_image': None, 'cover_image_original': None, 'img_updated_at': None,
-            'remark': None, 'is_disabled_override': None,
+            'remark': None,
         }
         if manual.get('spec') is None:
             manual['spec'] = raw.spec
@@ -269,8 +265,7 @@ class MaterialService:
             keyword in (raw.raw_name or raw.name or '').strip()
             for keyword in self._disable_keywords()
         )
-        override = manual.get('is_disabled_override')
-        manual['is_disabled'] = default_disabled if override is None else bool(override)
+        manual['is_disabled'] = default_disabled
         return manual
 
 

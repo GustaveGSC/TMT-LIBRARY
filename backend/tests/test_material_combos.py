@@ -13,7 +13,7 @@ import database.models.product.category  # noqa: F401
 import database.models.product.finished  # noqa: F401
 import database.models.product.resource  # noqa: F401
 from database.models.product.import_raw import ImportProductRaw
-from database.models.product.material import ProductMaterial
+from database.models.product.material import MaterialDisableKeyword, ProductMaterial
 from database.models.product.material_combo import MaterialCombo, MaterialComboItem
 from database.repository.account import UserRepository
 from routes.product.material import material_bp
@@ -33,6 +33,7 @@ def combo_app(monkeypatch):
     monkeypatch.setattr(UserRepository, 'get_auth_state', lambda _id: (True, 0))
     tables = [
         ImportProductRaw.__table__, ProductMaterial.__table__,
+        MaterialDisableKeyword.__table__,
         MaterialCombo.__table__, MaterialComboItem.__table__,
     ]
     with app.app_context():
@@ -75,10 +76,12 @@ def test_combo_crud_replaces_items_and_preserves_missing_reference(combo_app):
     with combo_app.app_context():
         db.session.add_all([
             ImportProductRaw(
-                code='ERP001', name='桌腿钢架', group_code='14ME',
+                code='ERP001', name='桌腿钢架', raw_name='桌腿钢架（已停用）',
+                status='生效', group_code='14ME',
                 group_name='原材料_金属件', imported_at=now_cst(),
             ),
             ProductMaterial(code='ERP001', short_name='桌腿'),
+            MaterialDisableKeyword(keyword='停用', is_disabled=False),
         ])
         db.session.commit()
 
@@ -90,10 +93,11 @@ def test_combo_crud_replaces_items_and_preserves_missing_reference(combo_app):
             'id': created.data['items'][0]['id'], 'material_code': 'ERP001',
             'quantity': 2, 'sort_order': 0, 'material_name': '桌腿钢架',
             'short_name': '桌腿', 'group_name': '原材料_金属件',
-            'is_missing': False,
+            'is_missing': False, 'is_disabled': True,
         }
         assert created.data['items'][1]['is_missing'] is True
         assert created.data['items'][1]['material_name'] is None
+        assert created.data['items'][1]['is_disabled'] is False
 
         updated = material_combo_service.save(
             _payload(items=[{'material_code': 'ERP001', 'quantity': 5}]),

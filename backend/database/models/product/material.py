@@ -65,7 +65,6 @@ class ProductMaterial(db.Model):
             'spec': self.spec, 'cover_image': self.cover_image,
             'cover_image_original': self.cover_image_original,
             'img_updated_at': self.img_updated_at, 'remark': self.remark,
-            'is_disabled_override': self.is_disabled,
         }
 
 

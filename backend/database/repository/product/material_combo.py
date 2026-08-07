@@ -1,8 +1,10 @@
 """售后物料组合的数据访问。"""
 
+from sqlalchemy import exists, func, or_
+
 from database.base import db
 from database.models.product.import_raw import ImportProductRaw
-from database.models.product.material import ProductMaterial
+from database.models.product.material import MaterialDisableKeyword, ProductMaterial
 from database.models.product.material_combo import MaterialCombo, MaterialComboItem
 
 
@@ -39,9 +41,17 @@ class MaterialComboRepository:
     def material_details(codes):
         if not codes:
             return {}
+        source_name = func.coalesce(ImportProductRaw.raw_name, ImportProductRaw.name)
+        keyword_hit = exists().where(
+            MaterialDisableKeyword.is_disabled.is_(False),
+            func.instr(source_name, MaterialDisableKeyword.keyword) > 0,
+        )
+        effective_disabled = or_(
+            ImportProductRaw.status == '失效', keyword_hit,
+        ).label('is_disabled')
         rows = db.session.query(
             ImportProductRaw.code, ImportProductRaw.name, ImportProductRaw.group_name,
-            ProductMaterial.short_name,
+            ProductMaterial.short_name, effective_disabled,
         ).outerjoin(
             ProductMaterial, ProductMaterial.code == ImportProductRaw.code,
         ).filter(ImportProductRaw.code.in_(codes)).all()
@@ -49,6 +59,7 @@ class MaterialComboRepository:
             row.code: {
                 'material_name': row.name, 'short_name': row.short_name,
                 'group_name': row.group_name, 'is_missing': False,
+                'is_disabled': bool(row.is_disabled),
             }
             for row in rows
         }

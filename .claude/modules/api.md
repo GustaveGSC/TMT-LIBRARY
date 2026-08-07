@@ -134,11 +134,10 @@ DELETE /api/material/combos/:id
     `"..."` 字面量。嵌套上限 10、节点上限 50；语法错误返回可展示的中文 400。
     仅影响 code/name/short_name，旧 keyword 始终保持原 LIKE 行为。
   data 为 `{items,total,page,page_size}`。
-- `PUT items/:code` 可写 `short_name/category/spec/remark/is_disabled`；
+- `PUT items/:code` 可写 `short_name/category/spec/remark`；
   首次保存时按需创建 `product_material`。
-- 物料项返回 `is_disabled`（最终生效值）和
-  `is_disabled_override`（`null|true|false`）。默认值由 ERP `status=失效` 或启用的原始品名关键词
-  判定；人工三态覆盖优先。保存时传 `is_disabled:null` 可恢复“跟随默认”。
+- 物料项返回只读 `is_disabled`，仅由 ERP `status=失效` 或启用的原始品名关键词判定；
+  不支持人工覆盖。`is_disabled` 查询参数仍可用于用户主动筛选停用/启用物料。
 - `POST items/:code/image` 沿用产品封面图 JSON base64 契约：
   `{data_url,orig_data_url?}`；仅 PNG/JPEG/WebP，单张解码后最大 10MB。成功 data：
   `{url,orig_url,img_updated_at,cover_image,cover_image_original}`。
@@ -152,7 +151,8 @@ DELETE /api/material/combos/:id
 - `POST/PUT combos` 请求体为
   `{name,category?,remark?,is_disabled?,sort_order?,items:[{material_code,quantity,sort_order?}]}`；
   `name` 必填且唯一，数量必须为正整数，同一组合内物料编码不得重复。PUT 对明细执行整体替换。
-- 组合明细响应附带 `material_name/short_name/group_name/is_missing`。ERP 重导后编码不存在时
+- 组合明细响应附带 `material_name/short_name/group_name/is_missing/is_disabled`，其中停用状态
+  与物料清单使用同一套 ERP 状态+关键词实时判定。ERP 重导后编码不存在时
   保留配置并返回 `is_missing:true`，不会报错或自动删除。重名、非法数量和重复编码返回 400；
   查询或删除不存在的组合返回 404。
 
