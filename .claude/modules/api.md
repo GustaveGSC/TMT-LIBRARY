@@ -155,6 +155,7 @@ DELETE /api/material/prices/:price_id
 - 价格字段实施字段级权限：只有同时具备 `rd:view` 时，列表项才附加
   `latest_price/latest_price_source`；详情额外附加
   `has_cost_node/cost_node_id/cost_notes/is_purchased_semi/cost_node_type`。无权限时这些字段整体不出现。
+  详情同时返回 `can_add_price`；物料大类只要包含 `useless` 即为 false。
 - 物料价格直接复用研发 BOM 的 `cost_material_price`：
   - `GET items/:code/prices` 返回价格历史并附 `order_no`；
   - `POST items/:code/prices` 接收
@@ -165,6 +166,8 @@ DELETE /api/material/prices/:price_id
 - 价格 GET 需要 `product:view + rd:view`，写操作需要 `product:view + rd:edit`，不额外要求
   `product:edit`。成本节点备注及 `is_purchased_semi` 继续使用既有
   `PATCH /api/rd/cost/nodes/:node_id`（`rd:edit`），不与 `product_material.remark` 合并。
+- 大类包含 `useless` 的物料调用新增价格接口返回 400“无用物料不支持维护价格”；门禁发生在
+  成本节点惰性创建之前。既有价格仍允许修改供应商或删除，便于清理历史数据。
 - 售后物料组合接口：GET 需要 `product:view`，POST/PUT/DELETE 需要 `product:edit`。
   `GET combos` 可传 `keyword`（名称模糊）、`category`、`is_disabled=0|1`，返回
   `{items,total}`，每个组合均含完整 `items`。`GET combos/categories` 返回非空分类去重数组。

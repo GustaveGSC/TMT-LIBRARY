@@ -216,3 +216,25 @@ def test_price_state_filter_and_price_validation(price_app):
         assert material_price_service.add_price(
             material_service.detail('NONE-A01').data, [], 'tester',
         ).message == '请求体格式无效'
+
+
+def test_useless_material_cannot_create_price_or_empty_cost_node(price_app):
+    with price_app.app_context():
+        db.session.add_all([
+            _raw('OLD001-A01', group='OLD'),
+            # 多标签防御：只要包含 useless，即使同时是 material 也必须拒绝。
+            ErpGroupCategory(group_code='OLD', is_material=True, is_useless=True),
+        ])
+        db.session.commit()
+        material_service.invalidate_group_config_cache()
+        material = material_service.detail('OLD001-A01').data
+        assert material['categories'] == ['material', 'useless']
+        assert material_price_service.detail_fields(material)['can_add_price'] is False
+
+        result = material_price_service.add_price(
+            material, {'unit_price': 9.9}, 'tester',
+        )
+
+        assert result.message == '无用物料不支持维护价格'
+        assert CostBomNode.query.count() == 0
+        assert CostMaterialPrice.query.count() == 0

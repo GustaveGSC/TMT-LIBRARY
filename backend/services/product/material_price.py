@@ -76,13 +76,14 @@ class MaterialPriceService:
 
     def detail_fields(self, material):
         code = material['code']
+        can_add_price = 'useless' not in (material.get('categories') or [])
         node = MaterialPriceRepository.node_for_code(code, _strip_version(code))
         if not node:
             return {
                 'has_cost_node': False, 'cost_node_id': None,
                 'latest_price': None, 'latest_price_source': None,
                 'cost_notes': '', 'is_purchased_semi': False,
-                'cost_node_type': None,
+                'cost_node_type': None, 'can_add_price': can_add_price,
             }
         latest = self.latest_for_materials([code]).get(code)
         return {
@@ -92,6 +93,7 @@ class MaterialPriceService:
             'cost_notes': node.notes or '',
             'is_purchased_semi': bool(node.is_purchased_semi),
             'cost_node_type': node.node_type,
+            'can_add_price': can_add_price,
         }
 
     def list_prices(self, material):
@@ -112,6 +114,9 @@ class MaterialPriceService:
         return Result.ok(data=data)
 
     def add_price(self, material, body, username):
+        # 必须先于 _node()：拒绝时不能留下空成本节点并占用基础码 UNIQUE。
+        if 'useless' in (material.get('categories') or []):
+            return Result.fail('无用物料不支持维护价格')
         if not isinstance(body, dict):
             return Result.fail('请求体格式无效')
         try:
