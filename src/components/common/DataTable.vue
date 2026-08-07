@@ -83,9 +83,12 @@ function isTextFilter(col) {
 const filterOptionsOf = computed(() => {
   const map = {}
   for (const col of props.columns) {
-    // 文本筛选不需要候选项；serverMode 下也无法从当页数据推出完整候选
-    if (!col.filterable || isTextFilter(col) || props.serverMode) continue
+    // 文本筛选不需要候选项
+    if (!col.filterable || isTextFilter(col)) continue
+    // 显式传入的候选项优先——serverMode 下必须走这条，否则下拉会是空的
     if (col.filterOptions) { map[slotKey(col)] = col.filterOptions; continue }
+    // 只有非 serverMode 才能从当页数据自动推导；serverMode 下当页数据推不出完整候选
+    if (props.serverMode) continue
     const seen = new Map()
     for (const row of props.data) {
       const v = filterValueOf(col, row)
@@ -241,8 +244,13 @@ const displayData = computed(() => {
 .app-data-table--bordered :deep(.el-table__cell:last-child) { border-right: none; }
 
 /* ── 两行表头：标题+排序 / 筛选下拉 ────────────────── */
-.th-top { display: flex; align-items: center; justify-content: center; gap: 4px; white-space: nowrap; }
-.th-top:not(.th-top--plain) { margin-bottom: 5px; }
+.th-top {
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+  white-space: nowrap;
+  /* 固定行高 + 统一下边距：无排序按钮的列曾因少这一截而让筛选框整体上移错位 */
+  min-height: 18px;
+  margin-bottom: 5px;
+}
 .th-lbl { font-size: 12px; font-weight: 700; color: var(--text-secondary); white-space: nowrap; line-height: 1.3; }
 .sort-btn {
   display: inline-flex; align-items: center; justify-content: center;
@@ -257,10 +265,10 @@ const displayData = computed(() => {
 .sort-btn.sort-asc::before  { border-color: transparent transparent var(--accent) transparent; }
 .sort-btn.sort-desc::after  { border-color: var(--accent) transparent transparent transparent; }
 
-.th-sel { width: 100%; }
+.th-sel { width: 100%; height: 24px; }
 /* 文本筛选框：高度与 .th-sel 下拉保持一致，视觉上同一排 */
 .th-txt {
-  width: 100%; height: 24px; padding: 0 6px;
+  width: 100%; height: 24px; padding: 0 6px; box-sizing: border-box;
   border: 1px solid var(--border); border-radius: 5px;
   background: var(--bg-card); color: var(--text-primary);
   font-size: 11px; font-family: inherit; outline: none;
@@ -278,6 +286,10 @@ const displayData = computed(() => {
   background: var(--bg-table-header) !important;
   vertical-align: top;
   padding: 6px 4px;
+}
+/* 表头单元格内容顶端对齐：没有筛选框的列不会把标签垂直居中而与邻列错位 */
+.app-data-table :deep(.el-table__header th.el-table__cell > .cell) {
+  display: flex; flex-direction: column; justify-content: flex-start;
 }
 .app-data-table :deep(.el-table__header-wrapper) { background: var(--bg-table-header); }
 
