@@ -1,6 +1,6 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowLeft, HomeFilled } from '@element-plus/icons-vue'
 import { PhListDashes, PhBarcode, PhPackage, PhUploadSimple } from '@phosphor-icons/vue'
@@ -26,12 +26,13 @@ const mountedTabs = ref({ items: true, rules: false, combos: false, import: fals
 
 // ── Tab 定义 ──────────────────────────────────────
 // 导入数据需要 product:edit（接口挂在 product_bp 上，权限码未变），只读用户不显示该 tab
-const tabs = computed(() => [
+// 注意：usePermission 返回的是普通布尔值，不是 ref，不能写 .value
+const tabs = [
   { key: 'items',  label: '物料清单',     icon: PhListDashes },
   { key: 'combos', label: '售后物料组合', icon: PhPackage },
   { key: 'rules',  label: '编码规则',     icon: PhBarcode },
-  ...(canEditProduct.value ? [{ key: 'import', label: '导入数据', icon: PhUploadSimple }] : []),
-])
+  ...(canEditProduct ? [{ key: 'import', label: '导入数据', icon: PhUploadSimple }] : []),
+]
 
 // ── 生命周期 ──────────────────────────────────────
 onMounted(() => { window.electronAPI?.maximizeApp?.() })
