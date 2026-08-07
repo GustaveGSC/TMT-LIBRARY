@@ -317,6 +317,8 @@ onMounted(loadRules)
 
 <style scoped>
 .code-prefix-rules {
+  flex: 1 1 0; min-height: 0;
+  display: flex; flex-direction: column;
   padding: 4px 0 8px;
   font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
@@ -325,12 +327,13 @@ onMounted(loadRules)
 .toolbar {
   display: flex; align-items: center;
   justify-content: space-between; margin-bottom: 10px;
+  flex-shrink: 0;
 }
 .filter-tabs { display: flex; gap: 6px; }
 .filter-tab {
   padding: 4px 12px; border-radius: 6px;
   border: 1px solid var(--border);
-  background: var(--bg-card); color: var(--text-muted);
+  background: var(--bg-card); color: var(--text-secondary);
   font-size: 12px; font-family: inherit;
   cursor: pointer; transition: all 0.15s;
 }
@@ -348,7 +351,8 @@ onMounted(loadRules)
 
 /* ── 说明 ─────────────────────────────────────── */
 .rules-tip {
-  font-size: 11px; color: var(--text-muted);
+  flex-shrink: 0;
+  font-size: 11px; color: var(--text-secondary);
   margin-bottom: 14px; padding: 8px 12px;
   background: var(--accent-bg);
   border: 1px solid var(--border); border-radius: 7px;
@@ -361,19 +365,20 @@ onMounted(loadRules)
   background: rgba(208,90,60,0.06); border: 1px solid rgba(208,90,60,0.2);
   border-radius: 7px; color: #d05a3c; font-size: 12px;
 }
-.state-tip { font-size: 13px; color: var(--text-muted); padding: 24px 0; text-align: center; }
+.state-tip { font-size: 13px; color: var(--text-secondary); padding: 24px 0; text-align: center; }
 
 /* ── 规则表格 ─────────────────────────────────── */
 .rules-table {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; flex-direction: column;
   border: 1px solid var(--border);
   border-radius: 10px; overflow: hidden; margin-bottom: 16px;
 }
 .rules-table::-webkit-scrollbar { width: 4px; }
 .rules-table::-webkit-scrollbar-track { background: transparent; }
 .rules-table::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-.rules-table-body {
-  max-height: 220px; overflow-y: auto;
-}
+/* 撑满表格剩余高度，不再写死 220px */
+.rules-table-body { flex: 1 1 0; min-height: 0; overflow-y: auto; }
 .rules-table-body::-webkit-scrollbar { width: 4px; }
 .rules-table-body::-webkit-scrollbar-track { background: transparent; }
 .rules-table-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
@@ -384,7 +389,7 @@ onMounted(loadRules)
   position: sticky; top: 0; z-index: 1;
 }
 .rt-col {
-  font-size: 12px; color: var(--text-muted);
+  font-size: 12px; color: var(--text-primary);
   padding-right: 10px;
 }
 .col-prefix  { width: 140px; flex-shrink: 0; }
@@ -412,7 +417,7 @@ onMounted(loadRules)
 .btn-icon {
   width: 26px; height: 26px; border-radius: 5px;
   border: 1px solid var(--border);
-  background: transparent; color: var(--text-muted);
+  background: transparent; color: var(--text-secondary);
   display: flex; align-items: center; justify-content: center;
   cursor: pointer; transition: all 0.15s; font-size: 13px;
 }
@@ -426,7 +431,7 @@ onMounted(loadRules)
 .rt-row.row-disabled { opacity: 0.45; }
 .prefix-tag.prefix-disabled { text-decoration: line-through; }
 .type-badge.badge-disabled {
-  color: var(--text-muted);
+  color: var(--text-secondary);
   background: var(--bg);
   border-color: var(--border);
   border: 1px solid;
@@ -434,6 +439,7 @@ onMounted(loadRules)
 
 /* ── 表单卡片 ─────────────────────────────────── */
 .form-card {
+  flex-shrink: 0;
   background: var(--bg-card); border: 1px solid var(--border);
   border-radius: 12px; padding: 20px;
 }
@@ -441,7 +447,7 @@ onMounted(loadRules)
 .form-row { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
 .form-label {
   width: 48px; flex-shrink: 0;
-  font-size: 12px; color: var(--text-muted);
+  font-size: 12px; color: var(--text-secondary);
   padding-top: 7px; text-align: right;
 }
 .required { color: #d05a3c; }
@@ -457,7 +463,7 @@ onMounted(loadRules)
 .type-option {
   padding: 4px 14px; border-radius: 6px;
   border: 1px solid var(--border);
-  background: var(--bg); color: var(--text-muted);
+  background: var(--bg); color: var(--text-secondary);
   font-size: 12px; font-family: inherit;
   cursor: pointer; transition: all 0.15s;
 }
@@ -471,7 +477,7 @@ onMounted(loadRules)
   cursor: pointer; transition: all 0.2s; border: none;
 }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-secondary { background: var(--bg); border: 1px solid var(--border); color: var(--text-muted); }
+.btn-secondary { background: var(--bg); border: 1px solid var(--border); color: var(--text-secondary); }
 .btn-secondary:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .btn-primary { background: var(--accent); color: #fff; }
 .btn-primary:hover:not(:disabled) { filter: brightness(1.1); }

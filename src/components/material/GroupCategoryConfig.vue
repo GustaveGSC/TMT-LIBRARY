@@ -210,12 +210,14 @@ onMounted(loadGroups)
 
 <style scoped>
 .group-category-config {
+  flex: 1 1 0; min-height: 0;
+  display: flex; flex-direction: column;
   padding: 4px 0 8px;
   font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
 
 /* ── 工具栏 ───────────────────────────────────── */
-.toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-shrink: 0; }
 .search-input {
   width: 200px; height: 30px; padding: 0 10px;
   border: 1px solid var(--border); border-radius: 7px;
@@ -229,7 +231,7 @@ onMounted(loadGroups)
 .filter-tab {
   padding: 4px 12px; border-radius: 6px;
   border: 1px solid var(--border);
-  background: var(--bg-card); color: var(--text-muted);
+  background: var(--bg-card); color: var(--text-secondary);
   font-size: 12px; font-family: inherit;
   cursor: pointer; transition: all 0.15s;
 }
@@ -240,7 +242,7 @@ onMounted(loadGroups)
   margin-left: auto;
   width: 30px; height: 30px; border-radius: 7px;
   border: 1px solid var(--border);
-  background: transparent; color: var(--text-muted);
+  background: transparent; color: var(--text-secondary);
   display: flex; align-items: center; justify-content: center;
   cursor: pointer; transition: all 0.15s;
 }
@@ -251,7 +253,8 @@ onMounted(loadGroups)
 
 /* ── 说明与状态 ───────────────────────────────── */
 .rules-tip {
-  font-size: 11px; color: var(--text-muted);
+  flex-shrink: 0;
+  font-size: 11px; color: var(--text-secondary);
   margin-bottom: 12px; padding: 8px 12px;
   background: var(--accent-bg);
   border: 1px solid var(--border); border-radius: 7px;
@@ -262,11 +265,15 @@ onMounted(loadGroups)
   background: rgba(208,90,60,0.06); border: 1px solid rgba(208,90,60,0.2);
   border-radius: 7px; color: #d05a3c; font-size: 12px;
 }
-.state-tip { font-size: 13px; color: var(--text-muted); padding: 24px 0; text-align: center; }
+.state-tip { font-size: 13px; color: var(--text-secondary); padding: 24px 0; text-align: center; }
 
 /* ── 表格 ─────────────────────────────────────── */
-.gc-table { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
-.gc-body { max-height: calc(100vh - 320px); overflow-y: auto; }
+.gc-table {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; flex-direction: column;
+  border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+}
+.gc-body { flex: 1 1 0; min-height: 0; overflow-y: auto; }
 .gc-body::-webkit-scrollbar { width: 4px; }
 .gc-body::-webkit-scrollbar-track { background: transparent; }
 .gc-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
@@ -277,7 +284,7 @@ onMounted(loadGroups)
   border-bottom: 1px solid var(--border); padding: 0 14px;
   position: sticky; top: 0; z-index: 1;
 }
-.gc-col { font-size: 12px; color: var(--text-muted); padding-right: 10px; }
+.gc-col { font-size: 12px; color: var(--text-primary); padding-right: 10px; }
 .col-code     { width: 96px;  flex-shrink: 0; }
 .col-name     { width: 180px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .col-count    { width: 70px;  flex-shrink: 0; }
@@ -305,12 +312,12 @@ onMounted(loadGroups)
   background: rgba(156,111,186,0.12); border: 1px solid rgba(156,111,186,0.3);
   border-radius: 4px; padding: 2px 7px; cursor: help;
 }
-.muted { color: var(--text-muted); }
+.muted { color: var(--text-secondary); }
 
 .cat-chip {
   padding: 3px 10px; border-radius: 6px;
   border: 1px solid var(--border);
-  background: var(--bg); color: var(--text-muted);
+  background: var(--bg); color: var(--text-secondary);
   font-size: 11px; font-family: inherit;
   cursor: pointer; transition: all 0.15s;
 }
@@ -320,7 +327,7 @@ onMounted(loadGroups)
 .btn-icon {
   width: 26px; height: 26px; border-radius: 5px;
   border: 1px solid var(--border);
-  background: transparent; color: var(--text-muted);
+  background: transparent; color: var(--text-secondary);
   display: flex; align-items: center; justify-content: center;
   cursor: pointer; transition: all 0.15s; font-size: 13px;
 }

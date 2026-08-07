@@ -167,7 +167,9 @@ function handleHome() {
 }
 .sub-tab:hover { border-color: var(--accent); color: var(--accent); }
 .sub-tab.active { background: var(--accent-bg); border-color: var(--accent); color: var(--accent); font-weight: 600; }
-.sub-panel { flex: 1; min-height: 0; overflow-y: auto; }
+/* 子面板作为 flex 列容器，内部组件用主轴撑满剩余高度；
+   overflow 交给组件内部的表格体，不在这一层滚动 */
+.sub-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .sub-panel::-webkit-scrollbar { width: 4px; }
 .sub-panel::-webkit-scrollbar-track { background: transparent; }
 .sub-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
