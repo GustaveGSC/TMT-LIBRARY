@@ -3,12 +3,13 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowLeft, HomeFilled } from '@element-plus/icons-vue'
-import { PhListDashes, PhBarcode } from '@phosphor-icons/vue'
+import { PhListDashes, PhBarcode, PhPackage } from '@phosphor-icons/vue'
 import WindowControls from '@/components/common/WindowControls.vue'
 import AppBottomBar from '@/components/common/AppBottomBar.vue'
 import MaterialItemsPanel from '@/components/material/MaterialItemsPanel.vue'
 import GroupCategoryConfig from '@/components/material/GroupCategoryConfig.vue'
 import CodePrefixRules from '@/components/material/CodePrefixRules.vue'
+import MaterialComboPanel from '@/components/material/MaterialComboPanel.vue'
 
 // ── 路由 ──────────────────────────────────────────
 const router = useRouter()
@@ -18,12 +19,13 @@ const activeTab = ref('items')
 const ruleTab   = ref('group')   // group 分组默认大类 / prefix 前缀例外规则
 
 // 已挂载过的 tab，避免切走后重新拉数据；与产品库 mountedTabs 的做法一致
-const mountedTabs = ref({ items: true, rules: false })
+const mountedTabs = ref({ items: true, rules: false, combos: false })
 
 // ── Tab 定义 ──────────────────────────────────────
 const tabs = [
-  { key: 'items', label: '物料清单', icon: PhListDashes },
-  { key: 'rules', label: '编码规则', icon: PhBarcode },
+  { key: 'items',  label: '物料清单',     icon: PhListDashes },
+  { key: 'combos', label: '售后物料组合', icon: PhPackage },
+  { key: 'rules',  label: '编码规则',     icon: PhBarcode },
 ]
 
 // ── 生命周期 ──────────────────────────────────────
@@ -83,6 +85,11 @@ function handleHome() {
       <!-- 物料清单 -->
       <div v-if="mountedTabs.items" v-show="activeTab === 'items'" class="tab-panel">
         <MaterialItemsPanel />
+      </div>
+
+      <!-- 售后物料组合 -->
+      <div v-if="mountedTabs.combos" v-show="activeTab === 'combos'" class="tab-panel">
+        <MaterialComboPanel />
       </div>
 
       <!-- 编码规则：分组默认大类 + 前缀例外规则 -->
