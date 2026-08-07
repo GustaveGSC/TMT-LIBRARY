@@ -118,8 +118,9 @@ async function searchMaterials() {
   if (!kw) { pickerRows.value = []; return }
   pickerLoading.value = true
   try {
-    // 复用物料清单接口。这里不限定大类：分组默认大类目前一条都没配，
-    // 8091 条里有 3354 条「未分类」，若默认只显示原材料会大量选不到。
+    // 复用物料清单接口。**刻意不限定大类**：用户 2026-08-07 明确
+    // 「未分类里的物料很复杂，建议不去管它，但是也可以进行选择」——
+    // 即未分类物料长期可选，这不是等分组大类配好后要收紧的临时妥协。
     const res = await http.get('/api/material/items', {
       params: { page: 1, page_size: 30, keyword: kw, is_disabled: '0' },
     })
@@ -386,8 +387,7 @@ onMounted(loadCombos)
           </button>
         </div>
         <div class="pk-hint">
-          未限定物料大类——分组默认大类尚未配置，8,091 条里有 3,354 条「未分类」，
-          限定后会大量选不到。
+          全部物料均可选，<b>不按大类限定</b>——未分类的物料同样可以加入组合。
         </div>
         <div v-if="pickerLoading" class="state-tip">搜索中...</div>
         <div v-else-if="!pickerRows.length" class="state-tip">输入关键词后回车搜索</div>
