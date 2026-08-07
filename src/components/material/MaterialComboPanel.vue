@@ -121,8 +121,9 @@ async function searchMaterials() {
     // 复用物料清单接口。**刻意不限定大类**：用户 2026-08-07 明确
     // 「未分类里的物料很复杂，建议不去管它，但是也可以进行选择」——
     // 即未分类物料长期可选，这不是等分组大类配好后要收紧的临时妥协。
+    // 不按停用过滤：停用只作为提示，停用物料同样允许加入组合
     const res = await http.get('/api/material/items', {
-      params: { page: 1, page_size: 30, keyword: kw, is_disabled: '0' },
+      params: { page: 1, page_size: 30, keyword: kw },
     })
     pickerRows.value = res.success ? (res.data?.items || []) : []
   } catch {
@@ -142,7 +143,7 @@ function addMaterial(row) {
   items.push({
     material_code: row.code, quantity: 1,
     material_name: row.name, short_name: row.short_name,
-    group_name: row.group_name, is_missing: false,
+    group_name: row.group_name, is_missing: false, is_disabled: !!row.is_disabled,
   })
 }
 
@@ -354,7 +355,10 @@ onMounted(loadCombos)
                   <span class="miss-tag">物料已不存在</span>
                 </template>
                 <template v-else>
-                  <div class="nm-main">{{ it.short_name || it.material_name || '—' }}</div>
+                  <div class="nm-main">
+                    {{ it.short_name || it.material_name || '—' }}
+                    <span v-if="it.is_disabled" class="pk-off">已停用</span>
+                  </div>
                   <div v-if="it.short_name && it.material_name" class="nm-sub">{{ it.material_name }}</div>
                 </template>
               </div>
@@ -387,7 +391,8 @@ onMounted(loadCombos)
           </button>
         </div>
         <div class="pk-hint">
-          全部物料均可选，<b>不按大类限定</b>——未分类的物料同样可以加入组合。
+          全部物料均可选，<b>不按大类、不按停用状态限定</b>——未分类与已停用的物料同样可加入组合，
+          已停用的会标出来供判断。
         </div>
         <div v-if="pickerLoading" class="state-tip">搜索中...</div>
         <div v-else-if="!pickerRows.length" class="state-tip">输入关键词后回车搜索</div>
@@ -395,6 +400,7 @@ onMounted(loadCombos)
           <div v-for="r in pickerRows" :key="r.code" class="pk-row">
             <span class="code-tag">{{ r.code }}</span>
             <span class="pk-name" :title="r.name">{{ r.short_name || r.name }}</span>
+            <span v-if="r.is_disabled" class="pk-off" title="ERP 已停用或名称含停用关键词">已停用</span>
             <span class="pk-group">{{ r.group_name || '' }}</span>
             <button class="btn-save mini-btn" @click="addMaterial(r)">添加</button>
           </div>
@@ -643,5 +649,10 @@ onMounted(loadCombos)
 .pk-row:last-child { border-bottom: none; }
 .pk-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pk-group { width: 130px; flex-shrink: 0; color: var(--text-secondary); font-size: 11px; }
+.pk-off {
+  flex-shrink: 0; font-size: 10px; font-weight: 600; color: #d05a3c;
+  background: rgba(208,90,60,0.1); border: 1px solid rgba(208,90,60,0.35);
+  border-radius: 4px; padding: 1px 6px;
+}
 .mini-btn { padding: 3px 12px; }
 </style>

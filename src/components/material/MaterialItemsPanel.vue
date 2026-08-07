@@ -31,8 +31,6 @@ const errorMsg = ref('')
 const colFilters = ref({})
 const sortBy     = ref('code')
 const sortDir    = ref('asc')
-// 底部开关：默认不显示停用数据（重导后停用占比将达 36%，默认藏起来更实用）
-const hideDisabled = ref(true)
 // 文本筛选按「与或非」表达式解析（& 与 / | 或 / ! 非 / () 分组）。
 // 必须是显式开关，不能自动识别：半角括号出现在 4385 条物料名称里
 // （如「π桌 (V1.1)」占 54%），自动解析会把 (V1.1) 当成分组。
@@ -108,10 +106,9 @@ async function loadItems() {
     if (f.group_code)      params.group_code = f.group_code
     if (f.categories === 'unclassified') params.unclassified = 1
     else if (f.categories)               params.category     = f.categories
-    // 停用筛选：列筛选显式选了就以它为准（便于专门查看停用项），
-    // 没选时才套用底部「不显示停用状态数据」开关。
+    // 停用只作为信息展示，不做默认过滤——用户 2026-08-07 决定：
+    // 停用状态仅来源于导入数据，不参与筛掉候选。列筛选仍可主动按停用筛。
     if (txt(f.is_disabled)) params.is_disabled = f.is_disabled
-    else if (hideDisabled.value) params.is_disabled = '0'
     if (useExpr.value) params.match_mode = 'expr'
 
     const res = await http.get('/api/material/items', { params })
@@ -143,7 +140,7 @@ function onSortChange({ prop, order }) {
   loadItems()
 }
 
-watch([pageSize, hideDisabled, useExpr], () => { page.value = 1; loadItems() })
+watch([pageSize, useExpr], () => { page.value = 1; loadItems() })
 watch(page, loadItems)
 
 // ── 生命周期 ──────────────────────────────────────
@@ -200,13 +197,11 @@ onMounted(() => { loadGroups(); loadItems() })
           <span v-if="!(row.categories || []).length" class="cat-badge badge-none">未分类</span>
         </template>
 
-        <!-- 停用状态：is_disabled 是最终生效值；is_disabled_override 是人工设定值
-             （null = 跟随 ERP 默认判定）。两者结合才能区分「默认停用」与「人工覆盖」。 -->
+        <!-- 停用状态：只来源于导入数据（ERP 状态失效 或 名称含停用关键词），
+             不可人工设置，所以只做展示、没有「人工覆盖」标记。 -->
         <template #cell-is_disabled="{ row }">
           <span v-if="row.is_disabled" class="st-badge st-off">停用</span>
           <span v-else class="st-badge st-on">启用</span>
-          <span v-if="row.is_disabled_override !== null && row.is_disabled_override !== undefined"
-                class="st-manual" title="人工覆盖，未跟随 ERP 默认">人工</span>
         </template>
       </DataTable>
     </div>
@@ -215,10 +210,6 @@ onMounted(() => { loadGroups(); loadItems() })
     <div class="footbar">
       <div class="fb-left">
         <span class="total-hint">共 <b>{{ total }}</b> 条</span>
-        <label class="fb-check">
-          <input v-model="hideDisabled" type="checkbox" />
-          <span>不显示停用状态数据</span>
-        </label>
         <label class="fb-check">
           <input v-model="useExpr" type="checkbox" />
           <span>高级筛选</span>
@@ -326,13 +317,6 @@ onMounted(() => { loadGroups(); loadItems() })
 }
 .st-badge.st-on  { color: #4a8f6a; background: rgba(74,143,106,0.12); border-color: rgba(74,143,106,0.4); }
 .st-badge.st-off { color: #d05a3c; background: rgba(208,90,60,0.1);  border-color: rgba(208,90,60,0.35); }
-.st-manual {
-  margin-left: 4px; font-size: 10px;
-  color: #9c6fba; background: rgba(156,111,186,0.12);
-  border: 1px solid rgba(156,111,186,0.3); border-radius: 4px; padding: 1px 5px;
-  cursor: help;
-}
-
 .pg-btn {
   padding: 4px 14px; border-radius: 6px;
   border: 1px solid var(--border);
