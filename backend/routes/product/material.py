@@ -4,12 +4,13 @@ import hashlib
 
 from flask import Blueprint, g, request
 
-from auth import make_blueprint_guard
+from auth import has_permission, make_blueprint_guard
 from error_handling import internal_error_response
 from result import Result
 from routes.product.finished import _decode_image_data_url
 from services.product.material import CATEGORY_TYPES, material_service
 from services.product.material_combo import material_combo_service
+from services.product.material_price import material_price_service
 from storage.client import get_bucket
 from upload_validation import UploadValidationError
 from services.product.material_filter import FilterExpressionError
@@ -17,6 +18,19 @@ from services.product.material_filter import FilterExpressionError
 
 material_bp = Blueprint('material', __name__)
 material_bp.before_request(make_blueprint_guard('product:view', 'product:edit'))
+material_cost_bp = Blueprint('material_cost', __name__)
+material_cost_bp.before_request(make_blueprint_guard('product:view'))
+
+
+def _require_rd(permission):
+    if not has_permission(g.current_user or {}, permission):
+        return Result.fail('无研发成本权限').to_response(403)
+    return None
+
+
+def _material_for_cost(code):
+    result = material_service.detail(code)
+    return result.data if result.success else None
 
 
 @material_bp.get('/group-categories')
@@ -61,6 +75,12 @@ def list_items():
         else:
             text_filters[key] = raw_value.strip() or None
     try:
+        can_view_cost = has_permission(g.current_user or {}, 'rd:view')
+        price_state = request.args.get('price_state', '').strip() or None
+        if price_state and not can_view_cost:
+            return Result.fail('无研发成本权限').to_response(403)
+        if price_state not in (None, 'has', 'none'):
+            return Result.fail('价格状态参数无效').to_response()
         result = material_service.list_items(
             page, page_size, category=category,
             group_code=request.args.get('group_code', '').strip() or None,
@@ -68,6 +88,7 @@ def list_items():
             **text_filters, sort_by=sort_by, sort_dir=sort_dir, match_mode=match_mode,
             is_disabled=disabled,
             unclassified=request.args.get('unclassified') in ('1', 'true', 'True'),
+            price_state=price_state, include_cost=can_view_cost,
         )
     except FilterExpressionError as exc:
         return Result.fail(str(exc)).to_response()
@@ -154,7 +175,9 @@ def delete_material_combo(combo_id):
 
 @material_bp.get('/items/<path:code>')
 def material_detail(code):
-    return material_service.detail(code).to_response()
+    return material_service.detail(
+        code, include_cost=has_permission(g.current_user or {}, 'rd:view')
+    ).to_response()
 
 
 @material_bp.put('/items/<path:code>')
@@ -199,3 +222,57 @@ def upload_material_image(code):
         }).to_response()
     except Exception:
         return internal_error_response('物料图片上传失败', '上传失败')
+
+
+@material_cost_bp.get('/items/<path:code>/prices')
+def material_prices(code):
+    denied = _require_rd('rd:view')
+    if denied:
+        return denied
+    material = _material_for_cost(code)
+    if not material:
+        return Result.fail('物料不存在').to_response(404)
+    return material_price_service.list_prices(material).to_response()
+
+
+@material_cost_bp.post('/items/<path:code>/prices')
+def add_material_price(code):
+    denied = _require_rd('rd:edit')
+    if denied:
+        return denied
+    material = _material_for_cost(code)
+    if not material:
+        return Result.fail('物料不存在').to_response(404)
+    return material_price_service.add_price(
+        material, request.get_json(silent=True) or {},
+        (g.current_user or {}).get('username'),
+    ).to_response()
+
+
+@material_cost_bp.patch('/prices/<int:price_id>')
+def update_material_price(price_id):
+    denied = _require_rd('rd:edit')
+    if denied:
+        return denied
+    return material_price_service.update_price(
+        price_id, request.get_json(silent=True) or {},
+    ).to_response()
+
+
+@material_cost_bp.delete('/prices/<int:price_id>')
+def delete_material_price(price_id):
+    denied = _require_rd('rd:edit')
+    if denied:
+        return denied
+    return material_price_service.delete_price(price_id).to_response()
+
+
+@material_cost_bp.get('/items/<path:code>/usages')
+def material_usages(code):
+    denied = _require_rd('rd:view')
+    if denied:
+        return denied
+    material = _material_for_cost(code)
+    if not material:
+        return Result.fail('物料不存在').to_response(404)
+    return material_price_service.usages(material).to_response()

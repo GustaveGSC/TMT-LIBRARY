@@ -5,6 +5,7 @@ from database.models.product.import_raw import ImportProductRaw
 from database.models.product.material import (
     ErpGroupCategory, MaterialDisableKeyword, ProductMaterial,
 )
+from database.models.rd.cost import CostBomNode, CostMaterialPrice
 
 
 class MaterialRepository:
@@ -42,7 +43,7 @@ class MaterialRepository:
     @staticmethod
     def raw_query(
         keyword=None, group_code=None, disabled=None, disable_keywords=(),
-        text_conditions=(), sort_by='code', sort_dir='asc',
+        text_conditions=(), sort_by='code', sort_dir='asc', price_state=None,
     ):
         query = ImportProductRaw.query.outerjoin(
             ProductMaterial, ProductMaterial.code == ImportProductRaw.code,
@@ -58,6 +59,17 @@ class MaterialRepository:
             query = query.filter(
                 MaterialRepository.effective_disabled_expression(disable_keywords) == disabled
             )
+        if price_state:
+            # 显式 COLLATE 跨过生产历史表的 unicode_ci / 0900_ai_ci 裂缝。
+            node_code = CostBomNode.code_with_version
+            if db.session.get_bind().dialect.name == 'mysql':
+                node_code = node_code.collate('utf8mb4_0900_ai_ci')
+            has_price = db.exists().where(
+                CostMaterialPrice.node_id == CostBomNode.id,
+                CostMaterialPrice.unit_price.is_not(None),
+                node_code == ImportProductRaw.code,
+            )
+            query = query.filter(has_price if price_state == 'has' else ~has_price)
         sort_columns = {
             'code': ImportProductRaw.code,
             'name': ImportProductRaw.name,

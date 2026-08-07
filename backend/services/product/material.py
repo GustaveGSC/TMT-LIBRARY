@@ -4,6 +4,7 @@ from database.models.product.material import MaterialDisableKeyword, ProductMate
 from database.repository.product.material import MaterialRepository
 from result import Result
 from services.product.material_filter import expression_condition, literal_contains
+from services.product.material_price import material_price_service
 
 
 BOOLEAN_KEYS = ('is_finished', 'is_packaged', 'is_semi', 'is_material', 'is_useless')
@@ -118,6 +119,7 @@ class MaterialService:
             filters.get('keyword'), filters.get('group_code'), filters.get('is_disabled'),
             self._disable_keywords(), text_conditions=text_conditions,
             sort_by=filters.get('sort_by', 'code'), sort_dir=filters.get('sort_dir', 'asc'),
+            price_state=filters.get('price_state'),
         )
         configs, rules = self._group_configs(), self._rules()
         category = filters.get('category')
@@ -161,18 +163,32 @@ class MaterialService:
             raw_rows = MaterialRepository.raw_for_codes([item['code'] for item in page_rows])
             selected = [(raw, categories_by_code[raw.code]) for raw in raw_rows]
         materials = MaterialRepository.materials_for_codes([raw.code for raw, _ in selected])
+        items = [self._serialize(raw, cats, materials.get(raw.code)) for raw, cats in selected]
+        if filters.get('include_cost'):
+            prices = material_price_service.latest_for_materials([
+                item['code'] for item in items
+            ])
+            for item in items:
+                price = prices.get(item['code'])
+                item['latest_price'] = price['latest_price'] if price else None
+                item['latest_price_source'] = (
+                    price['latest_price_source'] if price else None
+                )
         return Result.ok(data={
-            'items': [self._serialize(raw, cats, materials.get(raw.code)) for raw, cats in selected],
+            'items': items,
             'total': total, 'page': page, 'page_size': page_size,
         })
 
-    def detail(self, code):
+    def detail(self, code, include_cost=False):
         raw = MaterialRepository.raw_by_code(code)
         if not raw:
             return Result.fail('物料不存在')
         cats = self._categories(code, raw.group_code, self._rules(), self._group_configs())
         material = MaterialRepository.materials_for_codes([code]).get(code)
-        return Result.ok(data=self._serialize(raw, cats, material))
+        data = self._serialize(raw, cats, material)
+        if include_cost:
+            data.update(material_price_service.detail_fields(data))
+        return Result.ok(data=data)
 
     def disable_keywords(self):
         return Result.ok(data=[row.to_dict() for row in MaterialRepository.disable_keywords()])

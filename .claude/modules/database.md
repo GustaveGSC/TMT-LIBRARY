@@ -421,8 +421,10 @@ cost_material_price                        # 物料价格记录（手动 + BOM�
   snapshot_id(FK→cost_snapshot SET NULL nullable),  # BOM导入时关联快照
   unit_price(DECIMAL 12,4), price_date(DATE nullable),
   supplier_name(VARCHAR 100 nullable),
-  source(VARCHAR 20 DEFAULT 'manual'),  # 'manual' | 'bom_import'
+  source(VARCHAR 20 DEFAULT 'manual'),  # 'manual' | 'bom_import' | 'bom_calc'
   notes(TEXT nullable), created_at
+  # 物料库通过 cost_bom_node.code_with_version 对应 import_product_raw.code，展示并维护同一份价格
+  # 无成本节点的物料在首次手动加价时惰性创建节点；基础 code 冲突时复用既有节点
 
 cost_material_supplier                     # 物料供应商报价（可标记首选）
   id, node_id(FK→cost_bom_node CASCADE),

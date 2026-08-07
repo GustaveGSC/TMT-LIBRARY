@@ -118,6 +118,11 @@ GET  /api/material/combos/:id
 POST /api/material/combos
 PUT  /api/material/combos/:id
 DELETE /api/material/combos/:id
+GET  /api/material/items/:code/prices
+POST /api/material/items/:code/prices
+GET  /api/material/items/:code/usages
+PATCH /api/material/prices/:price_id
+DELETE /api/material/prices/:price_id
 ```
 
 - `GET group-categories` 返回全部 ERP 分组：
@@ -134,6 +139,8 @@ DELETE /api/material/combos/:id
     `"..."` 字面量。嵌套上限 10、节点上限 50；语法错误返回可展示的中文 400。
     仅影响 code/name/short_name，旧 keyword 始终保持原 LIKE 行为。
   data 为 `{items,total,page,page_size}`。
+- `GET items` 可选 `price_state=has|none`，仅 `rd:view` 用户可用；用于按是否存在价格记录筛选。
+  本期不支持 `sort_by=price`，避免破坏 8,091 行物料的数据库分页。
 - `PUT items/:code` 可写 `short_name/category/spec/remark`；
   首次保存时按需创建 `product_material`。
 - 物料项返回只读 `is_disabled`，仅由 ERP `status=失效` 或启用的原始品名关键词判定；
@@ -145,6 +152,19 @@ DELETE /api/material/combos/:id
   `GET disable-preview` 返回 `{status_inactive,keyword_hit,union}`，为 ERP 状态、启用关键词及并集
   的实时命中数；关键词表为空时只按 ERP 状态判定。
 - `:code` 支持包含 `/` 的 ERP 编码；OSS 对象名使用编码 SHA-256，不直接拼接原编码。
+- 价格字段实施字段级权限：只有同时具备 `rd:view` 时，列表项才附加
+  `latest_price/latest_price_source`；详情额外附加
+  `has_cost_node/cost_node_id/cost_notes/is_purchased_semi/cost_node_type`。无权限时这些字段整体不出现。
+- 物料价格直接复用研发 BOM 的 `cost_material_price`：
+  - `GET items/:code/prices` 返回价格历史并附 `order_no`；
+  - `POST items/:code/prices` 接收
+    `{unit_price,price_date?,supplier_name?,notes?}`，手工来源固定为 `manual`；没有成本节点时惰性创建；
+  - `PATCH prices/:id` 本期只允许修改 `{supplier_name}`；
+  - `DELETE prices/:id` 删除价格记录；
+  - `GET items/:code/usages` 返回该成本节点出现过的快照/SKU。
+- 价格 GET 需要 `product:view + rd:view`，写操作需要 `product:view + rd:edit`，不额外要求
+  `product:edit`。成本节点备注及 `is_purchased_semi` 继续使用既有
+  `PATCH /api/rd/cost/nodes/:node_id`（`rd:edit`），不与 `product_material.remark` 合并。
 - 售后物料组合接口：GET 需要 `product:view`，POST/PUT/DELETE 需要 `product:edit`。
   `GET combos` 可传 `keyword`（名称模糊）、`category`、`is_disabled=0|1`，返回
   `{items,total}`，每个组合均含完整 `items`。`GET combos/categories` 返回非空分类去重数组。
