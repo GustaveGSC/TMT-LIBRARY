@@ -112,6 +112,12 @@ POST /api/material/disable-keywords
 PUT  /api/material/disable-keywords/:id
 DELETE /api/material/disable-keywords/:id
 GET  /api/material/disable-preview
+GET  /api/material/combos
+GET  /api/material/combos/categories
+GET  /api/material/combos/:id
+POST /api/material/combos
+PUT  /api/material/combos/:id
+DELETE /api/material/combos/:id
 ```
 
 - `GET group-categories` 返回全部 ERP 分组：
@@ -140,6 +146,15 @@ GET  /api/material/disable-preview
   `GET disable-preview` 返回 `{status_inactive,keyword_hit,union}`，为 ERP 状态、启用关键词及并集
   的实时命中数；关键词表为空时只按 ERP 状态判定。
 - `:code` 支持包含 `/` 的 ERP 编码；OSS 对象名使用编码 SHA-256，不直接拼接原编码。
+- 售后物料组合接口：GET 需要 `product:view`，POST/PUT/DELETE 需要 `product:edit`。
+  `GET combos` 可传 `keyword`（名称模糊）、`category`、`is_disabled=0|1`，返回
+  `{items,total}`，每个组合均含完整 `items`。`GET combos/categories` 返回非空分类去重数组。
+- `POST/PUT combos` 请求体为
+  `{name,category?,remark?,is_disabled?,sort_order?,items:[{material_code,quantity,sort_order?}]}`；
+  `name` 必填且唯一，数量必须为正整数，同一组合内物料编码不得重复。PUT 对明细执行整体替换。
+- 组合明细响应附带 `material_name/short_name/group_name/is_missing`。ERP 重导后编码不存在时
+  保留配置并返回 `is_missing:true`，不会报错或自动删除。重名、非法数量和重复编码返回 400；
+  查询或删除不存在的组合返回 404。
 
 GET    /api/erp-code-rules/
 POST   /api/erp-code-rules/

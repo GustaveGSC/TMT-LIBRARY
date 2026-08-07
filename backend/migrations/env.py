@@ -46,6 +46,7 @@ import database.models.product.finished  # noqa: E402,F401
 import database.models.product.import_raw  # noqa: E402,F401
 import database.models.product.lifecycle  # noqa: E402,F401
 import database.models.product.material  # noqa: E402,F401
+import database.models.product.material_combo  # noqa: E402,F401
 import database.models.product.param  # noqa: E402,F401
 import database.models.product.resource  # noqa: E402,F401
 import database.models.product.detail_package  # noqa: E402,F401

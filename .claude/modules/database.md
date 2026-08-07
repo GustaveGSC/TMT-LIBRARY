@@ -261,6 +261,19 @@ material_disable_keyword
   id, keyword(VARCHAR 64 UNIQUE), is_disabled, remark, created_at
   # 名称停用规则由界面维护；迁移预置“停用”“作废”，可增删改/停用
 
+material_combo
+  id, name(VARCHAR 200 UNIQUE), category(VARCHAR 100 nullable), remark(TEXT nullable),
+  is_disabled(BOOLEAN DEFAULT false), sort_order(INT DEFAULT 0), created_by,
+  created_at, updated_at
+  # 人工维护的售后备件组合；不与产品/型号关联，不支持组合嵌套
+
+material_combo_item
+  id, combo_id(FK→material_combo CASCADE), material_code(VARCHAR 255),
+  quantity(INT), sort_order(INT), created_at
+  # UNIQUE(combo_id, material_code)；明细保存采用整体替换
+  # material_code 不设 ERP 外键，MySQL 排序规则显式为 utf8mb4_0900_ai_ci
+  # 查询时 JOIN import_product_raw/product_material；ERP 编码消失时保留并标记 is_missing
+
 product_category
   id, name(UNIQUE), sort_order, created_at
 

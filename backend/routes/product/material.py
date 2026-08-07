@@ -9,6 +9,7 @@ from error_handling import internal_error_response
 from result import Result
 from routes.product.finished import _decode_image_data_url
 from services.product.material import CATEGORY_TYPES, material_service
+from services.product.material_combo import material_combo_service
 from storage.client import get_bucket
 from upload_validation import UploadValidationError
 from services.product.material_filter import FilterExpressionError
@@ -98,6 +99,57 @@ def delete_disable_keyword(keyword_id):
 @material_bp.get('/disable-preview')
 def disable_preview():
     return material_service.disable_preview().to_response()
+
+
+@material_bp.get('/combos')
+def list_material_combos():
+    disabled_arg = request.args.get('is_disabled')
+    if disabled_arg is None:
+        disabled = None
+    elif disabled_arg in ('1', 'true', 'True'):
+        disabled = True
+    elif disabled_arg in ('0', 'false', 'False'):
+        disabled = False
+    else:
+        return Result.fail('停用状态参数无效').to_response()
+    return material_combo_service.list(
+        keyword=request.args.get('keyword', '').strip() or None,
+        category=request.args.get('category', '').strip() or None,
+        is_disabled=disabled,
+    ).to_response()
+
+
+@material_bp.get('/combos/categories')
+def material_combo_categories():
+    return material_combo_service.categories().to_response()
+
+
+@material_bp.get('/combos/<int:combo_id>')
+def material_combo_detail(combo_id):
+    result = material_combo_service.get_one(combo_id)
+    return result.to_response(200 if result.success else 404)
+
+
+@material_bp.post('/combos')
+def create_material_combo():
+    username = (g.current_user or {}).get('username')
+    return material_combo_service.save(
+        request.get_json(silent=True) or {}, created_by=username,
+    ).to_response()
+
+
+@material_bp.put('/combos/<int:combo_id>')
+def update_material_combo(combo_id):
+    result = material_combo_service.save(
+        request.get_json(silent=True) or {}, combo_id=combo_id,
+    )
+    return result.to_response(200 if result.success else 400)
+
+
+@material_bp.delete('/combos/<int:combo_id>')
+def delete_material_combo(combo_id):
+    result = material_combo_service.delete(combo_id)
+    return result.to_response(200 if result.success else 404)
 
 
 @material_bp.get('/items/<path:code>')

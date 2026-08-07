@@ -30,7 +30,8 @@ FINANCE_DIMENSION_REVISION = '20260728_03'
 DETAIL_PACKAGE_SCOPE_REVISION = '20260729_01'
 MATERIAL_LIBRARY_REVISION = '20260731_01'
 MATERIAL_COLLATION_REVISION = '20260731_02'
-HEAD_REVISION = MATERIAL_COLLATION_REVISION
+MATERIAL_COMBO_REVISION = '20260807_01'
+HEAD_REVISION = MATERIAL_COMBO_REVISION
 CRITICAL_INDEXES = {
     'shipping_order_finished': {
         'ix_sof_source',
@@ -66,6 +67,10 @@ def test_baseline_has_linear_history_and_task_lease_is_the_only_head():
     assert (
         scripts.get_revision(MATERIAL_COLLATION_REVISION).down_revision
         == MATERIAL_LIBRARY_REVISION
+    )
+    assert (
+        scripts.get_revision(MATERIAL_COMBO_REVISION).down_revision
+        == MATERIAL_COLLATION_REVISION
     )
     assert scripts.get_revision(PERMISSION_REVISION).down_revision == TASK_REVISION
     assert scripts.get_revision(CUSTOMER_MAPPING_REVISION).down_revision == PERMISSION_REVISION
@@ -266,6 +271,8 @@ def test_baseline_upgrade_adds_only_task_schemas(tmp_path, monkeypatch):
         'erp_group_category',
         'product_material',
         'material_disable_keyword',
+        'material_combo',
+        'material_combo_item',
     }
     inspector = sa.inspect(engine)
     shipping_task_columns = {
