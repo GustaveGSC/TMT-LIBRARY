@@ -6,7 +6,7 @@ import WindowControls from '@/components/common/WindowControls.vue'
 import ProductTable  from './ProductTable.vue'
 import ProductImage  from './ProductImage.vue'
 import ProductChart  from './ProductChart.vue'
-import { ArrowLeft, Upload, Folder, Collection, Memo, Timer, Tools, HomeFilled } from '@element-plus/icons-vue'
+import { ArrowLeft, Folder, Collection, Memo, Timer, Tools, HomeFilled } from '@element-plus/icons-vue'
 import { usePermission } from '@/composables/usePermission'
 import http from '@/api/http'
 import { pollProductLifecycleTask } from '@/utils/productLifecyclePoll'
@@ -14,7 +14,6 @@ import { getConflictTaskId } from '@/utils/taskConflict'
 
 // ── 权限 ──────────────────────────────────────────
 const { canEditProduct } = usePermission()
-import ProductImport    from './ProductImport.vue'
 import ProductCategory  from './ProductCategory.vue'
 import ProductTag     from './ProductTag.vue'
 import ProductParam     from './ProductParam.vue'
@@ -72,7 +71,6 @@ async function navigateTo(page) {
 // ── 搜索 ──────────────────────────────────────────
 
 // ── 弹窗状态 ──────────────────────────────────────
-const showImportDialog   = ref(false)
 const showCategoryDialog = ref(false)
 const showTagDialog    = ref(false)
 const showParamDialog  = ref(false)
@@ -353,13 +351,6 @@ onMounted(async () => {
         <div v-if="canEditProduct" class="tool-section">
           <div class="tool-section-label">数据管理</div>
           <div class="tool-btns">
-            <button class="tool-btn" @click="showImportDialog = true">
-              <div class="tool-btn-icon"><el-icon><Upload /></el-icon></div>
-              <div class="tool-btn-body">
-                <div class="tool-btn-title">导入数据</div>
-                <div class="tool-btn-desc">从 ERP 导出的 Excel 文件导入</div>
-              </div>
-            </button>
             <button class="tool-btn" @click="showCategoryDialog = true">
               <div class="tool-btn-icon"><el-icon><Folder /></el-icon></div>
               <div class="tool-btn-body">
@@ -409,11 +400,6 @@ onMounted(async () => {
       <ProductDetailPackages v-if="canEditProduct && mountedTabs.detailPackages" v-show="activePage === 'detailPackages'" />
 
     </main>
-
-    <!-- ── 导入数据弹窗 ────────────────────────────── -->
-    <el-dialog v-model="showImportDialog" title="导入 ERP 数据" width="640" align-center>
-      <ProductImport />
-    </el-dialog>
 
     <!-- ── 分类管理弹窗 ────────────────────────────── -->
     <el-dialog v-model="showCategoryDialog" title="分类管理" width="680" align-center>
