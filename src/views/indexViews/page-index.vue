@@ -49,6 +49,7 @@ import iconMaterial from '@/assets/icons/icon_data_mgmt.png'
 import iconRdTools      from '@/assets/icons/icon_rd_tools.png'
 import iconAftersaleTools from '@/assets/icons/icon_aftersale_tools.png'
 import iconGeneralTools from '@/assets/icons/icon_general_tools.png'
+import iconLab from '@/assets/icons/icon_handset_sim.png'
 
 const router = useRouter()
 
@@ -136,6 +137,19 @@ const moduleGroups = computed(() => [
         name: '通用工具',
         icon: iconGeneralTools,
         route: '/general-tools',
+        disabled: false,
+        visible: true,
+      },
+    ].filter(mod => mod.visible),
+  },
+  {
+    label: '实验室',
+    items: [
+      {
+        key: 'lab',
+        name: '模拟手控系统',
+        icon: iconLab,
+        route: '/lab',
         disabled: false,
         visible: true,
       },

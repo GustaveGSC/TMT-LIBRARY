@@ -98,6 +98,10 @@ const router = createRouter({
       path: '/general-tools',
       component: () => import('@/views/generalToolsViews/page-general-tools.vue'),
     },
+    {
+      path: '/lab',
+      component: () => import('@/views/labViews/page-lab.vue'),
+    },
   ]
 })
 
