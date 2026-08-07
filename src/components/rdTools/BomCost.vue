@@ -2,13 +2,12 @@
 // ── 导入 ──────────────────────────────────────────
 import { ref, computed, watch, onMounted, reactive } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import {
-  Upload, Search, Delete, Plus, Close, Setting,
-} from '@element-plus/icons-vue'
+import { Upload, Plus, Close, Setting } from '@element-plus/icons-vue'
 import http from '@/api/http'
+import MaterialCard from '@/components/material/MaterialCard.vue'
 
 // ── 响应式状态 ────────────────────────────────────
-const subTab = ref('snapshots')    // snapshots | nodes | estimate
+const subTab = ref('snapshots')    // snapshots | estimate
 
 // ─── 快照管理 ─────────────────────────────────────
 const snapshots        = ref([])
@@ -133,61 +132,22 @@ function onPriceEdit(row, val) {
   previewData.value = { ...previewData.value }
 }
 
-// BOM 树抽屉（物料查询里用）
+// 物料卡片：BOM 树里点品号直接看物料详情与价格
+// （原「物料查询」tab 的节点抽屉已下线，内容并入物料卡片）
+const mcVisible = ref(false)
+const mcCode    = ref('')
+function openMaterialCard(code) {
+  if (!code) return
+  mcCode.value = code
+  mcVisible.value = true
+}
+
+// BOM 树抽屉（成本快照里用）
 const bomDrawerVisible = ref(false)
 const bomDrawerLoading = ref(false)
 const activeSku        = ref(null)
 const bomTree          = ref([])
 
-
-// ─── 物料节点查询 ──────────────────────────────────
-const nodeSearchQ     = ref('')
-const nodeList        = ref([])
-const nodeTotal       = ref(0)
-const nodePage        = ref(1)
-const nodesLoading    = ref(false)
-// 列头筛选（分列）
-const nodeColFilters  = reactive({ category: '', code: '', name: '', spec: '' })
-let _nodeFilterTimer  = null
-function onNodeColFilter() {
-  clearTimeout(_nodeFilterTimer)
-  _nodeFilterTimer = setTimeout(() => { nodePage.value = 1; loadNodes() }, 300)
-}
-
-// 节点详情抽屉
-const nodeDrawerVisible = ref(false)
-const nodeDrawerLoading = ref(false)
-const nodeDrawerWidth   = ref(780)   // 默认宽度 px
-
-function onDrawerResizeStart(e) {
-  e.preventDefault()
-  const startX  = e.clientX
-  const startW  = nodeDrawerWidth.value
-  function onMove(ev) {
-    const delta = startX - ev.clientX   // 从右侧拖，向左拖 = 增大
-    nodeDrawerWidth.value = Math.max(400, Math.min(window.innerWidth - 60, startW + delta))
-  }
-  function onUp() {
-    document.removeEventListener('mousemove', onMove)
-    document.removeEventListener('mouseup', onUp)
-  }
-  document.addEventListener('mousemove', onMove)
-  document.addEventListener('mouseup', onUp)
-}
-const activeNode        = ref(null)
-const priceHistory      = ref([])
-const nodeUsages        = ref([])
-const nodeDetailTab     = ref('info')
-// 物料价格记录
-const materialPrices     = ref([])
-const priceFormVisible   = ref(false)
-const priceForm          = ref({ unit_price: '', price_date: '', supplier_name: '', notes: '' })
-const priceSaving        = ref(false)
-
-// 供应商表单
-const supplierFormVisible = ref(false)
-const supplierForm        = ref({ supplier_name: '', unit_price: '', price_date: '', is_preferred: false, notes: '' })
-const supplierSaving      = ref(false)
 
 // ─── 成本预估 ─────────────────────────────────────
 const estimateMode    = ref('ref')   // ref | free
@@ -279,7 +239,6 @@ onMounted(() => {
 
 watch(subTab, (val) => {
   if (val === 'snapshots' && snapshots.value.length === 0) loadSnapshots()
-  if (val === 'nodes' && nodeList.value.length === 0) loadNodes()
 })
 
 // ─────────────────────────────────────────────────
@@ -428,167 +387,6 @@ async function openBomDrawer(sku) {
 // 物料节点方法
 // ─────────────────────────────────────────────────
 
-async function loadNodes() {
-  nodesLoading.value = true
-  const res = await http.get('/api/rd/cost/nodes', {
-    params: {
-      q: nodeSearchQ.value, page: nodePage.value, per_page: 30,
-      f_category: nodeColFilters.category,
-      f_code:     nodeColFilters.code,
-      f_name:     nodeColFilters.name,
-      f_spec:     nodeColFilters.spec,
-    },
-  })
-  nodesLoading.value = false
-  if (res.success) {
-    nodeList.value  = res.data.items
-    nodeTotal.value = res.data.total
-  }
-}
-
-function doNodeSearch() {
-  nodePage.value = 1
-  loadNodes()
-}
-
-async function openNodeDrawer(node) {
-  activeNode.value      = { ...node }
-  nodeDrawerVisible.value = true
-  nodeDrawerLoading.value = true
-  nodeDetailTab.value   = 'info'
-  priceHistory.value    = []
-  nodeUsages.value      = []
-  materialPrices.value  = []
-
-  const [detailRes, usageRes, pricesRes] = await Promise.all([
-    http.get(`/api/rd/cost/nodes/${node.id}`),
-    http.get(`/api/rd/cost/nodes/${node.id}/usages`),
-    http.get(`/api/rd/cost/nodes/${node.id}/prices`),
-  ])
-  nodeDrawerLoading.value = false
-
-  if (detailRes.success)  activeNode.value = detailRes.data
-  if (usageRes.success)   nodeUsages.value = usageRes.data
-  if (pricesRes.success)  materialPrices.value = pricesRes.data.map(p => ({ ...p, _supplierDraft: p.supplier_name || '' }))
-}
-
-async function addMaterialPrice() {
-  if (!priceForm.value.unit_price) { ElMessage.warning('请填写单价'); return }
-  priceSaving.value = true
-  const res = await http.post(`/api/rd/cost/nodes/${activeNode.value.id}/prices`, {
-    unit_price:    parseFloat(priceForm.value.unit_price),
-    price_date:    priceForm.value.price_date || '',
-    supplier_name: priceForm.value.supplier_name || '',
-    notes:         priceForm.value.notes || '',
-  })
-  priceSaving.value = false
-  if (res.success) {
-    materialPrices.value.unshift({ ...res.data, _supplierDraft: res.data.supplier_name || '' })
-    priceFormVisible.value = false
-    priceForm.value = { unit_price: '', price_date: '', supplier_name: '', notes: '' }
-    ElMessage.success('已添加')
-  } else {
-    ElMessage.error(res.message)
-  }
-}
-
-async function confirmPriceSupplier(row) {
-  const newVal = row._supplierDraft || ''
-  const res = await http.patch(`/api/rd/cost/prices/${row.id}`, { supplier_name: newVal })
-  if (res.success) {
-    row.supplier_name = newVal
-    // 同步更新 BOM 详情对话框里相同 node 的供应商列
-    if (bomDialogFlat.value.length && activeNode.value) {
-      const nodeCode = activeNode.value.code
-      bomDialogTree.value.forEach(function patch(n) {
-        if (n.child_code === nodeCode) n.supplier_name = newVal
-        if (n.children?.length) n.children.forEach(patch)
-      })
-    }
-    ElMessage.success('供应商已更新')
-  } else {
-    ElMessage.error(res.message)
-  }
-}
-
-async function deleteMaterialPrice(row) {
-  await ElMessageBox.confirm('确认删除该价格记录？', '确认', {
-    type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消',
-  })
-  const res = await http.delete(`/api/rd/cost/prices/${row.id}`)
-  if (res.success) {
-    materialPrices.value = materialPrices.value.filter(p => p.id !== row.id)
-    ElMessage.success('已删除')
-  } else {
-    ElMessage.error(res.message)
-  }
-}
-
-async function saveNodePatch() {
-  const n = activeNode.value
-  if (!n) return
-  const res = await http.patch(`/api/rd/cost/nodes/${n.id}`, {
-    is_purchased_semi: n.is_purchased_semi,
-    notes:             n.notes,
-  })
-  if (res.success) {
-    ElMessage.success('已保存')
-    loadNodes()
-  } else {
-    ElMessage.error(res.message)
-  }
-}
-
-// 供应商操作
-function openSupplierForm() {
-  supplierForm.value = { supplier_name: '', unit_price: '', price_date: '', is_preferred: false, notes: '' }
-  supplierFormVisible.value = true
-}
-
-async function saveSupplier() {
-  if (!supplierForm.value.supplier_name || !supplierForm.value.unit_price) {
-    ElMessage.warning('供应商名称和单价不能为空')
-    return
-  }
-  supplierSaving.value = true
-  const res = await http.post('/api/rd/cost/suppliers', {
-    node_id: activeNode.value.id,
-    ...supplierForm.value,
-  })
-  supplierSaving.value = false
-  if (res.success) {
-    ElMessage.success('已添加')
-    supplierFormVisible.value = false
-    // 刷新节点详情
-    const detailRes = await http.get(`/api/rd/cost/nodes/${activeNode.value.id}`)
-    if (detailRes.success) activeNode.value = detailRes.data
-  } else {
-    ElMessage.error(res.message)
-  }
-}
-
-async function deleteSupplier(supplier) {
-  await ElMessageBox.confirm(`确认删除供应商「${supplier.supplier_name}」的报价？`, '确认', {
-    type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消',
-  })
-  const res = await http.delete(`/api/rd/cost/suppliers/${supplier.id}`)
-  if (res.success) {
-    ElMessage.success('已删除')
-    const detailRes = await http.get(`/api/rd/cost/nodes/${activeNode.value.id}`)
-    if (detailRes.success) activeNode.value = detailRes.data
-  }
-}
-
-async function togglePreferred(supplier) {
-  const res = await http.patch(`/api/rd/cost/suppliers/${supplier.id}`, {
-    is_preferred: !supplier.is_preferred,
-  })
-  if (res.success) {
-    const detailRes = await http.get(`/api/rd/cost/nodes/${activeNode.value.id}`)
-    if (detailRes.success) activeNode.value = detailRes.data
-  }
-}
-
 // ─────────────────────────────────────────────────
 // 成本预估方法
 // ─────────────────────────────────────────────────
@@ -709,7 +507,6 @@ function copyEstimate() {
       <button
         v-for="t in [
           { key: 'snapshots', label: '成本快照' },
-          { key: 'nodes',     label: '物料查询' },
           { key: 'estimate',  label: '成本预估' },
         ]"
         :key="t.key"
@@ -808,7 +605,7 @@ function copyEstimate() {
                 >
                   <td class="bom-col-seq bom-text-black">{{ line._seq }}</td>
                   <td class="bom-col-code">
-                    <span class="bom-code-link" @click="openNodeDrawer({ id: line.child_node_id, code: line.child_code })">{{ line.child_code_with_version || line.child_code }}</span>
+                    <span class="bom-code-link" @click="openMaterialCard(line.child_code_with_version || line.child_code)">{{ line.child_code_with_version || line.child_code }}</span>
                   </td>
                   <td class="bom-col-name bom-text-black" :style="{ paddingLeft: line._depth * 1.5 + 0.5 + 'em' }">
                     <template v-if="line.child_node_type === 'semi' && line.children?.length">
@@ -847,86 +644,6 @@ function copyEstimate() {
           layout="total, prev, pager, next"
           size="small"
           @current-change="loadSnapshots"
-        />
-      </div>
-    </div>
-
-    <!-- ═══════════════════════════════════════════ -->
-    <!-- Tab 2：物料查询                             -->
-    <!-- ═══════════════════════════════════════════ -->
-    <div v-show="subTab === 'nodes'" class="panel">
-      <div class="toolbar"></div>
-
-      <el-table
-        :data="nodeList"
-        v-loading="nodesLoading"
-        size="small"
-        class="cost-table node-filter-table"
-        :row-class-name="({ row }) => 'table-row node-row-' + row.node_type"
-      >
-        <el-table-column width="160" fixed="left">
-          <template #header>
-            <div class="col-filter-header">
-              <span>品号</span>
-              <el-input v-model="nodeColFilters.code" size="small" placeholder="支持正则" clearable class="col-filter-input" @input="onNodeColFilter" @clear="onNodeColFilter" />
-            </div>
-          </template>
-          <template #default="{ row }">{{ row.code_with_version || row.code }}</template>
-        </el-table-column>
-        <el-table-column prop="material_category" width="180" show-overflow-tooltip>
-          <template #header>
-            <div class="col-filter-header">
-              <span>物料分类</span>
-              <el-input v-model="nodeColFilters.category" size="small" placeholder="支持正则" clearable class="col-filter-input" @input="onNodeColFilter" @clear="onNodeColFilter" />
-            </div>
-          </template>
-          <template #default="{ row }">
-            <span :class="{ 'text-muted': !row.material_category }">{{ row.material_category || '—' }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="name" min-width="180" show-overflow-tooltip>
-          <template #header>
-            <div class="col-filter-header">
-              <span>品名</span>
-              <el-input v-model="nodeColFilters.name" size="small" placeholder="支持正则" clearable class="col-filter-input" @input="onNodeColFilter" @clear="onNodeColFilter" />
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column prop="spec" min-width="140" show-overflow-tooltip>
-          <template #header>
-            <div class="col-filter-header">
-              <span>规格</span>
-              <el-input v-model="nodeColFilters.spec" size="small" placeholder="支持正则" clearable class="col-filter-input" @input="onNodeColFilter" @clear="onNodeColFilter" />
-            </div>
-          </template>
-          <template #default="{ row }">
-            <span :class="{ 'text-muted': !row.spec }">{{ row.spec || '—' }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="最新单价" width="130" align="right" fixed="right">
-          <template #default="{ row }">
-            <span v-if="row.latest_price != null"
-              :class="row.latest_price_source === 'bom_calc' ? 'price-val-calc' : 'price-val'">
-              ¥{{ row.latest_price.toFixed(4) }}
-            </span>
-            <span v-else class="text-muted">—</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="60" fixed="right">
-          <template #default="{ row }">
-            <el-button link size="small" @click="openNodeDrawer(row)">详情</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-
-      <div class="pagination-bar">
-        <el-pagination
-          v-model:current-page="nodePage"
-          :total="nodeTotal"
-          :page-size="30"
-          layout="total, prev, pager, next"
-          size="small"
-          @current-change="loadNodes"
         />
       </div>
     </div>
@@ -1287,131 +1004,6 @@ function copyEstimate() {
 
 
     <!-- ═══════════════════════════════════════════ -->
-    <!-- 节点详情抽屉                                -->
-    <!-- ═══════════════════════════════════════════ -->
-    <el-drawer
-      v-model="nodeDrawerVisible"
-      :size="nodeDrawerWidth + 'px'"
-      direction="rtl"
-    >
-      <!-- 左侧拖拽条 -->
-      <div class="drawer-resize-handle" @mousedown="onDrawerResizeStart" />
-      <template #header>
-        <div class="drawer-header" v-if="activeNode">
-          <div class="drawer-code-line">{{ activeNode.code_with_version || activeNode.code }}</div>
-          <div class="drawer-name-line">
-            {{ activeNode.name }}<template v-if="activeNode.spec">　{{ activeNode.spec }}</template>
-          </div>
-        </div>
-        <span v-else>物料详情</span>
-      </template>
-      <div v-if="activeNode" v-loading="nodeDrawerLoading">
-        <el-tabs v-model="nodeDetailTab">
-          <!-- 基本信息 -->
-          <el-tab-pane label="基本信息" name="info">
-            <el-form :model="activeNode" label-width="90px" class="node-form">
-              <el-form-item label="品号">
-                <span class="form-val">{{ activeNode.code }}</span>
-              </el-form-item>
-              <el-form-item label="含版品号">
-                <span class="form-val">{{ activeNode.code_with_version }}</span>
-              </el-form-item>
-              <el-form-item label="品名">
-                <span class="form-val">{{ activeNode.name }}</span>
-              </el-form-item>
-              <el-form-item label="规格">
-                <span class="form-val">{{ activeNode.spec }}</span>
-              </el-form-item>
-              <el-form-item label="物料分类">
-                <span class="form-val">{{ activeNode.material_category || '—' }}</span>
-              </el-form-item>
-              <el-form-item v-if="activeNode.node_type === 'semi'" label="外购半成品">
-                <el-switch v-model="activeNode.is_purchased_semi" />
-                <span class="form-hint">整体采购，下级物料无需计价</span>
-              </el-form-item>
-              <el-form-item label="备注">
-                <el-input v-model="activeNode.notes" type="textarea" :rows="2" />
-              </el-form-item>
-              <el-form-item>
-                <el-button type="primary" @click="saveNodePatch">保存修改</el-button>
-              </el-form-item>
-            </el-form>
-          </el-tab-pane>
-
-          <!-- 价格记录（合并原价格记录+价格历史） -->
-          <el-tab-pane label="价格记录" name="prices">
-            <div class="supplier-actions">
-              <el-button size="small" :icon="Plus" @click="priceFormVisible = true">手动添加</el-button>
-            </div>
-            <el-table :data="materialPrices" size="small" class="cost-table">
-              <el-table-column prop="price_date" label="日期" width="105" />
-              <el-table-column prop="order_no" label="订单号" min-width="120" show-overflow-tooltip />
-              <el-table-column label="单价 (¥)" width="110" align="right">
-                <template #default="{ row }">
-                  <span class="price-val">¥{{ row.unit_price?.toFixed(4) }}</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="供应商" min-width="150">
-                <template #default="{ row }">
-                  <div class="supplier-edit-cell">
-                    <el-input
-                      v-model="row._supplierDraft"
-                      size="small"
-                      placeholder="点击填写"
-                      @keyup.enter="confirmPriceSupplier(row)"
-                    />
-                    <el-button
-                      v-if="row._supplierDraft !== row.supplier_name"
-                      link size="small" type="success"
-                      style="margin-left:4px;font-size:16px"
-                      title="确认"
-                      @click="confirmPriceSupplier(row)"
-                    >✓</el-button>
-                  </div>
-                </template>
-              </el-table-column>
-              <el-table-column label="来源" width="80" align="center">
-                <template #default="{ row }">
-                  <el-tag size="small" :type="row.source === 'bom_import' ? 'info' : 'success'">
-                    {{ row.source === 'bom_import' ? 'BOM导入' : '手动' }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column label="操作" width="60" align="center">
-                <template #default="{ row }">
-                  <el-button link size="small" type="danger" @click="deleteMaterialPrice(row)">删除</el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-            <div v-if="!materialPrices.length" class="empty-tip">暂无价格记录</div>
-          </el-tab-pane>
-
-          <!-- 使用记录 -->
-          <el-tab-pane label="使用记录" name="usages">
-            <el-table :data="nodeUsages" size="small" class="cost-table">
-              <el-table-column prop="snapshot_date" label="快照日期"   width="115" />
-              <el-table-column prop="order_no"      label="订单号"     min-width="180" />
-              <el-table-column prop="finished_code" label="成品品号"   min-width="150" />
-              <el-table-column label="数量" width="70" align="center">
-                <template #default="{ row }">{{ row.quantity }}</template>
-              </el-table-column>
-              <el-table-column label="单价 (¥)" width="110" align="right">
-                <template #default="{ row }">
-                  <span class="price-val">{{ row.unit_price != null ? '¥' + row.unit_price.toFixed(4) : '—' }}</span>
-                </template>
-              </el-table-column>
-            </el-table>
-            <div v-if="!nodeUsages.length" class="empty-tip">暂无使用记录</div>
-          </el-tab-pane>
-        </el-tabs>
-      </div>
-    </el-drawer>
-
-
-    <!-- ═══════════════════════════════════════════ -->
-    <!-- 添加供应商报价对话框                         -->
-    <!-- ═══════════════════════════════════════════ -->
-    <!-- ═══════════════════════════════════════════ -->
     <!-- 列名配置对话框                               -->
     <!-- ═══════════════════════════════════════════ -->
     <el-dialog v-model="colAliasVisible" title="Excel 列名配置" width="560px" :close-on-click-modal="false">
@@ -1433,51 +1025,8 @@ function copyEstimate() {
       </template>
     </el-dialog>
 
-    <!-- 手动添加价格记录 -->
-    <el-dialog v-model="priceFormVisible" title="添加价格记录" width="360px" :close-on-click-modal="false">
-      <el-form :model="priceForm" label-width="80px" size="small">
-        <el-form-item label="单价 (¥)" required>
-          <el-input-number v-model="priceForm.unit_price" :min="0" :precision="4" :controls="false" style="width: 150px" />
-        </el-form-item>
-        <el-form-item label="日期">
-          <el-date-picker v-model="priceForm.price_date" type="date" value-format="YYYY-MM-DD" placeholder="选择日期" style="width: 150px" />
-        </el-form-item>
-        <el-form-item label="供应商">
-          <el-input v-model="priceForm.supplier_name" placeholder="可选" style="width: 180px" />
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="priceForm.notes" placeholder="可选" style="width: 180px" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button size="small" @click="priceFormVisible = false">取消</el-button>
-        <el-button size="small" type="primary" :loading="priceSaving" @click="addMaterialPrice">保存</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="supplierFormVisible" title="添加供应商报价" width="380px" :close-on-click-modal="false">
-      <el-form :model="supplierForm" label-width="90px" size="small">
-        <el-form-item label="供应商名称" required>
-          <el-input v-model="supplierForm.supplier_name" />
-        </el-form-item>
-        <el-form-item label="单价 (¥)" required>
-          <el-input-number v-model="supplierForm.unit_price" :min="0" :precision="4" :controls="false" style="width: 150px" />
-        </el-form-item>
-        <el-form-item label="报价日期">
-          <el-date-picker v-model="supplierForm.price_date" type="date" value-format="YYYY-MM-DD" style="width: 150px" />
-        </el-form-item>
-        <el-form-item label="设为首选">
-          <el-switch v-model="supplierForm.is_preferred" />
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="supplierForm.notes" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="supplierFormVisible = false">取消</el-button>
-        <el-button type="primary" :loading="supplierSaving" @click="saveSupplier">添加</el-button>
-      </template>
-    </el-dialog>
+    <!-- 物料卡片：BOM 树点品号打开 -->
+    <MaterialCard v-model:visible="mcVisible" :code="mcCode" />
   </div>
 </template>
 
@@ -1571,17 +1120,6 @@ export default { components: { BomTreeNode } }
 
 /* ── 价格 ── */
 .price-val { color: #c4883a; font-weight: 500; }
-.price-val-calc { color: #e67e22; font-weight: 500; font-style: italic; }
-/* 物料查询：字体加大、按节点类型区分行底色 */
-.node-filter-table :deep(.el-table__body td) { font-size: 14px; }
-:deep(.node-row-finished td) { background-color: #fff3cd !important; }
-:deep(.node-row-finished:hover td) { background-color: #ffe9a0 !important; }
-:deep(.node-row-semi td) { background-color: #f5f8ff !important; }
-:deep(.node-row-semi:hover td) { background-color: #eaf0ff !important; }
-:deep(.node-row-material td) { background-color: #fff !important; }
-:deep(.node-row-material:hover td) { background-color: #faf7f2 !important; }
-.text-muted { color: var(--text-muted); }
-
 /* ── 导入对话框 ── */
 .import-form { padding: 4px 0; }
 .import-file-row {
@@ -1738,37 +1276,6 @@ export default { components: { BomTreeNode } }
 }
 .order-tag:hover { background: #e0c8a0; border-color: #c4883a; color: #3a2010; }
 
-/* ── 抽屉拖拽条 ── */
-.drawer-resize-handle {
-  position: absolute; left: 0; top: 0; bottom: 0; width: 5px;
-  cursor: ew-resize; z-index: 10;
-  background: transparent;
-}
-.drawer-resize-handle:hover { background: rgba(196,136,58,0.3); }
-
-/* ── 抽屉自定义 header ── */
-.drawer-header { line-height: 1.5; }
-.drawer-code-line { font-size: 16px; font-weight: 700; color: var(--text-primary); }
-.drawer-name-line { font-size: 14px; color: var(--text-primary); margin-top: 2px; }
-.supplier-edit-cell { display: flex; align-items: center; }
-
-/* ── 物料查询列头筛选 ── */
-.col-filter-header { display: flex; flex-direction: column; gap: 4px; padding: 2px 0; }
-.col-filter-input { width: 100%; }
-.col-filter-input :deep(.el-input__wrapper) { padding: 0 6px; }
-.node-filter-table :deep(.el-table__header th) { vertical-align: top; padding: 6px 0; }
-
-/* ── 节点表单 ── */
-.node-form { padding: 4px 0; font-size: 14px; }
-.node-form :deep(.el-form-item__label) { font-size: 14px; }
-.node-form :deep(.el-form-item__content) { font-size: 14px; }
-.node-form :deep(.el-input__inner),
-.node-form :deep(.el-textarea__inner) { font-size: 14px; }
-.form-val { font-size: 14px; color: var(--text-primary); word-break: break-all; }
-.form-hint { font-size: 13px; color: var(--text-muted); margin-left: 8px; }
-.form-hint { font-size: 11px; color: var(--text-muted); margin-left: 8px; }
-.supplier-actions { margin-bottom: 8px; }
-
 /* ── 空提示 ── */
 .empty-tip {
   text-align: center; color: var(--text-muted);
@@ -1849,7 +1356,7 @@ export default { components: { BomTreeNode } }
 .bom-col-price { width: 100px; text-align: right; color: #c4883a; }
 .bom-col-total { width: 100px; text-align: right; color: #c4883a; font-weight: 600; }
 
-/* ── BOM 树（物料查询抽屉） ── */
+/* ── BOM 树（成本快照 BOM 详情用） ── */
 .bom-tree-wrap { font-size: 12px; }
 :deep(.bom-node) { padding-left: 16px; }
 :deep(.bom-node-row) {

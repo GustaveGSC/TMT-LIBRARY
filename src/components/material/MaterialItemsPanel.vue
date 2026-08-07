@@ -5,6 +5,7 @@ import { WarningFilled } from '@element-plus/icons-vue'
 import http from '@/api/http'
 import DataTable from '@/components/common/DataTable.vue'
 import MaterialCard from './MaterialCard.vue'
+import { usePermission } from '@/composables/usePermission'
 
 // ── 大类定义 ──────────────────────────────────────
 // 与后端大类判定服务返回的 categories 数组取值一致。
@@ -17,6 +18,10 @@ const CATEGORIES = [
   { key: 'useless',  label: '无用物料', color: '#8a7a6a' },
 ]
 const catMap = Object.fromEntries(CATEGORIES.map(c => [c.key, c]))
+
+// 价格属于研发成本数据，仅 rd:view 可见。
+// 注意 usePermission 返回普通布尔值不是 ref，模板/JS 里都不能写 .value。
+const { canViewRd } = usePermission()
 
 // ── 数据 ──────────────────────────────────────────
 const items    = ref([])
@@ -65,6 +70,12 @@ const columns = computed(() => [
     ] },
   { prop: 'is_disabled', label: '停用状态', width: 130, filterable: true,
     filterOptions: [{ label: '启用', value: '0' }, { label: '停用', value: '1' }] },
+  // 价格列仅研发权限可见；后端在无 rd:view 时根本不返回 latest_price 字段，
+  // 这里的隐藏只是体验层，真正的门禁在后端。
+  // 不设 sortable：按价格排序需全表 JOIN 后内存分页，8091 行扛不住，后端已明确不做。
+  ...(canViewRd ? [{ prop: 'latest_price', label: '价格', width: 130, align: 'right',
+    filterable: true,
+    filterOptions: [{ label: '有价格', value: 'has' }, { label: '无价格', value: 'none' }] }] : []),
 ])
 
 // ── 物料卡片 ──────────────────────────────────────
@@ -109,6 +120,8 @@ async function loadItems() {
     // 停用只作为信息展示，不做默认过滤——用户 2026-08-07 决定：
     // 停用状态仅来源于导入数据，不参与筛掉候选。列筛选仍可主动按停用筛。
     if (txt(f.is_disabled)) params.is_disabled = f.is_disabled
+    // 无 rd:view 时后端会对 price_state 直接 403，所以必须先判权限再带参
+    if (canViewRd && txt(f.latest_price)) params.price_state = txt(f.latest_price)
     if (useExpr.value) params.match_mode = 'expr'
 
     const res = await http.get('/api/material/items', { params })
@@ -202,6 +215,17 @@ onMounted(() => { loadGroups(); loadItems() })
         <template #cell-is_disabled="{ row }">
           <span v-if="row.is_disabled" class="st-badge st-off">停用</span>
           <span v-else class="st-badge st-on">启用</span>
+        </template>
+
+        <!-- 价格：来自研发 BOM 的 cost_material_price 最新一条。
+             bom_calc 是推算值，用不同颜色区分，与 BOM 成本页的口径一致。 -->
+        <template #cell-latest_price="{ row }">
+          <span v-if="row.latest_price != null"
+                :class="row.latest_price_source === 'bom_calc' ? 'price-val calc' : 'price-val'"
+                :title="row.latest_price_source === 'bom_calc' ? 'BOM 推算价' : (row.latest_price_source === 'bom_import' ? 'BOM 导入价' : '手动录入价')">
+            ¥{{ Number(row.latest_price).toFixed(4) }}
+          </span>
+          <span v-else class="cell-empty">—</span>
         </template>
       </DataTable>
     </div>
@@ -310,6 +334,12 @@ onMounted(() => { loadGroups(); loadItems() })
   border: 1px solid; border-radius: 4px; padding: 1px 6px;
 }
 .cat-badge.badge-none { color: var(--text-secondary); background: var(--bg-table-header); border-color: var(--border); }
+
+.price-val {
+  font-family: 'SF Mono', Consolas, monospace; font-size: 12px;
+  font-weight: 600; color: #3d2b1a;
+}
+.price-val.calc { color: #4a8fc0; }
 
 .st-badge {
   font-size: 10px; font-weight: 600;
