@@ -11,6 +11,7 @@ from routes.product.finished import _decode_image_data_url
 from services.product.material import CATEGORY_TYPES, material_service
 from services.product.material_combo import material_combo_service
 from services.product.material_price import material_price_service
+from services.product.material_supplier import material_supplier_service
 from storage.client import get_bucket
 from upload_validation import UploadValidationError
 from services.product.material_filter import FilterExpressionError
@@ -276,3 +277,55 @@ def material_usages(code):
     if not material:
         return Result.fail('物料不存在').to_response(404)
     return material_price_service.usages(material).to_response()
+
+
+@material_cost_bp.get('/suppliers')
+def material_suppliers():
+    denied = _require_rd('rd:view')
+    return denied or material_supplier_service.list().to_response()
+
+
+@material_cost_bp.get('/suppliers/options')
+def material_supplier_options():
+    denied = _require_rd('rd:view')
+    return denied or material_supplier_service.options().to_response()
+
+
+@material_cost_bp.get('/suppliers/<int:supplier_id>/materials')
+def material_supplier_materials(supplier_id):
+    denied = _require_rd('rd:view')
+    if denied:
+        return denied
+    result = material_supplier_service.materials(supplier_id)
+    return result.to_response(200 if result.success else 404)
+
+
+@material_cost_bp.post('/suppliers')
+def create_material_supplier():
+    denied = _require_rd('rd:edit')
+    if denied:
+        return denied
+    return material_supplier_service.create(
+        request.get_json(silent=True) or {}, (g.current_user or {}).get('username'),
+    ).to_response()
+
+
+@material_cost_bp.patch('/suppliers/<int:supplier_id>')
+def update_material_supplier(supplier_id):
+    denied = _require_rd('rd:edit')
+    if denied:
+        return denied
+    return material_supplier_service.update(
+        supplier_id, request.get_json(silent=True) or {},
+    ).to_response()
+
+
+@material_cost_bp.delete('/suppliers/<int:supplier_id>')
+def delete_material_supplier(supplier_id):
+    denied = _require_rd('rd:edit')
+    if denied:
+        return denied
+    result = material_supplier_service.delete(
+        supplier_id, request.args.get('force') in ('1', 'true', 'True'),
+    )
+    return result.to_response(200 if result.success else 400)

@@ -187,6 +187,7 @@ class CostMaterialPrice(db.Model):
     unit_price    = db.Column(db.Numeric(12, 4), nullable=False)
     price_date    = db.Column(db.Date,           nullable=True)
     supplier_name = db.Column(db.String(64),     nullable=True)             # 手动填写时可补充
+    supplier_id   = db.Column(db.Integer, db.ForeignKey('material_supplier.id', ondelete='SET NULL'), nullable=True, index=True)
     source        = db.Column(db.Enum('bom_import', 'manual', 'bom_calc'), nullable=False, default='manual')
     snapshot_id   = db.Column(db.Integer,        db.ForeignKey('cost_snapshot.id', ondelete='SET NULL'), nullable=True)
     notes         = db.Column(db.Text,           nullable=True)
@@ -200,6 +201,7 @@ class CostMaterialPrice(db.Model):
             'unit_price':    float(self.unit_price) if self.unit_price is not None else None,
             'price_date':    self.price_date.strftime('%Y-%m-%d') if self.price_date else '',
             'supplier_name': self.supplier_name or '',
+            'supplier_id':   self.supplier_id,
             'source':        self.source,
             'snapshot_id':   self.snapshot_id,
             'notes':         self.notes or '',

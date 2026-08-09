@@ -123,6 +123,12 @@ POST /api/material/items/:code/prices
 GET  /api/material/items/:code/usages
 PATCH /api/material/prices/:price_id
 DELETE /api/material/prices/:price_id
+GET  /api/material/suppliers
+GET  /api/material/suppliers/options
+GET  /api/material/suppliers/:id/materials
+POST /api/material/suppliers
+PATCH /api/material/suppliers/:id
+DELETE /api/material/suppliers/:id
 ```
 
 - `GET group-categories` 返回全部 ERP 分组：
@@ -168,6 +174,17 @@ DELETE /api/material/prices/:price_id
   `PATCH /api/rd/cost/nodes/:node_id`（`rd:edit`），不与 `product_material.remark` 合并。
 - 大类包含 `useless` 的物料调用新增价格接口返回 400“无用物料不支持维护价格”；门禁发生在
   成本节点惰性创建之前。既有价格仍允许修改供应商或删除，便于清理历史数据。
+- 价格 POST/PATCH 同时支持 `supplier_id` 与 `supplier_name`：ID 优先；仅传自由文本名称时
+  自动登记或复用 `material_supplier`；传空字符串会清空 ID 与文本。主数据改名会在同一事务
+  同步所有关联价格的 `supplier_name`。
+- 供应商接口需要 `product:view + rd:view`，写接口需要 `product:view + rd:edit`：
+  - `GET suppliers` 返回 `{items,total}`，项目含 `material_count/group_codes/groups/`
+    `group_count/groups_truncated/last_quote_date`；分组展示最多 20 个；
+  - `GET suppliers/options` 仅返回 `{id,name}` 数组；
+  - `GET suppliers/:id/materials` 返回该供应商每个成本节点的最新报价及 ERP 分组；
+  - POST 接收 `{name,contact?,remark?}`，PATCH 可修改这三个字段；
+  - DELETE 有价格引用且未传 `force=1` 时返回 400，并带 `{price_count}`；强制删除只将价格
+    `supplier_id` 置空，不删除价格记录或历史 `supplier_name`。
 - 售后物料组合接口：GET 需要 `product:view`，POST/PUT/DELETE 需要 `product:edit`。
   `GET combos` 可传 `keyword`（名称模糊）、`category`、`is_disabled=0|1`，返回
   `{items,total}`，每个组合均含完整 `items`。`GET combos/categories` 返回非空分类去重数组。

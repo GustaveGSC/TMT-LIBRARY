@@ -14,6 +14,7 @@ from database.models.product.import_raw import ImportProductRaw
 from database.models.product.material import (
     ErpGroupCategory, MaterialDisableKeyword, ProductMaterial,
 )
+from database.models.product.material_supplier import MaterialSupplier
 from database.models.rd.cost import (
     CostBomLine, CostBomNode, CostMaterialPrice, CostMaterialRule,
     CostMaterialSupplier, CostSnapshot, CostSnapshotSku,
@@ -22,6 +23,7 @@ from database.repository.account import UserRepository
 from routes.product.material import material_bp, material_cost_bp
 from services.product.material import material_service
 from services.product.material_price import material_price_service
+from services.product.material_supplier import material_supplier_service
 from utils import now_cst
 
 
@@ -39,6 +41,7 @@ def price_app(monkeypatch):
     tables = [
         ImportProductRaw.__table__, ErpCodeRule.__table__, ErpGroupCategory.__table__,
         ProductMaterial.__table__, MaterialDisableKeyword.__table__,
+        MaterialSupplier.__table__,
         CostSnapshot.__table__, CostSnapshotSku.__table__, CostBomNode.__table__,
         CostBomLine.__table__, CostMaterialSupplier.__table__,
         CostMaterialPrice.__table__, CostMaterialRule.__table__,
@@ -238,3 +241,60 @@ def test_useless_material_cannot_create_price_or_empty_cost_node(price_app):
         assert result.message == '无用物料不支持维护价格'
         assert CostBomNode.query.count() == 0
         assert CostMaterialPrice.query.count() == 0
+
+
+def test_supplier_auto_register_rename_and_protected_delete(price_app):
+    with price_app.app_context():
+        db.session.add_all([_raw('SUP-A01'), _raw('SUP2-A01')])
+        db.session.commit()
+        first = material_price_service.add_price(
+            material_service.detail('SUP-A01').data,
+            {'unit_price': 5, 'supplier_name': '新供应商'}, 'tester',
+        )
+        second = material_price_service.add_price(
+            material_service.detail('SUP2-A01').data,
+            {'unit_price': 6, 'supplier_name': '新供应商'}, 'tester',
+        )
+        assert first.success and second.success
+        supplier = MaterialSupplier.query.one()
+        assert CostMaterialPrice.query.filter_by(supplier_id=supplier.id).count() == 2
+
+        renamed = material_supplier_service.update(supplier.id, {'name': '已改名供应商'})
+        assert renamed.success
+        assert {row.supplier_name for row in CostMaterialPrice.query.all()} == {'已改名供应商'}
+
+        blocked = material_supplier_service.delete(supplier.id)
+        assert blocked.data == {'price_count': 2}
+        assert MaterialSupplier.query.count() == 1
+        deleted = material_supplier_service.delete(supplier.id, force=True)
+        assert deleted.success
+        assert CostMaterialPrice.query.count() == 2
+        assert all(row.supplier_id is None for row in CostMaterialPrice.query.all())
+
+
+def test_supplier_summary_is_fixed_queries_and_returns_materials(price_app):
+    with price_app.app_context():
+        db.session.add(_raw('SUM-A01', group='14WD'))
+        db.session.commit()
+        assert material_price_service.add_price(
+            material_service.detail('SUM-A01').data,
+            {'unit_price': 7, 'supplier_name': '汇总商'}, 'tester',
+        ).success
+        statements = []
+
+        def capture(_conn, _cursor, statement, _params, _context, _many):
+            if statement.lstrip().upper().startswith('SELECT'):
+                statements.append(statement)
+
+        event.listen(db.engine, 'before_cursor_execute', capture)
+        try:
+            result = material_supplier_service.list()
+        finally:
+            event.remove(db.engine, 'before_cursor_execute', capture)
+        item = result.data['items'][0]
+        assert item['material_count'] == 1
+        assert item['group_codes'] == ['14WD']
+        assert item['groups'][0]['name'] == '原材料_木器'
+        assert len(statements) <= 3
+        details = material_supplier_service.materials(item['id'])
+        assert details.data[0]['code'] == 'SUM-A01'

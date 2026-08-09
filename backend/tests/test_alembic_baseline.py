@@ -31,7 +31,8 @@ DETAIL_PACKAGE_SCOPE_REVISION = '20260729_01'
 MATERIAL_LIBRARY_REVISION = '20260731_01'
 MATERIAL_COLLATION_REVISION = '20260731_02'
 MATERIAL_COMBO_REVISION = '20260807_01'
-HEAD_REVISION = MATERIAL_COMBO_REVISION
+MATERIAL_SUPPLIER_REVISION = '20260810_01'
+HEAD_REVISION = MATERIAL_SUPPLIER_REVISION
 CRITICAL_INDEXES = {
     'shipping_order_finished': {
         'ix_sof_source',
@@ -72,6 +73,7 @@ def test_baseline_has_linear_history_and_task_lease_is_the_only_head():
         scripts.get_revision(MATERIAL_COMBO_REVISION).down_revision
         == MATERIAL_COLLATION_REVISION
     )
+    assert scripts.get_revision(MATERIAL_SUPPLIER_REVISION).down_revision == MATERIAL_COMBO_REVISION
     assert scripts.get_revision(PERMISSION_REVISION).down_revision == TASK_REVISION
     assert scripts.get_revision(CUSTOMER_MAPPING_REVISION).down_revision == PERMISSION_REVISION
     assert scripts.get_revision(ORDER_ALIAS_REVISION).down_revision == CUSTOMER_MAPPING_REVISION
@@ -273,6 +275,7 @@ def test_baseline_upgrade_adds_only_task_schemas(tmp_path, monkeypatch):
         'material_disable_keyword',
         'material_combo',
         'material_combo_item',
+        'material_supplier',
     }
     inspector = sa.inspect(engine)
     shipping_task_columns = {
@@ -486,3 +489,46 @@ def test_permission_domain_migration_prepares_roles_and_compatibility_mappings(
             'SELECT username, token_version FROM users'
         )).fetchall())
         assert versions == {'author': 1, 'staff': 0}
+
+
+def test_material_supplier_migration_backfills_and_downgrades(tmp_path, monkeypatch):
+    database_path = tmp_path / 'material-supplier.db'
+    database_url = f'sqlite:///{database_path.as_posix()}'
+    engine = sa.create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            'CREATE TABLE cost_material_price ('
+            'id INTEGER PRIMARY KEY, supplier_name VARCHAR(64))'
+        ))
+        connection.execute(sa.text(
+            "INSERT INTO cost_material_price (id, supplier_name) VALUES "
+            "(1, '优固'), (2, '优固'), (3, NULL), (4, '')"
+        ))
+
+    monkeypatch.setenv('DATABASE_URL', database_url)
+    config = _config(database_url)
+    command.stamp(config, MATERIAL_COMBO_REVISION)
+    command.upgrade(config, MATERIAL_SUPPLIER_REVISION)
+
+    inspector = sa.inspect(engine)
+    assert 'material_supplier' in inspector.get_table_names()
+    assert 'supplier_id' in {
+        column['name'] for column in inspector.get_columns('cost_material_price')
+    }
+    with engine.connect() as connection:
+        assert connection.execute(sa.text(
+            'SELECT name FROM material_supplier'
+        )).scalar_one() == '优固'
+        supplier_ids = connection.execute(sa.text(
+            'SELECT supplier_id FROM cost_material_price ORDER BY id'
+        )).scalars().all()
+        assert supplier_ids[0] == supplier_ids[1]
+        assert supplier_ids[0] is not None
+        assert supplier_ids[2:] == [None, None]
+
+    command.downgrade(config, MATERIAL_COMBO_REVISION)
+    inspector = sa.inspect(engine)
+    assert 'material_supplier' not in inspector.get_table_names()
+    assert 'supplier_id' not in {
+        column['name'] for column in inspector.get_columns('cost_material_price')
+    }

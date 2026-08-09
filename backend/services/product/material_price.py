@@ -10,6 +10,7 @@ from database.models.rd.cost import CostBomNode, CostMaterialPrice
 from database.repository.product.material_price import MaterialPriceRepository
 from result import Result
 from services.rd.cost_import import _strip_version
+from services.product.material_supplier import material_supplier_service
 
 
 class MaterialPriceService:
@@ -120,12 +121,14 @@ class MaterialPriceService:
         if not isinstance(body, dict):
             return Result.fail('请求体格式无效')
         try:
+            supplier = material_supplier_service.resolve(
+                body.get('supplier_id'), body.get('supplier_name'), username,
+            )
             price = CostMaterialPrice(
                 unit_price=self._price_value(body.get('unit_price')),
                 price_date=self._date(body.get('price_date')),
-                supplier_name=self._optional_text(
-                    body.get('supplier_name'), 64, '供应商名称'
-                ),
+                supplier_id=supplier.id if supplier else None,
+                supplier_name=supplier.name if supplier else None,
                 source='manual',
                 notes=self._optional_text(body.get('notes'), 65535, '价格备注'),
                 created_by=(username or '')[:64] or None,
@@ -158,11 +161,13 @@ class MaterialPriceService:
         if not price:
             return Result.fail('价格记录不存在')
         try:
-            if 'supplier_name' not in body:
-                return Result.fail('缺少 supplier_name')
-            price.supplier_name = self._optional_text(
-                body.get('supplier_name'), 64, '供应商名称'
+            if 'supplier_name' not in body and 'supplier_id' not in body:
+                return Result.fail('缺少 supplier_id 或 supplier_name')
+            supplier = material_supplier_service.resolve(
+                body.get('supplier_id'), body.get('supplier_name'), None,
             )
+            price.supplier_id = supplier.id if supplier else None
+            price.supplier_name = supplier.name if supplier else None
             MaterialPriceRepository.commit()
             return Result.ok(data=price.to_dict(), message='已更新')
         except ValueError as exc:

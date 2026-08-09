@@ -274,6 +274,11 @@ material_combo_item
   # material_code 不设 ERP 外键，MySQL 排序规则显式为 utf8mb4_0900_ai_ci
   # 查询时 JOIN import_product_raw/product_material；ERP 编码消失时保留并标记 is_missing
 
+material_supplier
+  id, name(VARCHAR 64 UNIQUE), contact(VARCHAR 64 nullable), remark(TEXT nullable),
+  created_by, created_at, updated_at
+  # 供应商主数据；关联物料/分组由 cost_material_price 反向实时汇总，不设人工关联表
+
 product_category
   id, name(UNIQUE), sort_order, created_at
 
@@ -421,6 +426,7 @@ cost_material_price                        # 物料价格记录（手动 + BOM�
   snapshot_id(FK→cost_snapshot SET NULL nullable),  # BOM导入时关联快照
   unit_price(DECIMAL 12,4), price_date(DATE nullable),
   supplier_name(VARCHAR 100 nullable),
+  supplier_id(FK→material_supplier SET NULL nullable, INDEX),
   source(VARCHAR 20 DEFAULT 'manual'),  # 'manual' | 'bom_import' | 'bom_calc'
   notes(TEXT nullable), created_at
   # 物料库通过 cost_bom_node.code_with_version 对应 import_product_raw.code，展示并维护同一份价格
