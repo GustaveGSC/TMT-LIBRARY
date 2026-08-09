@@ -225,7 +225,7 @@ watch(() => props.visible, v => {
   <el-dialog
     :model-value="props.visible"
     title="物料卡片"
-    :width="canViewRd ? 720 : 560"
+    :width="canViewRd ? 1000 : 560"
     align-center
     append-to-body
     @update:model-value="emit('update:visible', $event)"
@@ -240,6 +240,10 @@ watch(() => props.visible, v => {
       </div>
 
       <template v-else-if="detail">
+       <!-- 双列：左列物料本身的信息，右列价格（价格是研发成本域的数据，
+            与物料属性并列而不是压在下面，避免要滚很久才看到） -->
+       <div class="mc-cols" :class="{ single: !canViewRd }">
+        <div class="mc-col-left">
         <!-- 图片 -->
         <div class="mc-image">
           <img v-if="shownImage" :src="shownImage" alt="" />
@@ -302,12 +306,14 @@ watch(() => props.visible, v => {
 
         </div>
 
-        <!-- ── 价格（研发 BOM 成本数据，仅 rd:view 可见）──────
+        </div><!-- /mc-col-left -->
+
+        <!-- ── 价格（仅 rd:view 可见）────────────────────────
              与研发部 BOM 共用同一份 cost_material_price，不是副本。
              后端在无 rd:view 时根本不返回价格字段，此处隐藏只是体验层。 -->
-        <div v-if="canViewRd" class="mc-section">
+        <div v-if="canViewRd" class="mc-section mc-col-right">
           <div class="mc-section-title">
-            <span>价格（研发 BOM）</span>
+            <span>价格</span>
             <span v-if="detail.latest_price != null" class="mc-latest">
               最新　<b>¥{{ Number(detail.latest_price).toFixed(4) }}</b>
               <span class="mc-src">{{ SOURCE_LABELS[detail.latest_price_source] || '' }}</span>
@@ -364,7 +370,7 @@ watch(() => props.visible, v => {
                 <th style="width:96px">日期</th>
                 <th style="width:96px" class="ta-r">单价</th>
                 <th>供应商</th>
-                <th style="width:78px">来源</th>
+                <th style="width:104px">来源</th>
                 <th v-if="canEditRd" style="width:44px"></th>
               </tr>
             </thead>
@@ -429,6 +435,7 @@ watch(() => props.visible, v => {
             <label>成本备注</label><span>{{ detail.cost_notes }}</span>
           </div>
         </div>
+       </div><!-- /mc-cols -->
 
         <div class="mc-actions">
           <button class="btn btn-secondary" @click="close">取消</button>
@@ -540,7 +547,22 @@ watch(() => props.visible, v => {
 .btn-primary { background: var(--accent); color: #fff; }
 .btn-primary:hover:not(:disabled) { filter: brightness(1.1); }
 
-/* ── 价格区（研发 BOM）───────────────────────────── */
+/* ── 双列布局 ─────────────────────────────────── */
+.mc-cols { display: flex; align-items: flex-start; gap: 16px; }
+.mc-cols.single { display: block; }
+.mc-col-left  { width: 400px; flex-shrink: 0; }
+.mc-col-right { flex: 1; min-width: 0; margin-bottom: 18px; }
+/* 左右两列各自滚动，避免长价格表把整张卡片顶得很高 */
+.mc-col-left, .mc-col-right { max-height: 62vh; overflow-y: auto; }
+.mc-col-left::-webkit-scrollbar, .mc-col-right::-webkit-scrollbar { width: 4px; }
+.mc-col-left::-webkit-scrollbar-track, .mc-col-right::-webkit-scrollbar-track { background: transparent; }
+.mc-col-left::-webkit-scrollbar-thumb, .mc-col-right::-webkit-scrollbar-thumb {
+  background: var(--border); border-radius: 2px;
+}
+/* 左列内最后一个分区不再需要下外边距，避免与列底部叠加 */
+.mc-col-left .mc-section:last-child { margin-bottom: 0; }
+
+/* ── 价格区 ───────────────────────────────────── */
 .mc-section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .mc-latest { font-size: 12px; color: var(--text-secondary); font-weight: 400; }
 .mc-latest b { font-family: 'SF Mono', Consolas, monospace; color: #3d2b1a; font-size: 13px; }
@@ -594,6 +616,7 @@ watch(() => props.visible, v => {
 .src-tag {
   display: inline-block; padding: 1px 6px; border-radius: 4px;
   font-size: 11px; border: 1px solid;
+  white-space: nowrap;   /* 「BOM 导入」含空格，不加会断成两行 */
 }
 .src-bom_import { color: #4a8fc0; background: rgba(74,143,192,0.1);  border-color: rgba(74,143,192,0.35); }
 .src-manual     { color: #6ab47a; background: rgba(106,180,122,0.1); border-color: rgba(106,180,122,0.35); }
