@@ -222,3 +222,57 @@ SELECT p.supplier_id,
 - 表 `cost_material_supplier`（0 行）
 - 路由 `/api/rd/cost/suppliers` 的 `list` / `add` / `delete` / `update`
 - 路由 `GET /api/rd/cost/nodes`（「物料查询」tab 已下线）
+
+---
+
+# ✅ 验收与部署记录（2026-08-10，`74d8f8a`）
+
+后端已部署。**含迁移 `20260810_01`**，Alembic 单头。
+
+## 部署过程
+
+| 步骤 | 结果 |
+|---|---|
+| 备份 | 547M，`Dump completed on 2026-08-10 7:15:42` ✅ |
+| 上传 | 8 个文件，MD5 **逐一比对全部一致** ✅ |
+| 迁移 | `20260807_01 → 20260810_01 (head)` ✅ |
+| reload | master **2081 全程未变**（日志 `Hang up: Master` 来自 2081、worker 2090→6006 优雅替换，非冷启动）✅ |
+| 健康检查 | `/health` `/ready` 200 ✅ |
+
+> ⚠️ 记一笔：`alembic.ini` 在**仓库根** `/opt/tmt-library/`，不在 `backend/` 下。
+> 在 `backend/` 里跑 alembic 会报 `No 'script_location' key found in configuration`。
+
+## 九项验收
+
+| 验收项 | 结果 |
+|---|---|
+| ① COLLATE（真 MySQL） | 供应商列表、物料明细两条路径均无 1267 ✅ |
+| ② 迁移回填 | `优固` → 主表 id=1；价格行 21 的 `supplier_id=1` ✅ |
+| ③ 改名同步 | 改名后价格行 `supplier_name` 一起变，`supplier_id` 不变 ✅ |
+| ④ **删除保护** | 不带 force → 400 +「仍关联 2 条价格记录…」+ `data.price_count=2`；带 force → 供应商删除、**2 条价格记录全部保留**且 `supplier_id` 置 NULL ✅ |
+| ⑤ **自动登记 + 复用** | 自由文本 → 主表新增且 `supplier_id` 回填；同名再加 → **复用同一 id，不新增、不报 1062** ✅ |
+| ⑥ 汇总一致性 | `material_count=1` 与明细条数一致；分组 `14CM 原材料_定制件` 与实际一致 ✅ |
+| ⑦ 查询条数 | **恰好 3 条**，达标 ✅ |
+| ⑧ 表结构 | `material_supplier` 与 `cost_material_price` 同为 `utf8mb4_unicode_ci`；新 FK `fk_cost_material_price_supplier` = **SET NULL** ✅ |
+| ⑨ 清理 | supplier 与 price 均回到基线 1 / 133 ✅ |
+
+## 实现质量评价
+
+**截断保护做得比我要求的好**。我原本只让在 Python 端截断展示，Codex 另外用一条
+独立的 `COUNT(DISTINCT group_code)` 得到 `group_count`，再与实际展示条数比对得出
+`groups_truncated`。这样即使 `GROUP_CONCAT` 真被 `group_concat_max_len` 静默截断，
+也能被检测出来 —— 不依赖"字符串是完整的"这个假设。
+
+`resolve()` 的自动登记用 `begin_nested()`（SAVEPOINT）+ `IntegrityError` 回退重查，
+并发撞 UNIQUE 时不会污染外层事务。
+
+## 顺带解决了一个长期噪音（我这边的问题）
+
+本机 pytest 一直有 **44~45 个 `PermissionError: [WinError 5]`**，我此前几轮都当
+"本机环境问题"跳过，靠 `passed + errors = Codex 报的总数` 间接印证。这次加
+`--basetemp` 指向 scratchpad 后：**310 tests / 308 passed / 2 skipped / 0 errors / 0 failures**，
+与 Codex 报告完全一致。
+
+代价是此前**放弃了 44 个测试的真实结果**，其中恰好包含
+`test_alembic_baseline.py` 的迁移回填/回退专项测试 —— 风险最高、最该自己跑的那些。
+已写入记忆，以后每次都带 `--basetemp`。
