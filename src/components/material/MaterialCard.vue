@@ -63,6 +63,7 @@ async function loadCost() {
       http.get(`/api/material/items/${c}/prices`),
       http.get(`/api/material/items/${c}/usages`),
     ])
+    loadSupplierOptions()
     prices.value = (pRes.success ? (pRes.data || []) : [])
       .map(x => ({ ...x, _supplierDraft: x.supplier_name || '' }))
     usages.value = uRes.success ? (uRes.data || []) : []
@@ -116,6 +117,17 @@ async function removePrice(row) {
 }
 
 const SOURCE_LABELS = { bom_import: 'BOM 导入', manual: '手动', bom_calc: 'BOM 推算' }
+
+// 供应商候选（下拉）。allow-create 允许直接打新名字——后端 resolve() 会自动
+// 登记进 material_supplier 并回填 supplier_id，不用先去供应商页登记一遍。
+const supplierOptions = ref([])
+async function loadSupplierOptions() {
+  if (!canViewRd) return
+  try {
+    const res = await http.get('/api/material/suppliers/options')
+    if (res.success) supplierOptions.value = res.data || []
+  } catch { /* 候选拿不到仍可自由输入 */ }
+}
 
 // ── 加载详情 ──────────────────────────────────────
 async function loadDetail() {
@@ -347,7 +359,13 @@ watch(() => props.visible, v => {
             </div>
             <div class="pf-row">
               <label>供应商</label>
-              <input v-model="priceForm.supplier_name" class="mc-input" placeholder="可留空" />
+              <el-select
+                v-model="priceForm.supplier_name" class="pf-select" size="small"
+                filterable clearable allow-create default-first-option
+                placeholder="选择或直接输入"
+              >
+                <el-option v-for="s in supplierOptions" :key="s.id" :label="s.name" :value="s.name" />
+              </el-select>
               <label>备注</label>
               <input v-model="priceForm.notes" class="mc-input" placeholder="可留空" />
             </div>
@@ -381,9 +399,14 @@ watch(() => props.visible, v => {
                 <td>
                   <template v-if="canEditRd">
                     <div class="sup-cell">
-                      <input v-model="row._supplierDraft" class="mc-input tiny"
-                             placeholder="点击填写" @keyup.enter="saveSupplier(row)" />
-                      <button v-if="row._supplierDraft !== (row.supplier_name || '')"
+                      <el-select
+                        v-model="row._supplierDraft" class="sup-select" size="small"
+                        filterable clearable allow-create default-first-option
+                        placeholder="选择或输入"
+                      >
+                        <el-option v-for="s in supplierOptions" :key="s.id" :label="s.name" :value="s.name" />
+                      </el-select>
+                      <button v-if="(row._supplierDraft || '') !== (row.supplier_name || '')"
                               class="sup-ok" title="确认" @click="saveSupplier(row)">✓</button>
                     </div>
                   </template>
@@ -623,6 +646,8 @@ watch(() => props.visible, v => {
 .src-bom_calc   { color: #9c6fba; background: rgba(156,111,186,0.1); border-color: rgba(156,111,186,0.35); }
 
 .sup-cell { display: flex; align-items: center; gap: 4px; }
+.sup-select { flex: 1; min-width: 0; }
+.pf-select { flex: 1; min-width: 0; }
 .mc-input.tiny { padding: 3px 7px; font-size: 12px; }
 .sup-ok {
   border: none; background: transparent; color: #6ab47a;

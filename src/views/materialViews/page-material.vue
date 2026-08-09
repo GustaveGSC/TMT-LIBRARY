@@ -3,7 +3,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowLeft, HomeFilled } from '@element-plus/icons-vue'
-import { PhListDashes, PhBarcode, PhPackage, PhUploadSimple } from '@phosphor-icons/vue'
+import { PhListDashes, PhBarcode, PhPackage, PhUploadSimple, PhTruck } from '@phosphor-icons/vue'
 import WindowControls from '@/components/common/WindowControls.vue'
 import AppBottomBar from '@/components/common/AppBottomBar.vue'
 import MaterialItemsPanel from '@/components/material/MaterialItemsPanel.vue'
@@ -11,18 +11,19 @@ import GroupCategoryConfig from '@/components/material/GroupCategoryConfig.vue'
 import CodePrefixRules from '@/components/material/CodePrefixRules.vue'
 import MaterialComboPanel from '@/components/material/MaterialComboPanel.vue'
 import MaterialImportPanel from '@/components/material/MaterialImportPanel.vue'
+import MaterialSupplierPanel from '@/components/material/MaterialSupplierPanel.vue'
 import { usePermission } from '@/composables/usePermission'
 
 // ── 路由 ──────────────────────────────────────────
 const router = useRouter()
-const { canEditProduct } = usePermission()
+const { canEditProduct, canViewRd } = usePermission()
 
 // ── 响应式状态 ────────────────────────────────────
 const activeTab = ref('items')
 const ruleTab   = ref('group')   // group 分组默认大类 / prefix 前缀例外规则
 
 // 已挂载过的 tab，避免切走后重新拉数据；与产品库 mountedTabs 的做法一致
-const mountedTabs = ref({ items: true, rules: false, combos: false, import: false })
+const mountedTabs = ref({ items: true, rules: false, combos: false, import: false, suppliers: false })
 
 // ── Tab 定义 ──────────────────────────────────────
 // 导入数据需要 product:edit（接口挂在 product_bp 上，权限码未变），只读用户不显示该 tab
@@ -30,6 +31,8 @@ const mountedTabs = ref({ items: true, rules: false, combos: false, import: fals
 const tabs = [
   { key: 'items',  label: '物料清单',     icon: PhListDashes },
   { key: 'combos', label: '售后物料组合', icon: PhPackage },
+  // 供应商是成本域数据，与价格同级，仅研发权限（rd:view）可见
+  ...(canViewRd ? [{ key: 'suppliers', label: '供应商', icon: PhTruck }] : []),
   { key: 'rules',  label: '编码规则',     icon: PhBarcode },
   ...(canEditProduct ? [{ key: 'import', label: '导入数据', icon: PhUploadSimple }] : []),
 ]
@@ -96,6 +99,11 @@ function handleHome() {
       <!-- 售后物料组合 -->
       <div v-if="mountedTabs.combos" v-show="activeTab === 'combos'" class="tab-panel">
         <MaterialComboPanel />
+      </div>
+
+      <!-- 供应商 -->
+      <div v-if="canViewRd && mountedTabs.suppliers" v-show="activeTab === 'suppliers'" class="tab-panel">
+        <MaterialSupplierPanel />
       </div>
 
       <!-- 导入数据 -->
