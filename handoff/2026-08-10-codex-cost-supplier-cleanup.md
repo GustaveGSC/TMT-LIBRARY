@@ -132,3 +132,65 @@ CREATE TABLE `cost_material_supplier` (
 
 - 有迁移且是 **DROP TABLE**，部署前照例整库备份 + 校验 `Dump completed`；
 - 删表前我会再查一次行数，**只要不是 0 就中止**，不会凭这份文档的旧数据下手。
+
+---
+
+# ✅ 验收与部署记录（2026-08-11，`4b6da8a`）
+
+已部署。含迁移 `20260810_02`（**DROP TABLE**），Alembic 单头。
+
+## 部署过程
+
+| 步骤 | 结果 |
+|---|---|
+| **删表前复查行数** | **0**（不是 0 就会中止；没凭交接文档的旧数据下手）✅ |
+| 备份 | 545M，`Dump completed on 2026-08-11 6:35:05` ✅ |
+| 上传 | 4 个文件，MD5 逐一比对一致 ✅ |
+| 迁移 | `20260810_01 → 20260810_02 (head)` ✅ |
+| reload | master **2198 全程未变** ✅ |
+| 健康检查 | `/health` `/ready` 200 ✅ |
+
+## 验收
+
+| 验收项 | 结果 |
+|---|---|
+| 表已删除 | `information_schema` 中 `cost_material_supplier` 计数 **0** ✅ |
+| 邻表未受影响 | `cost_bom_node` **130** / `cost_material_price` **133** / `material_supplier` **1**，全部不变 ✅ |
+| 旧路由 | `/api/rd/cost/suppliers` → **404**（已不注册）✅ |
+| **活路由仍在** | `/nodes`、`/nodes/1`、`/nodes/1/usages`、`/snapshots` 全部 **401**（需鉴权，说明路由存在且不是 500）✅ |
+| **成本预估真实路径** | 自由模式 `q=14` → total **108**、本页 20 条中 **17 条带价**、查询 **3 条**；参考模式 `node_type=finished` → total **5**（1101LH04-A 等）✅ |
+| `get_node` 无 TypeError | `success=True`，响应**不再含 `suppliers` 键** ✅ |
+| 价格口径一致 | `/nodes` 与物料库 `latest_for_materials` 对 20 个码**逐一一致，0 个偏差** ✅ |
+
+测试：`312 tests / 310 passed / 2 skipped / 0 errors / 0 failures`（带 `--basetemp`）。
+
+## 关于 Codex 多做的那处改动 —— 是对的，而且因果链值得记
+
+Codex 顺手把 `search_nodes` 的最新价查询从裸 SQL 改成了 SQLAlchemy `in_()`：
+
+```python
+# 旧
+sql_text("... WHERE node_id IN :ids ...")，{'ids': tuple(node_ids)}
+# 新
+CostMaterialPrice.node_id.in_(node_ids)
+```
+
+我没要求这个改动，但它**修掉了一个潜伏缺陷**：`text()` 里的 `:ids` 传 tuple
+并不会真正展开成 `IN (...)`，需要 `bindparam(expanding=True)`；它此前能工作
+纯粹是因为 **PyMySQL 恰好把 tuple 渲染成 `(1,2,3)`**。换驱动或换库就会坏。
+
+因果链：**我在交接里把「必须写测试证明 `/nodes` 仍可用」列为最重要的验收项，
+那个测试跑在 SQLite 上，于是立刻暴露了这处不可移植的写法。** 如果我当时只写
+「保留 /nodes 别删」而没要求写测试，这个缺陷会继续潜伏。
+
+排序键（`node_id, price_date DESC, created_at DESC`）与改动前完全一致，无行为变化；
+生产实测价格与物料库口径 20/20 一致，印证了这一点。
+
+## 至此物料库这条线全部收口
+
+物料库五个 tab：物料清单（含价格列）/ 售后物料组合 / 供应商 / 编码规则 / 导入数据。
+研发 BOM 只剩 成本快照 / 成本预估，物料详情统一走物料卡片。
+
+遗留（优先级最低，已不可达）：`_strip_version` 把 `-S1`/`-C1` 变体码当版本号，
+受影响的 55 个物料全在已标为「无用物料」的金蝶组，而无用物料不可加价格，
+风险不可达。若将来重新启用金蝶两组需重新评估。
