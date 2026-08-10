@@ -14,7 +14,7 @@ from app import create_app
 from database.base import db
 from database.models.rd.cost import (
     CostSnapshot, CostSnapshotSku, CostBomNode,
-    CostBomLine, CostMaterialSupplier, CostMaterialRule, CostMaterialPrice,
+    CostBomLine, CostMaterialRule, CostMaterialPrice,
 )
 
 app = create_app()
@@ -25,7 +25,6 @@ with app.app_context():
         CostSnapshot.__table__,
         CostSnapshotSku.__table__,
         CostBomLine.__table__,
-        CostMaterialSupplier.__table__,
         CostMaterialRule.__table__,
         CostMaterialPrice.__table__,
     ]

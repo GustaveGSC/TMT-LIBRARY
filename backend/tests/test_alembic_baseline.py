@@ -32,7 +32,8 @@ MATERIAL_LIBRARY_REVISION = '20260731_01'
 MATERIAL_COLLATION_REVISION = '20260731_02'
 MATERIAL_COMBO_REVISION = '20260807_01'
 MATERIAL_SUPPLIER_REVISION = '20260810_01'
-HEAD_REVISION = MATERIAL_SUPPLIER_REVISION
+LEGACY_COST_SUPPLIER_REMOVAL_REVISION = '20260810_02'
+HEAD_REVISION = LEGACY_COST_SUPPLIER_REMOVAL_REVISION
 CRITICAL_INDEXES = {
     'shipping_order_finished': {
         'ix_sof_source',
@@ -74,6 +75,10 @@ def test_baseline_has_linear_history_and_task_lease_is_the_only_head():
         == MATERIAL_COLLATION_REVISION
     )
     assert scripts.get_revision(MATERIAL_SUPPLIER_REVISION).down_revision == MATERIAL_COMBO_REVISION
+    assert (
+        scripts.get_revision(LEGACY_COST_SUPPLIER_REMOVAL_REVISION).down_revision
+        == MATERIAL_SUPPLIER_REVISION
+    )
     assert scripts.get_revision(PERMISSION_REVISION).down_revision == TASK_REVISION
     assert scripts.get_revision(CUSTOMER_MAPPING_REVISION).down_revision == PERMISSION_REVISION
     assert scripts.get_revision(ORDER_ALIAS_REVISION).down_revision == CUSTOMER_MAPPING_REVISION
@@ -532,3 +537,51 @@ def test_material_supplier_migration_backfills_and_downgrades(tmp_path, monkeypa
     assert 'supplier_id' not in {
         column['name'] for column in inspector.get_columns('cost_material_price')
     }
+
+
+def test_legacy_cost_supplier_removal_migration_round_trip(tmp_path, monkeypatch):
+    database_path = tmp_path / 'legacy-cost-supplier.db'
+    database_url = f'sqlite:///{database_path.as_posix()}'
+    engine = sa.create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            'CREATE TABLE cost_bom_node (id INTEGER PRIMARY KEY)'
+        ))
+        connection.execute(sa.text(
+            'CREATE TABLE cost_material_supplier ('
+            'id INTEGER PRIMARY KEY, node_id INTEGER NOT NULL, '
+            'supplier_name VARCHAR(64) NOT NULL, unit_price NUMERIC(12,4) NOT NULL, '
+            'price_date DATE, is_preferred BOOLEAN NOT NULL, notes TEXT, '
+            'created_by VARCHAR(64), created_at DATETIME NOT NULL, '
+            'FOREIGN KEY(node_id) REFERENCES cost_bom_node(id) ON DELETE CASCADE)'
+        ))
+        connection.execute(sa.text(
+            'CREATE INDEX ix_cost_material_supplier_node_id '
+            'ON cost_material_supplier (node_id)'
+        ))
+
+    monkeypatch.setenv('DATABASE_URL', database_url)
+    config = _config(database_url)
+    command.stamp(config, MATERIAL_SUPPLIER_REVISION)
+    command.upgrade(config, LEGACY_COST_SUPPLIER_REMOVAL_REVISION)
+    assert 'cost_material_supplier' not in sa.inspect(engine).get_table_names()
+
+    command.downgrade(config, MATERIAL_SUPPLIER_REVISION)
+    inspector = sa.inspect(engine)
+    assert 'cost_material_supplier' in inspector.get_table_names()
+    assert {column['name'] for column in inspector.get_columns(
+        'cost_material_supplier'
+    )} == {
+        'id', 'node_id', 'supplier_name', 'unit_price', 'price_date',
+        'is_preferred', 'notes', 'created_by', 'created_at',
+    }
+    assert {
+        index['name'] for index in inspector.get_indexes('cost_material_supplier')
+    } == {'ix_cost_material_supplier_node_id'}
+    foreign_keys = inspector.get_foreign_keys('cost_material_supplier')
+    assert len(foreign_keys) == 1
+    assert foreign_keys[0]['referred_table'] == 'cost_bom_node'
+    assert foreign_keys[0]['options'].get('ondelete') == 'CASCADE'
+
+    command.upgrade(config, LEGACY_COST_SUPPLIER_REMOVAL_REVISION)
+    assert 'cost_material_supplier' not in sa.inspect(engine).get_table_names()

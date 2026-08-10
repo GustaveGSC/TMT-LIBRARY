@@ -552,7 +552,7 @@ GET    /api/rd/cost/sku/:sku_id/bom       # BOM 树；含 child_spec/child_code_
 
 GET    /api/rd/cost/nodes                 # 物料节点查询；?q&node_type&page&per_page
                                            #   Python 侧按 erp_code_rules 前缀匹配 material_category，先按分类后按品号排序
-GET    /api/rd/cost/nodes/:id             # 节点详情（含 suppliers、material_category）
+GET    /api/rd/cost/nodes/:id             # 节点详情（含 material_category）
 PATCH  /api/rd/cost/nodes/:id             # 更新节点：is_purchased_semi / notes
 GET    /api/rd/cost/nodes/:id/prices      # 价格记录（含 order_no via snapshot join）；按 price_date desc
 POST   /api/rd/cost/nodes/:id/prices      # 手动添加价格记录 {unit_price,price_date?,supplier_name?,notes?}

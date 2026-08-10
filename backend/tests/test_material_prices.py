@@ -17,7 +17,7 @@ from database.models.product.material import (
 from database.models.product.material_supplier import MaterialSupplier
 from database.models.rd.cost import (
     CostBomLine, CostBomNode, CostMaterialPrice, CostMaterialRule,
-    CostMaterialSupplier, CostSnapshot, CostSnapshotSku,
+    CostSnapshot, CostSnapshotSku,
 )
 from database.repository.account import UserRepository
 from routes.product.material import material_bp, material_cost_bp
@@ -43,7 +43,7 @@ def price_app(monkeypatch):
         ProductMaterial.__table__, MaterialDisableKeyword.__table__,
         MaterialSupplier.__table__,
         CostSnapshot.__table__, CostSnapshotSku.__table__, CostBomNode.__table__,
-        CostBomLine.__table__, CostMaterialSupplier.__table__,
+        CostBomLine.__table__,
         CostMaterialPrice.__table__, CostMaterialRule.__table__,
     ]
     with app.app_context():

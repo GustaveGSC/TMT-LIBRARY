@@ -4,9 +4,13 @@ import pytest
 from auth import generate_token
 from database.base import db
 from database.models.rd import EcrNote, EcrReminder
-from database.models.rd.cost import CostSnapshot, CostSnapshotSku
+from database.models.product.material_supplier import MaterialSupplier
+from database.models.rd.cost import (
+    CostBomLine, CostBomNode, CostMaterialPrice, CostSnapshot, CostSnapshotSku,
+)
 from database.repository.account import UserRepository
 from routes.rd import rd_bp
+import routes.rd.cost as cost_routes
 from routes.rd.cost import cost_bp
 
 
@@ -43,10 +47,6 @@ RD_COST_ROUTES = {
     ('PATCH', '/api/rd/cost/nodes/<int:node_id>'),
     ('GET', '/api/rd/cost/nodes/<int:node_id>/price-history'),
     ('GET', '/api/rd/cost/nodes/<int:node_id>/usages'),
-    ('GET', '/api/rd/cost/suppliers'),
-    ('POST', '/api/rd/cost/suppliers'),
-    ('DELETE', '/api/rd/cost/suppliers/<int:supplier_id>'),
-    ('PATCH', '/api/rd/cost/suppliers/<int:supplier_id>'),
     ('GET', '/api/rd/cost/material-rules'),
     ('POST', '/api/rd/cost/material-rules'),
     ('DELETE', '/api/rd/cost/material-rules/<int:rule_id>'),
@@ -93,7 +93,7 @@ def test_rd_route_map_is_stable_before_module_split():
 
     assert actual == RD_ROUTES | RD_COST_ROUTES
     assert len(RD_ROUTES) == 17
-    assert len(RD_COST_ROUTES) == 26
+    assert len(RD_COST_ROUTES) == 22
 
     note_modules = {
         app.view_functions[rule.endpoint].__module__
@@ -114,11 +114,16 @@ def test_rd_route_map_is_stable_before_module_split():
 def rd_app_client(monkeypatch):
     app = _app()
     monkeypatch.setattr(UserRepository, 'get_auth_state', lambda _id: (True, 0))
+    monkeypatch.setattr(cost_routes, '_load_code_rules', lambda: [])
     with app.app_context():
         EcrReminder.__table__.create(db.engine)
         EcrNote.__table__.create(db.engine)
         CostSnapshot.__table__.create(db.engine)
         CostSnapshotSku.__table__.create(db.engine)
+        CostBomNode.__table__.create(db.engine)
+        CostBomLine.__table__.create(db.engine)
+        MaterialSupplier.__table__.create(db.engine)
+        CostMaterialPrice.__table__.create(db.engine)
     return app, app.test_client()
 
 
@@ -143,6 +148,44 @@ def test_rd_cost_requires_domain_permissions(rd_app_client):
     )
     assert editable.status_code == 400
     assert editable.get_json()['message'] == '请上传 Excel 文件'
+
+
+def test_cost_node_routes_remain_available_after_legacy_supplier_cleanup(
+    rd_app_client,
+):
+    app, client = rd_app_client
+    with app.app_context():
+        node = CostBomNode(code='14WD01001', name='测试物料', node_type='material')
+        snapshot = CostSnapshot(order_no='TEST-001')
+        db.session.add_all([node, snapshot])
+        db.session.flush()
+        sku = CostSnapshotSku(
+            snapshot_id=snapshot.id, finished_code='FINISHED-A',
+            finished_name='测试成品',
+        )
+        db.session.add(sku)
+        db.session.flush()
+        db.session.add(CostBomLine(
+            sku_id=sku.id, parent_node_id=node.id, child_node_id=node.id,
+            quantity=2, unit_price=3,
+        ))
+        db.session.commit()
+        node_id = node.id
+
+    _set_user(client, username='rd-viewer', permissions=['rd:view'])
+    listed = client.get('/api/rd/cost/nodes?q=14WD01001')
+    detailed = client.get(f'/api/rd/cost/nodes/{node_id}')
+    usages = client.get(f'/api/rd/cost/nodes/{node_id}/usages')
+
+    assert listed.status_code == 200
+    assert listed.get_json()['data']['items'][0]['code'] == '14WD01001'
+    assert detailed.status_code == 200
+    assert detailed.get_json()['data']['material_category'] is None
+    assert 'suppliers' not in detailed.get_json()['data']
+    assert usages.status_code == 200
+    assert usages.get_json()['data'][0]['finished_code'] == 'FINISHED-A'
+
+    assert client.get('/api/rd/cost/suppliers').status_code == 404
 
 
 def test_reminders_require_rd_admin_for_management(rd_app_client):

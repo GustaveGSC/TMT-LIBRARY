@@ -432,12 +432,6 @@ cost_material_price                        # 物料价格记录（手动 + BOM�
   # 物料库通过 cost_bom_node.code_with_version 对应 import_product_raw.code，展示并维护同一份价格
   # 无成本节点的物料在首次手动加价时惰性创建节点；基础 code 冲突时复用既有节点
 
-cost_material_supplier                     # 物料供应商报价（可标记首选）
-  id, node_id(FK→cost_bom_node CASCADE),
-  supplier_name(VARCHAR 100), unit_price(DECIMAL 12,4 nullable),
-  price_date(DATE nullable), is_preferred(BOOLEAN DEFAULT False),
-  notes(TEXT nullable), created_at
-
 cost_material_rule                         # 物料匹配规则（保留，暂未使用）
   id, pattern(VARCHAR 200), rule_type(VARCHAR 50), action(VARCHAR 200),
   priority(INT DEFAULT 0), is_active(BOOLEAN DEFAULT True), created_at

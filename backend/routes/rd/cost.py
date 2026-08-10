@@ -11,7 +11,7 @@ from result import Result
 from database.base import db
 from database.models.rd.cost import (
     CostSnapshot, CostSnapshotSku, CostBomNode,
-    CostBomLine, CostMaterialSupplier, CostMaterialRule, CostMaterialPrice,
+    CostBomLine, CostMaterialRule, CostMaterialPrice,
 )
 from upload_validation import read_spreadsheet_upload, UploadValidationError
 from error_handling import internal_error_response
@@ -413,16 +413,23 @@ def search_nodes():
     # 附加最新单价（从 cost_material_price，覆盖所有节点类型）
     node_ids = [n['id'] for n in page_items]
     if node_ids:
-        from sqlalchemy import text as sql_text
-        price_rows = db.session.execute(
-            sql_text("""
-                SELECT node_id, unit_price, source
-                FROM cost_material_price
-                WHERE node_id IN :ids AND unit_price IS NOT NULL
-                ORDER BY node_id, price_date DESC, created_at DESC
-            """),
-            {'ids': tuple(node_ids)}
-        ).all()
+        price_rows = (
+            db.session.query(
+                CostMaterialPrice.node_id,
+                CostMaterialPrice.unit_price,
+                CostMaterialPrice.source,
+            )
+            .filter(
+                CostMaterialPrice.node_id.in_(node_ids),
+                CostMaterialPrice.unit_price.isnot(None),
+            )
+            .order_by(
+                CostMaterialPrice.node_id,
+                CostMaterialPrice.price_date.desc(),
+                CostMaterialPrice.created_at.desc(),
+            )
+            .all()
+        )
         price_map  = {}
         source_map = {}
         for r in price_rows:
@@ -442,11 +449,11 @@ def search_nodes():
 @cost_bp.get('/nodes/<int:node_id>')
 @require_auth
 def get_node(node_id):
-    node = CostBomNode.query.get(node_id)
+    node = db.session.get(CostBomNode, node_id)
     if not node:
         return Result.fail('节点不存在').to_response()
     rules = _load_code_rules()
-    d = node.to_dict(include_suppliers=True)
+    d = node.to_dict()
     d['material_category'] = _match_category(node.code, rules)
     return Result.ok(data=d).to_response()
 
@@ -543,111 +550,7 @@ def node_usages(node_id):
 
 
 # ─────────────────────────────────────────────────────────────
-# 供应商报价
 # ─────────────────────────────────────────────────────────────
-
-@cost_bp.get('/suppliers')
-@require_auth
-def list_suppliers():
-    node_id = request.args.get('node_id', type=int)
-    query = CostMaterialSupplier.query
-    if node_id:
-        query = query.filter_by(node_id=node_id)
-    suppliers = query.order_by(
-        CostMaterialSupplier.is_preferred.desc(),
-        CostMaterialSupplier.price_date.desc()
-    ).all()
-    return Result.ok(data=[s.to_dict() for s in suppliers]).to_response()
-
-
-@cost_bp.post('/suppliers')
-@require_auth
-def add_supplier():
-    err = _require_edit()
-    if err:
-        return err
-
-    data = request.get_json() or {}
-    node_id = data.get('node_id')
-    if not node_id:
-        return Result.fail('缺少 node_id').to_response()
-
-    node = CostBomNode.query.get(node_id)
-    if not node:
-        return Result.fail('节点不存在').to_response()
-
-    price_date = None
-    if data.get('price_date'):
-        try:
-            price_date = date.fromisoformat(data['price_date'])
-        except ValueError:
-            pass
-
-    # 若设为首选，取消其他首选
-    if data.get('is_preferred'):
-        CostMaterialSupplier.query.filter_by(node_id=node_id, is_preferred=True).update({'is_preferred': False})
-
-    supplier = CostMaterialSupplier(
-        node_id=node_id,
-        supplier_name=data.get('supplier_name', ''),
-        unit_price=data.get('unit_price'),
-        price_date=price_date,
-        is_preferred=bool(data.get('is_preferred', False)),
-        notes=data.get('notes', '') or None,
-        created_by=g.current_user.get('username', ''),
-    )
-    db.session.add(supplier)
-    db.session.commit()
-    return Result.ok(data=supplier.to_dict(), message='已添加').to_response()
-
-
-@cost_bp.delete('/suppliers/<int:supplier_id>')
-@require_auth
-def delete_supplier(supplier_id):
-    err = _require_edit()
-    if err:
-        return err
-
-    supplier = CostMaterialSupplier.query.get(supplier_id)
-    if not supplier:
-        return Result.fail('不存在').to_response()
-
-    db.session.delete(supplier)
-    db.session.commit()
-    return Result.ok(message='已删除').to_response()
-
-
-@cost_bp.patch('/suppliers/<int:supplier_id>')
-@require_auth
-def update_supplier(supplier_id):
-    err = _require_edit()
-    if err:
-        return err
-
-    supplier = CostMaterialSupplier.query.get(supplier_id)
-    if not supplier:
-        return Result.fail('不存在').to_response()
-
-    data = request.get_json() or {}
-
-    if data.get('is_preferred') and not supplier.is_preferred:
-        CostMaterialSupplier.query.filter(
-            CostMaterialSupplier.node_id == supplier.node_id,
-            CostMaterialSupplier.id != supplier_id,
-        ).update({'is_preferred': False})
-
-    for key in ('supplier_name', 'unit_price', 'notes', 'is_preferred'):
-        if key in data:
-            setattr(supplier, key, data[key])
-    if 'price_date' in data and data['price_date']:
-        try:
-            supplier.price_date = date.fromisoformat(data['price_date'])
-        except ValueError:
-            pass
-
-    db.session.commit()
-    return Result.ok(data=supplier.to_dict(), message='已更新').to_response()
-
 
 # ─────────────────────────────────────────────────────────────
 # 材料估算规则

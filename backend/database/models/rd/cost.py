@@ -83,12 +83,10 @@ class CostBomNode(db.Model):
     created_at       = db.Column(db.DateTime,    nullable=False, default=now_cst)
     updated_at       = db.Column(db.DateTime,    nullable=False, default=now_cst, onupdate=now_cst)
 
-    suppliers = db.relationship('CostMaterialSupplier', backref='node',
-                                cascade='all, delete-orphan', lazy='select')
     prices    = db.relationship('CostMaterialPrice', backref='node',
                                 cascade='all, delete-orphan', lazy='select')
 
-    def to_dict(self, include_suppliers=False, latest_price=None):
+    def to_dict(self, latest_price=None):
         d = {
             'id':                self.id,
             'code':              self.code,
@@ -108,8 +106,6 @@ class CostBomNode(db.Model):
         }
         if latest_price is not None:
             d['latest_price'] = latest_price
-        if include_suppliers:
-            d['suppliers'] = [s.to_dict() for s in self.suppliers]
         return d
 
 
@@ -147,34 +143,6 @@ class CostBomLine(db.Model):
             'child_node_type': self.child_node.node_type if self.child_node else '',
             'child_is_purchased_semi': self.child_node.is_purchased_semi if self.child_node else False,
             'child_purchase_type': self.child_node.purchase_type if self.child_node else '',
-        }
-
-
-class CostMaterialSupplier(db.Model):
-    """物料供应商报价（手动维护，独立于快照）"""
-    __tablename__ = 'cost_material_supplier'
-
-    id            = db.Column(db.Integer,      primary_key=True, autoincrement=True)
-    node_id       = db.Column(db.Integer,      db.ForeignKey('cost_bom_node.id', ondelete='CASCADE'), nullable=False, index=True)
-    supplier_name = db.Column(db.String(64),   nullable=False)
-    unit_price    = db.Column(db.Numeric(12, 4), nullable=False)
-    price_date    = db.Column(db.Date,         nullable=True)
-    is_preferred  = db.Column(db.Boolean,      nullable=False, default=False)
-    notes         = db.Column(db.Text,         nullable=True)
-    created_by    = db.Column(db.String(64),   nullable=True)
-    created_at    = db.Column(db.DateTime,     nullable=False, default=now_cst)
-
-    def to_dict(self):
-        return {
-            'id':            self.id,
-            'node_id':       self.node_id,
-            'supplier_name': self.supplier_name,
-            'unit_price':    float(self.unit_price) if self.unit_price is not None else None,
-            'price_date':    self.price_date.strftime('%Y-%m-%d') if self.price_date else '',
-            'is_preferred':  self.is_preferred,
-            'notes':         self.notes or '',
-            'created_by':    self.created_by or '',
-            'created_at':    self.created_at.strftime('%Y-%m-%d') if self.created_at else '',
         }
 
 
