@@ -1,8 +1,8 @@
 <script setup>
 // ── 物料门禁命中提示：弹窗形式 ──────────────────────
 // 检测到门禁（PDM转BOM / 变更申请单填写 / 材料清单校验）时用这个弹窗展示，不再用行内
-// banner。列表按 禁止(block) 在前、提醒(warn) 在后展示；每项显示名称（品名+规格）、
-// 物料编码、门禁原因。block 存在时调用方需要自行禁用"下一步"操作，本组件只负责展示。
+// banner。列表按 禁止(block) 在前、提醒(warn) 在后展示；每项显示名称、物料编码、门禁原因。
+// block 存在时调用方需要自行禁用"下一步"操作，本组件只负责展示。
 import { computed } from 'vue'
 import { CircleCloseFilled, WarningFilled } from '@element-plus/icons-vue'
 
@@ -14,7 +14,7 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue'])
 
 function displayName(item) {
-  return [item.name, item.spec].filter(Boolean).join(' ') || '（未登记名称）'
+  return item.name || '（未登记名称）'
 }
 
 const total = computed(() => (props.hits?.block?.length || 0) + (props.hits?.warn?.length || 0))

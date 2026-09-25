@@ -146,18 +146,19 @@
 
 **命中展示改为弹窗**（2026-09-25 第二次修改，用户反馈"需要是一个dialog面板"）：三处校验点检测到
 命中（或校验接口本身异常）时自动弹出 `MaterialGateHitDialog.vue`，不再用行内 banner；block 在前
-warn 在后分区展示，每项显示"名称（品名+规格）+ 物料编码 + 门禁原因"。关闭弹窗后原位置会留一条
-可点击的小提示条（`.gate-reopen-hint`，三个组件各自实现，非共享组件）用于重新打开，命中 block 时
-提示条变红色。门禁维护入口同一批也从 `EcrForm.vue`/`MaterialGateCheckPage.vue` 里移除，统一放到
-研发工具首页"设置"分组（见上）。
+warn 在后分区展示，每项显示"名称 + 物料编码 + 门禁原因"。关闭弹窗后原位置会留一条可点击的小提示条
+（`.gate-reopen-hint`，三个组件各自实现，非共享组件）用于重新打开，命中 block 时提示条变红色。
+门禁维护入口同一批也从 `EcrForm.vue`/`MaterialGateCheckPage.vue` 里移除，统一放到研发工具首页
+"设置"分组（见上）。
 
-> **`name`/`spec` 字段待补**：`MaterialGateHitDialog.vue` 要显示的"名称（品名+规格）"来自门禁记录
-> 自身登记的 `name`/`spec` 字段（管理员新增门禁时一并填写"这个编码对应的是什么"，不是从上传文件
-> 解析出来的），但后端 `check`/`check-file` 的响应目前还没有这两个字段——已交接 Codex
-> （`handoff/2026-09-25-codex-rd-material-gate-name-spec.md`，未部署）。`MaterialGateManageDialog.vue`
-> 的新增/编辑表单已经加了这两个输入框，`POST/PUT` 会带上 `name`/`spec`，但旧后端目前会**静默忽略**
-> 这两个多出来的字段（不报错，也不保存），所以现在填了会看起来"消失"；命中弹窗在字段缺失时兜底
-> 显示"（未登记名称）"。后端这批交付并重新部署前，不要以为这个功能已经完整。
+> **`name` 字段待补**：`MaterialGateHitDialog.vue` 要显示的"名称"来自门禁记录自身登记的 `name`
+> 字段（管理员新增门禁时一并填写"这个编码对应的是什么"，不是从上传文件解析出来的），但后端
+> `check`/`check-file` 的响应目前还没有这个字段——已交接 Codex
+> （`handoff/2026-09-25-codex-rd-material-gate-name-spec.md`，未部署；**只加 `name` 一个字段**，
+> 早期版本要求过的 `spec` 已被用户反馈撤回，改成单一名称输入）。`MaterialGateManageDialog.vue`
+> 的新增/编辑表单已经加了这个输入框，`POST/PUT` 会带上 `name`，但旧后端目前会**静默忽略**这个
+> 多出来的字段（不报错，也不保存），所以现在填了会看起来"消失"；命中弹窗在字段缺失时兜底显示
+> "（未登记名称）"。后端这批交付并重新部署前，不要以为这个功能已经完整。
 
 共用组件：
 - `src/composables/useMaterialGateCheck.js` — 包装 `check` 接口调用，返回 `{warn, block, ok}`
@@ -165,7 +166,7 @@ warn 在后分区展示，每项显示"名称（品名+规格）+ 物料编码 +
 - `src/components/rdTools/MaterialGateHitDialog.vue` — 命中结果弹窗（block 红色不可关闭分区、warn
   黄色分区），三处校验点共用，`ok:false` 时展示"校验未完成"提示
 - `src/components/rdTools/MaterialGateManageDialog.vue` — 门禁 CRUD 弹窗（新增/编辑/上下架，含
-  `name`/`spec` 字段），页面级单例挂在 `page-rd-tools.vue`
+  `name` 字段），页面级单例挂在 `page-rd-tools.vue`
 
 ### 个人笔记
 

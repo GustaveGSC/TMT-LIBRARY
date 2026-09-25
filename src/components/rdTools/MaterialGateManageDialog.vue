@@ -2,7 +2,7 @@
 // ── 物料门禁维护弹窗 ────────────────────────────────
 // 仅 rd:admin 可打开（调用方负责按钮的权限门禁，本组件本身不重复判断）。入口固定在研发工具
 // 首页"设置"分组（不再放在"变更申请单填写"里）。新增/编辑/上下架，结构照抄原"管理变更提醒"
-// 弹窗的交互模式；name（品名）/spec（规格）是命中门禁时弹窗要展示的名称来源，必须登记。
+// 弹窗的交互模式；name 是命中门禁时弹窗要展示的名称来源，必须登记。
 import { ref, reactive, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import http from '@/api/http'
@@ -20,7 +20,7 @@ const LEVEL_OPTS = [
   { value: 'block', label: '禁止' },
 ]
 
-function blankForm() { return { code: '', name: '', spec: '', level: 'warn', reason: '' } }
+function blankForm() { return { code: '', name: '', level: 'warn', reason: '' } }
 
 const gates      = ref([])       // 全部记录（含下架历史）
 const loading    = ref(false)
@@ -49,7 +49,6 @@ function startEdit(item) {
   editingId.value = item.id
   editForm.code   = item.code
   editForm.name   = item.name
-  editForm.spec   = item.spec || ''
   editForm.level  = item.level
   editForm.reason = item.reason
 }
@@ -57,7 +56,7 @@ function cancelEdit() { editingId.value = null }
 
 function validateFields(f) {
   if (!f.code.trim())   { ElMessage.warning('请填写物料编码'); return false }
-  if (!f.name.trim())   { ElMessage.warning('请填写品名'); return false }
+  if (!f.name.trim())   { ElMessage.warning('请填写名称'); return false }
   if (!f.reason.trim()) { ElMessage.warning('请填写门禁原因'); return false }
   return true
 }
@@ -69,7 +68,6 @@ async function handleCreate() {
     const res = await http.post('/api/rd/material-gates', {
       code:       newGate.code.trim(),
       name:       newGate.name.trim(),
-      spec:       newGate.spec.trim(),
       level:      newGate.level,
       reason:     newGate.reason.trim(),
       created_by: submitter,
@@ -94,7 +92,6 @@ async function handleUpdate(id) {
     const res = await http.put(`/api/rd/material-gates/${id}`, {
       code:   editForm.code.trim(),
       name:   editForm.name.trim(),
-      spec:   editForm.spec.trim(),
       level:  editForm.level,
       reason: editForm.reason.trim(),
     })
@@ -160,10 +157,12 @@ function levelLabel(level) {
           <el-option v-for="o in LEVEL_OPTS" :key="o.value" :label="o.label" :value="o.value" />
         </el-select>
       </div>
-      <div class="mgmt-create-row" style="margin-top:8px">
-        <el-input v-model="newGate.name" placeholder="品名（必填，命中时展示）" maxlength="200" style="flex:1" />
-        <el-input v-model="newGate.spec" placeholder="规格（选填）" maxlength="300" style="flex:1" />
-      </div>
+      <el-input
+        v-model="newGate.name"
+        placeholder="名称（必填，命中时展示）"
+        maxlength="200"
+        style="margin-top:8px"
+      />
       <el-input
         v-model="newGate.reason"
         type="textarea"
@@ -199,10 +198,7 @@ function levelLabel(level) {
                 <el-option v-for="o in LEVEL_OPTS" :key="o.value" :label="o.label" :value="o.value" />
               </el-select>
             </div>
-            <div class="mgmt-create-row" style="margin-top:6px">
-              <el-input v-model="editForm.name" placeholder="品名" maxlength="200" style="flex:1" />
-              <el-input v-model="editForm.spec" placeholder="规格（选填）" maxlength="300" style="flex:1" />
-            </div>
+            <el-input v-model="editForm.name" placeholder="名称" maxlength="200" style="margin-top:6px" />
             <el-input v-model="editForm.reason" type="textarea" :rows="2" placeholder="门禁原因" style="margin-top:6px" maxlength="500" show-word-limit />
           </div>
           <div class="mgmt-item-actions">
@@ -214,7 +210,7 @@ function levelLabel(level) {
           <div class="mgmt-item-main">
             <div class="mgmt-item-content">
               <span class="mgmt-item-code">{{ item.code }}</span>
-              <span class="mgmt-item-name">{{ item.name }}{{ item.spec ? ` ${item.spec}` : '' }}</span>
+              <span class="mgmt-item-name">{{ item.name }}</span>
               <el-tag size="small" :type="item.level === 'block' ? 'danger' : 'warning'">{{ levelLabel(item.level) }}</el-tag>
             </div>
             <div class="mgmt-item-notes">{{ item.reason }}</div>
