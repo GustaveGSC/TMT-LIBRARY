@@ -1,7 +1,8 @@
 <script setup>
 // ── 物料门禁维护弹窗 ────────────────────────────────
-// 仅 rd:admin 可打开（调用方负责按钮的权限门禁，本组件本身不重复判断）。
-// 新增/编辑/上下架，结构照抄原"管理变更提醒"弹窗的交互模式。
+// 仅 rd:admin 可打开（调用方负责按钮的权限门禁，本组件本身不重复判断）。入口固定在研发工具
+// 首页"设置"分组（不再放在"变更申请单填写"里）。新增/编辑/上下架，结构照抄原"管理变更提醒"
+// 弹窗的交互模式；name（品名）/spec（规格）是命中门禁时弹窗要展示的名称来源，必须登记。
 import { ref, reactive, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import http from '@/api/http'
@@ -19,12 +20,14 @@ const LEVEL_OPTS = [
   { value: 'block', label: '禁止' },
 ]
 
+function blankForm() { return { code: '', name: '', spec: '', level: 'warn', reason: '' } }
+
 const gates      = ref([])       // 全部记录（含下架历史）
 const loading    = ref(false)
-const newGate    = reactive({ code: '', level: 'warn', reason: '' })
+const newGate    = reactive(blankForm())
 const createLoading = ref(false)
 const editingId   = ref(null)
-const editForm    = reactive({ code: '', level: 'warn', reason: '' })
+const editForm    = reactive(blankForm())
 const editLoading = ref(false)
 
 async function loadAll() {
@@ -45,6 +48,8 @@ watch(() => props.modelValue, (visible) => {
 function startEdit(item) {
   editingId.value = item.id
   editForm.code   = item.code
+  editForm.name   = item.name
+  editForm.spec   = item.spec || ''
   editForm.level  = item.level
   editForm.reason = item.reason
 }
@@ -52,6 +57,7 @@ function cancelEdit() { editingId.value = null }
 
 function validateFields(f) {
   if (!f.code.trim())   { ElMessage.warning('请填写物料编码'); return false }
+  if (!f.name.trim())   { ElMessage.warning('请填写品名'); return false }
   if (!f.reason.trim()) { ElMessage.warning('请填写门禁原因'); return false }
   return true
 }
@@ -62,13 +68,15 @@ async function handleCreate() {
   try {
     const res = await http.post('/api/rd/material-gates', {
       code:       newGate.code.trim(),
+      name:       newGate.name.trim(),
+      spec:       newGate.spec.trim(),
       level:      newGate.level,
       reason:     newGate.reason.trim(),
       created_by: submitter,
     })
     if (res.success) {
       ElMessage.success('已创建')
-      newGate.code = ''; newGate.reason = ''; newGate.level = 'warn'
+      Object.assign(newGate, blankForm())
       gates.value.unshift(res.data)
       emit('changed')
     } else {
@@ -85,6 +93,8 @@ async function handleUpdate(id) {
   try {
     const res = await http.put(`/api/rd/material-gates/${id}`, {
       code:   editForm.code.trim(),
+      name:   editForm.name.trim(),
+      spec:   editForm.spec.trim(),
       level:  editForm.level,
       reason: editForm.reason.trim(),
     })
@@ -150,6 +160,10 @@ function levelLabel(level) {
           <el-option v-for="o in LEVEL_OPTS" :key="o.value" :label="o.label" :value="o.value" />
         </el-select>
       </div>
+      <div class="mgmt-create-row" style="margin-top:8px">
+        <el-input v-model="newGate.name" placeholder="品名（必填，命中时展示）" maxlength="200" style="flex:1" />
+        <el-input v-model="newGate.spec" placeholder="规格（选填）" maxlength="300" style="flex:1" />
+      </div>
       <el-input
         v-model="newGate.reason"
         type="textarea"
@@ -185,6 +199,10 @@ function levelLabel(level) {
                 <el-option v-for="o in LEVEL_OPTS" :key="o.value" :label="o.label" :value="o.value" />
               </el-select>
             </div>
+            <div class="mgmt-create-row" style="margin-top:6px">
+              <el-input v-model="editForm.name" placeholder="品名" maxlength="200" style="flex:1" />
+              <el-input v-model="editForm.spec" placeholder="规格（选填）" maxlength="300" style="flex:1" />
+            </div>
             <el-input v-model="editForm.reason" type="textarea" :rows="2" placeholder="门禁原因" style="margin-top:6px" maxlength="500" show-word-limit />
           </div>
           <div class="mgmt-item-actions">
@@ -196,6 +214,7 @@ function levelLabel(level) {
           <div class="mgmt-item-main">
             <div class="mgmt-item-content">
               <span class="mgmt-item-code">{{ item.code }}</span>
+              <span class="mgmt-item-name">{{ item.name }}{{ item.spec ? ` ${item.spec}` : '' }}</span>
               <el-tag size="small" :type="item.level === 'block' ? 'danger' : 'warning'">{{ levelLabel(item.level) }}</el-tag>
             </div>
             <div class="mgmt-item-notes">{{ item.reason }}</div>
@@ -246,8 +265,9 @@ function levelLabel(level) {
 .mgmt-item--block   { border-left-color: #c0402a; }
 .mgmt-item--inactive { opacity: 0.5; border-left-color: #bbb; }
 .mgmt-item-main    { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.mgmt-item-content { font-size: 13px; font-weight: 600; color: var(--text-primary); word-break: break-word; display: flex; align-items: center; gap: 8px; }
+.mgmt-item-content { font-size: 13px; font-weight: 600; color: var(--text-primary); word-break: break-word; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .mgmt-item-code    { font-family: monospace; }
+.mgmt-item-name    { font-weight: 400; color: var(--text-muted); }
 .mgmt-item-notes   { font-size: 12px; color: var(--text-muted); word-break: break-word; white-space: pre-wrap; }
 .mgmt-item-meta    { font-size: 11px; color: #a09080; margin-top: 2px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
 .mgmt-item-actions { flex-shrink: 0; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }

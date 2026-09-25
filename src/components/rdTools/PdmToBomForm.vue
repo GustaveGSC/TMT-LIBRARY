@@ -7,7 +7,7 @@ import { PhArrowsLeftRight } from '@phosphor-icons/vue'
 import http from '@/api/http'
 import { downloadBlob, pickFile } from '@/utils/download.js'
 import { useMaterialGateCheck } from '@/composables/useMaterialGateCheck'
-import MaterialGateBanner from './MaterialGateBanner.vue'
+import MaterialGateHitDialog from './MaterialGateHitDialog.vue'
 
 const { checkMaterialCodes } = useMaterialGateCheck()
 
@@ -30,6 +30,7 @@ const totalLevel = ref(0)             // 最大层级深度
 const gateHits    = ref({ warn: [], block: [] })
 const gateHitsOk  = ref(true)
 const gateChecking = ref(false)
+const gateDialogVisible = ref(false)   // 检测到命中时自动弹窗展示，关闭后可用下方小提示条重新打开
 
 async function runGateCheck(codes) {
   gateChecking.value = true
@@ -37,6 +38,7 @@ async function runGateCheck(codes) {
   gateHits.value   = { warn: hits.warn, block: hits.block }
   gateHitsOk.value = hits.ok
   gateChecking.value = false
+  if (!hits.ok || hits.warn.length || hits.block.length) gateDialogVisible.value = true
 }
 
 // 列宽（拖拽调整）
@@ -425,7 +427,17 @@ function isErrorRow(ri) {
           共 {{ tableData.length }} 行数据，品号：{{ firstCode }}
         </div>
         <div v-if="gateChecking" class="gate-checking-hint">门禁校验中…</div>
-        <MaterialGateBanner v-else :hits="gateHits" :ok="gateHitsOk" style="width:min(560px, 90%)" />
+        <div
+          v-else-if="!gateHitsOk || gateHits.warn.length || gateHits.block.length"
+          class="gate-reopen-hint"
+          :class="{ 'gate-reopen-hint--block': gateHits.block.length }"
+          @click="gateDialogVisible = true"
+        >
+          {{ gateHitsOk
+            ? `存在 ${gateHits.block.length + gateHits.warn.length} 项物料门禁提示，点击查看`
+            : '物料门禁校验未完成，点击查看' }}
+        </div>
+        <MaterialGateHitDialog v-model="gateDialogVisible" :hits="gateHits" :ok="gateHitsOk" />
         <div class="export-buttons">
           <button class="btn-export" :disabled="exporting || !!gateHits.block.length" @click="exportAll">
             <el-icon><Download /></el-icon>
@@ -721,6 +733,21 @@ function isErrorRow(ri) {
 .ready-title { font-size: 16px; font-weight: 600; color: var(--text-primary); }
 .ready-desc  { font-size: 13px; color: var(--text-muted); }
 .gate-checking-hint { font-size: 12px; color: var(--text-muted); }
+.gate-reopen-hint {
+  font-size: 12px;
+  color: #8a5a1e;
+  background: rgba(196,136,58,0.10);
+  border: 1px solid rgba(196,136,58,0.4);
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.gate-reopen-hint:hover { text-decoration: underline; }
+.gate-reopen-hint--block {
+  color: #a3311e;
+  background: rgba(192,64,42,0.08);
+  border-color: rgba(192,64,42,0.35);
+}
 
 .export-buttons {
   display: flex;

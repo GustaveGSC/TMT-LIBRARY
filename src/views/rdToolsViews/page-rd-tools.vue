@@ -2,7 +2,7 @@
 // ── 导入 ──────────────────────────────────────────
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowLeft, HomeFilled } from '@element-plus/icons-vue'
+import { ArrowLeft, HomeFilled, Setting as SettingIcon } from '@element-plus/icons-vue'
 import WindowControls from '@/components/common/WindowControls.vue'
 import { PhHouseLine, PhArrowsLeftRight, PhClipboardText, PhBell, PhCurrencyDollar, PhShieldWarning } from '@phosphor-icons/vue'
 import EcrForm from '@/components/rdTools/EcrForm.vue'
@@ -10,16 +10,21 @@ import EcnForm from '@/components/rdTools/EcnForm.vue'
 import PdmToBomForm from '@/components/rdTools/PdmToBomForm.vue'
 import BomCost from '@/components/rdTools/BomCost.vue'
 import MaterialGateCheckPage from '@/components/rdTools/MaterialGateCheckPage.vue'
+import MaterialGateManageDialog from '@/components/rdTools/MaterialGateManageDialog.vue'
 import AppBottomBar from '@/components/common/AppBottomBar.vue'
 import { smartBack } from '@/utils/smartBack'
+import { usePermission } from '@/composables/usePermission'
 
-// ── 路由 ──────────────────────────────────────────
+// ── 路由 & 权限 ────────────────────────────────────
 const router = useRouter()
+const { canAdminRd } = usePermission()
 
 // ── 响应式状态 ────────────────────────────────────
 const activeTab = ref('home')
+// 物料门禁维护弹窗：入口固定在首页"设置"分组，不在具体功能 tab 里（2026-09-25 起）
+const showGateMgmtDialog = ref(false)
 
-// ── Tab 定义 ──────────────────────────────────────
+// ── Tab 定义（首页"功能"分组 + 顶部导航）─────────────
 const tabs = [
   { key: 'home',     label: '主页',          icon: PhHouseLine },
   { key: 'pdm2bom', label: 'PDM转BOM',      icon: PhArrowsLeftRight },
@@ -80,18 +85,35 @@ function handleHome() {
 
       <!-- 主页 -->
       <div v-show="activeTab === 'home'" class="tab-panel home-panel">
-        <div class="home-grid">
-          <div
-            v-for="tab in tabs.slice(1)"
-            :key="tab.key"
-            class="tool-card"
-            @click="activeTab = tab.key"
-          >
-            <div class="tool-card-icon">
-              <component :is="tab.icon" :size="32" weight="duotone" color="#c4883a" />
+        <div class="home-groups">
+          <div class="home-group">
+            <div class="home-group-label">功能</div>
+            <div class="home-grid">
+              <div
+                v-for="tab in tabs.slice(1)"
+                :key="tab.key"
+                class="tool-card"
+                @click="activeTab = tab.key"
+              >
+                <div class="tool-card-icon">
+                  <component :is="tab.icon" :size="32" weight="duotone" color="#c4883a" />
+                </div>
+                <div class="tool-card-name">{{ tab.label }}</div>
+                <div v-if="tab.coming" class="tool-card-badge">即将上线</div>
+              </div>
             </div>
-            <div class="tool-card-name">{{ tab.label }}</div>
-            <div v-if="tab.coming" class="tool-card-badge">即将上线</div>
+          </div>
+
+          <div v-if="canAdminRd" class="home-group">
+            <div class="home-group-label">设置</div>
+            <div class="home-grid">
+              <div class="tool-card" @click="showGateMgmtDialog = true">
+                <div class="tool-card-icon">
+                  <el-icon :size="30" color="#c4883a"><SettingIcon /></el-icon>
+                </div>
+                <div class="tool-card-name">物料门禁维护</div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -123,6 +145,8 @@ function handleHome() {
 
     </main>
     <AppBottomBar />
+
+    <MaterialGateManageDialog v-model="showGateMgmtDialog" />
   </div>
 </template>
 
@@ -181,14 +205,24 @@ function handleHome() {
 
 .tab-panel { flex: 1; width: 100%; height: 100%; }
 
-/* 主页：工具卡片网格 */
+/* 主页：工具卡片网格，按"功能"/"设置"分组 */
 .home-panel {
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 40px;
+  overflow-y: auto;
 }
-.home-grid { display: flex; gap: 24px; }
+.home-groups { display: flex; flex-direction: column; gap: 28px; }
+.home-group-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.08em;
+  margin-bottom: 10px;
+  padding-left: 2px;
+}
+.home-grid { display: flex; gap: 24px; flex-wrap: wrap; }
 
 .tool-card {
   position: relative;

@@ -2,19 +2,16 @@
 // ── 导入 ──────────────────────────────────────────
 import { ref, reactive, computed, onMounted, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Close, Plus, Setting, EditPen } from '@element-plus/icons-vue'
+import { Close, Plus, EditPen } from '@element-plus/icons-vue'
 import http from '@/api/http.js'
 import logoUrl from '@/assets/logo-banner.png'
-import { usePermission } from '@/composables/usePermission'
 import { downloadBlob, pickFile } from '@/utils/download.js'
 import { useMaterialGateCheck } from '@/composables/useMaterialGateCheck'
-import MaterialGateBanner from './MaterialGateBanner.vue'
-import MaterialGateManageDialog from './MaterialGateManageDialog.vue'
+import MaterialGateHitDialog from './MaterialGateHitDialog.vue'
 
 // ── 当前用户 & 权限 ────────────────────────────────
 const _user     = JSON.parse(localStorage.getItem('user') || '{}')
 const submitter = _user.display_name || _user.username || ''
-const { canAdminRd } = usePermission()
 
 
 // ── 滚动容器引用（重置时归顶）──────────────────────
@@ -28,8 +25,8 @@ const REASON_OPTS       = ['品质不良', '价格变动', '设计优化', '结�
 
 
 // ── 物料门禁校验 ──────────────────────────────────
+// 门禁维护入口已移到研发工具首页"设置"分组（page-rd-tools.vue），这里只做校验展示。
 const { checkMaterialCodes } = useMaterialGateCheck()
-const showMgmtDialog = ref(false)   // 物料门禁维护弹窗
 
 // ── 响应式状态 ────────────────────────────────────
 const form = reactive({
@@ -55,7 +52,7 @@ function newGroup() {
   return { before_path: '', before_name: '', after_path: '', after_name: '',
            before_file: null, after_file: null,   // 网页端存储 File 对象
            compareResult: null, compareLoading: false, confirmed: false,
-           gateHits: { warn: [], block: [] }, gateHitsOk: true, gateChecking: false }
+           gateHits: { warn: [], block: [] }, gateHitsOk: true, gateChecking: false, gateDialogVisible: false }
 }
 const bomGroups = ref([newGroup()])
 
@@ -244,6 +241,8 @@ async function handleCompare(idx) {
       g.gateHits   = { warn: hits.warn, block: hits.block }
       g.gateHitsOk = hits.ok
       g.gateChecking = false
+      // 检测到门禁（或校验本身失败）时用弹窗展示，不再用行内 banner
+      if (!hits.ok || hits.warn.length || hits.block.length) g.gateDialogVisible = true
     } else {
       ElMessage.error(res.message || '比对失败')
     }
@@ -532,9 +531,6 @@ function resetForm() {
           <button class="btn-add-group" @click="addBomGroup">
             <el-icon><Plus /></el-icon> 添加变更
           </button>
-          <button v-if="canAdminRd" class="btn-mgmt-gate" @click="showMgmtDialog = true">
-            <el-icon><Setting /></el-icon> 管理物料门禁
-          </button>
         </div>
 
         <!-- 每个 BOM 变更组 -->
@@ -587,9 +583,20 @@ function resetForm() {
             </span>
           </div>
 
-          <!-- 门禁提示：比对完成后对 after 文件里的全部物料编码做过校验 -->
+          <!-- 门禁提示：比对完成后对 after 文件里的全部物料编码做过校验，检测到命中会自动弹窗；
+               关闭弹窗后用这条小提示可以随时重新打开（block 存在时禁用确认按钮的逻辑不受影响） -->
           <div v-if="group.gateChecking" class="gate-checking-hint">门禁校验中…</div>
-          <MaterialGateBanner v-else-if="group.compareResult" :hits="group.gateHits" :ok="group.gateHitsOk" />
+          <div
+            v-else-if="group.compareResult && (!group.gateHitsOk || group.gateHits.warn.length || group.gateHits.block.length)"
+            class="gate-reopen-hint"
+            :class="{ 'gate-reopen-hint--block': group.gateHits.block.length }"
+            @click="group.gateDialogVisible = true"
+          >
+            {{ group.gateHitsOk
+              ? `存在 ${group.gateHits.block.length + group.gateHits.warn.length} 项物料门禁提示，点击查看`
+              : '物料门禁校验未完成，点击查看' }}
+          </div>
+          <MaterialGateHitDialog v-model="group.gateDialogVisible" :hits="group.gateHits" :ok="group.gateHitsOk" />
 
           <!-- 确认栏：比对完成后显示，确认后才纳入预览/导出；命中门禁"禁止"时不可确认 -->
           <div v-if="group.compareResult" class="confirm-bar">
@@ -720,9 +727,6 @@ function resetForm() {
     </div><!-- /ecr-body -->
 
   </div>
-
-  <!-- ── 物料门禁维护弹窗 ───────────────────────── -->
-  <MaterialGateManageDialog v-model="showMgmtDialog" />
 
   <!-- ── 预览弹窗 ──────────────────────────────── -->
   <el-dialog v-model="showPreview" title="变更申请单预览" width="min(1200px, 96vw)" :close-on-click-modal="true" draggable
@@ -1482,31 +1486,29 @@ function resetForm() {
 .detail-row--deleted    { background: rgba(192,64,42,0.07); }
 .preview-submitter      { margin-top: 6px; font-size: 11px; text-align: right; color: #555; }
 
-/* ── 物料门禁维护入口按钮（材料明细表 section-label 里）── */
-.btn-mgmt-gate {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 2px 10px;
-  font-size: 11px;
-  font-family: var(--font-family);
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: all 0.15s;
-  text-transform: none;
-  letter-spacing: 0;
-  font-weight: 400;
-}
-.btn-mgmt-gate:hover { color: var(--accent); border-color: var(--accent); }
-
 .gate-checking-hint {
   font-size: 12px;
   color: var(--text-muted);
   padding: 6px 0;
+}
+
+/* 门禁弹窗关闭后的重新打开提示条 */
+.gate-reopen-hint {
+  font-size: 12px;
+  color: #8a5a1e;
+  background: rgba(196,136,58,0.10);
+  border: 1px solid rgba(196,136,58,0.4);
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin: 6px 0;
+  cursor: pointer;
+  width: fit-content;
+}
+.gate-reopen-hint:hover { text-decoration: underline; }
+.gate-reopen-hint--block {
+  color: #a3311e;
+  background: rgba(192,64,42,0.08);
+  border-color: rgba(192,64,42,0.35);
 }
 
 
