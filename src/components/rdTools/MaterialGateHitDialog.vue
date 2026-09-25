@@ -109,12 +109,22 @@ const total = computed(() => (props.hits?.block?.length || 0) + (props.hits?.war
   padding: 8px 10px;
   border-radius: 6px;
   margin-bottom: 6px;
-  font-size: 12px;
+  font-size: 13px;
 }
-.gate-hit-section--block .gate-hit-row { background: rgba(192,64,42,0.06); border: 1px solid rgba(192,64,42,0.2); }
-.gate-hit-section--warn  .gate-hit-row { background: rgba(196,136,58,0.08); border: 1px solid rgba(196,136,58,0.3); }
+/* 文字颜色固定写死，不跟随主题变量——命中提示是警示类内容，必须在任何主题下都保持
+   醒目、高对比度、易读，不能因为主题切换导致文字和背景色系一起变浅、看不清。 */
+.gate-hit-section--block .gate-hit-row { background: #fdecea; border: 1px solid #f0b6ac; }
+.gate-hit-section--warn  .gate-hit-row { background: #fdf3e3; border: 1px solid #edc98a; }
 .gate-hit-row:last-child { margin-bottom: 0; }
-.gate-hit-name { font-weight: 600; color: var(--text-primary); }
-.gate-hit-code { font-family: monospace; color: var(--text-muted); margin-top: 2px; }
-.gate-hit-reason { color: var(--text-muted); margin-top: 2px; }
+.gate-hit-name { font-weight: 700; font-size: 14px; }
+.gate-hit-code { font-family: monospace; font-weight: 600; margin-top: 3px; }
+.gate-hit-reason { margin-top: 3px; line-height: 1.5; }
+
+.gate-hit-section--block .gate-hit-name   { color: #7a1f12; }
+.gate-hit-section--block .gate-hit-code   { color: #96392a; }
+.gate-hit-section--block .gate-hit-reason { color: #7a3226; }
+
+.gate-hit-section--warn .gate-hit-name   { color: #5c3a0a; }
+.gate-hit-section--warn .gate-hit-code   { color: #7a5a1e; }
+.gate-hit-section--warn .gate-hit-reason { color: #6b4f20; }
 </style>
