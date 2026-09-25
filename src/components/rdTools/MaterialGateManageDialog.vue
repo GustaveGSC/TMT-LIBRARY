@@ -3,8 +3,8 @@
 // 仅 rd:admin 可打开（调用方负责按钮的权限门禁，本组件本身不重复判断）。入口固定在研发工具
 // 首页"设置"分组（不再放在"变更申请单填写"里）。新增/编辑/上下架，结构照抄原"管理变更提醒"
 // 弹窗的交互模式；name 是命中门禁时弹窗要展示的名称来源，必须登记。
-import { ref, reactive, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, reactive, computed, watch } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '@/api/http'
 
 const props = defineProps({
@@ -29,6 +29,19 @@ const createLoading = ref(false)
 const editingId   = ref(null)
 const editForm    = reactive(blankForm())
 const editLoading = ref(false)
+const deletingId  = ref(null)
+
+// 搜索：按物料编码/名称/门禁原因过滤，纯前端过滤（数据量不大，全部记录已经一次性加载）
+const searchText = ref('')
+const filteredGates = computed(() => {
+  const q = searchText.value.trim().toLowerCase()
+  if (!q) return gates.value
+  return gates.value.filter(g =>
+    g.code.toLowerCase().includes(q) ||
+    (g.name || '').toLowerCase().includes(q) ||
+    (g.reason || '').toLowerCase().includes(q)
+  )
+})
 
 async function loadAll() {
   loading.value = true
@@ -42,7 +55,7 @@ async function loadAll() {
 }
 
 watch(() => props.modelValue, (visible) => {
-  if (visible) loadAll()
+  if (visible) { loadAll(); searchText.value = '' }
 })
 
 function startEdit(item) {
@@ -133,6 +146,31 @@ async function handleActivate(id) {
   }
 }
 
+async function handleDelete(item) {
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除门禁「${item.code}${item.name ? ' ' + item.name : ''}」吗？此操作不可恢复。`,
+      '删除门禁',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return  // 用户取消
+  }
+  deletingId.value = item.id
+  try {
+    const res = await http.delete(`/api/rd/material-gates/${item.id}`)
+    if (res.success) {
+      gates.value = gates.value.filter(g => g.id !== item.id)
+      emit('changed')
+      ElMessage.success('已删除')
+    } else {
+      ElMessage.error(res.message || '删除失败')
+    }
+  } finally {
+    deletingId.value = null
+  }
+}
+
 function levelLabel(level) {
   return LEVEL_OPTS.find(o => o.value === level)?.label || level
 }
@@ -181,11 +219,20 @@ function levelLabel(level) {
 
     <el-divider />
 
+    <el-input
+      v-model="searchText"
+      placeholder="搜索物料编码 / 名称 / 门禁原因"
+      clearable
+      size="small"
+      style="margin-bottom:10px"
+    />
+
     <div v-if="loading" style="text-align:center;padding:20px;color:var(--text-muted)">加载中…</div>
     <div v-else-if="!gates.length" style="text-align:center;padding:20px;color:var(--text-muted)">暂无记录</div>
+    <div v-else-if="!filteredGates.length" style="text-align:center;padding:20px;color:var(--text-muted)">没有匹配的记录</div>
     <div v-else class="mgmt-list">
       <div
-        v-for="item in gates"
+        v-for="item in filteredGates"
         :key="item.id"
         class="mgmt-item"
         :class="{ 'mgmt-item--inactive': !item.is_active, 'mgmt-item--block': item.level === 'block' && item.is_active }"
@@ -224,6 +271,7 @@ function levelLabel(level) {
             <el-button size="small" @click="startEdit(item)">编辑</el-button>
             <el-button v-if="item.is_active" size="small" type="danger" plain @click="handleDeactivate(item.id)">下架</el-button>
             <el-button v-else size="small" @click="handleActivate(item.id)">重新上架</el-button>
+            <el-button size="small" type="danger" :loading="deletingId === item.id" @click="handleDelete(item)">删除</el-button>
           </div>
         </template>
       </div>

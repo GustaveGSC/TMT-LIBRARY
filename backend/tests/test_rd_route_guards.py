@@ -26,6 +26,7 @@ RD_ROUTES = {
     ('GET', '/api/rd/material-gates/all'),
     ('POST', '/api/rd/material-gates'),
     ('PUT', '/api/rd/material-gates/<int:gate_id>'),
+    ('DELETE', '/api/rd/material-gates/<int:gate_id>'),
     ('PUT', '/api/rd/material-gates/<int:gate_id>/deactivate'),
     ('PUT', '/api/rd/material-gates/<int:gate_id>/activate'),
     ('POST', '/api/rd/material-gates/check'),
@@ -97,7 +98,7 @@ def test_rd_route_map_is_stable_before_module_split():
     }
 
     assert actual == RD_ROUTES | RD_COST_ROUTES
-    assert len(RD_ROUTES) == 19
+    assert len(RD_ROUTES) == 20
     assert len(RD_COST_ROUTES) == 22
 
     note_modules = {
@@ -203,7 +204,7 @@ def test_material_gates_require_rd_admin_for_management(rd_app_client):
     assert denied.get_json()['success'] is False
     denied_create = client.post(
         '/api/rd/material-gates',
-        json={'code': 'A001', 'level': 'warn', 'reason': '越权创建'},
+        json={'code': 'A001', 'name': '螺母', 'level': 'warn', 'reason': '越权创建'},
         headers={'X-CSRF-Token': 'csrf'},
     )
     assert denied_create.status_code == 403
@@ -213,14 +214,23 @@ def test_material_gates_require_rd_admin_for_management(rd_app_client):
         client, username='rd-admin',
         permissions=['rd:view', 'rd:edit', 'rd:admin'],
     )
+    missing_name = client.post(
+        '/api/rd/material-gates',
+        json={'code': 'A001', 'level': 'warn', 'reason': '缺名称'},
+        headers={'X-CSRF-Token': 'csrf'},
+    )
+    assert missing_name.status_code == 400
+    assert missing_name.get_json()['message'] == '名称不能为空'
+
     created = client.post(
         '/api/rd/material-gates',
-        json={'code': 'A001', 'level': 'warn', 'reason': '审核 BOM'},
+        json={'code': 'A001', 'name': '锁紧六角螺母', 'level': 'warn', 'reason': '审核 BOM'},
         headers={'X-CSRF-Token': 'csrf'},
     )
     assert created.status_code == 200
     gate_id = created.get_json()['data']['id']
     assert created.get_json()['data']['created_by'] == 'rd-admin'
+    assert created.get_json()['data']['name'] == '锁紧六角螺母'
 
     all_items = client.get('/api/rd/material-gates/all')
     assert all_items.status_code == 200
@@ -228,7 +238,7 @@ def test_material_gates_require_rd_admin_for_management(rd_app_client):
 
     updated = client.put(
         f'/api/rd/material-gates/{gate_id}',
-        json={'code': 'A001', 'level': 'block', 'reason': '复核 BOM'},
+        json={'code': 'A001', 'name': '锁紧六角螺母', 'level': 'block', 'reason': '复核 BOM'},
         headers={'X-CSRF-Token': 'csrf'},
     )
     assert updated.status_code == 200
@@ -241,7 +251,8 @@ def test_material_gates_require_rd_admin_for_management(rd_app_client):
     )
     assert checked.status_code == 200
     assert checked.get_json()['data'] == {
-        'warn': [], 'block': [{'code': 'A001', 'reason': '复核 BOM'}],
+        'warn': [],
+        'block': [{'code': 'A001', 'name': '锁紧六角螺母', 'reason': '复核 BOM'}],
     }
 
     deactivated = client.put(
@@ -262,6 +273,19 @@ def test_material_gates_require_rd_admin_for_management(rd_app_client):
         item['reason'] for item in client.get('/api/rd/material-gates').get_json()['data']
     ] == ['复核 BOM']
 
+    deleted = client.delete(
+        f'/api/rd/material-gates/{gate_id}',
+        headers={'X-CSRF-Token': 'csrf'},
+    )
+    assert deleted.status_code == 200
+
+    missing_delete = client.delete(
+        f'/api/rd/material-gates/{gate_id}',
+        headers={'X-CSRF-Token': 'csrf'},
+    )
+    assert missing_delete.status_code == 404
+    assert client.get('/api/rd/material-gates/all').get_json()['data'] == []
+
 
 def test_material_gate_rejects_second_active_gate_for_same_code(rd_app_client):
     _app_obj, client = rd_app_client
@@ -272,17 +296,45 @@ def test_material_gate_rejects_second_active_gate_for_same_code(rd_app_client):
     headers = {'X-CSRF-Token': 'csrf'}
     first = client.post(
         '/api/rd/material-gates',
-        json={'code': 'A001', 'level': 'warn', 'reason': '第一条'},
+        json={'code': 'A001', 'name': '第一条物料', 'level': 'warn', 'reason': '第一条'},
         headers=headers,
     )
     assert first.status_code == 200
     second = client.post(
         '/api/rd/material-gates',
-        json={'code': 'A001', 'level': 'block', 'reason': '重复'},
+        json={'code': 'A001', 'name': '重复物料', 'level': 'block', 'reason': '重复'},
         headers=headers,
     )
     assert second.status_code == 400
     assert second.get_json()['message'] == '该物料编码已有在架门禁，请先下架旧记录'
+
+
+def test_material_gate_delete_requires_rd_admin(rd_app_client):
+    _app_obj, client = rd_app_client
+    headers = {'X-CSRF-Token': 'csrf'}
+    _set_user(
+        client, username='rd-admin',
+        permissions=['rd:view', 'rd:edit', 'rd:admin'],
+    )
+    created = client.post(
+        '/api/rd/material-gates',
+        json={'code': 'A001', 'name': '待删除物料', 'level': 'warn', 'reason': '待删除'},
+        headers=headers,
+    )
+    gate_id = created.get_json()['data']['id']
+
+    _set_user(client, username='viewer', permissions=['rd:view', 'rd:edit'])
+    denied = client.delete(f'/api/rd/material-gates/{gate_id}', headers=headers)
+    assert denied.status_code == 403
+    assert denied.get_json()['message'] == '权限不足：需要研发部管理员权限'
+
+    _set_user(
+        client, username='rd-admin',
+        permissions=['rd:view', 'rd:edit', 'rd:admin'],
+    )
+    deleted = client.delete(f'/api/rd/material-gates/{gate_id}', headers=headers)
+    assert deleted.status_code == 200
+    assert client.get('/api/rd/material-gates/all').get_json()['data'] == []
 
 
 def test_material_gate_check_file_extracts_unique_codes(rd_app_client):
@@ -294,7 +346,7 @@ def test_material_gate_check_file_extracts_unique_codes(rd_app_client):
     headers = {'X-CSRF-Token': 'csrf'}
     client.post(
         '/api/rd/material-gates',
-        json={'code': 'A001', 'level': 'warn', 'reason': '核查材料'},
+        json={'code': 'A001', 'name': '核查用物料', 'level': 'warn', 'reason': '核查材料'},
         headers=headers,
     )
 
@@ -317,7 +369,7 @@ def test_material_gate_check_file_extracts_unique_codes(rd_app_client):
     assert checked.status_code == 200
     assert checked.get_json()['data'] == {
         'scanned_count': 2,
-        'warn': [{'code': 'A001', 'reason': '核查材料'}],
+        'warn': [{'code': 'A001', 'name': '核查用物料', 'reason': '核查材料'}],
         'block': [],
     }
 

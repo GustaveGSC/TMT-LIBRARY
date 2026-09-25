@@ -13,6 +13,7 @@ from services.rd.change_documents import compare_bom
 ROOT = Path(__file__).resolve().parents[2]
 PREVIOUS_REVISION = '20260904_02'
 MATERIAL_GATE_REVISION = '20260925_01'
+MATERIAL_GATE_NAME_REVISION = '20260926_01'
 
 
 def _alembic_config(database_url: str) -> Config:
@@ -76,3 +77,31 @@ def test_material_gate_migration_replaces_legacy_table(tmp_path, monkeypatch):
     inspector = sa.inspect(engine)
     assert 'material_gate' not in inspector.get_table_names()
     assert 'ecr_reminder' in inspector.get_table_names()
+
+
+def test_material_gate_name_migration_adds_column(tmp_path, monkeypatch):
+    database_path = tmp_path / 'material-gate-name.db'
+    database_url = f'sqlite:///{database_path.as_posix()}'
+    engine = sa.create_engine(database_url)
+
+    monkeypatch.setenv('DATABASE_URL', database_url)
+    config = _alembic_config(database_url)
+    command.stamp(config, MATERIAL_GATE_REVISION)
+
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            'CREATE TABLE material_gate ('
+            'id INTEGER PRIMARY KEY, code VARCHAR(64) NOT NULL, level VARCHAR(16) NOT NULL, '
+            'reason VARCHAR(500) NOT NULL, is_active BOOLEAN NOT NULL, '
+            'created_by VARCHAR(64), created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)'
+        ))
+
+    command.upgrade(config, MATERIAL_GATE_NAME_REVISION)
+    inspector = sa.inspect(engine)
+    columns = {column['name'] for column in inspector.get_columns('material_gate')}
+    assert 'name' in columns
+
+    command.downgrade(config, MATERIAL_GATE_REVISION)
+    inspector = sa.inspect(engine)
+    columns = {column['name'] for column in inspector.get_columns('material_gate')}
+    assert 'name' not in columns

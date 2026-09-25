@@ -69,6 +69,16 @@ def _set_material_gate_active(gate_id: int, is_active: bool):
     return Result.ok(gate).to_response()
 
 
+@rd_bp.delete('/material-gates/<int:gate_id>')
+@require_auth
+def delete_material_gate(gate_id):
+    if not is_rd_admin():
+        return _permission_denied_response()
+    if not material_gate_service.delete(gate_id):
+        return Result.fail('门禁不存在').to_response(404)
+    return Result.ok(None).to_response()
+
+
 @rd_bp.put('/material-gates/<int:gate_id>/deactivate')
 @require_auth
 def deactivate_material_gate(gate_id):

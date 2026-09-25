@@ -40,15 +40,16 @@ class MaterialGateRepository:
         )
 
     @staticmethod
-    def create(code: str, level: str, reason: str, created_by: str | None) -> MaterialGate:
-        gate = MaterialGate(code=code, level=level, reason=reason, created_by=created_by)
+    def create(code: str, name: str, level: str, reason: str, created_by: str | None) -> MaterialGate:
+        gate = MaterialGate(code=code, name=name, level=level, reason=reason, created_by=created_by)
         db.session.add(gate)
         db.session.commit()
         return gate
 
     @staticmethod
-    def update(gate: MaterialGate, code: str, level: str, reason: str) -> MaterialGate:
+    def update(gate: MaterialGate, code: str, name: str, level: str, reason: str) -> MaterialGate:
         gate.code = code
+        gate.name = name
         gate.level = level
         gate.reason = reason
         db.session.commit()
@@ -59,6 +60,11 @@ class MaterialGateRepository:
         gate.is_active = is_active
         db.session.commit()
         return gate
+
+    @staticmethod
+    def delete(gate: MaterialGate) -> None:
+        db.session.delete(gate)
+        db.session.commit()
 
 
 material_gate_repository = MaterialGateRepository()

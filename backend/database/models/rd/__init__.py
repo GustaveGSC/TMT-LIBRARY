@@ -8,6 +8,7 @@ class MaterialGate(db.Model):
 
     id         = db.Column(db.Integer,     primary_key=True, autoincrement=True)
     code       = db.Column(db.String(64),  nullable=False, index=True)
+    name       = db.Column(db.String(200), nullable=False, server_default='')
     level      = db.Column(db.String(16),  nullable=False)  # warn / block
     reason     = db.Column(db.String(500), nullable=False)
     is_active  = db.Column(db.Boolean,     nullable=False, default=True)
@@ -19,6 +20,7 @@ class MaterialGate(db.Model):
         return {
             'id':         self.id,
             'code':       self.code,
+            'name':       self.name or '',
             'level':      self.level,
             'reason':     self.reason,
             'is_active':  self.is_active,
