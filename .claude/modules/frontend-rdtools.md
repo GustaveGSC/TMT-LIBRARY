@@ -26,6 +26,12 @@
 
 图标使用 `@phosphor-icons/vue`（`PhHouseLine / PhArrowsLeftRight / PhClipboardText / PhBell / PhCurrencyDollar / PhShieldWarning`）。
 
+**主页分组**（2026-09-25 起）：`home` tab 内的工具卡片网格分两组展示——"功能"组包含
+`tabs.slice(1)` 的全部 tab（点击切换 `activeTab`）；"设置"组只对 `canAdminRd` 用户显示，目前只有
+一张"物料门禁维护"卡片，点击**不切换 tab**，而是打开 `page-rd-tools.vue` 页面级的
+`showGateMgmtDialog`（`<MaterialGateManageDialog v-model="showGateMgmtDialog" />`，和
+`AppBottomBar` 同级挂在页面根部）。门禁维护入口不再放在"变更申请单填写"里。
+
 ---
 
 ## PDM 转 BOM（PdmToBomForm.vue）
@@ -130,8 +136,7 @@
 - **变更申请单填写**（`EcrForm.vue`）：每个 BOM 变更组比对完成后，对 `compare-bom` 返回的
   `after_codes`（after 文件里出现的全部物料编码，不止 diff 出来的变动项）调用
   `POST /api/rd/material-gates/check`；命中 `block` 时该组"确认此变更"按钮禁用，无法纳入导出；
-  命中 `warn` 仅提示不阻断。`canAdminRd` 用户可在"材料明细表" section-label 里点「管理物料门禁」
-  打开 `MaterialGateManageDialog.vue`。
+  命中 `warn` 仅提示不阻断。
 - **PDM转BOM**（`PdmToBomForm.vue`）：`process` 返回后对 `material_codes`（去重后的"品号"列，
   注意这里列名是**品号**不是物料编码，两个上传流程的源文件格式不同）做同样校验；`revalidate()`
   人工改过品号后会重新扫一遍；命中 `block` 时导出按钮禁用。
@@ -139,13 +144,28 @@
   Excel，调 `POST /api/rd/material-gates/check-file`，单独展示命中结果，不生成任何单据，也不依赖
   前两个流程。
 
+**命中展示改为弹窗**（2026-09-25 第二次修改，用户反馈"需要是一个dialog面板"）：三处校验点检测到
+命中（或校验接口本身异常）时自动弹出 `MaterialGateHitDialog.vue`，不再用行内 banner；block 在前
+warn 在后分区展示，每项显示"名称（品名+规格）+ 物料编码 + 门禁原因"。关闭弹窗后原位置会留一条
+可点击的小提示条（`.gate-reopen-hint`，三个组件各自实现，非共享组件）用于重新打开，命中 block 时
+提示条变红色。门禁维护入口同一批也从 `EcrForm.vue`/`MaterialGateCheckPage.vue` 里移除，统一放到
+研发工具首页"设置"分组（见上）。
+
+> **`name`/`spec` 字段待补**：`MaterialGateHitDialog.vue` 要显示的"名称（品名+规格）"来自门禁记录
+> 自身登记的 `name`/`spec` 字段（管理员新增门禁时一并填写"这个编码对应的是什么"，不是从上传文件
+> 解析出来的），但后端 `check`/`check-file` 的响应目前还没有这两个字段——已交接 Codex
+> （`handoff/2026-09-25-codex-rd-material-gate-name-spec.md`，未部署）。`MaterialGateManageDialog.vue`
+> 的新增/编辑表单已经加了这两个输入框，`POST/PUT` 会带上 `name`/`spec`，但旧后端目前会**静默忽略**
+> 这两个多出来的字段（不报错，也不保存），所以现在填了会看起来"消失"；命中弹窗在字段缺失时兜底
+> 显示"（未登记名称）"。后端这批交付并重新部署前，不要以为这个功能已经完整。
+
 共用组件：
 - `src/composables/useMaterialGateCheck.js` — 包装 `check` 接口调用，返回 `{warn, block, ok}`
   （`ok:false` 表示接口异常，调用方需要提示但不当成"无命中"处理）
-- `src/components/rdTools/MaterialGateBanner.vue` — 命中结果展示（红色 block 不可关闭，黄色 warn
-  可关闭），三处校验点共用
-- `src/components/rdTools/MaterialGateManageDialog.vue` — 门禁 CRUD 弹窗（新增/编辑/上下架），
-  `EcrForm.vue` 和 `MaterialGateCheckPage.vue` 都嵌了一份
+- `src/components/rdTools/MaterialGateHitDialog.vue` — 命中结果弹窗（block 红色不可关闭分区、warn
+  黄色分区），三处校验点共用，`ok:false` 时展示"校验未完成"提示
+- `src/components/rdTools/MaterialGateManageDialog.vue` — 门禁 CRUD 弹窗（新增/编辑/上下架，含
+  `name`/`spec` 字段），页面级单例挂在 `page-rd-tools.vue`
 
 ### 个人笔记
 
