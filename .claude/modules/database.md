@@ -493,3 +493,10 @@ standby 中的退役旧代不会在发布后立即 TRUNCATE，以保留验收窗
 - 重复启动返回 409 和当前持有租约的 task_id；终态释放租约。
 - 新 worker 启动时把遗留 pending/running 标记为 interrupted；终态保留 7 天。
 - 生命周期业务更新使用单一事务，任务进度通过独立连接提交。
+### material_gate（研发物料门禁，2026-09-25）
+
+按物料编码记录研发工具的提醒/阻断规则，替代并删除旧 `ecr_reminder` 自由文本表。字段：
+`id`、`code VARCHAR(64)`（普通索引）、`level VARCHAR(16)`（仅 `warn`/`block`）、
+`reason VARCHAR(500)`、`is_active`、`created_by`、`created_at`、`updated_at`。
+同一编码只允许一条在架记录，由 service 层在新增、编辑在架记录和重新上架时校验；数据库不设唯一约束，
+以允许保留下架历史。

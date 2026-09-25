@@ -645,7 +645,8 @@ def compare_bom(before_path, after_path):
         'deleted': n_deleted,
         'total':   len(changes),
     }
-    return {'changes': changes, 'stats': stats}
+    after_codes = sorted({item['code'] for item in after.values()})
+    return {'changes': changes, 'stats': stats, 'after_codes': after_codes}
 
 
 # ── ECN 选项常量 ──────────────────────────────────────

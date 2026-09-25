@@ -2,23 +2,25 @@ from database.base import db
 from utils import now_cst
 
 
-class EcrReminder(db.Model):
-    """变更提醒条目：持久化、支持下架（软删除），不允许硬删除"""
-    __tablename__ = 'ecr_reminder'
+class MaterialGate(db.Model):
+    """按物料编码维护的研发门禁；同一编码只允许一条在架记录。"""
+    __tablename__ = 'material_gate'
 
     id         = db.Column(db.Integer,     primary_key=True, autoincrement=True)
-    content    = db.Column(db.String(500), nullable=False)          # 提醒内容
-    notes      = db.Column(db.Text,        nullable=True)           # 备注说明
-    is_active  = db.Column(db.Boolean,     nullable=False, default=True)  # False = 已下架
-    created_by = db.Column(db.String(64),  nullable=True)           # 创建人用户名
+    code       = db.Column(db.String(64),  nullable=False, index=True)
+    level      = db.Column(db.String(16),  nullable=False)  # warn / block
+    reason     = db.Column(db.String(500), nullable=False)
+    is_active  = db.Column(db.Boolean,     nullable=False, default=True)
+    created_by = db.Column(db.String(64),  nullable=True)
     created_at = db.Column(db.DateTime,    nullable=False, default=now_cst)
     updated_at = db.Column(db.DateTime,    nullable=False, default=now_cst, onupdate=now_cst)
 
     def to_dict(self):
         return {
             'id':         self.id,
-            'content':    self.content,
-            'notes':      self.notes or '',
+            'code':       self.code,
+            'level':      self.level,
+            'reason':     self.reason,
             'is_active':  self.is_active,
             'created_by': self.created_by or '',
             'created_at': self.created_at.strftime('%Y-%m-%d') if self.created_at else '',

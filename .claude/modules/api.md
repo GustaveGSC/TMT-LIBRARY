@@ -15,7 +15,7 @@
 | product / category / lifecycle 等 | `product:view`（读）+ `product:edit`（写） |
 | shipping | `shipping:view` + `shipping:edit`；导出需 `shipping:export` |
 | aftersale | `aftersale:view` + `aftersale:edit`；导出需 `aftersale:export` |
-| rd | `rd:view`（读）+ `rd:edit`（写）；reminders 管理另需 `rd:admin` |
+| rd | `rd:view`（读）+ `rd:edit`（写）；物料门禁（material-gates）管理另需 `rd:admin` |
 
 权限体系已切换为显式权限码授权：
 
@@ -521,9 +521,30 @@ POST   /api/aftersale/chart-data                      # 图表聚合数据，bod
 
 ```
 POST   /api/rd/ecr/parse-ecr             # ecr_file：ECR xlsx/xls；返回表单字段与 changes
-POST   /api/rd/ecr/compare-bom           # bom_before + bom_after：两个 BOM xlsx；返回 changes/stats
-POST   /api/rd/pdm2bom/process            # pdm_file：PDM xlsx；返回 columns/table_data/error_map/total_level
+POST   /api/rd/ecr/compare-bom           # bom_before + bom_after：两个 BOM xlsx；返回 changes/stats/after_codes
+POST   /api/rd/pdm2bom/process            # pdm_file：PDM xlsx；返回 columns/table_data/error_map/total_level/material_codes
 ```
+
+### 物料门禁（material-gates，2026-09-25 起）
+
+按物料编码登记门禁（`level`: `warn` 提醒 / `block` 禁止），替代原来的 `ecr_reminder`。
+
+```
+GET  /api/rd/material-gates                         # rd:view；仅返回在架门禁
+GET  /api/rd/material-gates/all                     # rd:admin；含下架历史
+POST /api/rd/material-gates                         # rd:admin；{code,level,reason}
+PUT  /api/rd/material-gates/:id                     # rd:admin；{code,level,reason}
+PUT  /api/rd/material-gates/:id/activate            # rd:admin；同编码已有在架记录时返回 400
+PUT  /api/rd/material-gates/:id/deactivate          # rd:admin
+POST /api/rd/material-gates/check                   # rd:edit；{codes:[...]}
+POST /api/rd/material-gates/check-file              # rd:edit；multipart file，仅 .xlsx
+```
+
+`check` 返回 `{warn:[{code,reason}], block:[{code,reason}]}`；自动去重输入，只返回已登记且在架的编码。
+`check-file` 从首行优先读取“物料编码”、其次“品号”列，返回相同结果并增加 `scanned_count`；缺少列返回
+`未找到"物料编码"或"品号"列`。管理接口找不到记录返回 404；同编码第二条在架门禁返回 400。
+两个查询型 POST 仍沿用该 blueprint 的 `rd:edit` 权限口径，未加入 `view_post_paths` 白名单。
+详见 `frontend-rdtools.md` "物料门禁校验" 一节。
 
 `compare-bom` 同时兼容旧 ERP BOM（特征列：图号/品名）与新 PDM BOM（特征列：
 物料编码/一级分类）。PDM 的 `状态=审核中` 且版本为空表示新物料，输出图号固定为

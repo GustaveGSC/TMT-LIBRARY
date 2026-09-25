@@ -33,7 +33,12 @@ MATERIAL_COLLATION_REVISION = '20260731_02'
 MATERIAL_COMBO_REVISION = '20260807_01'
 MATERIAL_SUPPLIER_REVISION = '20260810_01'
 LEGACY_COST_SUPPLIER_REMOVAL_REVISION = '20260810_02'
-HEAD_REVISION = LEGACY_COST_SUPPLIER_REMOVAL_REVISION
+TAG_UNIQUE_REVISION = '20260818_01'
+DEV_TASK_REVISION = '20260819_01'
+USER_PROFILE_REVISION = '20260904_01'
+ROLE_CATEGORY_REVISION = '20260904_02'
+MATERIAL_GATE_REVISION = '20260925_01'
+HEAD_REVISION = MATERIAL_GATE_REVISION
 CRITICAL_INDEXES = {
     'shipping_order_finished': {
         'ix_sof_source',
@@ -79,6 +84,11 @@ def test_baseline_has_linear_history_and_task_lease_is_the_only_head():
         scripts.get_revision(LEGACY_COST_SUPPLIER_REMOVAL_REVISION).down_revision
         == MATERIAL_SUPPLIER_REVISION
     )
+    assert scripts.get_revision(TAG_UNIQUE_REVISION).down_revision == LEGACY_COST_SUPPLIER_REMOVAL_REVISION
+    assert scripts.get_revision(DEV_TASK_REVISION).down_revision == TAG_UNIQUE_REVISION
+    assert scripts.get_revision(USER_PROFILE_REVISION).down_revision == DEV_TASK_REVISION
+    assert scripts.get_revision(ROLE_CATEGORY_REVISION).down_revision == USER_PROFILE_REVISION
+    assert scripts.get_revision(MATERIAL_GATE_REVISION).down_revision == ROLE_CATEGORY_REVISION
     assert scripts.get_revision(PERMISSION_REVISION).down_revision == TASK_REVISION
     assert scripts.get_revision(CUSTOMER_MAPPING_REVISION).down_revision == PERMISSION_REVISION
     assert scripts.get_revision(ORDER_ALIAS_REVISION).down_revision == CUSTOMER_MAPPING_REVISION
@@ -253,7 +263,9 @@ def test_baseline_upgrade_adds_only_task_schemas(tmp_path, monkeypatch):
     command.stamp(config, BASELINE_REVISION)
 
     before_upgrade = set(sa.inspect(engine).get_table_names())
-    command.upgrade(config, 'head')
+    # 此用例只验证 baseline 后最早一批自建表迁移；后续迁移会修改 baseline
+    # 已存在的业务表，不能在这里只有占位表的数据库上继续跑到最新 head。
+    command.upgrade(config, LEGACY_COST_SUPPLIER_REMOVAL_REVISION)
     after_upgrade = set(sa.inspect(engine).get_table_names())
 
     assert before_upgrade == {'alembic_version', 'existing_business_data'}
@@ -326,7 +338,7 @@ def test_baseline_upgrade_adds_only_task_schemas(tmp_path, monkeypatch):
             )).scalar_one() == 1
     with engine.connect() as connection:
         current = MigrationContext.configure(connection).get_current_revision()
-    assert current == HEAD_REVISION
+    assert current == LEGACY_COST_SUPPLIER_REMOVAL_REVISION
 
 
 def test_finance_dimension_migration_backfills_category_configuration(tmp_path, monkeypatch):

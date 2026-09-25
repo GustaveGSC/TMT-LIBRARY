@@ -242,9 +242,11 @@ def pdm2bom_process():
             if missing:
                 error_map[str(ri)] = missing
 
+        material_codes = sorted({row[code_idx] for row in table_data if row[code_idx]})
         return Result.ok({
             'columns':             columns,
             'table_data':          table_data,
+            'material_codes':      material_codes,
             'required_col_indices': required_col_indices,
             'error_map':           error_map,
             'total_level':         total_level,
@@ -341,4 +343,4 @@ def pdm2bom_export_bom():
 
 # 子模块在 rd_bp 建立后导入，以便其路由继续挂载在同一个 Blueprint 上。
 from . import notes as _notes_routes  # noqa: E402,F401
-from . import reminders as _reminder_routes  # noqa: E402,F401
+from . import material_gate as _material_gate_routes  # noqa: E402,F401
