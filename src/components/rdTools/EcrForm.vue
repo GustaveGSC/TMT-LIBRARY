@@ -7,6 +7,9 @@ import http from '@/api/http.js'
 import logoUrl from '@/assets/logo-banner.png'
 import { usePermission } from '@/composables/usePermission'
 import { downloadBlob, pickFile } from '@/utils/download.js'
+import { useMaterialGateCheck } from '@/composables/useMaterialGateCheck'
+import MaterialGateBanner from './MaterialGateBanner.vue'
+import MaterialGateManageDialog from './MaterialGateManageDialog.vue'
 
 // ── 当前用户 & 权限 ────────────────────────────────
 const _user     = JSON.parse(localStorage.getItem('user') || '{}')
@@ -24,30 +27,9 @@ const DISTRIBUTION_OPTS = ['研发', '业务', '采购', '生产', '生管', '�
 const REASON_OPTS       = ['品质不良', '价格变动', '设计优化', '结构优化', '成本优化', '工艺优化', '其他']
 
 
-// ── 变更提醒区高度拖拽 ────────────────────────────
-const reminderHeight    = ref(200)          // px，默认高度
-const reminderCollapsed = ref(false)        // 是否合拢
-const REMINDER_MIN      = 80               // 展开时最小高度
-const REMINDER_MAX      = 520              // 最大高度
-
-function startReminderResize(e) {
-  if (reminderCollapsed.value) return
-  e.preventDefault()
-  const startY = e.clientY
-  const startH = reminderHeight.value
-
-  function onMove(ev) {
-    // 向上拖 → 增大高度；向下拖 → 减小高度
-    const delta = startY - ev.clientY
-    reminderHeight.value = Math.min(REMINDER_MAX, Math.max(REMINDER_MIN, startH + delta))
-  }
-  function onUp() {
-    window.removeEventListener('mousemove', onMove)
-    window.removeEventListener('mouseup',   onUp)
-  }
-  window.addEventListener('mousemove', onMove)
-  window.addEventListener('mouseup',   onUp)
-}
+// ── 物料门禁校验 ──────────────────────────────────
+const { checkMaterialCodes } = useMaterialGateCheck()
+const showMgmtDialog = ref(false)   // 物料门禁维护弹窗
 
 // ── 响应式状态 ────────────────────────────────────
 const form = reactive({
@@ -68,130 +50,12 @@ const exportLoading = ref(false)
 const showPreview   = ref(false)
 
 
-// 变更提醒（从后端加载，在架条目）
-const reminders        = ref([])         // 当前在架提醒列表（db 数据）
-const reminderChecked  = reactive({})    // { id: boolean } 本次会话的勾选状态
-const remindersLoading = ref(false)
-
-async function fetchReminders() {
-  remindersLoading.value = true
-  try {
-    const res = await http.get('/api/rd/reminders')
-    if (res.success) {
-      reminders.value = res.data
-      // 清理已失效的 checked 状态，保留本次已勾选
-      const idSet = new Set(res.data.map(r => r.id))
-      Object.keys(reminderChecked).forEach(k => { if (!idSet.has(Number(k))) delete reminderChecked[k] })
-    }
-  } finally {
-    remindersLoading.value = false
-  }
-}
-
-// ── 管理对话框 ────────────────────────────────────
-const showMgmtDialog   = ref(false)
-const mgmtReminders    = ref([])         // 全部提醒（含下架历史）
-const mgmtLoading      = ref(false)
-const newReminder      = reactive({ content: '', notes: '' })
-const createLoading    = ref(false)
-const editingId        = ref(null)       // 当前正在编辑的提醒 id
-const editForm         = reactive({ content: '', notes: '' })
-const editLoading      = ref(false)
-
-function startEdit(item) {
-  editingId.value    = item.id
-  editForm.content   = item.content
-  editForm.notes     = item.notes || ''
-}
-function cancelEdit() {
-  editingId.value = null
-}
-async function handleUpdateReminder(id) {
-  if (!editForm.content.trim()) { ElMessage.warning('提醒内容不能为空'); return }
-  editLoading.value = true
-  try {
-    const res = await http.put(`/api/rd/reminders/${id}`, {
-      content: editForm.content.trim(),
-      notes:   editForm.notes.trim(),
-    })
-    if (res.success) {
-      const item = mgmtReminders.value.find(r => r.id === id)
-      if (item) { item.content = res.data.content; item.notes = res.data.notes }
-      editingId.value = null
-      await fetchReminders()
-      ElMessage.success('已更新')
-    } else {
-      ElMessage.error(res.message || '更新失败')
-    }
-  } finally {
-    editLoading.value = false
-  }
-}
-
-async function openMgmtDialog() {
-  showMgmtDialog.value = true
-  mgmtLoading.value = true
-  try {
-    const res = await http.get('/api/rd/reminders/all')
-    if (res.success) mgmtReminders.value = res.data
-    else ElMessage.error(res.message || '加载失败')
-  } finally {
-    mgmtLoading.value = false
-  }
-}
-
-async function handleCreateReminder() {
-  if (!newReminder.content.trim()) { ElMessage.warning('请填写提醒内容'); return }
-  createLoading.value = true
-  try {
-    const res = await http.post('/api/rd/reminders', {
-      content:    newReminder.content.trim(),
-      notes:      newReminder.notes.trim(),
-      created_by: submitter,
-    })
-    if (res.success) {
-      ElMessage.success('已创建')
-      newReminder.content = ''
-      newReminder.notes   = ''
-      mgmtReminders.value.unshift(res.data)
-      await fetchReminders()   // 同步主列表
-    } else {
-      ElMessage.error(res.message || '创建失败')
-    }
-  } finally {
-    createLoading.value = false
-  }
-}
-
-async function handleDeactivate(id) {
-  const res = await http.put(`/api/rd/reminders/${id}/deactivate`, {})
-  if (res.success) {
-    const item = mgmtReminders.value.find(r => r.id === id)
-    if (item) item.is_active = false
-    await fetchReminders()
-    ElMessage.success('已下架')
-  } else {
-    ElMessage.error(res.message || '操作失败')
-  }
-}
-
-async function handleActivate(id) {
-  const res = await http.put(`/api/rd/reminders/${id}/activate`, {})
-  if (res.success) {
-    const item = mgmtReminders.value.find(r => r.id === id)
-    if (item) item.is_active = true
-    await fetchReminders()
-    ElMessage.success('已重新上架')
-  } else {
-    ElMessage.error(res.message || '操作失败')
-  }
-}
-
-// 多个 BOM 变更组，每组独立的文件选择和比对结果
+// 多个 BOM 变更组，每组独立的文件选择、比对结果和门禁校验结果
 function newGroup() {
   return { before_path: '', before_name: '', after_path: '', after_name: '',
            before_file: null, after_file: null,   // 网页端存储 File 对象
-           compareResult: null, compareLoading: false, confirmed: false }
+           compareResult: null, compareLoading: false, confirmed: false,
+           gateHits: { warn: [], block: [] }, gateHitsOk: true, gateChecking: false }
 }
 const bomGroups = ref([newGroup()])
 
@@ -228,7 +92,6 @@ const previewRows = computed(() => {
 // ── 生命周期 ──────────────────────────────────────
 onMounted(() => {
   form.ecr_code = generateEcrCode(false)
-  fetchReminders()
   fetchNotes()
 })
 
@@ -285,7 +148,9 @@ function diffRowsFor(group) {
         drawing_after:  ch.row_type === 'added'   ? ch.drawing : '',
         spec_before:    ch.row_type === 'deleted' ? ch.spec : '',
         spec_after:     ch.row_type === 'added'   ? ch.spec : '',
-        change_content: ch.qty_desc ? `数量变更 ${ch.qty_desc}` : kind,
+        change_content: ch.qty_desc
+          ? (kind === '数量变更' ? `数量变更 ${ch.qty_desc}` : ch.qty_desc)
+          : kind,
         row_type:       ch.row_type,
       })
       i++
@@ -308,10 +173,10 @@ function validate() {
                                   { ElMessage.warning('请填写变更原因说明'); return false }
   if (!form.change_subject.trim()){ ElMessage.warning('请填写变更主题'); return false }
   if (!form.change_desc.trim())   { ElMessage.warning('请填写变更内容说明'); return false }
-  // 在架提醒项必须全部勾选
-  const unchecked = reminders.value.filter(r => !reminderChecked[r.id])
-  if (unchecked.length) {
-    ElMessage.warning(`还有 ${unchecked.length} 条变更提醒未确认，请逐项核对并勾选后再导出`)
+  // 任一组存在门禁"禁止"级命中，不允许导出（禁止项必须先处理——下架门禁或移除该变更组）
+  const blocked = bomGroups.value.find(g => g.gateHits.block.length)
+  if (blocked) {
+    ElMessage.warning('存在被物料门禁"禁止"的物料，请先处理后再导出')
     return false
   }
   return true
@@ -372,6 +237,13 @@ async function handleCompare(idx) {
       g.compareResult = res.data
       g.confirmed = false   // 重新比对后需要重新确认
       if (res.data.stats.total === 0) ElMessage.info('两份 BOM 无差异')
+      // 对变更后（after）文件里出现的全部物料编码做门禁校验，不是只查 diff 出来的变动项——
+      // after_codes 是后端在 compare-bom 里顺带算好的去重列表（未变更的物料也在其中）
+      g.gateChecking = true
+      const hits = await checkMaterialCodes(res.data.after_codes || [])
+      g.gateHits   = { warn: hits.warn, block: hits.block }
+      g.gateHitsOk = hits.ok
+      g.gateChecking = false
     } else {
       ElMessage.error(res.message || '比对失败')
     }
@@ -431,15 +303,10 @@ const noteAdding   = ref(false)
 const editingNoteId   = ref(null)   // 当前正在编辑的笔记 id
 const editingNoteText = ref('')
 
-// 请求头携带用户名，后端按此隔离数据
-function _noteHeaders() {
-  return { 'X-Username': _user.username || '' }
-}
-
 async function fetchNotes() {
   notesLoading.value = true
   try {
-    const res = await http.get('/api/rd/notes', { headers: _noteHeaders() })
+    const res = await http.get('/api/rd/notes')
     if (res.success) notesList.value = res.data
   } finally {
     notesLoading.value = false
@@ -468,7 +335,7 @@ async function addNote() {
   if (!text) return
   noteAdding.value = true
   try {
-    const res = await http.post('/api/rd/notes', { content: text }, { headers: _noteHeaders() })
+    const res = await http.post('/api/rd/notes', { content: text })
     if (res.success) {
       notesList.value.unshift(res.data)
       noteInput.value = ''
@@ -493,7 +360,7 @@ function cancelEditNote() {
 async function saveEditNote(id) {
   const text = editingNoteText.value.trim()
   if (!text) return
-  const res = await http.put(`/api/rd/notes/${id}`, { content: text }, { headers: _noteHeaders() })
+  const res = await http.put(`/api/rd/notes/${id}`, { content: text })
   if (res.success) {
     const item = notesList.value.find(n => n.id === id)
     if (item) { item.content = res.data.content; item.text = res.data.content }
@@ -514,7 +381,7 @@ async function deleteNote(id) {
   } catch {
     return  // 用户点取消
   }
-  const res = await http.delete(`/api/rd/notes/${id}`, { headers: _noteHeaders() })
+  const res = await http.delete(`/api/rd/notes/${id}`)
   if (res.success) {
     notesList.value = notesList.value.filter(n => n.id !== id)
   } else {
@@ -540,7 +407,6 @@ function resetForm() {
   form.change_subject       = ''
   form.change_desc          = ''
   bomGroups.value           = [newGroup()]
-  Object.keys(reminderChecked).forEach(k => delete reminderChecked[k])
   form.ecr_code             = generateEcrCode(false)
   // 滚动归顶，避免视觉上看不出已重置
   nextTick(() => {
@@ -666,6 +532,9 @@ function resetForm() {
           <button class="btn-add-group" @click="addBomGroup">
             <el-icon><Plus /></el-icon> 添加变更
           </button>
+          <button v-if="canAdminRd" class="btn-mgmt-gate" @click="showMgmtDialog = true">
+            <el-icon><Setting /></el-icon> 管理物料门禁
+          </button>
         </div>
 
         <!-- 每个 BOM 变更组 -->
@@ -718,11 +587,17 @@ function resetForm() {
             </span>
           </div>
 
-          <!-- 确认栏：比对完成后显示，确认后才纳入预览/导出 -->
+          <!-- 门禁提示：比对完成后对 after 文件里的全部物料编码做过校验 -->
+          <div v-if="group.gateChecking" class="gate-checking-hint">门禁校验中…</div>
+          <MaterialGateBanner v-else-if="group.compareResult" :hits="group.gateHits" :ok="group.gateHitsOk" />
+
+          <!-- 确认栏：比对完成后显示，确认后才纳入预览/导出；命中门禁"禁止"时不可确认 -->
           <div v-if="group.compareResult" class="confirm-bar">
             <template v-if="!group.confirmed">
-              <el-button size="small" type="primary" @click="group.confirmed = true">确认此变更</el-button>
-              <span class="confirm-hint">确认后将纳入预览和导出</span>
+              <el-button size="small" type="primary" :disabled="!!group.gateHits.block.length" @click="group.confirmed = true">确认此变更</el-button>
+              <span class="confirm-hint">
+                {{ group.gateHits.block.length ? '存在被门禁"禁止"的物料，无法确认' : '确认后将纳入预览和导出' }}
+              </span>
             </template>
             <template v-else>
               <span class="confirmed-mark">✓ 已确认</span>
@@ -844,127 +719,10 @@ function resetForm() {
 
     </div><!-- /ecr-body -->
 
-    <!-- ── 底部：变更提醒项 ────────────────────── -->
-    <div
-      class="ecr-reminder"
-      :class="{ 'ecr-reminder--collapsed': reminderCollapsed }"
-      :style="reminderCollapsed ? {} : { flex: `0 0 ${reminderHeight}px` }"
-    >
-      <!-- 拖拽手柄 -->
-      <div
-        class="reminder-resize-handle"
-        :class="{ 'reminder-resize-handle--disabled': reminderCollapsed }"
-        @mousedown="startReminderResize"
-      />
-
-      <div class="section-label">
-        <!-- 合拢/展开箭头（最左） -->
-        <span class="reminder-collapse-icon" :class="{ 'reminder-collapse-icon--up': reminderCollapsed }" @click="reminderCollapsed = !reminderCollapsed">▾</span>
-        变更提醒
-        <span v-if="!reminderCollapsed" class="section-tip">在架提醒需全部勾选确认后方可导出</span>
-        <button v-if="canAdminRd && !reminderCollapsed" class="btn-mgmt-reminder" @click="openMgmtDialog">
-          <el-icon><Setting /></el-icon> 管理变更提醒
-        </button>
-      </div>
-
-      <template v-if="!reminderCollapsed">
-        <div v-if="remindersLoading" class="reminder-empty">加载中…</div>
-
-        <div v-else-if="!reminders.length" class="reminder-empty">
-          当前暂无在架变更提醒
-        </div>
-
-        <div v-else class="reminder-list">
-          <div
-            v-for="item in reminders"
-            :key="item.id"
-            class="reminder-card"
-            :class="{ 'reminder-card--checked': reminderChecked[item.id] }"
-          >
-            <el-checkbox
-              v-model="reminderChecked[item.id]"
-              class="reminder-check"
-            />
-            <div class="reminder-body">
-              <div class="reminder-content">{{ item.content }}</div>
-              <div v-if="item.notes" class="reminder-notes">{{ item.notes }}</div>
-              <div class="reminder-meta">发布于 {{ item.created_at }}{{ item.created_by ? '  ·  ' + item.created_by : '' }}</div>
-            </div>
-          </div>
-        </div>
-      </template>
-    </div>
-
   </div>
 
-  <!-- ── 管理变更提醒弹窗 ───────────────────────── -->
-  <el-dialog v-model="showMgmtDialog" title="管理变更提醒" width="min(720px, 94vw)" draggable :close-on-click-modal="false">
-    <!-- 新建表单 -->
-    <div class="mgmt-create-form">
-      <div class="mgmt-create-title">新建提醒</div>
-      <el-input
-        v-model="newReminder.content"
-        placeholder="提醒内容（必填）"
-        maxlength="200"
-        show-word-limit
-      />
-      <el-input
-        v-model="newReminder.notes"
-        type="textarea"
-        :rows="2"
-        placeholder="备注说明（选填，可补充背景或操作要求）"
-        style="margin-top:8px"
-      />
-      <div style="text-align:right;margin-top:8px">
-        <el-button type="primary" size="small" :loading="createLoading" @click="handleCreateReminder">
-          发布提醒
-        </el-button>
-      </div>
-    </div>
-
-    <el-divider />
-
-    <!-- 全部提醒列表 -->
-    <div v-if="mgmtLoading" style="text-align:center;padding:20px;color:var(--text-muted)">加载中…</div>
-    <div v-else-if="!mgmtReminders.length" style="text-align:center;padding:20px;color:var(--text-muted)">暂无记录</div>
-    <div v-else class="mgmt-list">
-      <div
-        v-for="item in mgmtReminders"
-        :key="item.id"
-        class="mgmt-item"
-        :class="{ 'mgmt-item--inactive': !item.is_active }"
-      >
-        <!-- 编辑模式 -->
-        <template v-if="editingId === item.id">
-          <div class="mgmt-item-main">
-            <el-input v-model="editForm.content" placeholder="提醒内容" maxlength="200" show-word-limit />
-            <el-input v-model="editForm.notes" type="textarea" :rows="2" placeholder="备注说明（选填）" style="margin-top:6px" />
-          </div>
-          <div class="mgmt-item-actions">
-            <el-button size="small" type="primary" :loading="editLoading" @click="handleUpdateReminder(item.id)">保存</el-button>
-            <el-button size="small" @click="cancelEdit">取消</el-button>
-          </div>
-        </template>
-        <!-- 展示模式 -->
-        <template v-else>
-          <div class="mgmt-item-main">
-            <div class="mgmt-item-content">{{ item.content }}</div>
-            <div v-if="item.notes" class="mgmt-item-notes">{{ item.notes }}</div>
-            <div class="mgmt-item-meta">
-              {{ item.created_at }}
-              <template v-if="item.created_by"> · {{ item.created_by }}</template>
-              <el-tag v-if="!item.is_active" size="small" type="info" style="margin-left:8px">已下架</el-tag>
-            </div>
-          </div>
-          <div class="mgmt-item-actions">
-            <el-button size="small" @click="startEdit(item)">编辑</el-button>
-            <el-button v-if="item.is_active" size="small" type="danger" plain @click="handleDeactivate(item.id)">下架</el-button>
-            <el-button v-else size="small" @click="handleActivate(item.id)">重新上架</el-button>
-          </div>
-        </template>
-      </div>
-    </div>
-  </el-dialog>
+  <!-- ── 物料门禁维护弹窗 ───────────────────────── -->
+  <MaterialGateManageDialog v-model="showMgmtDialog" />
 
   <!-- ── 预览弹窗 ──────────────────────────────── -->
   <el-dialog v-model="showPreview" title="变更申请单预览" width="min(1200px, 96vw)" :close-on-click-modal="true" draggable
@@ -1724,74 +1482,8 @@ function resetForm() {
 .detail-row--deleted    { background: rgba(192,64,42,0.07); }
 .preview-submitter      { margin-top: 6px; font-size: 11px; text-align: right; color: #555; }
 
-/* ── 变更提醒区：底部，高度可拖拽调整 ── */
-.ecr-reminder {
-  /* flex: 由内联 style 动态控制 */
-  width: 100%;
-  min-height: 0;
-  overflow-y: auto;
-  border-top: 2px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 0 0 20px;
-  position: relative;
-}
-.ecr-reminder--collapsed {
-  flex: 0 0 auto !important;
-  overflow: hidden;
-}
-.ecr-reminder::-webkit-scrollbar       { width: 4px; }
-.ecr-reminder::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.18); border-radius: 2px; }
-.ecr-reminder::-webkit-scrollbar-track { background: transparent; }
-
-/* ── 拖拽手柄 ── */
-.reminder-resize-handle {
-  width: 100%;
-  height: 6px;
-  flex-shrink: 0;
-  cursor: ns-resize;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.15s;
-  margin-bottom: 8px;
-}
-.reminder-resize-handle::after {
-  content: '';
-  display: block;
-  width: 40px;
-  height: 3px;
-  background: var(--border);
-  border-radius: 2px;
-  transition: background 0.15s, width 0.15s;
-}
-.reminder-resize-handle:hover::after {
-  background: var(--accent);
-  width: 60px;
-}
-.reminder-resize-handle--disabled {
-  cursor: default;
-  pointer-events: none;
-}
-
-/* ── 合拢/展开箭头 ── */
-.reminder-collapse-icon {
-  font-size: 16px;
-  color: var(--text-muted);
-  cursor: pointer;
-  user-select: none;
-  display: inline-block;
-  transition: transform 0.2s, color 0.15s;
-  transform: rotate(0deg);
-  line-height: 1;
-  flex-shrink: 0;
-}
-.reminder-collapse-icon:hover { color: var(--accent); }
-.reminder-collapse-icon--up   { transform: rotate(-90deg); }
-
-/* 管理按钮 */
-.btn-mgmt-reminder {
+/* ── 物料门禁维护入口按钮（材料明细表 section-label 里）── */
+.btn-mgmt-gate {
   margin-left: auto;
   display: flex;
   align-items: center;
@@ -1809,118 +1501,14 @@ function resetForm() {
   letter-spacing: 0;
   font-weight: 400;
 }
-.btn-mgmt-reminder:hover { color: var(--accent); border-color: var(--accent); }
+.btn-mgmt-gate:hover { color: var(--accent); border-color: var(--accent); }
 
-/* 空态 */
-.reminder-empty {
+.gate-checking-hint {
   font-size: 12px;
   color: var(--text-muted);
-  padding: 12px 0;
-  text-align: center;
-  background: rgba(255,255,255,0.4);
-  border: 1px dashed var(--border);
-  border-radius: 8px;
+  padding: 6px 0;
 }
 
-/* 提醒列表横向排布 */
-.reminder-list {
-  display: flex;
-  flex-direction: row;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-/* 每张提醒卡片 */
-.reminder-card {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  flex: 1 1 260px;
-  min-width: 0;
-  padding: 10px 14px;
-  background: #fff;
-  border: 2px solid #e8b96b;
-  border-left: 5px solid #c4883a;
-  border-radius: 8px;
-  box-shadow: 0 1px 4px rgba(196,136,58,0.10);
-  transition: border-color 0.15s, background 0.15s, opacity 0.15s;
-}
-.reminder-card--checked {
-  border-color: rgba(38,120,64,0.4);
-  border-left-color: #267840;
-  background: rgba(38,120,64,0.03);
-  opacity: 0.8;
-}
-.reminder-check { flex-shrink: 0; margin-top: 2px; }
-
-.reminder-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-
-.reminder-content {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-  line-height: 1.4;
-  word-break: break-word;
-}
-.reminder-card--checked .reminder-content {
-  text-decoration: line-through;
-  color: var(--text-muted);
-}
-.reminder-notes {
-  font-size: 11px;
-  color: var(--text-muted);
-  line-height: 1.4;
-  word-break: break-word;
-  white-space: pre-wrap;
-}
-.reminder-meta {
-  font-size: 10px;
-  color: #a09080;
-  margin-top: 2px;
-}
-
-/* ── 管理弹窗样式 ── */
-.mgmt-create-form {
-  padding: 4px 0 0;
-}
-.mgmt-create-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-muted);
-  margin-bottom: 8px;
-}
-
-.mgmt-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-height: 360px;
-  overflow-y: auto;
-}
-.mgmt-list::-webkit-scrollbar       { width: 4px; }
-.mgmt-list::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15); border-radius: 2px; }
-.mgmt-list::-webkit-scrollbar-track { background: transparent; }
-
-.mgmt-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 10px 14px;
-  background: #fff;
-  border: 1px solid var(--border);
-  border-left: 4px solid var(--accent);
-  border-radius: 8px;
-  transition: opacity 0.15s;
-}
-.mgmt-item--inactive {
-  opacity: 0.5;
-  border-left-color: #bbb;
-}
-.mgmt-item-main    { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.mgmt-item-content { font-size: 13px; font-weight: 600; color: var(--text-primary); word-break: break-word; }
-.mgmt-item-notes   { font-size: 12px; color: var(--text-muted); word-break: break-word; white-space: pre-wrap; }
-.mgmt-item-meta    { font-size: 11px; color: #a09080; margin-top: 2px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
-.mgmt-item-actions { flex-shrink: 0; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
 
 </style>
 

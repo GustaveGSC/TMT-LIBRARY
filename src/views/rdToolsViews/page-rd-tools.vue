@@ -4,12 +4,14 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowLeft, HomeFilled } from '@element-plus/icons-vue'
 import WindowControls from '@/components/common/WindowControls.vue'
-import { PhHouseLine, PhArrowsLeftRight, PhClipboardText, PhBell, PhCurrencyDollar } from '@phosphor-icons/vue'
+import { PhHouseLine, PhArrowsLeftRight, PhClipboardText, PhBell, PhCurrencyDollar, PhShieldWarning } from '@phosphor-icons/vue'
 import EcrForm from '@/components/rdTools/EcrForm.vue'
 import EcnForm from '@/components/rdTools/EcnForm.vue'
 import PdmToBomForm from '@/components/rdTools/PdmToBomForm.vue'
 import BomCost from '@/components/rdTools/BomCost.vue'
+import MaterialGateCheckPage from '@/components/rdTools/MaterialGateCheckPage.vue'
 import AppBottomBar from '@/components/common/AppBottomBar.vue'
+import { smartBack } from '@/utils/smartBack'
 
 // ── 路由 ──────────────────────────────────────────
 const router = useRouter()
@@ -24,6 +26,7 @@ const tabs = [
   { key: 'ecr',     label: '变更申请单填写', icon: PhClipboardText },
   { key: 'ecn',     label: '变更通知单填写', icon: PhBell },
   { key: 'cost',    label: 'BOM成本',        icon: PhCurrencyDollar },
+  { key: 'gate',    label: '材料清单校验',   icon: PhShieldWarning },
 ]
 
 // ── 生命周期 ──────────────────────────────────────
@@ -32,7 +35,7 @@ onMounted(() => { window.electronAPI?.maximizeApp?.() })
 // ── 方法 ──────────────────────────────────────────
 function handleBack() {
   window.electronAPI?.unmaximizeApp?.()
-  router.back()
+  smartBack(router)
 }
 
 // 返回主页：与 handleBack 区别是不依赖浏览历史，始终回到 /index
@@ -111,6 +114,11 @@ function handleHome() {
       <!-- BOM 成本 -->
       <div v-show="activeTab === 'cost'" class="tab-panel cost-panel">
         <BomCost />
+      </div>
+
+      <!-- 材料清单校验 -->
+      <div v-show="activeTab === 'gate'" class="tab-panel gate-panel">
+        <MaterialGateCheckPage />
       </div>
 
     </main>
@@ -231,7 +239,8 @@ function handleHome() {
 .ecr-panel,
 .ecn-panel,
 .pdm2bom-panel,
-.cost-panel {
+.cost-panel,
+.gate-panel {
   display: flex;
   flex-direction: column;
   overflow: hidden;

@@ -6,6 +6,10 @@ import { UploadFilled, RefreshRight, Download, ArrowDown } from '@element-plus/i
 import { PhArrowsLeftRight } from '@phosphor-icons/vue'
 import http from '@/api/http'
 import { downloadBlob, pickFile } from '@/utils/download.js'
+import { useMaterialGateCheck } from '@/composables/useMaterialGateCheck'
+import MaterialGateBanner from './MaterialGateBanner.vue'
+
+const { checkMaterialCodes } = useMaterialGateCheck()
 
 // ── 响应式状态 ────────────────────────────────────
 // 'idle' | 'processing' | 'error' | 'ready'
@@ -21,6 +25,19 @@ const tableData = ref([])             // 2D 字符串数组，可编辑
 const errorMap = ref({})              // { "rowIndex": [colIndex, ...] }
 const requiredColIndices = ref([])    // 必填列索引
 const totalLevel = ref(0)             // 最大层级深度
+
+// 物料门禁校验结果
+const gateHits    = ref({ warn: [], block: [] })
+const gateHitsOk  = ref(true)
+const gateChecking = ref(false)
+
+async function runGateCheck(codes) {
+  gateChecking.value = true
+  const hits = await checkMaterialCodes(codes)
+  gateHits.value   = { warn: hits.warn, block: hits.block }
+  gateHitsOk.value = hits.ok
+  gateChecking.value = false
+}
 
 // 列宽（拖拽调整）
 const colWidths = ref([])   // 每列宽度（px），与 columns 同步初始化
@@ -90,6 +107,7 @@ async function selectFile() {
   columns.value = []
   tableData.value = []
   errorMap.value = {}
+  gateHits.value = { warn: [], block: [] }
 }
 
 // 发送文件到后端处理
@@ -128,6 +146,7 @@ async function processFile() {
     if (!errCount) {
       ElMessage.success(`处理完成，共 ${tableData.value.length} 行`)
     }
+    runGateCheck(data.material_codes || [])
   } catch {
     ElMessage.error('请求失败，请检查后端服务')
     state.value = 'idle'
@@ -159,6 +178,11 @@ function revalidate() {
     state.value = 'ready'
     ElMessage.success('校验通过，可以导出')
   }
+  // 品号可能在人工修正缺失项时被改动，重新扫一遍门禁
+  const codeIdx = columns.value.indexOf('品号')
+  if (codeIdx >= 0) {
+    runGateCheck([...new Set(tableData.value.map(row => row[codeIdx]).filter(Boolean))])
+  }
 }
 
 // 判断 ArrayBuffer 是否为合法 xlsx（ZIP magic bytes: 50 4B 03 04）
@@ -181,6 +205,10 @@ function decodeErrorMsg(buf, fallback = '导出失败') {
 // 导出 ERP 物料 + BOM
 async function exportAll() {
   if (exporting.value) return
+  if (gateHits.value.block.length) {
+    ElMessage.warning('存在被物料门禁"禁止"的物料，无法导出')
+    return
+  }
   exporting.value = true
   const erpName = `ERP-${firstCode.value}.xlsx`
   const bomName = `BOM-${firstCode.value}.xlsx`
@@ -396,8 +424,10 @@ function isErrorRow(ri) {
         <div class="ready-desc">
           共 {{ tableData.length }} 行数据，品号：{{ firstCode }}
         </div>
+        <div v-if="gateChecking" class="gate-checking-hint">门禁校验中…</div>
+        <MaterialGateBanner v-else :hits="gateHits" :ok="gateHitsOk" style="width:min(560px, 90%)" />
         <div class="export-buttons">
-          <button class="btn-export" :disabled="exporting" @click="exportAll">
+          <button class="btn-export" :disabled="exporting || !!gateHits.block.length" @click="exportAll">
             <el-icon><Download /></el-icon>
             {{ exporting ? '导出中…' : '导出（ERP 物料 + BOM）' }}
           </button>
@@ -690,6 +720,7 @@ function isErrorRow(ri) {
 }
 .ready-title { font-size: 16px; font-weight: 600; color: var(--text-primary); }
 .ready-desc  { font-size: 13px; color: var(--text-muted); }
+.gate-checking-hint { font-size: 12px; color: var(--text-muted); }
 
 .export-buttons {
   display: flex;
