@@ -6,7 +6,7 @@
 |---|---|
 | 路由 | `/rd-tools` |
 | 页面组件 | `src/views/rdToolsViews/page-rd-tools.vue` |
-| 权限码 | `rd:view`（查看）、`rd:edit`（编辑）、`rd:admin`（管理变更提醒） |
+| 权限码 | `rd:view`（查看）、`rd:edit`（编辑）、`rd:admin`（管理物料门禁） |
 | composable | `canViewRd / canEditRd / canAdminRd`（来自 `usePermission`） |
 
 页面挂载时调用 `window.electronAPI.maximizeApp()`，返回时调用 `unmaximizeApp()`。
@@ -21,8 +21,10 @@
 | `pdm2bom` | PDM转BOM | `PdmToBomForm.vue` | 已上线 |
 | `ecr` | 变更申请单填写 | `EcrForm.vue` | 已上线 |
 | `ecn` | 变更通知单填写 | `EcnForm.vue` | 已上线 |
+| `cost` | BOM成本 | `BomCost.vue` | 已上线 |
+| `gate` | 材料清单校验 | `MaterialGateCheckPage.vue` | 已上线（2026-09-25） |
 
-图标使用 `@phosphor-icons/vue`（`PhHouseLine / PhArrowsLeftRight / PhClipboardText / PhBell`）。
+图标使用 `@phosphor-icons/vue`（`PhHouseLine / PhArrowsLeftRight / PhClipboardText / PhBell / PhCurrencyDollar / PhShieldWarning`）。
 
 ---
 
@@ -114,13 +116,36 @@
 - 取替代关系（col 10）：cancel+add 对合并两行，填 `change_kind`；单行填 `qty_desc` 或 `change_kind`
 - 填写人员行：右对齐
 
-### 变更提醒区（底部）
+### 物料门禁校验（2026-09-25 起替代原"变更提醒"，已上线）
 
-- 从 `GET /api/rd/reminders` 加载在架提醒，挂载时调用
-- 所有在架提醒必须**全部勾选**才能通过导出校验
-- `canAdminRd` 用户可打开「管理变更提醒」弹窗（新建 / 编辑 / 下架 / 重新上架）
-- 顶部拖拽手柄可调整区域高度（80px ~ 520px，`reminderHeight` ref）
-- section-label 最左侧箭头图标（`▾`）可折叠/展开，折叠时隐藏内容和管理按钮
+> 交接文档：`handoff/2026-09-25-codex-rd-material-gate-backend.md`（需求）、
+> `handoff/2026-09-25-codex-rd-material-gate-backend-complete.md`（Codex 实现回执）。
+> 迁移 `20260925_01` 已在生产执行（`ecr_reminder` 表已删除，下架前 11 条历史记录归档在
+> `handoff/archives/2026-09-25-ecr_reminder-final-backup.json`，其中 3 条是下架前仍在架的提醒，
+> 内容未自动迁移为门禁，如有需要按业务含义手动在物料门禁里重建）。
+
+原"变更提醒"（自由文本 + 全部勾选确认才能导出，挂在 `EcrForm.vue` 底部可拖拽区域）已整体移除，
+改为按**物料编码**登记门禁（级别 `warn` 提醒 / `block` 禁止），在两个上传流程里自动校验：
+
+- **变更申请单填写**（`EcrForm.vue`）：每个 BOM 变更组比对完成后，对 `compare-bom` 返回的
+  `after_codes`（after 文件里出现的全部物料编码，不止 diff 出来的变动项）调用
+  `POST /api/rd/material-gates/check`；命中 `block` 时该组"确认此变更"按钮禁用，无法纳入导出；
+  命中 `warn` 仅提示不阻断。`canAdminRd` 用户可在"材料明细表" section-label 里点「管理物料门禁」
+  打开 `MaterialGateManageDialog.vue`。
+- **PDM转BOM**（`PdmToBomForm.vue`）：`process` 返回后对 `material_codes`（去重后的"品号"列，
+  注意这里列名是**品号**不是物料编码，两个上传流程的源文件格式不同）做同样校验；`revalidate()`
+  人工改过品号后会重新扫一遍；命中 `block` 时导出按钮禁用。
+- **材料清单校验**（独立 tab，`MaterialGateCheckPage.vue`）：上传任意带"物料编码"或"品号"列的
+  Excel，调 `POST /api/rd/material-gates/check-file`，单独展示命中结果，不生成任何单据，也不依赖
+  前两个流程。
+
+共用组件：
+- `src/composables/useMaterialGateCheck.js` — 包装 `check` 接口调用，返回 `{warn, block, ok}`
+  （`ok:false` 表示接口异常，调用方需要提示但不当成"无命中"处理）
+- `src/components/rdTools/MaterialGateBanner.vue` — 命中结果展示（红色 block 不可关闭，黄色 warn
+  可关闭），三处校验点共用
+- `src/components/rdTools/MaterialGateManageDialog.vue` — 门禁 CRUD 弹窗（新增/编辑/上下架），
+  `EcrForm.vue` 和 `MaterialGateCheckPage.vue` 都嵌了一份
 
 ### 个人笔记
 
@@ -230,13 +255,15 @@
 | POST | `/ecr/export` | `rd:view` | 生成 ECR xlsx，返回 arraybuffer |
 | POST | `/ecr/parse-ecr` | `rd:view` | 解析 ECR xlsx/xls，返回表单字段和变更明细（含 substitution/handling/responsible_person） |
 | POST | `/ecr/export-ecn` | `rd:view` | 生成 ECN xlsx，返回 arraybuffer |
-| POST | `/ecr/compare-bom` | `rd:view` | 比对两份 BOM，返回 `{ changes, stats }` |
-| GET | `/reminders` | `rd:view` | 返回所有在架提醒 |
-| GET | `/reminders/all` | `rd:admin` | 返回全部提醒（含下架历史） |
-| POST | `/reminders` | `rd:admin` | 新建变更提醒 |
-| PUT | `/reminders/<id>` | `rd:admin` | 编辑提醒内容/备注 |
-| PUT | `/reminders/<id>/deactivate` | `rd:admin` | 下架提醒（软删除） |
-| PUT | `/reminders/<id>/activate` | `rd:admin` | 重新上架提醒 |
+| POST | `/ecr/compare-bom` | `rd:edit` | 比对两份 BOM，返回 `{ changes, stats, after_codes }` |
+| GET | `/material-gates` | `rd:view` | 返回所有在架门禁 |
+| GET | `/material-gates/all` | `rd:admin` | 返回全部门禁（含下架历史） |
+| POST | `/material-gates` | `rd:admin` | 新建门禁（`code/level/reason`），同编码已有在架记录则拒绝 |
+| PUT | `/material-gates/<id>` | `rd:admin` | 编辑门禁 |
+| PUT | `/material-gates/<id>/deactivate` | `rd:admin` | 下架门禁（软删除） |
+| PUT | `/material-gates/<id>/activate` | `rd:admin` | 重新上架门禁（同编码已有其它在架记录则拒绝） |
+| POST | `/material-gates/check` | `rd:edit` | body `{codes:[...]}` → `{warn:[{code,reason}], block:[{code,reason}]}` |
+| POST | `/material-gates/check-file` | `rd:edit` | 上传 `.xlsx`（字段名 `file`），优先识别"物料编码"列，其次"品号"列，返回 `{scanned_count, warn, block}` |
 | GET | `/notes` | `rd:view` | 返回当前用户笔记（按 `X-Username` 隔离，倒序） |
 | POST | `/notes` | `rd:view` | 新建笔记 |
 | PUT | `/notes/<id>` | `rd:view` | 编辑笔记内容（只能改自己的） |
@@ -250,16 +277,13 @@
 
 ## 数据库
 
-| 表 | 模型 | 文件 |
-|---|---|---|
-| `ecr_reminder` | `EcrReminder` | `backend/database/models/rd/__init__.py` |
-| `ecr_note` | `EcrNote` | `backend/database/models/rd/__init__.py` |
+| 表 | 模型 | 文件 | 状态 |
+|---|---|---|---|
+| `material_gate` | `MaterialGate` | `backend/database/models/rd/__init__.py` | 已上线（迁移 `20260925_01`），字段：`id / code / level / reason / is_active / created_by / created_at / updated_at`，`code` 上有非唯一索引，"同编码只允许一条在架"由应用层校验 |
+| `ecr_note` | `EcrNote` | `backend/database/models/rd/__init__.py` | 已上线，字段：`id / username / content / created_at`（建表脚本：`backend/create_ecr_notes.py`） |
 
-`ecr_reminder` 字段：`id / content / notes / is_active / created_by / created_at / updated_at`
-
-`ecr_note` 字段：`id / username / content / created_at`（建表脚本：`backend/create_ecr_notes.py`）
-
-建表脚本：`backend/create_ecr_reminders.py`
+`ecr_reminder`（`EcrReminder`）已随这次改动**整体移除**（表+model+repository+service+routes），
+迁移里会 `DROP TABLE ecr_reminder`，不保留历史数据（用户明确要求整体替换为门禁机制）。
 
 ---
 
