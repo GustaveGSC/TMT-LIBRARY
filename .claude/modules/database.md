@@ -313,8 +313,12 @@ product_tag_category
   # 不受 is_shipping_dim/shipping_dim_enabled 配置影响；NULL 为普通产品标签维度
 
 product_tag
-  id, name(UNIQUE), color(default:#c4883a), category_id(FK→product_tag_category nullable),
+  id, name, color(default:#c4883a), category_id(FK→product_tag_category nullable),
   shipping_dim_enabled(BOOLEAN DEFAULT True), created_at
+  # UNIQUE INDEX uq_product_tag_category_name(category_id, name) —— 2026-08-18 起唯一性按分类范围（含"未分类"=NULL），
+  # 不同分类（或未分类）下允许同名标签独立存在；同一分类下改名/归类若撞到已存在的同名标签，视为合并（保留目标标签的
+  # id/属性，原标签的 product_finished_tag/product_resource_tag/product_detail_package_tag 关联及三处 tag_condition JSON
+  # 中的 tag_id 引用全部迁移到目标标签，原标签被删除）。归类合并逻辑：TagRepository.merge_into()
   # shipping_dim_enabled=False 的标签在其分类作为发货维度时不参与聚合（也不落入任何兜底分组，直接不出现）
   # 同一产品在同一分类下若被打了多个标签，按标签维度聚合时该产品的发货记录会在多个标签分组中重复计入（多对多设计的已知边界情况，不做去重）
 
@@ -493,10 +497,12 @@ standby 中的退役旧代不会在发布后立即 TRUNCATE，以保留验收窗
 - 重复启动返回 409 和当前持有租约的 task_id；终态释放租约。
 - 新 worker 启动时把遗留 pending/running 标记为 interrupted；终态保留 7 天。
 - 生命周期业务更新使用单一事务，任务进度通过独立连接提交。
-### material_gate（研发物料门禁，2026-09-25）
+### material_gate（研发物料门禁，2026-09-25，`name` 列 2026-09-26 补充）
 
 按物料编码记录研发工具的提醒/阻断规则，替代并删除旧 `ecr_reminder` 自由文本表。字段：
-`id`、`code VARCHAR(64)`（普通索引）、`level VARCHAR(16)`（仅 `warn`/`block`）、
-`reason VARCHAR(500)`、`is_active`、`created_by`、`created_at`、`updated_at`。
-同一编码只允许一条在架记录，由 service 层在新增、编辑在架记录和重新上架时校验；数据库不设唯一约束，
-以允许保留下架历史。
+`id`、`code VARCHAR(64)`（普通索引）、`name VARCHAR(200)`（必填，命中门禁时展示的名称，
+迁移 `20260926_01` 补充，早期版本曾计划拆成 `name`+`spec` 两列，用户反馈后改回单一字段）、
+`level VARCHAR(16)`（仅 `warn`/`block`）、`reason VARCHAR(500)`、`is_active`、`created_by`、
+`created_at`、`updated_at`。同一编码只允许一条在架记录，由 service 层在新增、编辑在架记录和
+重新上架时校验；数据库不设唯一约束，以允许保留下架历史。硬删除走 `DELETE` 接口（真正从表中移除，
+不可恢复），和 `is_active` 软删除是两条独立路径。

@@ -50,22 +50,51 @@ PUT    /api/config/login-mottos                       # ops:login-config:edit；
 POST   /api/account/login                             # 公开；登录时自动写入 user_login_log（成功/失败均记录）；失败受账号+IP双维度限流
 POST   /api/account/register                          # 公开但默认关闭（通过 ALLOW_REGISTER=true 开启）；注册后无角色/业务权限，仅可使用无需权限码的通用工具；同IP每小时最多5次
 POST   /api/account/logout                            # 清除会话/CSRF Cookie；幂等；有效会话请求需通过 CSRF
+GET    /api/account/me                                # 2026-09-04 新增；任意已登录用户（无需具体权限码），返回最新 user.to_dict()
+                                                      # （含最新 roles/permissions）；未登录/会话失效直接 401。前端路由守卫用它在
+                                                      # 进入受保护页面前主动确认会话真的有效，而不是等业务接口 401 才发现——收藏夹
+                                                      # 直接打开深层路由这种场景下，本地 localStorage 缓存的登录态和 8 小时计时器
+                                                      # 可能"看起来没过期"，但后端 Cookie 已经失效（账号被禁用/权限变更/token_version
+                                                      # 变化），只调这一个接口即可提前发现并跳登录页
+PUT    /api/account/me/profile                        # 2026-09-04 新增；任意已登录用户；body {department_id, employee_no}，
+                                                      # 两者都必填（不像 PUT /users/:id 那样可选）；登录后强制补充资料专用，
+                                                      # 前端路由守卫检测到 user.department_id/employee_no 缺失时强制跳转到
+                                                      # /complete-profile，提交这个接口成功后才放行到其它页面
+GET    /api/account/departments                       # 任意已登录用户（无需权限码）；补充资料页/用户管理页下拉框用
+POST   /api/account/departments                       # ops:department:edit；body {name, sort_order?}
+PUT    /api/account/departments/:id                   # ops:department:edit；body {name?, sort_order?}
+DELETE /api/account/departments/:id                   # ops:department:edit；删除后原属该部门的用户 department_id 变 NULL
+                                                      # （FK ondelete=SET NULL），下次登录会被强制补充资料页拦下重新选择
 GET    /api/account/login-logs                        # developer:analytics:view；?page&per_page&username
 GET    /api/account/login-stats/dau                   # developer:analytics:view；?days=30 → [{date,count}]
 GET    /api/account/login-stats/users                 # developer:analytics:view → [{username,display_name,total,success_count,failed_count,last_login_at,identity_type}]
 GET    /api/account/users                             # account:users:view
-POST   /api/account/users                             # account:users:edit
-PUT    /api/account/users/:id                         # account:users:edit；仅允许 display_name，禁止 roles/token_version/status/password 等 mass assignment
+POST   /api/account/users                             # account:users:edit；body 可选带 department_id/employee_no（2026-09-04起，管理员建号时可代填）
+PUT    /api/account/users/:id                         # account:users:edit；白名单仅 display_name/department_id/employee_no（2026-09-04 新增后两个），
+                                                      # 禁止 roles/token_version/status/password 等 mass assignment
 DELETE /api/account/users/:id                         # account:users:edit
 PUT    /api/account/users/:id/password                # 本人，或 account:users:edit
 PUT    /api/account/users/:id/status                  # account:users:edit
 POST   /api/account/users/:id/reset-password          # account:users:edit；admin/author 受保护账号仅 admin 角色操作者可重置
 POST   /api/account/users/:id/roles/:id               # account:users:edit；admin 为冻结存量角色，任何操作者均不可再分配
 DELETE /api/account/users/:id/roles/:id               # account:users:edit；撤销 admin 角色额外要求操作者已是 admin
-GET    /api/account/roles                             # account:roles:view
-POST   /api/account/roles                             # account:roles:edit
+GET    /api/account/roles                             # account:roles:view；返回含 category（system 或任意自定义分组名）
+POST   /api/account/roles                             # account:roles:edit；body {name, description?, category?}，category 默认 'function'，
+                                                      # 可传任意非空字符串（≤20字）作为自定义分组名，唯独不能传保留字 'system'
+PUT    /api/account/roles/:id                         # account:roles:edit；2026-09-04 新增（此前只能新增/删除，不能改名/改描述）
+                                                      # body {name?, description?, category?}；内置 admin 角色名不可改（改描述可以），
+                                                      # 角色改名会批量失效该角色所有持有者的 token（JWT payload 里的 roles 是名字快照）；
+                                                      # category 可改成任意自定义分组名（≤20字，不能是 'system'），
+                                                      # category='system' 的角色（内置标准角色包）分类不可改，接口拦截
+GET    /api/account/role-categories                   # account:roles:view；返回当前所有角色实际在用的自定义分组名列表（不含 system），
+                                                      # 供前端新增/编辑角色时的分组下拉参考已有名称
+PUT    /api/account/role-categories/:name             # account:roles:edit；2026-09-04 新增，重命名分组（body {new_name}）——
+                                                      # 分组不是独立表，重命名=批量把 category==:name 的所有角色改成 new_name；
+                                                      # :name='system' 或 new_name='system'/空/超长会被拒绝；不涉及权限，不失效 token
 DELETE /api/account/roles/:id                         # account:roles:edit；内置 admin 角色不可删除
-POST   /api/account/roles/:id/permissions/:code       # account:roles:edit
+POST   /api/account/roles/:id/permissions/:code       # account:roles:edit；给角色新增权限，批量失效该角色所有持有者的 token
+DELETE /api/account/roles/:id/permissions/:code       # account:roles:edit；2026-09-04 新增，从角色移除权限，之前只有新增没有移除
+                                                      #   （管理页"绑定权限"弹窗取消勾选不会生效），同样批量失效受影响用户
 GET    /api/account/permissions                       # account:roles:view
 POST   /api/account/permissions                       # account:roles:edit
 PUT    /api/account/permissions/:id                   # account:roles:edit
@@ -97,10 +126,11 @@ DELETE /api/product/finished/:id/packaged/:id
 
 ## /api/material（物料库）
 
-权限：GET 需要 `product:view`，PUT/POST 需要 `product:edit`；响应统一为
+权限（2026-09-04 起独立于产品库，此前借用 product:view/edit + rd:view/edit）：响应统一为
 `{success,message,data}`。
 
 ```
+# material_bp：GET 需要 material:view，PUT/POST/DELETE 需要 material:edit
 GET  /api/material/group-categories
 PUT  /api/material/group-categories/:group_code
 GET  /api/material/items
@@ -118,6 +148,8 @@ GET  /api/material/combos/:id
 POST /api/material/combos
 PUT  /api/material/combos/:id
 DELETE /api/material/combos/:id
+
+# material_cost_bp：全部方法统一需要 material:price（查看/编辑不分级，与 rd:view/edit 的两档设计不同）
 GET  /api/material/items/:code/prices
 POST /api/material/items/:code/prices
 GET  /api/material/items/:code/usages
@@ -130,6 +162,10 @@ POST /api/material/suppliers
 PATCH /api/material/suppliers/:id
 DELETE /api/material/suppliers/:id
 ```
+
+`GET /api/material/items` 和 `GET /api/material/items/:code` 额外按 `material:price` 有无决定是否返回成本字段
+（`include_cost`），不是单独的权限分支。物料库页面（`/material`）里的"导入数据"tab 走的是产品库 BOM/成本导入接口
+（`POST /api/product/import`，挂在 `product_bp`），仍按 `product:view/edit` 鉴权，不受本次拆分影响。
 
 - `GET group-categories` 返回全部 ERP 分组：
   `{group_code,group_name,material_count,override_count,is_finished,is_packaged,is_semi,is_material,is_useless,remark}`。
@@ -307,6 +343,10 @@ POST   /api/shipping/import/cancel/:task_id           # 旧取消入口，转发
 GET    /api/shipping/operators                        # 获取所有最近操作人及其分类
 POST   /api/shipping/operators/classify               # 批量保存操作人分类 [{operator, type}]
 GET    /api/shipping/stats                            # 统计摘要
+GET    /api/shipping/dashboard-images                 # 2026-09-14；图表 tooltip 图片增强；?dim=series|model&code=xxx；
+                                                      # dim=model 返回该型号自己的图（型号与成品一一对应只有一张）；
+                                                      # dim=series 返回该系列下所有型号各自的图；挂 shipping 蓝图只要求
+                                                      # shipping:view，不要求 product:view（消费方是发货看板）
 GET    /api/shipping/shipped-dates                    # 所有发货记录的 shipped_date（去重升序，不含销退日期）
 POST   /api/shipping/resolve                          # 刷新 is_stale 订单的成品组合；旧 /task-status 轮询入口保留，状态已持久化
                                                       # 默认最多10000个(order_no,source)，可用
@@ -337,14 +377,26 @@ POST   /api/shipping/equivalents                      # 新增 {code_a, code_b, 
 DELETE /api/shipping/equivalents/<id>                 # 删除通用件对，并标记受影响订单 stale
 
 上述仓库过滤、通用件对、以及成品-产成品关联写接口均复用发货数据变更租约：若导入或重算正在运行，返回 `409 { success:false, data:{task_id} }`。成功响应的 `data` 保留原字段，并新增 `stale_pairs`、`stale_limit`、`requires_full_resolve`。规则保存与 `is_stale` 标记在同一事务提交；当 `requires_full_resolve=true` 时，配置已保存且不会部分重算，调用方应引导用户执行完整重建。
+GET    /api/shipping/orders                           # 订单明细分页查询（`ShippingTable.vue`）；?source=shipping|finance（默认shipping，2026-09-01起必填区分，
+                                                      #   之前遗漏 source 过滤会把两个来源混在同一结果集——两者是独立数据管道，同一订单号可能在两边各有一行，口径不同不能混看）
+                                                      #   ?trade_type=all|domestic|foreign|non_sales（默认all，2026-09-02 新增，2026-09-03 加 non_sales；仅
+                                                      #   source=finance 时生效，按人工映射 status 三选一精确匹配过滤，与 source=shipping 时固定用 all 一致，
+                                                      #   口径对齐 get_chart_data；non_sales 传给 source=shipping 时不产生任何过滤效果（等同 all）——发货端
+                                                      #   订单没有 customer_alias（恒为空，见 database.md shipping_order_finished），无法关联客户映射表，
+                                                      #   不存在"非销售"这个维度）
+                                                      #   其余 filters：ecommerce_order_no/finished_code/finished_name/category_name/series_code/model_code/
+                                                      #   channel_name/channel_code/channel_org_name/province/city/district（模糊匹配）、date_start/date_end、
+                                                      #   page/size（size<=200）、sort_field/sort_order
 GET    /api/shipping/chart-options                    # 渠道名和省份去重列表；?source=shipping|finance 过滤来源
                                                       #   返回额外含 tag_dimensions: [{category_id,name,color,tags:[{id,name}],value_kind:'id'|'name'}]
                                                       #   source=finance 的 finance_dimension_field=country/brand 分类取客户映射 country/brand 去重值，value_kind='name'（前端须传 tag_names）；其余维度为产品标签，value_kind='id'
                                                       #   source=finance 另含 map_dimension_category_id（country 财务维度 id）；source=shipping 为 null，且不返回任一财务维度
                                                       #   （已配置 is_shipping_dim=1 的标签分类及其 shipping_dim_enabled=1 的标签，见 database.md product_tag_category）
-POST   /api/shipping/chart-data                       # 图表聚合数据，body 含 source('shipping'|'finance')、trade_type('all'|'domestic'|'foreign')
-                                                      #   source=shipping：trade_type 保留历史 FTP 产品判断（前端固定传 all）
-                                                      #   source=finance：domestic/foreign 仅按人工映射 status=domestic/export；pending、non_sales、未映射均不进入两者，all 仍包含全部
+POST   /api/shipping/chart-data                       # 图表聚合数据，body 含 source('shipping'|'finance')、trade_type('all'|'domestic'|'foreign'|'non_sales')
+                                                      #   source=shipping：trade_type 保留历史 FTP 产品判断（前端固定传 all，non_sales 无效果同 all）
+                                                      #   source=finance：domestic/foreign/non_sales 精确匹配人工映射 status 三者之一；pending、未映射均不进入
+                                                      #   任何一个非 all 选项，all 仍包含全部（含 pending/non_sales/未映射）。non_sales 为 2026-09-03 新增，
+                                                      #   之前"非销售客户"（如赠品/样品）只能隐含在 all 汇总里，看不到单独数据
                                                       #   group_by 除固定维度外，可传 'tag:<category_id>' 按该标签分类聚合（需先在数据配置中启用该分类为发货维度）
                                                       #   source=finance 且标签分类 finance_dimension_field=country/brand 时，按人工映射的 country/brand 聚合；仅 status=export 且值非空的数据参与
                                                       #   按“品牌”聚合的 item 额外含 name（该品牌对应的一个或多个国家，以逗号分隔），供 tooltip 副标题显示；地域聚合不含 name
@@ -530,14 +582,15 @@ POST   /api/rd/pdm2bom/process            # pdm_file：PDM xlsx；返回 columns
 按物料编码登记门禁（`level`: `warn` 提醒 / `block` 禁止），替代原来的 `ecr_reminder`。
 
 ```
-GET  /api/rd/material-gates                         # rd:view；仅返回在架门禁
-GET  /api/rd/material-gates/all                     # rd:admin；含下架历史
-POST /api/rd/material-gates                         # rd:admin；{code,level,reason}
-PUT  /api/rd/material-gates/:id                     # rd:admin；{code,level,reason}
-PUT  /api/rd/material-gates/:id/activate            # rd:admin；同编码已有在架记录时返回 400
-PUT  /api/rd/material-gates/:id/deactivate          # rd:admin
-POST /api/rd/material-gates/check                   # rd:edit；{codes:[...]}
-POST /api/rd/material-gates/check-file              # rd:edit；multipart file，仅 .xlsx
+GET    /api/rd/material-gates                       # rd:view；仅返回在架门禁
+GET    /api/rd/material-gates/all                   # rd:admin；含下架历史
+POST   /api/rd/material-gates                       # rd:admin；{code,name,level,reason}
+PUT    /api/rd/material-gates/:id                   # rd:admin；{code,name,level,reason}
+DELETE /api/rd/material-gates/:id                   # rd:admin；硬删除，不可恢复（2026-09-26 起，区别于下面的下架/软删除）
+PUT    /api/rd/material-gates/:id/activate          # rd:admin；同编码已有在架记录时返回 400
+PUT    /api/rd/material-gates/:id/deactivate         # rd:admin
+POST   /api/rd/material-gates/check                 # rd:edit；{codes:[...]} → {warn:[{code,name,reason}],block:[...]}
+POST   /api/rd/material-gates/check-file             # rd:edit；multipart file，仅 .xlsx
 ```
 
 `check` 返回 `{warn:[{code,reason}], block:[{code,reason}]}`；自动去重输入，只返回已登记且在架的编码。

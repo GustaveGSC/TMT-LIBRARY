@@ -151,14 +151,17 @@ warn 在后分区展示，每项显示"名称 + 物料编码 + 门禁原因"。�
 门禁维护入口同一批也从 `EcrForm.vue`/`MaterialGateCheckPage.vue` 里移除，统一放到研发工具首页
 "设置"分组（见上）。
 
-> **`name` 字段待补**：`MaterialGateHitDialog.vue` 要显示的"名称"来自门禁记录自身登记的 `name`
-> 字段（管理员新增门禁时一并填写"这个编码对应的是什么"，不是从上传文件解析出来的），但后端
-> `check`/`check-file` 的响应目前还没有这个字段——已交接 Codex
-> （`handoff/2026-09-25-codex-rd-material-gate-name-spec.md`，未部署；**只加 `name` 一个字段**，
-> 早期版本要求过的 `spec` 已被用户反馈撤回，改成单一名称输入）。`MaterialGateManageDialog.vue`
-> 的新增/编辑表单已经加了这个输入框，`POST/PUT` 会带上 `name`，但旧后端目前会**静默忽略**这个
-> 多出来的字段（不报错，也不保存），所以现在填了会看起来"消失"；命中弹窗在字段缺失时兜底显示
-> "（未登记名称）"。后端这批交付并重新部署前，不要以为这个功能已经完整。
+`MaterialGateHitDialog.vue` 要显示的"名称"来自门禁记录自身登记的 `MaterialGate.name` 字段
+（管理员新增门禁时一并填写"这个编码对应的是什么"，不是从上传文件解析出来的），迁移
+`20260926_01` 已上线。**这个字段是 Claude 直接实现部署的，没有走 Codex**——最初交接给 Codex 的
+`handoff/2026-09-25-codex-rd-material-gate-name-spec.md` 一直没被领走，用户反馈"填写了名称但提醒
+显示未登记"后发现是这个原因，判断改动足够小（一列+一个接口）就直接做了，那份交接文档标注
+"已实现（未走 Codex）"仅作设计记录保留，不要按它重新实现。
+
+**门禁维护弹窗管理能力**（同一批加的）：`MaterialGateManageDialog.vue` 增加了搜索框（纯前端过滤，
+按 code/name/reason 任意匹配）和真正的硬删除（`DELETE /api/rd/material-gates/<id>`，`rd:admin`，
+点击后 `ElMessageBox.confirm` 二次确认）——和已有的"下架/重新上架"（软删除、可逆）是两回事，删除
+不可恢复。
 
 共用组件：
 - `src/composables/useMaterialGateCheck.js` — 包装 `check` 接口调用，返回 `{warn, block, ok}`
@@ -281,6 +284,7 @@ warn 在后分区展示，每项显示"名称 + 物料编码 + 门禁原因"。�
 | GET | `/material-gates/all` | `rd:admin` | 返回全部门禁（含下架历史） |
 | POST | `/material-gates` | `rd:admin` | 新建门禁（`code/level/reason`），同编码已有在架记录则拒绝 |
 | PUT | `/material-gates/<id>` | `rd:admin` | 编辑门禁 |
+| DELETE | `/material-gates/<id>` | `rd:admin` | 硬删除门禁（不可恢复，区别于下面的下架/软删除） |
 | PUT | `/material-gates/<id>/deactivate` | `rd:admin` | 下架门禁（软删除） |
 | PUT | `/material-gates/<id>/activate` | `rd:admin` | 重新上架门禁（同编码已有其它在架记录则拒绝） |
 | POST | `/material-gates/check` | `rd:edit` | body `{codes:[...]}` → `{warn:[{code,reason}], block:[{code,reason}]}` |
@@ -300,7 +304,7 @@ warn 在后分区展示，每项显示"名称 + 物料编码 + 门禁原因"。�
 
 | 表 | 模型 | 文件 | 状态 |
 |---|---|---|---|
-| `material_gate` | `MaterialGate` | `backend/database/models/rd/__init__.py` | 已上线（迁移 `20260925_01`），字段：`id / code / level / reason / is_active / created_by / created_at / updated_at`，`code` 上有非唯一索引，"同编码只允许一条在架"由应用层校验 |
+| `material_gate` | `MaterialGate` | `backend/database/models/rd/__init__.py` | 已上线（迁移 `20260925_01` + `20260926_01`），字段：`id / code / name / level / reason / is_active / created_by / created_at / updated_at`，`code` 上有非唯一索引，"同编码只允许一条在架"由应用层校验；`name` 必填 |
 | `ecr_note` | `EcrNote` | `backend/database/models/rd/__init__.py` | 已上线，字段：`id / username / content / created_at`（建表脚本：`backend/create_ecr_notes.py`） |
 
 `ecr_reminder`（`EcrReminder`）已随这次改动**整体移除**（表+model+repository+service+routes），
