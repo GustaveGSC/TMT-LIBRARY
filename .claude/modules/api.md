@@ -172,7 +172,9 @@ DELETE /api/material/suppliers/:id
 - `PUT group-categories/:group_code` 接收五个 `is_*` 布尔字段及可选 `remark`。
 - `GET items` 参数：`page`（默认 1）、`page_size`（默认 20，上限 100）、
   `category=finished|packaged|semi|material|useless`、`group_code`、`keyword`、
-  `is_disabled=0|1`、`unclassified=0|1`，以及以下服务端分列筛选/排序参数：
+  `is_disabled=0|1`、`unclassified=0|1`、`exclude_useless=0|1`（2026-09-26 起，独立开关，
+  排除大类含 `useless` 的物料，可与 `category`/`unclassified` 叠加；前端是表格上方的"不显示无用
+  物料"勾选，和列筛选是两回事），以及以下服务端分列筛选/排序参数：
   - `code/name/short_name`：分别对 ERP 编码、ERP 名称、简称做字面量包含匹配；
     `%`、`_`、反斜杠不会作为 LIKE 通配符；可与 keyword 叠加（AND）。
   - `sort_by=code|name|short_name|group_code`，默认 code；非法字段返回 400。
