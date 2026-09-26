@@ -40,8 +40,8 @@ const sortDir    = ref('asc')
 // 必须是显式开关，不能自动识别：半角括号出现在 4385 条物料名称里
 // （如「π桌 (V1.1)」占 54%），自动解析会把 (V1.1) 当成分组。
 const useExpr = ref(false)
-// 表格配置（表格外的展示开关，和列筛选是两回事）：不显示无用物料
-const excludeUseless = ref(false)
+// 表格配置（表格外的展示开关，和列筛选是两回事）：不显示无用物料，默认开启
+const excludeUseless = ref(true)
 
 // ── 分页 ──────────────────────────────────────────
 const page     = ref(1)
