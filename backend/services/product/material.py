@@ -123,7 +123,9 @@ class MaterialService:
         )
         configs, rules = self._group_configs(), self._rules()
         category = filters.get('category')
-        if not category and not filters.get('unclassified'):
+        unclassified = filters.get('unclassified')
+        exclude_useless = filters.get('exclude_useless')
+        if not category and not unclassified and not exclude_useless:
             total = query.order_by(None).count()
             raw_rows = query.offset((page - 1) * page_size).limit(page_size).all()
             selected = [
@@ -145,8 +147,12 @@ class MaterialService:
             ]
             if category:
                 classified = [item for item in classified if category in item['categories']]
-            else:
+            elif unclassified:
                 classified = [item for item in classified if not item['categories']]
+            # 「不显示无用物料」是独立开关，可以和 category/unclassified 叠加，
+            # 也可以单独使用（此时上面两个 if/elif 都不成立，classified 先原样保留全部）。
+            if exclude_useless:
+                classified = [item for item in classified if 'useless' not in item['categories']]
             sort_by = filters.get('sort_by', 'code')
             non_null = [item for item in classified if item[sort_by] is not None]
             nulls = [item for item in classified if item[sort_by] is None]

@@ -21,7 +21,7 @@ const catMap = Object.fromEntries(CATEGORIES.map(c => [c.key, c]))
 
 // 价格属于研发成本数据，仅 rd:view 可见。
 // 注意 usePermission 返回普通布尔值不是 ref，模板/JS 里都不能写 .value。
-const { canViewRd } = usePermission()
+const { canMaterialPrice } = usePermission()
 
 // ── 数据 ──────────────────────────────────────────
 const items    = ref([])
@@ -40,6 +40,8 @@ const sortDir    = ref('asc')
 // 必须是显式开关，不能自动识别：半角括号出现在 4385 条物料名称里
 // （如「π桌 (V1.1)」占 54%），自动解析会把 (V1.1) 当成分组。
 const useExpr = ref(false)
+// 表格配置（表格外的展示开关，和列筛选是两回事）：不显示无用物料
+const excludeUseless = ref(false)
 
 // ── 分页 ──────────────────────────────────────────
 const page     = ref(1)
@@ -73,7 +75,7 @@ const columns = computed(() => [
   // 价格列仅研发权限可见；后端在无 rd:view 时根本不返回 latest_price 字段，
   // 这里的隐藏只是体验层，真正的门禁在后端。
   // 不设 sortable：按价格排序需全表 JOIN 后内存分页，8091 行扛不住，后端已明确不做。
-  ...(canViewRd ? [{ prop: 'latest_price', label: '价格', width: 130, align: 'right',
+  ...(canMaterialPrice ? [{ prop: 'latest_price', label: '价格', width: 130, align: 'right',
     filterable: true,
     filterOptions: [{ label: '有价格', value: 'has' }, { label: '无价格', value: 'none' }] }] : []),
 ])
@@ -121,8 +123,9 @@ async function loadItems() {
     // 停用状态仅来源于导入数据，不参与筛掉候选。列筛选仍可主动按停用筛。
     if (txt(f.is_disabled)) params.is_disabled = f.is_disabled
     // 无 rd:view 时后端会对 price_state 直接 403，所以必须先判权限再带参
-    if (canViewRd && txt(f.latest_price)) params.price_state = txt(f.latest_price)
+    if (canMaterialPrice && txt(f.latest_price)) params.price_state = txt(f.latest_price)
     if (useExpr.value) params.match_mode = 'expr'
+    if (excludeUseless.value) params.exclude_useless = 1
 
     const res = await http.get('/api/material/items', { params })
     if (res.success) {
@@ -153,7 +156,7 @@ function onSortChange({ prop, order }) {
   loadItems()
 }
 
-watch([pageSize, useExpr], () => { page.value = 1; loadItems() })
+watch([pageSize, useExpr, excludeUseless], () => { page.value = 1; loadItems() })
 watch(page, loadItems)
 
 // ── 生命周期 ──────────────────────────────────────
@@ -166,6 +169,11 @@ onMounted(() => { loadGroups(); loadItems() })
     <div v-if="errorMsg" class="error-bar">
       <el-icon><WarningFilled /></el-icon>
       <span>{{ errorMsg }}</span>
+    </div>
+
+    <!-- ── 表格配置（表格外，和列筛选是两回事，控制展示范围而非当前列的值）── -->
+    <div class="table-config-bar">
+      <el-checkbox v-model="excludeUseless" label="不显示无用物料" size="small" />
     </div>
 
     <!-- ── 表格（复用全站统一的 DataTable，服务端筛选排序）── -->
@@ -315,6 +323,12 @@ onMounted(() => { loadGroups(); loadItems() })
   margin-bottom: 10px; padding: 8px 12px;
   background: rgba(208,90,60,0.06); border: 1px solid rgba(208,90,60,0.2);
   border-radius: 7px; color: #d05a3c; font-size: 12px; flex-shrink: 0;
+}
+
+/* ── 表格配置（表格外，控制展示范围）── */
+.table-config-bar {
+  display: flex; align-items: center; gap: 12px;
+  margin-bottom: 8px; flex-shrink: 0;
 }
 
 /* ── 表格 ─────────────────────────────────────── */

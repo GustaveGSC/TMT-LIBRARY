@@ -255,6 +255,27 @@ def test_material_list_column_filters_and_short_name_nulls_last(material_app):
         assert [item['code'] for item in category_sorted] == ['C', 'B', 'A']
 
 
+def test_material_list_exclude_useless_hides_only_useless_items(material_app):
+    with material_app.app_context():
+        db.session.add_all([
+            ImportProductRaw(code='U1', name='无用件', group_code='G', group_name='组',
+                             imported_at=now_cst()),
+            ImportProductRaw(code='M1', name='原材料件', group_code='G', group_name='组',
+                             imported_at=now_cst()),
+            ErpCodeRule(prefix='U', type='useless', is_disabled=False),
+            ErpCodeRule(prefix='M', type='material', is_disabled=False),
+        ])
+        db.session.commit()
+
+        plain = material_service.list_items(1, 20, is_disabled=False).data['items']
+        excluded = material_service.list_items(
+            1, 20, is_disabled=False, exclude_useless=True,
+        ).data['items']
+
+        assert {item['code'] for item in plain} == {'U1', 'M1'}
+        assert {item['code'] for item in excluded} == {'M1'}
+
+
 def test_material_route_rejects_invalid_sort_field(material_app, monkeypatch):
     material_app.register_blueprint(material_bp, url_prefix='/api/material')
     monkeypatch.setattr(UserRepository, 'get_auth_state', lambda _id: (True, 0))

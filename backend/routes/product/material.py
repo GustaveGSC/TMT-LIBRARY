@@ -18,14 +18,15 @@ from services.product.material_filter import FilterExpressionError
 
 
 material_bp = Blueprint('material', __name__)
-material_bp.before_request(make_blueprint_guard('product:view', 'product:edit'))
+material_bp.before_request(make_blueprint_guard('material:view', 'material:edit'))
 material_cost_bp = Blueprint('material_cost', __name__)
-material_cost_bp.before_request(make_blueprint_guard('product:view'))
+# 价格/供应商是单独一档权限（material:price），查看和编辑不再像 rd:view/rd:edit 那样分两级
+material_cost_bp.before_request(make_blueprint_guard('material:price'))
 
 
-def _require_rd(permission):
-    if not has_permission(g.current_user or {}, permission):
-        return Result.fail('无研发成本权限').to_response(403)
+def _require_material_price():
+    if not has_permission(g.current_user or {}, 'material:price'):
+        return Result.fail('无物料成本权限').to_response(403)
     return None
 
 
@@ -76,10 +77,10 @@ def list_items():
         else:
             text_filters[key] = raw_value.strip() or None
     try:
-        can_view_cost = has_permission(g.current_user or {}, 'rd:view')
+        can_view_cost = has_permission(g.current_user or {}, 'material:price')
         price_state = request.args.get('price_state', '').strip() or None
         if price_state and not can_view_cost:
-            return Result.fail('无研发成本权限').to_response(403)
+            return Result.fail('无物料成本权限').to_response(403)
         if price_state not in (None, 'has', 'none'):
             return Result.fail('价格状态参数无效').to_response()
         result = material_service.list_items(
@@ -89,6 +90,7 @@ def list_items():
             **text_filters, sort_by=sort_by, sort_dir=sort_dir, match_mode=match_mode,
             is_disabled=disabled,
             unclassified=request.args.get('unclassified') in ('1', 'true', 'True'),
+            exclude_useless=request.args.get('exclude_useless') in ('1', 'true', 'True'),
             price_state=price_state, include_cost=can_view_cost,
         )
     except FilterExpressionError as exc:
@@ -177,7 +179,7 @@ def delete_material_combo(combo_id):
 @material_bp.get('/items/<path:code>')
 def material_detail(code):
     return material_service.detail(
-        code, include_cost=has_permission(g.current_user or {}, 'rd:view')
+        code, include_cost=has_permission(g.current_user or {}, 'material:price')
     ).to_response()
 
 
@@ -227,7 +229,7 @@ def upload_material_image(code):
 
 @material_cost_bp.get('/items/<path:code>/prices')
 def material_prices(code):
-    denied = _require_rd('rd:view')
+    denied = _require_material_price()
     if denied:
         return denied
     material = _material_for_cost(code)
@@ -238,7 +240,7 @@ def material_prices(code):
 
 @material_cost_bp.post('/items/<path:code>/prices')
 def add_material_price(code):
-    denied = _require_rd('rd:edit')
+    denied = _require_material_price()
     if denied:
         return denied
     material = _material_for_cost(code)
@@ -252,7 +254,7 @@ def add_material_price(code):
 
 @material_cost_bp.patch('/prices/<int:price_id>')
 def update_material_price(price_id):
-    denied = _require_rd('rd:edit')
+    denied = _require_material_price()
     if denied:
         return denied
     return material_price_service.update_price(
@@ -262,7 +264,7 @@ def update_material_price(price_id):
 
 @material_cost_bp.delete('/prices/<int:price_id>')
 def delete_material_price(price_id):
-    denied = _require_rd('rd:edit')
+    denied = _require_material_price()
     if denied:
         return denied
     return material_price_service.delete_price(price_id).to_response()
@@ -270,7 +272,7 @@ def delete_material_price(price_id):
 
 @material_cost_bp.get('/items/<path:code>/usages')
 def material_usages(code):
-    denied = _require_rd('rd:view')
+    denied = _require_material_price()
     if denied:
         return denied
     material = _material_for_cost(code)
@@ -281,19 +283,19 @@ def material_usages(code):
 
 @material_cost_bp.get('/suppliers')
 def material_suppliers():
-    denied = _require_rd('rd:view')
+    denied = _require_material_price()
     return denied or material_supplier_service.list().to_response()
 
 
 @material_cost_bp.get('/suppliers/options')
 def material_supplier_options():
-    denied = _require_rd('rd:view')
+    denied = _require_material_price()
     return denied or material_supplier_service.options().to_response()
 
 
 @material_cost_bp.get('/suppliers/<int:supplier_id>/materials')
 def material_supplier_materials(supplier_id):
-    denied = _require_rd('rd:view')
+    denied = _require_material_price()
     if denied:
         return denied
     result = material_supplier_service.materials(supplier_id)
@@ -302,7 +304,7 @@ def material_supplier_materials(supplier_id):
 
 @material_cost_bp.post('/suppliers')
 def create_material_supplier():
-    denied = _require_rd('rd:edit')
+    denied = _require_material_price()
     if denied:
         return denied
     return material_supplier_service.create(
@@ -312,7 +314,7 @@ def create_material_supplier():
 
 @material_cost_bp.patch('/suppliers/<int:supplier_id>')
 def update_material_supplier(supplier_id):
-    denied = _require_rd('rd:edit')
+    denied = _require_material_price()
     if denied:
         return denied
     return material_supplier_service.update(
@@ -322,7 +324,7 @@ def update_material_supplier(supplier_id):
 
 @material_cost_bp.delete('/suppliers/<int:supplier_id>')
 def delete_material_supplier(supplier_id):
-    denied = _require_rd('rd:edit')
+    denied = _require_material_price()
     if denied:
         return denied
     result = material_supplier_service.delete(
