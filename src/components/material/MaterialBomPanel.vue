@@ -158,6 +158,11 @@ async function deleteBom() {
   }
 }
 
+// 编码显示 ERP 编码；与研发编码不一致（成品 -A 对研发 -A01/-A02）时需要额外标出研发版本
+function versionHint(b) {
+  return !!(b?.erp_code && b.erp_code !== b.drawing && b.version)
+}
+
 function openCard(code) {
   cardCode.value = code
   cardVisible.value = true
@@ -172,7 +177,7 @@ onMounted(loadList)
     <!-- ── 左：BOM 列表 ── -->
     <aside class="bp-list">
       <div class="bp-toolbar">
-        <el-input v-model="keyword" size="small" clearable placeholder="研发编码 / ERP 编码 / 名称"
+        <el-input v-model="keyword" size="small" clearable placeholder="编码 / 名称"
                   :prefix-icon="Search" class="bp-search" />
         <el-select v-model="category" size="small" clearable placeholder="类别" class="bp-cat">
           <el-option v-for="c in categories" :key="c" :label="c" :value="c" />
@@ -199,7 +204,8 @@ onMounted(loadList)
           @click="selectBom(b.id)"
         >
           <div class="bp-item-top">
-            <span class="bp-drawing mono">{{ b.drawing }}</span>
+            <span class="bp-drawing mono">{{ b.erp_code || b.drawing }}</span>
+            <span v-if="versionHint(b)" class="bp-ver">{{ b.version }}</span>
             <span v-if="b.category" class="bp-cat-tag">{{ b.category }}</span>
             <span class="bp-count">{{ b.line_count }} 项</span>
           </div>
@@ -221,15 +227,14 @@ onMounted(loadList)
     <section v-loading="treeLoading" class="bp-detail">
       <template v-if="treeData">
         <header class="bd-head">
-          <span class="bd-drawing mono">{{ treeData.bom.drawing }}</span>
+          <!-- 编码：研发编码与 ERP 编码一致，只显示一个；有 ERP 编码时可点开物料卡片 -->
+          <span v-if="treeData.bom.erp_code" class="bd-drawing mono link" title="点击查看物料卡片"
+                @click="openCard(treeData.bom.erp_code)">{{ treeData.bom.erp_code }}</span>
+          <span v-else class="bd-drawing mono" title="ERP 物料表里没有对应编码">{{ treeData.bom.drawing }}</span>
+          <!-- 成品/产成品 ERP 只到 -A，研发版本更细（A01/A02），不一致时补一个版本提示 -->
+          <span v-if="versionHint(treeData.bom)" class="bd-ver">研发版本 {{ treeData.bom.version }}</span>
           <span class="bd-name">{{ treeData.bom.name }}</span>
-          <span v-if="treeData.bom.erp_code" class="bd-erp mono" title="点击查看物料卡片"
-                @click="openCard(treeData.bom.erp_code)">ERP：{{ treeData.bom.erp_code }}</span>
-          <span v-else class="bd-erp none">ERP 未匹配</span>
-          <span class="bd-meta">
-            {{ treeData.bom.imported_by || '—' }} · {{ treeData.bom.imported_at }}
-            <template v-if="treeData.bom.source_file"> · {{ treeData.bom.source_file }}</template>
-          </span>
+          <span class="bd-meta">{{ treeData.bom.imported_by || '—' }} · {{ treeData.bom.imported_at }}</span>
           <el-button v-if="canEditMaterial" size="small" :icon="Delete" class="bd-del" @click="deleteBom">删除</el-button>
         </header>
         <div class="bd-tree">
@@ -348,12 +353,12 @@ onMounted(loadList)
 .bd-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
 .bd-drawing { font-size: 16px; font-weight: 700; color: #000; }
 .bd-name { font-size: 14px; color: #3a3028; }
-.bd-erp {
-  font-size: 12px; padding: 1px 8px; border-radius: 10px; cursor: pointer;
+.bd-drawing.link { cursor: pointer; }
+.bd-drawing.link:hover { color: var(--accent); text-decoration: underline; }
+.bd-ver, .bp-ver {
+  font-size: 11px; padding: 0 6px; line-height: 16px; border-radius: 4px;
   color: #4a8fc0; background: rgba(74,143,192,0.1);
 }
-.bd-erp:hover { text-decoration: underline; }
-.bd-erp.none { cursor: default; color: #8a7a6a; background: #f5f0e8; text-decoration: none; }
 .bd-meta { font-size: 11px; color: #8a7a6a; }
 .bd-del { margin-left: auto; }
 .bd-tree { flex: 1; min-height: 0; }

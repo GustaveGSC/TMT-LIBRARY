@@ -63,10 +63,16 @@ test('物料BOM tab：列表、多层结构、导入结果', async ({ page }) =>
 
   await expect(page.locator('.bp-item')).toHaveCount(2)
   await expect(page.locator('.bp-item').first()).toHaveClass(/active/)
-  await expect(page.locator('.bd-drawing')).toHaveText('F1-A02')
-  // 默认全部展开：P1 / R1 / S1 三行；没匹配到 ERP 的显示「未匹配」
-  await expect(page.locator('.bom-tree .bt-drawing')).toHaveText(['P1-A01', 'R1-A01', 'S1-A01'])
-  await expect(page.locator('.bom-tree .bt-none')).toHaveText('未匹配')
+  // 标题只显示一个编码（ERP 编码）；研发版本更细时补版本提示；不显示上传文件名
+  await expect(page.locator('.bd-drawing')).toHaveText('F1-A')
+  await expect(page.locator('.bd-ver')).toHaveText('研发版本 A02')
+  await expect(page.locator('.bd-meta')).not.toContainText('a.xlsx')
+  // 没有「研发编码」列；序号列按层级编号；默认全部展开
+  await expect(page.locator('.bom-tree th', { hasText: '研发编码' })).toHaveCount(0)
+  await expect(page.locator('.bom-tree .bt-seq')).toHaveText(['1', '1.1', '2'])
+  await expect(page.locator('.bom-tree .bt-erp')).toHaveText(['P1-A', 'R1-A01'])
+  // ERP 里没有的显示研发编码并置灰
+  await expect(page.locator('.bom-tree .bt-none')).toHaveText('S1-A01')
   await page.screenshot({ path: 'test-results/material-bom-panel.png' })
 
   // 导入：选文件后直接上传，弹结果
@@ -124,7 +130,7 @@ test('物料表 BOM 标记 + 物料卡片 BOM 区：版本、被使用、卡片�
   await expect(bomSec.locator('.cost-tab.active')).toContainText('下级结构（2）')
   await expect(bomSec.locator('.bom-ver')).toBeVisible()
   // 折叠的子行仍在 DOM 里（el-table 只是隐藏），所以只数可见的
-  await expect(bomSec.locator('.bt-drawing:visible')).toHaveText(['P1-A01', 'S1-A01'])
+  await expect(bomSec.locator('.bt-seq:visible')).toHaveText(['1', '2'])
   await bomSec.scrollIntoViewIfNeeded()
   await page.locator('.el-dialog').screenshot({ path: 'test-results/material-card-bom.png' })
 
@@ -145,7 +151,7 @@ test('物料表 BOM 标记 + 物料卡片 BOM 区：版本、被使用、卡片�
   await page.locator('.code-link', { hasText: 'R1-A01' }).click()
   await expect(page.locator('.el-dialog__header .mc-erp-code')).toHaveText('R1-A01')
   await expect(bomSec.locator('.cost-tab.active')).toContainText('被使用（1 个产品）')
-  await expect(bomSec.locator('.used-chip')).toContainText('F1-A02')
+  await expect(bomSec.locator('.used-chip')).toContainText('F1-A')
   await expect(bomSec.locator('.cost-table tbody tr')).toHaveCount(1)
   await bomSec.scrollIntoViewIfNeeded()
   await page.locator('.el-dialog').screenshot({ path: 'test-results/material-card-bom-used.png' })
@@ -181,7 +187,7 @@ test('物料BOM：导入校验失败逐条列出；删除被引用的 BOM 需二
 
   await page.goto('/#/material')
   await page.locator('.nav-item', { hasText: '物料BOM' }).click()
-  await expect(page.locator('.bd-drawing')).toHaveText('M1-A01')
+  await expect(page.locator('.bd-drawing')).toHaveText('M1-A')
 
   // 导入失败：弹窗逐条列出错误
   await page.locator('.bp-toolbar input[type=file]').setInputFiles({
