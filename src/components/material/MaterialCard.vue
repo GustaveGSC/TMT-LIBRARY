@@ -264,7 +264,7 @@ watch(() => props.visible, v => {
   <el-dialog
     :model-value="props.visible"
     title="物料卡片"
-    :width="canMaterialPrice ? 1000 : 560"
+    :width="canMaterialPrice ? 900 : 760"
     align-center
     append-to-body
     @update:model-value="emit('update:visible', $event)"
@@ -279,10 +279,11 @@ watch(() => props.visible, v => {
       </div>
 
       <template v-else-if="detail">
-       <!-- 双列：左列物料本身的信息，右列价格（价格是研发成本域的数据，
-            与物料属性并列而不是压在下面，避免要滚很久才看到） -->
-       <div class="mc-cols" :class="{ single: !canMaterialPrice }">
-        <div class="mc-col-left">
+       <!-- 排版（用户 2026-09-27 指定）：第一行 图片 | ERP 信息；
+            第二行 人工维护（通栏）；第三行 价格（通栏，仅 material:price 可见） -->
+       <div class="mc-scroll">
+        <div class="mc-top">
+        <div class="mc-top-image">
         <!-- 图片 -->
         <div class="mc-image">
           <img v-if="shownImage" :src="shownImage" alt="" />
@@ -300,9 +301,10 @@ watch(() => props.visible, v => {
           </button>
           <span v-if="newImage" class="mc-img-tip">保存后才会上传</span>
         </div>
+        </div><!-- /mc-top-image -->
 
         <!-- ERP 权威字段：只读 -->
-        <div class="mc-section">
+        <div class="mc-section mc-erp">
           <div class="mc-section-title">ERP 信息（只读）</div>
           <div class="mc-field"><label>编码</label><span class="mono">{{ detail.code }}</span></div>
           <div class="mc-field"><label>名称</label><span>{{ detail.name }}</span></div>
@@ -312,11 +314,12 @@ watch(() => props.visible, v => {
           </div>
           <div class="mc-field">
             <label>状态</label>
-            <span>{{ detail.status || '—' }}</span>
+            <span class="status-text">{{ detail.status || '—' }}</span>
             <span v-if="detail.is_disabled" class="ro-badge off">已停用</span>
             <span v-else class="ro-badge on">启用</span>
           </div>
         </div>
+        </div><!-- /mc-top -->
 
         <!-- 人工维护字段 -->
         <div class="mc-section">
@@ -353,17 +356,20 @@ watch(() => props.visible, v => {
               </div>
             </div>
           </div>
-          <div class="mc-field">
-            <label>简称</label>
-            <input v-model="form.short_name" class="mc-input" :disabled="!canEditMaterial" placeholder="录入/挑选时显示的简称" />
-          </div>
-          <div class="mc-field">
-            <label>分类</label>
-            <input v-model="form.category" class="mc-input" :disabled="!canEditMaterial" placeholder="自由文本，用于下拉分组" />
-          </div>
-          <div class="mc-field">
-            <label>规格</label>
-            <input v-model="form.spec" class="mc-input" :disabled="!canEditMaterial" placeholder="规格" />
+          <!-- 通栏后宽度充足，简称/分类/规格并排成三列 -->
+          <div class="mc-grid3">
+            <div class="mc-field">
+              <label>简称</label>
+              <input v-model="form.short_name" class="mc-input" :disabled="!canEditMaterial" placeholder="录入/挑选时显示的简称" />
+            </div>
+            <div class="mc-field">
+              <label>分类</label>
+              <input v-model="form.category" class="mc-input" :disabled="!canEditMaterial" placeholder="自由文本，用于下拉分组" />
+            </div>
+            <div class="mc-field">
+              <label>规格</label>
+              <input v-model="form.spec" class="mc-input" :disabled="!canEditMaterial" placeholder="规格" />
+            </div>
           </div>
           <div class="mc-field mc-field-top">
             <label>备注</label>
@@ -372,12 +378,11 @@ watch(() => props.visible, v => {
 
         </div>
 
-        </div><!-- /mc-col-left -->
 
         <!-- ── 价格（仅 rd:view 可见）────────────────────────
              与研发部 BOM 共用同一份 cost_material_price，不是副本。
              后端在无 rd:view 时根本不返回价格字段，此处隐藏只是体验层。 -->
-        <div v-if="canMaterialPrice" class="mc-section mc-col-right">
+        <div v-if="canMaterialPrice" class="mc-section">
           <div class="mc-section-title">
             <span>价格</span>
             <span v-if="detail.latest_price != null" class="mc-latest">
@@ -512,7 +517,7 @@ watch(() => props.visible, v => {
             <label>成本备注</label><span>{{ detail.cost_notes }}</span>
           </div>
         </div>
-       </div><!-- /mc-cols -->
+       </div><!-- /mc-scroll -->
 
         <div class="mc-actions">
           <button class="btn btn-secondary" @click="close">取消</button>
@@ -587,6 +592,8 @@ watch(() => props.visible, v => {
 .mt-hint { font-size: 11px; color: #6b5e4e; line-height: 1.6; }
 .mt-hint b { color: #3a3028; }
 .mc-field > span { flex: 1; min-width: 0; word-break: break-all; }
+/* 状态文字与停用角标紧挨着显示，角标不参与撑满 */
+.mc-field > span.status-text, .mc-field > span.ro-badge { flex: none; }
 .mono { font-family: monospace; font-size: 12px; }
 .muted { color: #6b5e4e; }
 
@@ -641,20 +648,27 @@ watch(() => props.visible, v => {
 .btn-primary { background: var(--accent); color: #fff; }
 .btn-primary:hover:not(:disabled) { filter: brightness(1.1); }
 
-/* ── 双列布局 ─────────────────────────────────── */
-.mc-cols { display: flex; align-items: flex-start; gap: 16px; }
-.mc-cols.single { display: block; }
-.mc-col-left  { width: 400px; flex-shrink: 0; }
-.mc-col-right { flex: 1; min-width: 0; margin-bottom: 18px; }
-/* 左右两列各自滚动，避免长价格表把整张卡片顶得很高 */
-.mc-col-left, .mc-col-right { max-height: 62vh; overflow-y: auto; }
-.mc-col-left::-webkit-scrollbar, .mc-col-right::-webkit-scrollbar { width: 4px; }
-.mc-col-left::-webkit-scrollbar-track, .mc-col-right::-webkit-scrollbar-track { background: transparent; }
-.mc-col-left::-webkit-scrollbar-thumb, .mc-col-right::-webkit-scrollbar-thumb {
-  background: var(--border); border-radius: 2px;
+/* ── 布局：第一行 图片|ERP 信息，其下 人工维护、价格 通栏 ── */
+/* 整体一个滚动容器，价格表很长时只滚卡片内容，操作按钮始终可见 */
+.mc-scroll { max-height: 70vh; overflow-y: auto; padding-right: 4px; margin-bottom: 14px; }
+.mc-scroll::-webkit-scrollbar { width: 4px; }
+.mc-scroll::-webkit-scrollbar-track { background: transparent; }
+.mc-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.mc-scroll > .mc-section:last-child { margin-bottom: 0; }
+
+.mc-top { display: flex; align-items: stretch; gap: 16px; margin-bottom: 18px; }
+.mc-top-image { width: 40%; flex-shrink: 0; display: flex; flex-direction: column; }
+.mc-top-image .mc-image { flex: 1; min-height: 180px; margin-bottom: 0; }
+.mc-top-image .mc-image-bar { margin: 8px 0 0; }
+.mc-top .mc-erp { flex: 1; min-width: 0; margin-bottom: 0; }
+
+.mc-grid3 {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0 14px; margin-bottom: 10px;
 }
-/* 左列内最后一个分区不再需要下外边距，避免与列底部叠加 */
-.mc-col-left .mc-section:last-child { margin-bottom: 0; }
+.mc-grid3 .mc-field { margin-bottom: 0; }
+.mc-grid3 .mc-field label { width: 32px; }
+.mc-grid3 .mc-input { min-width: 0; }
 
 /* ── 价格区 ───────────────────────────────────── */
 .mc-section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
