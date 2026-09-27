@@ -160,7 +160,8 @@ watch([pageSize, useExpr, excludeUseless], () => { page.value = 1; loadItems() }
 watch(page, loadItems)
 
 // ── 生命周期 ──────────────────────────────────────
-onMounted(() => { loadGroups(); loadItems() })
+// 先拉表格数据再拉分组下拉候选：后端单 worker 按到达顺序处理，表格先出来体感更快
+onMounted(() => { loadItems(); loadGroups() })
 </script>
 
 <template>

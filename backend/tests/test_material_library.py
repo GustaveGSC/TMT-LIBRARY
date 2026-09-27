@@ -356,6 +356,63 @@ def test_material_images_add_replace_delete_keep_order(material_app):
         assert not material_service.add_image('NOPE', 'u', None, 'tester').success
 
 
+def test_material_type_filter_cache_refreshes_on_rule_group_and_import(material_app):
+    from services.product.erp_code_rules import erp_code_rule_service
+    with material_app.app_context():
+        db.session.add_all([
+            ImportProductRaw(code='K1', name='保留', group_code='G', group_name='组',
+                             imported_at=now_cst()),
+            ImportProductRaw(code='U1', name='无用', group_code='G', group_name='组',
+                             imported_at=now_cst()),
+        ])
+        db.session.commit()
+
+        def visible():
+            data = material_service.list_items(1, 20, is_disabled=False, exclude_useless=True).data
+            assert data['total'] == len(data['items'])
+            return sorted(item['code'] for item in data['items'])
+
+        assert visible() == ['K1', 'U1']
+        # 新增前缀规则 -> 缓存失效，U1 立即被排除
+        assert erp_code_rule_service.create('U', 'useless').success
+        assert visible() == ['K1']
+        # 分组默认改成无用 -> K1 也被排除（U1 仍由前缀规则判定）
+        assert material_service.save_group('G', {'is_useless': True}).success
+        assert visible() == []
+        assert material_service.save_group('G', {'is_material': True}).success
+        assert visible() == ['K1']
+        # ERP 导入新编码 -> 缓存失效，新编码按分组默认出现
+        import_product_service.import_rows([{
+            'code': 'K2', 'name': '新导入', 'group_code': 'G', 'group_name': '组',
+        }])
+        assert visible() == ['K1', 'K2']
+        groups = {g['group_code']: g for g in material_service.group_categories().data}
+        assert groups['G']['material_count'] == 3
+        assert groups['G']['rule_count'] == 1
+
+
+def test_material_category_filter_uses_database_sort_and_paging(material_app):
+    with material_app.app_context():
+        db.session.add_all([
+            ImportProductRaw(code=f'M{i:02d}', name=f'料{i}', group_code='G', group_name='组',
+                             imported_at=now_cst())
+            for i in range(30)
+        ] + [
+            ImportProductRaw(code='X01', name='成品', group_code='F', group_name='成品组',
+                             imported_at=now_cst()),
+            ErpGroupCategory(group_code='G', is_material=True),
+            ErpGroupCategory(group_code='F', is_finished=True),
+        ])
+        db.session.commit()
+        page2 = material_service.list_items(
+            2, 10, is_disabled=False, category='material', sort_by='code', sort_dir='desc',
+        ).data
+        assert page2['total'] == 30
+        assert [item['code'] for item in page2['items']] == [f'M{i:02d}' for i in range(19, 9, -1)]
+        only_finished = material_service.list_items(1, 50, is_disabled=False, category='finished').data
+        assert [item['code'] for item in only_finished['items']] == ['X01']
+
+
 def test_material_route_rejects_invalid_sort_field(material_app, monkeypatch):
     material_app.register_blueprint(material_bp, url_prefix='/api/material')
     monkeypatch.setattr(UserRepository, 'get_auth_state', lambda _id: (True, 0))

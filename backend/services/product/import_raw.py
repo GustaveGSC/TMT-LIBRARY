@@ -50,6 +50,9 @@ class ImportProductService:
         parsed, skipped_invalid = _parse_rows(raw_rows)
         imported_at  = now_cst()
         result       = ImportProductRepository.bulk_upsert(parsed, imported_at)
+        # 物料库按类型筛选/分组计数用的判定结果缓存依赖 ERP 物料清单，导入后必须失效
+        from services.product.material import material_service
+        material_service.invalidate_classification_cache()
         return {
             'total':           len(raw_rows),
             **result,
