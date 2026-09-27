@@ -1,7 +1,7 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
 import { ref, computed, watch } from 'vue'
-import { WarningFilled, Picture, Plus, Edit, Delete, ZoomIn } from '@element-plus/icons-vue'
+import { WarningFilled, Picture, Plus, Edit, Delete, ZoomIn, Close } from '@element-plus/icons-vue'
 import MediaViewer from '@/components/common/MediaViewer.vue'
 import { pickFile } from '@/utils/download'
 import http from '@/api/http'
@@ -313,12 +313,31 @@ watch(() => props.visible, v => {
 <template>
   <el-dialog
     :model-value="props.visible"
-    title="物料卡片"
+    :show-close="false"
     :width="canMaterialPrice ? 900 : 760"
     align-center
     append-to-body
     @update:model-value="emit('update:visible', $event)"
   >
+    <!-- 标题栏：不用 el-dialog 原生标题，改为「编码 名称 状态 …… 关闭」一行，
+         下方分割线与内容隔开。名称单行省略（悬停看全文），状态紧挨名称 -->
+    <template #header>
+      <div class="mc-erp-line">
+        <template v-if="detail">
+          <span class="mc-erp-code mono">{{ detail.code }}</span>
+          <span class="mc-erp-name" :title="detail.name">{{ detail.name }}</span>
+          <span
+            class="ro-badge"
+            :class="detail.is_disabled ? 'off' : 'on'"
+            :title="`ERP 状态：${detail.status || '—'}`"
+          >{{ detail.is_disabled ? '已停用' : '启用' }}</span>
+        </template>
+        <span v-else class="mc-erp-name">物料卡片</span>
+        <button class="mc-close-btn" type="button" @click="close">
+          <el-icon><Close /></el-icon><span>关闭</span>
+        </button>
+      </div>
+    </template>
     <div class="material-card">
 
       <div v-if="loading" class="state-tip">加载中...</div>
@@ -332,20 +351,6 @@ watch(() => props.visible, v => {
        <!-- 排版（用户 2026-09-27 指定）：第一行 图片 | ERP 信息；
             第二行 人工维护（通栏）；第三行 价格（通栏，仅 material:price 可见） -->
        <div class="mc-scroll">
-        <!-- ERP 信息（只读）：放在最上方，不做卡片样式、不带字段标签。
-             编码黑色加粗，名称常规字重；名称固定单行（超长省略，悬停看全文），保证卡片高度稳定。
-             状态只显示「启用/已停用」角标：ERP 原始状态（生效/失效）已折算进角标，
-             原文放在角标悬停提示里 -->
-        <div class="mc-erp-line">
-          <span class="mc-erp-code mono">{{ detail.code }}</span>
-          <span class="mc-erp-name" :title="detail.name">{{ detail.name }}</span>
-          <span
-            class="ro-badge"
-            :class="detail.is_disabled ? 'off' : 'on'"
-            :title="`ERP 状态：${detail.status || '—'}`"
-          >{{ detail.is_disabled ? '已停用' : '启用' }}</span>
-        </div>
-
         <div class="mc-top">
         <div class="mc-top-image">
         <!-- 图片：悬停出现遮罩 + 圆形图标按键（新增/编辑/删除/查看）；无图时直接显示新增 -->
@@ -786,22 +791,33 @@ watch(() => props.visible, v => {
 .mc-manual .mc-field-remark { flex: 1; min-height: 0; margin-bottom: 0; }
 .mc-manual .mc-field-remark .mc-textarea { height: 100%; min-height: 48px; resize: none; }
 
-/* ERP 信息行：卡片最上方，无边框无底色 */
+/* 标题栏（el-dialog #header 插槽）：编码 名称 状态 …… 关闭，底部分割线 */
 .mc-erp-line {
   display: flex; align-items: center; gap: 12px;
-  padding: 2px 2px 14px; min-width: 0;
+  padding-bottom: 12px; border-bottom: 1px solid var(--border);
+  min-width: 0;
 }
 .mc-erp-code {
   /* 固定黑色加粗，不跟随主题 */
   flex-shrink: 0;
-  font-size: 15px; font-weight: 700; color: #000;
+  font-size: 17px; font-weight: 700; color: #000;
 }
 .mc-erp-name {
-  flex: 1 1 auto; min-width: 0;
-  font-size: 17px; font-weight: 400; color: var(--text-primary);
+  /* 不占满剩余空间，状态角标紧跟在名称后面；过长时省略 */
+  flex: 0 1 auto; min-width: 0;
+  font-size: 15px; font-weight: 400; color: var(--text-primary);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .mc-erp-line .ro-badge { flex-shrink: 0; font-size: 11px; padding: 2px 8px; }
+.mc-close-btn {
+  margin-left: auto; flex-shrink: 0;
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 12px; border-radius: 7px;
+  border: 1px solid var(--border); background: var(--bg-card);
+  color: #3a3028; font-size: 13px; font-family: inherit; cursor: pointer;
+  transition: all 0.15s;
+}
+.mc-close-btn:hover { border-color: var(--accent); color: var(--accent); }
 
 /* ── 价格区 ───────────────────────────────────── */
 .mc-section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }

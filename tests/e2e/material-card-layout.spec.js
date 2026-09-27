@@ -32,7 +32,7 @@ async function openCard(page, item) {
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto('/#/material')
   await page.locator('.code-link', { hasText: '14ST02001-A01' }).click()
-  await expect(page.locator('.material-card .mc-erp-line')).toBeVisible()
+  await expect(page.locator('.el-dialog__header .mc-erp-code')).toBeVisible()
   return page.locator('.material-card')
 }
 
@@ -116,39 +116,40 @@ for (const n of [0, 1, 12]) {
   })
 }
 
-test('物料卡片：ERP 信息在最上方无卡片，图片|人工维护，价格通栏，字段对齐', async ({ page }) => {
+test('物料卡片：编码/名称/状态作为标题栏，图片|人工维护，价格通栏，字段对齐', async ({ page }) => {
   const card = await openCard(page, { ...ITEM, name: '成品_桌类_德罗 (V1.1)手摇1.8米榉木白色_A' })
   await page.waitForTimeout(500)   // 等 el-dialog 打开动画结束再量坐标
 
-  const erp = card.locator('.mc-erp-line')
+  const erp = page.locator('.el-dialog__header .mc-erp-line')
   const erpBox = await erp.boundingBox()
   const img = await card.locator('.mc-top-image').boundingBox()
   const manual = await card.locator('.mc-manual').boundingBox()
   const price = await card.locator('.mc-scroll > .mc-section').last().boundingBox()
 
-  // ERP 信息在图片那一行上方；不是卡片（无边框、无底色、无分区标题）
+  // 这一行就是弹窗标题：原生标题和原生右上角关闭都不渲染；下方有分割线
+  await expect(page.locator('.el-dialog .el-dialog__title')).toHaveCount(0)
+  await expect(page.locator('.el-dialog .el-dialog__headerbtn')).toHaveCount(0)
   expect(erpBox.y + erpBox.height).toBeLessThanOrEqual(img.y + 1)
-  const style = await erp.evaluate(el => {
+  const lineStyle = await erp.evaluate(el => {
     const cs = getComputedStyle(el)
-    return { border: cs.borderTopWidth, bg: cs.backgroundColor }
+    return { bottom: cs.borderBottomWidth, style: cs.borderBottomStyle, bg: cs.backgroundColor }
   })
-  expect(style.border).toBe('0px')
-  expect(style.bg).toBe('rgba(0, 0, 0, 0)')
-  await expect(erp.locator('.mc-section-title')).toHaveCount(0)
+  expect(lineStyle.bottom).not.toBe('0px')
+  expect(lineStyle.style).toBe('solid')
+  expect(lineStyle.bg).toBe('rgba(0, 0, 0, 0)')
   // 只显示编码、名称、启用状态角标：无字段标签、不显示分组和 ERP 原始状态文字
   await expect(erp).not.toContainText('编码')
   await expect(erp).not.toContainText('名称')
   await expect(erp).not.toContainText('分组')
   await expect(erp).not.toContainText(ITEM.status)
   await expect(erp.locator('.ro-badge')).toHaveText('启用')
-  await expect(erp.locator('.ro-badge')).toHaveAttribute('title', `ERP 状态：${ITEM.status}`)
-  // 编码：黑色加粗、不是标签（无边框无底色）；名称：不加粗，字号加大
+  // 编码 17px 黑色加粗、无标签样式；名称 15px 不加粗
   const code = await erp.locator('.mc-erp-code').evaluate(el => {
     const cs = getComputedStyle(el)
     return { w: Number(cs.fontWeight), size: parseFloat(cs.fontSize), border: cs.borderTopWidth, bg: cs.backgroundColor, color: cs.color }
   })
   expect(code.w).toBeGreaterThanOrEqual(600)
-  expect(code.size).toBeGreaterThanOrEqual(15)
+  expect(code.size).toBe(17)
   expect(code.color).toBe('rgb(0, 0, 0)')
   expect(code.border).toBe('0px')
   expect(code.bg).toBe('rgba(0, 0, 0, 0)')
@@ -157,7 +158,15 @@ test('物料卡片：ERP 信息在最上方无卡片，图片|人工维护，价
     return { w: Number(cs.fontWeight), size: parseFloat(cs.fontSize) }
   })
   expect(name.w).toBeLessThan(600)
-  expect(name.size).toBeGreaterThanOrEqual(16)
+  expect(name.size).toBe(15)
+  // 状态紧挨名称；原状态位置（最右侧）是「关闭」按键
+  const nameBox = await erp.locator('.mc-erp-name').boundingBox()
+  const badgeBox = await erp.locator('.ro-badge').boundingBox()
+  const closeBox = await erp.locator('.mc-close-btn').boundingBox()
+  expect(badgeBox.x - (nameBox.x + nameBox.width)).toBeLessThan(16)
+  expect(closeBox.x).toBeGreaterThan(badgeBox.x + badgeBox.width)
+  expect(Math.abs((closeBox.x + closeBox.width) - (erpBox.x + erpBox.width))).toBeLessThan(1)
+  await expect(erp.locator('.mc-close-btn')).toHaveText('关闭')
 
   // 图片在左、人工维护在右，等高；价格在下方通栏
   expect(img.x).toBeLessThan(manual.x)
@@ -177,6 +186,8 @@ test('物料卡片：ERP 信息在最上方无卡片，图片|人工维护，价
   expect(new Set(labelWidths).size).toBe(1)
 
   await page.locator('.el-dialog').screenshot({ path: 'test-results/material-card-layout.png' })
+  await erp.locator('.mc-close-btn').click()
+  await expect(page.locator('.material-card')).toBeHidden()
 })
 
 // 名称很长时单行省略，不能把卡片撑高
@@ -185,12 +196,12 @@ test('ERP 名称过长时单行省略、悬停可看全文', async ({ page }) =>
   const card = await openCard(page, { ...ITEM, name: longName })
   await page.waitForTimeout(500)
   // 名称只占一行：元素高度不超过一行行高
-  const nameBox = await card.locator('.mc-erp-name').evaluate(el => ({
+  const nameBox = await page.locator('.el-dialog__header .mc-erp-name').evaluate(el => ({
     h: el.getBoundingClientRect().height, lh: parseFloat(getComputedStyle(el).lineHeight) || 0,
     size: parseFloat(getComputedStyle(el).fontSize),
   }))
   expect(nameBox.h).toBeLessThan((nameBox.lh || nameBox.size * 1.5) + 1)
-  await expect(card.locator('.mc-erp-name')).toHaveAttribute('title', longName)
+  await expect(page.locator('.el-dialog__header .mc-erp-name')).toHaveAttribute('title', longName)
 })
 
 // 单独指定物料类型时提示最长，也不能把右侧区域撑高
