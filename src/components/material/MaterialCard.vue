@@ -323,7 +323,7 @@ watch(() => props.visible, v => {
         <div class="mc-top">
         <div class="mc-top-image">
         <!-- 图片：悬停出现遮罩 + 圆形图标按键（新增/编辑/删除/查看）；无图时直接显示新增 -->
-        <div class="mc-image" :class="{ busy: imgBusy }">
+        <div class="mc-image" :class="{ busy: imgBusy, 'no-images': !images.length }">
           <template v-if="currentImage">
             <img :src="currentImage.url" alt="" />
             <div class="mc-img-mask">
@@ -353,8 +353,9 @@ watch(() => props.visible, v => {
           </div>
           <div v-if="imgBusy" class="mc-img-busy">处理中...</div>
         </div>
-        <!-- 多张时的缩略图条，点击切换当前图 -->
-        <div v-if="images.length > 1" class="mc-thumbs">
+        <!-- 缩略图条：只要有图（含仅一张）就显示，点击切换当前图。
+             无图时不渲染，由图片框占满整列高度（.no-images），保证 0/1/多张图卡片尺寸不变 -->
+        <div v-if="images.length" class="mc-thumbs">
           <button
             v-for="(img, i) in images"
             :key="img.id"
@@ -712,7 +713,11 @@ watch(() => props.visible, v => {
 
 .mc-top { display: flex; align-items: stretch; gap: 16px; margin-bottom: 18px; }
 .mc-top-image { width: 40%; flex-shrink: 0; display: flex; flex-direction: column; }
+/* 图片列总高固定 = 图片框 220 + 缩略图条 56（上间距 8 + 条高 48）；
+   无图时图片框直接占满 276，卡片尺寸不随图片数量变化 */
+.mc-top-image { height: 276px; }
 .mc-top-image .mc-image { flex: none; height: 220px; margin-bottom: 0; }
+.mc-top-image .mc-image.no-images { height: 276px; }
 
 /* 图片悬停遮罩 + 圆形图标按键 */
 .mc-image { position: relative; }
@@ -749,11 +754,15 @@ watch(() => props.visible, v => {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   background: rgba(255,255,255,0.6); color: #3a3028; font-size: 12px;
 }
-.mc-thumbs { display: flex; gap: 6px; margin-top: 8px; overflow-x: auto; padding-bottom: 2px; }
+.mc-thumbs {
+  display: flex; gap: 6px; margin-top: 8px;
+  height: 48px; flex: none; box-sizing: border-box;
+  overflow-x: auto; overflow-y: hidden; align-items: flex-start;
+}
 .mc-thumbs::-webkit-scrollbar { height: 4px; }
 .mc-thumbs::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 .mc-thumb {
-  width: 44px; height: 44px; flex-shrink: 0; padding: 0;
+  width: 44px; height: 44px; flex-shrink: 0; padding: 0; box-sizing: border-box;
   border: 1.5px solid var(--border); border-radius: 6px; background: var(--bg);
   overflow: hidden; cursor: pointer;
 }

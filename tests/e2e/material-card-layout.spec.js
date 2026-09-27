@@ -90,6 +90,32 @@ test('图片框尺寸固定，不随图片实际尺寸变化', async ({ page }) 
   expect(imgBox.height).toBeLessThanOrEqual(small.height + 1)
 })
 
+// 0 / 1 / 多张图时，图片列与整张卡片的尺寸必须完全一致
+for (const n of [0, 1, 12]) {
+  test(`图片数量为 ${n} 时卡片尺寸不变`, async ({ page }) => {
+    const images = Array.from({ length: n }, (_, i) => ({ id: i + 1, url: PX, orig_url: null, sort_order: i }))
+    const card = await openCard(page, { ...ITEM, images })
+    await page.waitForTimeout(500)
+    const col = await card.locator('.mc-top-image').boundingBox()
+    const top = await card.locator('.mc-top').boundingBox()
+    const dialog = await page.locator('.el-dialog').boundingBox()
+    expect(Math.round(col.height)).toBe(276)
+    await card.locator('.mc-top').screenshot({ path: `test-results/material-card-top-${n}.png` })
+    await expect(card.locator('.mc-thumb')).toHaveCount(n)
+    // 记录到标题里便于对比三种情况；具体数值在下面三条断言里锁死
+    test.info().annotations.push({ type: 'size', description: `${n}: top=${top.height} dialog=${dialog.width}x${dialog.height}` })
+    expect(Math.round(top.height)).toBe(276)
+    expect(Math.round(dialog.width)).toBe(900)
+    if (n === 0) {
+      const box = await card.locator('.mc-image').boundingBox()
+      expect(Math.round(box.height)).toBe(276)
+    } else {
+      const strip = await card.locator('.mc-thumbs').boundingBox()
+      expect(Math.round(strip.y + strip.height)).toBe(Math.round(col.y + col.height))
+    }
+  })
+}
+
 test('物料卡片按 图片|ERP / 人工维护 / 价格 排版', async ({ page }) => {
   await page.addInitScript((u) => {
     localStorage.setItem('user', JSON.stringify(u))
