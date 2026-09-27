@@ -236,6 +236,12 @@ class MaterialService:
         material = MaterialRepository.materials_for_codes([code]).get(code)
         data = self._serialize(raw, cats, material, source)
         data['images'] = [row.to_dict() for row in MaterialRepository.images_for_code(code)]
+        # 成品直接沿用产品库的主图（只读，在产品库维护），与物料自己的图片分开返回
+        cover = MaterialRepository.product_cover(code)
+        data['product_images'] = (
+            [{'url': cover.cover_image, 'orig_url': cover.cover_image_original or cover.cover_image}]
+            if cover and cover.cover_image else []
+        )
         # 卡片需要同时看到「如果不单独指定，规则会判成什么」，方便决定要不要指定
         if source == SOURCE_MANUAL:
             data['rule_categories'], data['rule_source'] = self._classify(

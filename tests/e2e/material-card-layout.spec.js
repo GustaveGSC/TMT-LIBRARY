@@ -318,3 +318,33 @@ test('物料库 tab 名称与顺序', async ({ page }) => {
   await expect(page.locator('.nav-item.active')).toHaveText('物料BOM')
   await page.screenshot({ path: 'test-results/material-tabs.png' })
 })
+
+// 成品沿用产品库主图：排在第一张、只读（无编辑/删除），带「产品库」角标；物料自己的图片仍可编辑
+test('成品直接显示产品库图片，只读', async ({ page }) => {
+  const card = await openCard(page, {
+    ...ITEM, categories: ['finished'],
+    product_images: [{ url: PX, orig_url: PX }],
+    images: [{ id: 5, url: PX, orig_url: PX, sort_order: 0 }],
+  })
+  await page.waitForTimeout(500)
+  await expect(card.locator('.mc-thumb')).toHaveCount(2)
+  await expect(card.locator('.mc-img-count')).toHaveText('1 / 2')
+  await card.locator('.mc-image').hover()
+  await expect(card.locator('.mc-img-source')).toHaveText('产品库')
+  await expect(card.locator('.mc-round-btn[title="新增图片"]')).toBeVisible()
+  await expect(card.locator('.mc-round-btn[title="查看大图"]')).toBeVisible()
+  await expect(card.locator('.mc-round-btn[title^="编辑"]')).toHaveCount(0)
+  await expect(card.locator('.mc-round-btn[title="删除当前图片"]')).toHaveCount(0)
+
+  // 切到物料自己的图片：编辑/删除恢复，角标消失
+  await card.locator('.mc-thumb').nth(1).click()
+  await card.locator('.mc-image').hover()
+  await expect(card.locator('.mc-img-source')).toHaveCount(0)
+  await expect(card.locator('.mc-round-btn[title^="编辑"]')).toBeVisible()
+  await expect(card.locator('.mc-round-btn[title="删除当前图片"]')).toBeVisible()
+
+  // 只有产品库图片时也不显示空状态
+  await card.locator('.mc-thumb').nth(0).click()
+  await card.locator('.mc-image').hover()
+  await card.locator('.mc-image').screenshot({ path: 'test-results/material-card-product-image.png' })
+})

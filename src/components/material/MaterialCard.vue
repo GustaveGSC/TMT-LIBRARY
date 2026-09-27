@@ -111,7 +111,13 @@ function formatTypes(list) {
 // ── 图片（多张，存 material_image）────────────────────
 // 新增/编辑/删除都是**即时生效**的独立操作，不跟随底部「保存/取消」——
 // 图片要先传 OSS，放进表单草稿里等保存反而会在取消时留下孤儿文件。
-const images     = ref([])   // [{id, url, orig_url, sort_order}]
+const ownImages  = ref([])   // 物料自己的图片 material_image：[{id, url, orig_url, sort_order}]
+const productImages = ref([]) // 成品沿用产品库主图（只读）：[{url, orig_url}]
+// 展示用的完整列表：产品库图片排在最前，不可编辑/删除（在产品库维护）
+const images = computed(() => [
+  ...productImages.value.map((img, i) => ({ ...img, id: `product-${i}`, fromProduct: true })),
+  ...ownImages.value,
+])
 const currentIdx = ref(0)
 const imgBusy    = ref(false)
 const viewerOpen = ref(false)
@@ -228,7 +234,8 @@ async function loadDetail() {
     if (res.success) {
       detail.value = res.data
       fillForm(res.data)
-      images.value = res.data.images || []
+      ownImages.value = res.data.images || []
+      productImages.value = res.data.product_images || []
       currentIdx.value = 0
       loadCost()
     } else {
@@ -297,7 +304,7 @@ async function runImageOp(request, { selectLast = false } = {}) {
   try {
     const res = await request()
     if (!res.success) { ElMessage.error(res.message || '图片操作失败'); return }
-    images.value = res.data || []
+    ownImages.value = res.data || []
     if (selectLast) currentIdx.value = images.value.length - 1
     else if (currentIdx.value >= images.value.length) currentIdx.value = Math.max(0, images.value.length - 1)
   } catch (e) {
@@ -315,7 +322,7 @@ async function addImage() {
 
 async function replaceImage() {
   const img = currentImage.value
-  if (!img) return
+  if (!img || img.fromProduct) return
   const dataUrl = await pickImageDataUrl()
   if (!dataUrl) return
   await runImageOp(() => http.put(`${imagesUrl()}/${img.id}`, { data_url: dataUrl }))
@@ -323,7 +330,7 @@ async function replaceImage() {
 
 async function deleteImage() {
   const img = currentImage.value
-  if (!img) return
+  if (!img || img.fromProduct) return
   try {
     await ElMessageBox.confirm('确认删除这张图片？删除后不可恢复。', '删除图片',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' })
@@ -417,16 +424,17 @@ watch(() => props.visible, v => {
               <button v-if="canEditMaterial" class="mc-round-btn" title="新增图片" :disabled="imgBusy" @click="addImage">
                 <el-icon><Plus /></el-icon>
               </button>
-              <button v-if="canEditMaterial" class="mc-round-btn" title="编辑（替换当前图片）" :disabled="imgBusy" @click="replaceImage">
+              <button v-if="canEditMaterial && !currentImage.fromProduct" class="mc-round-btn" title="编辑（替换当前图片）" :disabled="imgBusy" @click="replaceImage">
                 <el-icon><Edit /></el-icon>
               </button>
-              <button v-if="canEditMaterial" class="mc-round-btn danger" title="删除当前图片" :disabled="imgBusy" @click="deleteImage">
+              <button v-if="canEditMaterial && !currentImage.fromProduct" class="mc-round-btn danger" title="删除当前图片" :disabled="imgBusy" @click="deleteImage">
                 <el-icon><Delete /></el-icon>
               </button>
               <button class="mc-round-btn" title="查看大图" @click="viewImage">
                 <el-icon><ZoomIn /></el-icon>
               </button>
             </div>
+            <span v-if="currentImage.fromProduct" class="mc-img-source" title="沿用产品库成品主图，请到产品库修改">产品库</span>
             <span v-if="images.length > 1" class="mc-img-count">{{ currentIdx + 1 }} / {{ images.length }}</span>
           </template>
           <div v-else class="mc-image-empty">
@@ -819,6 +827,13 @@ watch(() => props.visible, v => {
   position: absolute; right: 8px; bottom: 8px;
   font-size: 11px; color: #fff; background: rgba(0,0,0,0.45);
   border-radius: 10px; padding: 1px 8px; pointer-events: none;
+}
+/* 产品库图片来源角标（左上角） */
+.mc-img-source {
+  position: absolute; left: 8px; top: 8px;
+  padding: 2px 8px; border-radius: 10px;
+  background: rgba(0,0,0,0.5); color: #fff; font-size: 11px;
+  pointer-events: none;
 }
 .mc-img-busy {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;

@@ -134,7 +134,7 @@ DELETE /api/product/finished/:id/packaged/:id
 GET  /api/material/group-categories
 PUT  /api/material/group-categories/:group_code
 GET  /api/material/items
-GET  /api/material/items/:code
+GET  /api/material/items/:code   # images=物料自己的图片（可编辑）；product_images=同编码成品的产品库主图 [{url, orig_url}]（只读）
 PUT  /api/material/items/:code
 POST /api/material/items/:code/images
 PUT  /api/material/items/:code/images/:image_id

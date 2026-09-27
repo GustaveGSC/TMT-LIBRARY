@@ -2,6 +2,7 @@ from sqlalchemy import case, false, func, or_
 
 from database.base import db
 from database.models.product.import_raw import ImportProductRaw
+from database.models.product.finished import ProductFinished
 from database.models.product.material import (
     ErpGroupCategory, MaterialDisableKeyword, MaterialImage, ProductMaterial,
 )
@@ -99,6 +100,14 @@ class MaterialRepository:
             row.code: row for row in ProductMaterial.query
             .filter(ProductMaterial.code.in_(codes)).all()
         }
+
+    @staticmethod
+    def product_cover(code):
+        """产品库里同编码成品的主图（缩略图, 原图），没有则返回 None。"""
+        return (
+            db.session.query(ProductFinished.cover_image, ProductFinished.cover_image_original)
+            .filter(ProductFinished.code == code).first()
+        )
 
     @staticmethod
     def images_for_code(code):

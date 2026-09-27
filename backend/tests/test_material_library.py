@@ -11,7 +11,7 @@ from auth import generate_token
 from database.base import db
 from database.models.product.erp_code_rules import ErpCodeRule
 import database.models.product.category  # noqa: F401
-import database.models.product.finished  # noqa: F401
+from database.models.product.finished import ProductFinished
 import database.models.product.resource  # noqa: F401
 from database.models.product.import_raw import ImportProductRaw
 from database.models.product.material import (
@@ -116,6 +116,7 @@ def material_app():
         ErpGroupCategory.__table__,
         ProductMaterial.__table__,
         MaterialImage.__table__,
+        ProductFinished.__table__,
         MaterialDisableKeyword.__table__,
     ]
     with app.app_context():
@@ -529,3 +530,22 @@ def test_material_route_returns_expression_error_as_400(material_app, monkeypatc
     )
     assert response.status_code == 400
     assert response.get_json()['message'] == '括号不匹配'
+
+
+def test_material_detail_reuses_product_library_cover(material_app):
+    with material_app.app_context():
+        for code in ('F1', 'F2', 'M1'):
+            db.session.add(ImportProductRaw(code=code, name='件', group_code='G', group_name='组',
+                                            imported_at=now_cst()))
+        db.session.add(ProductFinished(code='F1', cover_image='thumb.png',
+                                       cover_image_original='orig.png'))
+        db.session.add(ProductFinished(code='F2'))
+        db.session.commit()
+
+        assert material_service.detail('F1').data['product_images'] == [
+            {'url': 'thumb.png', 'orig_url': 'orig.png'},
+        ]
+        # 产品库图片不进 material_image，也不影响物料自己的图片列表
+        assert material_service.detail('F1').data['images'] == []
+        assert material_service.detail('F2').data['product_images'] == []
+        assert material_service.detail('M1').data['product_images'] == []
