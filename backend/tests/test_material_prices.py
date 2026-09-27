@@ -7,11 +7,12 @@ from sqlalchemy import event, text
 from auth import generate_token, validate_csrf_request
 from database.base import db
 import database.models.product.category  # noqa: F401
-import database.models.product.finished  # noqa: F401
+from database.models.product.finished import ProductFinished
 import database.models.product.resource  # noqa: F401
 from database.models.product.erp_code_rules import ErpCodeRule
 from database.models.product.import_raw import ImportProductRaw
 from database.models.product.material import (
+    MaterialBom, MaterialBomLine,
     ErpGroupCategory, MaterialDisableKeyword, MaterialImage, ProductMaterial,
 )
 from database.models.product.material_supplier import MaterialSupplier
@@ -42,6 +43,7 @@ def price_app(monkeypatch):
         ImportProductRaw.__table__, ErpCodeRule.__table__, ErpGroupCategory.__table__,
         ProductMaterial.__table__, MaterialImage.__table__, MaterialDisableKeyword.__table__,
         MaterialSupplier.__table__,
+        ProductFinished.__table__, MaterialBom.__table__, MaterialBomLine.__table__,
         CostSnapshot.__table__, CostSnapshotSku.__table__, CostBomNode.__table__,
         CostBomLine.__table__,
         CostMaterialPrice.__table__, CostMaterialRule.__table__,

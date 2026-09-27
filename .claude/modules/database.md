@@ -275,6 +275,8 @@ material_bom
   # 研发版本比 ERP 细：erp_code 按「code-完整版本 → code-仅字母版本 → code」依次去 import_product_raw 匹配，
   #   所以成品 X-A01/X-A02 都对应 ERP 的 X-A（一个物料下可挂多个研发版本）；匹配不到为 NULL
   # 只存研发 BOM；采购 BOM 只作价格来源（cost_import），不进这张表
+  # code/version 入库前统一大写（MySQL ai_ci 与 Python 大小写口径一致，避免唯一约束 1062）
+  # 下级 BOM 是独立资产：父件重导不级联删除；ERP 导入后只对 erp_code 为空的行补关联，已匹配的不重写
 
 material_bom_line
   id, bom_id(FK→material_bom CASCADE, INDEX), seq, code, version, erp_code(INDEX, NULL),

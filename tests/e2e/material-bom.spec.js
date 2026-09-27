@@ -54,7 +54,7 @@ test('物料BOM tab：列表、多层结构、导入结果', async ({ page }) =>
   await page.route('**/api/material/boms/import', r => {
     uploaded = true
     return r.fulfill({ json: OK({ created: 3, updated: 1, lines: 12, roots: ['F1-A02'],
-                                  unmatched: ['S1-A01'] }) })
+                                  unmatched: ['S1-A01'], skipped: 5 }) })
   })
   await page.route('**/api/material/items/*', r => r.fulfill({ json: OK(item('P1-A')) }))
 
@@ -76,6 +76,7 @@ test('物料BOM tab：列表、多层结构、导入结果', async ({ page }) =>
   })
   await expect(page.locator('.ir-stats b')).toHaveText(['3', '1', '12'])
   await expect(page.locator('.ir-codes')).toHaveText('S1-A01')
+  await expect(page.locator('.ir-muted')).toContainText('已按规则跳过 5 行')
   expect(uploaded).toBe(true)
   await page.locator('.el-dialog button', { hasText: '知道了' }).click()
 
@@ -154,4 +155,50 @@ test('物料表 BOM 标记 + 物料卡片 BOM 区：版本、被使用、卡片�
   await expect(page.locator('.el-dialog__header .mc-erp-code')).toHaveText('F1-A')
   await page.locator('.el-dialog__header .mc-back-btn').click()
   await expect(page.locator('.el-dialog__header .mc-erp-code')).toHaveText('R1-A01')
+})
+
+test('物料BOM：导入校验失败逐条列出；删除被引用的 BOM 需二次确认', async ({ page }) => {
+  await setup(page)
+  const list = [bomHead(2, 'M1', 'A01', { category: '半成品' })]
+  await page.route('**/api/material/boms?*', r => r.fulfill({
+    json: OK({ items: list.map(b => ({ ...b, line_count: 1 })), total: 1, page: 1, page_size: 50,
+               categories: ['半成品'] }) }))
+  await page.route('**/api/material/boms/*/tree', r => r.fulfill({
+    json: OK({ bom: list[0], children: [] }) }))
+  await page.route('**/api/material/boms/import', r => r.fulfill({
+    json: { success: false, message: '第 5 行数量「abc」无效；第 9 行层次「1.1」是数字格式，请把层次列设为文本后重新导出', data: null } }))
+  const deletes = []
+  await page.route('**/api/material/boms/2*', r => {
+    if (r.request().method() !== 'DELETE') return r.fallback()
+    const force = new URL(r.request().url()).searchParams.get('force')
+    deletes.push(force)
+    if (!force) {
+      return r.fulfill({ json: { success: false, message: '被引用', data: {
+        needs_force: true, references: [bomHead(1, 'F1', 'A01'), bomHead(3, 'P1', 'A01')] } } })
+    }
+    return r.fulfill({ json: OK(null) })
+  })
+
+  await page.goto('/#/material')
+  await page.locator('.nav-item', { hasText: '物料BOM' }).click()
+  await expect(page.locator('.bd-drawing')).toHaveText('M1-A01')
+
+  // 导入失败：弹窗逐条列出错误
+  await page.locator('.bp-toolbar input[type=file]').setInputFiles({
+    name: 'bad.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    buffer: Buffer.from('x'),
+  })
+  await expect(page.locator('.ie-list li')).toHaveCount(2)
+  await expect(page.locator('.ie-list li').first()).toHaveText('第 5 行数量「abc」无效')
+  await page.locator('.el-dialog button', { hasText: '知道了' }).click()
+
+  // 删除：第一次确认 → 后端说被引用 → 列出上级再确认 → 带 force 删除
+  await page.locator('.bd-del').click()
+  await page.locator('.el-message-box button', { hasText: '删除' }).click()
+  // 第一个确认框关闭动画期间两个 message box 同时在 DOM 里，按标题定位第二个
+  const second = page.locator('.el-message-box', { hasText: '仍被引用' })
+  await expect(second).toContainText('F1-A01')
+  await expect(second).toContainText('P1-A01')
+  await second.locator('button', { hasText: '仍然删除' }).click()
+  await expect.poll(() => deletes).toEqual([null, '1'])
 })

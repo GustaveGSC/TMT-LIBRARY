@@ -10,6 +10,12 @@ from openpyxl.utils import get_column_letter
 
 from error_handling import report_internal_error
 from upload_validation import UploadValidationError
+# 表头识别/编码转文本/分类名清洗与物料库 BOM 共用，放在公共模块；这里保留原名供本模块和测试使用
+from services.common.bom_excel import (
+    bom_columns as _bom_columns,
+    category_name as _category_name,
+    numeric_code_text as _numeric_code_text,
+)
 
 _THIN  = Side(style='thin')
 _THICK = Side(style='medium')
@@ -140,70 +146,6 @@ def _level_sort_key(level_str):
         return tuple(int(x) for x in level_str.split('.') if x)
     except ValueError:
         return (0,)
-
-
-_ERP_BOM_REQUIRED_COLS = ['层次', '图号', '品名', '规格', '数量', '单位', '状态']
-_PDM_BOM_REQUIRED_COLS = [
-    '层次', '物料编码', '版本', '一级分类', '二级分类', '描述', '数量', '单位', '状态',
-]
-
-
-def _bom_columns(ws):
-    """返回 (格式, 首个同名表头映射)，必需表头重复时明确拒绝。"""
-    occurrences = {}
-    for column in range(1, ws.max_column + 1):
-        value = ws.cell(1, column).value
-        if value is None or not str(value).strip():
-            continue
-        occurrences.setdefault(str(value).strip(), []).append(column)
-
-    names = set(occurrences)
-    if '图号' in names:
-        format_name = 'erp'
-        required = _ERP_BOM_REQUIRED_COLS
-    elif {'物料编码', '一级分类'} <= names:
-        format_name = 'pdm'
-        required = _PDM_BOM_REQUIRED_COLS
-    else:
-        raise UploadValidationError('无法识别的 BOM 文件格式')
-
-    duplicates = [name for name in required if len(occurrences.get(name, [])) > 1]
-    if duplicates:
-        name = duplicates[0]
-        columns = '、'.join(str(column) for column in occurrences[name])
-        raise UploadValidationError(
-            f'表头中「{name}」出现了 {len(occurrences[name])} 次（第 {columns} 列），请确认导出模板'
-        )
-    missing = [name for name in required if name not in occurrences]
-    if missing:
-        raise UploadValidationError('缺少必要列：' + ', '.join(missing))
-    return format_name, {name: columns[0] for name, columns in occurrences.items()}
-
-
-def _numeric_code_text(cell):
-    """读取混合类型编码；纯 0 数字格式用于恢复 Excel 展示中的前导零。"""
-    value = cell.value
-    if value is None:
-        return ''
-    if isinstance(value, bool):
-        raise UploadValidationError(f'第 {cell.row} 行物料编码不是有效文本')
-    if isinstance(value, int):
-        text = str(value)
-    elif isinstance(value, float):
-        # PDM 偶尔会把带点的子件编码存成数值。这类编码会在后续按既有
-        # 规则跳过，不应为了一个不参与 BOM 比对的值阻断整份文件。
-        text = str(int(value)) if value.is_integer() else repr(value)
-    else:
-        return str(value).strip()
-    number_format = str(cell.number_format or '').strip()
-    if '.' not in text and number_format and set(number_format) == {'0'}:
-        text = text.zfill(len(number_format))
-    return text
-
-
-def _category_name(value):
-    text = str(value or '').strip()
-    return text.split('_', 1)[1] if '_' in text else text
 
 
 def _pdm_spec(get_value, version, is_packaged):

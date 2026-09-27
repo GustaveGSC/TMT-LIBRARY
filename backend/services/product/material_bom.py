@@ -1,14 +1,18 @@
 """物料 BOM（研发 BOM）：导入、展开查看、反查被哪些产品使用。
 
 只收研发 BOM（采购 BOM 只作价格来源，不在这里）。Excel 是多层展开的层次表，
-支持 PDM 导出（物料编码+版本）与 ERP 导出（图号）两种格式，表头识别复用变更申请单的
-`_bom_columns`。导入时把树拆成「每个有下级的节点一份单层 BOM」存储，查看时逐层展开。
+支持 PDM 导出（物料编码+版本）与 ERP 导出（图号）两种格式，表头识别用公共模块
+`services.common.bom_excel`。导入时把树拆成「每个有下级的节点一份单层 BOM」存储，查看时逐层展开。
 
 编码对应：研发版本比 ERP 细——成品/产成品 ERP 编码只到 -A，研发是 -A01/-A02；
 半成品/原材料 ERP 编码本身就带 -A01。所以按「完整版本 → 仅字母版本 → 无版本」顺序
 去 ERP 物料表里找对应编码。
+
+导入是「全有或全无」：任何一行的层次/数量/长度/结构有问题都整份拒绝并列出行号，
+不做「猜一个值继续导」（2026-09-27 Codex 评估报告 P0/P1 项）。
 """
 import io
+import math
 import re
 
 from openpyxl import load_workbook
@@ -18,108 +22,231 @@ from database.base import db
 from database.models.product.import_raw import ImportProductRaw
 from database.models.product.material import MaterialBom, MaterialBomLine
 from result import Result
-from services.rd.change_documents import (
-    _bom_columns, _category_name, _level_str, _numeric_code_text,
-)
-from upload_validation import UploadValidationError, ensure_spreadsheet_row_limit
+from services.common.bom_excel import bom_columns, category_name, numeric_code_text
+from upload_validation import UploadValidationError
 from utils import now_cst
 
 
-_VERSION_LETTERS_RE = re.compile(r'^([A-Za-z]+)\d+$')
+_VERSION_LETTERS_RE = re.compile(r'^([A-Z]+)\d+$')
+_LEVEL_RE = re.compile(r'^\d+(\.\d+)*$')
 # 展开/反查的最大层数，防止数据里出现环（A 含 B、B 又含 A）时死循环
 _MAX_DEPTH = 20
+# 研发 BOM 专用行数上限（真实单个产品约 200+ 行），超出直接拒绝，避免大文件长时间占住唯一 worker
+MAX_BOM_ROWS = 10000
+# 错误信息最多列出的条数
+_MAX_ERRORS = 20
+# 与模型列宽一致，导入前校验，不靠数据库报错/截断
+_FIELD_LIMITS = {'code': 64, 'version': 16, 'name': 255, 'spec': 512, 'category': 64, 'unit': 16}
+_FIELD_LABELS = {'code': '编码', 'version': '版本', 'name': '名称', 'spec': '规格',
+                 'category': '分类', 'unit': '单位'}
+# NUMERIC(14,4) 的整数部分最多 10 位
+_MAX_QTY = 10 ** 10
 
 
 def _drawing(code, version):
     return f'{code}-{version}' if version else code
 
 
+def _norm(text):
+    """编码/版本统一去空格转大写：MySQL ai_ci 不区分大小写，Python 区分，不统一会撞唯一约束。"""
+    return str(text or '').strip().upper()
+
+
+def _is_skipped_code(code):
+    """用户 2026-09-27 决定与变更申请单一致：带「.」的 PDM 子零件、14ST10 标准件不进物料 BOM。"""
+    return '.' in code or code.startswith('14ST10')
+
+
+def _parse_level(value, row, errors):
+    """层次必须是文本（如 '1.1.10'）。数字单元格里 1.10 已经变成 1.1，无法还原，只能拒绝。"""
+    if value is None:
+        return ''
+    if isinstance(value, bool):
+        errors.append(f'第 {row} 行层次无效')
+        return None
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if value.is_integer():
+            return str(int(value))
+        errors.append(f'第 {row} 行层次「{value}」是数字格式，请把层次列设为文本后重新导出')
+        return None
+    text = str(value).strip()
+    if text and not _LEVEL_RE.match(text):
+        errors.append(f'第 {row} 行层次「{text}」格式不正确')
+        return None
+    return text
+
+
+def _parse_qty(value, row, errors):
+    """数量必须是大于 0、最多 4 位小数的有限数；空/文本/0/负数都拒绝，不再默认为 1。"""
+    try:
+        if isinstance(value, bool) or value is None or str(value).strip() == '':
+            raise ValueError
+        qty = float(value)
+    except (TypeError, ValueError):
+        errors.append(f'第 {row} 行数量「{value if value is not None else ""}」无效')
+        return None
+    if not math.isfinite(qty) or qty <= 0 or qty >= _MAX_QTY:
+        errors.append(f'第 {row} 行数量「{value}」必须大于 0')
+        return None
+    if abs(qty * 10000 - round(qty * 10000)) > 1e-6:
+        errors.append(f'第 {row} 行数量「{value}」小数超过 4 位')
+        return None
+    return round(qty, 4)
+
+
+def _raise_errors(errors):
+    if errors:
+        more = f'（另有 {len(errors) - _MAX_ERRORS} 处）' if len(errors) > _MAX_ERRORS else ''
+        raise UploadValidationError('；'.join(errors[:_MAX_ERRORS]) + more)
+
+
 def parse_bom_rows(data: bytes):
-    """解析研发 BOM Excel，按文件顺序返回行：level/code/version/name/spec/category/qty/unit。"""
+    """解析研发 BOM Excel，按文件顺序返回行：row/level/code/version/name/spec/category/qty/unit。
+
+    跳过的编码（见 _is_skipped_code）连同它的整个下级一起不要。
+    有任何行级错误时汇总后抛 UploadValidationError（带 Excel 行号），不返回部分结果。
+    返回 (rows, skipped_count)。
+    """
     wb = load_workbook(io.BytesIO(data), data_only=True, read_only=False)
     try:
         ws = wb.active
-        format_name, col_map = _bom_columns(ws)
+        if ws.max_row - 1 > MAX_BOM_ROWS:
+            raise UploadValidationError(f'BOM 文件最多 {MAX_BOM_ROWS} 行，当前 {ws.max_row - 1} 行')
+        format_name, col_map = bom_columns(ws)
 
         def get(r, name):
             c = col_map.get(name)
             return ws.cell(r, c).value if c else None
 
-        rows = []
+        rows, errors = [], []
+        skipped = 0
+        skip_prefix = None
         for r in range(2, ws.max_row + 1):
-            ensure_spreadsheet_row_limit(r)
-            level = _level_str(get(r, '层次'))
-            if not level:
+            level = _parse_level(get(r, '层次'), r, errors)
+            if level is None:
                 continue
             if format_name == 'erp':
                 drawing = str(get(r, '图号') or '').strip()
-                if not drawing:
-                    continue
                 idx = drawing.rfind('-')
                 code = drawing[:idx] if idx > 0 else drawing
                 version = drawing[idx + 1:] if idx > 0 else ''
                 name = str(get(r, '品名') or '').strip()
                 spec = str(get(r, '规格') or '').strip()
-                category = None
+                category = ''
             else:
-                code = _numeric_code_text(ws.cell(r, col_map['物料编码']))
-                if not code:
-                    continue
+                code = numeric_code_text(ws.cell(r, col_map['物料编码']))
                 version = str(get(r, '版本') or '').strip()
-                category = _category_name(get(r, '一级分类')) or None
+                category = category_name(get(r, '一级分类'))
                 names = [
-                    _category_name(get(r, col))
+                    category_name(get(r, col))
                     for col in ('二级分类', '三级分类')
-                    if _category_name(get(r, col))
+                    if category_name(get(r, col))
                 ]
-                description = str(get(r, '描述') or '').strip()
-                name = description or '_'.join(names)
+                name = str(get(r, '描述') or '').strip() or '_'.join(names)
                 spec = str(get(r, '规格') or '').strip()
-            try:
-                qty = float(get(r, '数量'))
-            except (TypeError, ValueError):
-                qty = 1.0
-            rows.append({
-                'level': level, 'code': code, 'version': version,
-                'name': name or None, 'spec': spec or None, 'category': category,
+            code, version = _norm(code), _norm(version)
+
+            if not level and not code:
+                continue          # 空行
+            if not level:
+                errors.append(f'第 {r} 行缺少层次')
+                continue
+            if not code:
+                errors.append(f'第 {r} 行缺少物料编码')
+                continue
+            # 跳过的编码：它自己和它下面整棵子树都不要
+            if skip_prefix and (level == skip_prefix or level.startswith(skip_prefix + '.')):
+                skipped += 1
+                continue
+            skip_prefix = None
+            if _is_skipped_code(code):
+                skip_prefix = level
+                skipped += 1
+                continue
+
+            qty = _parse_qty(get(r, '数量'), r, errors)
+            row = {
+                'row': r, 'level': level, 'code': code, 'version': version,
+                'name': name or None, 'spec': spec or None, 'category': category or None,
                 'qty': qty, 'unit': str(get(r, '单位') or '').strip() or None,
-            })
-        return rows
+            }
+            for field, limit in _FIELD_LIMITS.items():
+                if row[field] and len(row[field]) > limit:
+                    errors.append(f'第 {r} 行{_FIELD_LABELS[field]}超过 {limit} 个字符')
+            rows.append(row)
+        _raise_errors(errors)
+        return rows, skipped
     finally:
         wb.close()
 
 
-def build_single_level_boms(rows):
-    """把层次行拆成单层 BOM：{(code, version): {'head': row, 'lines': [row+qty]}}。
+def _line_signature(lines):
+    """一次展开的内容签名（子件编码/版本/数量/单位，顺序无关），用于比较重复展开是否一致。"""
+    return sorted((l['code'], l['version'], l['qty'], l['unit'] or '') for l in lines)
 
-    同一父件在文件里被展开多次（同一半成品挂在多个上级下）时内容相同，只取第一次；
-    同一父件下同一子件出现多行时合并数量。
+
+def build_single_level_boms(rows):
+    """把层次行拆成单层 BOM：{(code, version): {'head': row, 'lines': [row]}}。
+
+    结构校验（有问题整份拒绝，带行号）：层次不能重复；非顶层行的上级必须已在它前面出现。
+    同一父件在文件里被展开多次（同一半成品挂在多个上级下）时，各次展开内容必须一致才去重，
+    不一致直接报错，不再默默取第一次。
+    同一父件下同一子件出现多行时合并数量，但单位必须相同、名称/规格/分类不能互相矛盾。
     """
+    errors = []
     by_level = {}
-    boms = {}
+    expansions = {}     # 父件 level → {'parent': row, 'lines': {child_key: row}}
     for row in rows:
-        by_level[row['level']] = row
-        dot = row['level'].rfind('.')
+        level = row['level']
+        if level in by_level:
+            errors.append(f'第 {row["row"]} 行与第 {by_level[level]["row"]} 行层次重复（{level}）')
+            continue
+        by_level[level] = row
+        dot = level.rfind('.')
         if dot < 0:
             continue
-        parent = by_level.get(row['level'][:dot])
+        parent = by_level.get(level[:dot])
         if parent is None:
+            errors.append(f'第 {row["row"]} 行（层次 {level}）找不到上级 {level[:dot]}，上级行必须在它前面')
             continue
-        key = (parent['code'], parent['version'])
-        entry = boms.setdefault(key, {'head': parent, 'lines': {}, 'owner': parent['level']})
-        # 只采用该父件第一次出现时的展开，后面重复展开的整段跳过
-        if entry['owner'] != parent['level']:
-            continue
+        exp = expansions.setdefault(parent['level'], {'parent': parent, 'lines': {}})
         child_key = (row['code'], row['version'])
-        line = entry['lines'].get(child_key)
-        if line:
-            line['qty'] += row['qty']
+        line = exp['lines'].get(child_key)
+        if line is None:
+            exp['lines'][child_key] = dict(row)
+            continue
+        # 同父同子多行：只允许同语义的行相加
+        if (line['unit'] or '') != (row['unit'] or ''):
+            errors.append(f'第 {line["row"]} 行与第 {row["row"]} 行是同一上级下的同一子件'
+                          f' {_drawing(*child_key)}，但单位不同（{line["unit"]} / {row["unit"]}）')
+            continue
+        for field in ('name', 'spec', 'category'):
+            if line[field] and row[field] and line[field] != row[field]:
+                errors.append(f'第 {line["row"]} 行与第 {row["row"]} 行是同一子件 {_drawing(*child_key)}，'
+                              f'但{_FIELD_LABELS[field]}不一致')
+                break
         else:
-            entry['lines'][child_key] = dict(row)
-    return {
-        key: {'head': v['head'], 'lines': list(v['lines'].values())}
-        for key, v in boms.items()
-    }
+            if line['qty'] is not None and row['qty'] is not None:
+                line['qty'] = round(line['qty'] + row['qty'], 4)
+    _raise_errors(errors)
+
+    boms = {}
+    for exp in expansions.values():
+        parent = exp['parent']
+        key = (parent['code'], parent['version'])
+        lines = list(exp['lines'].values())
+        if key not in boms:
+            boms[key] = {'head': parent, 'lines': lines}
+            continue
+        # 重复展开：内容一致才去重
+        first = boms[key]
+        if _line_signature(first['lines']) != _line_signature(lines):
+            errors.append(f'{_drawing(*key)} 在第 {first["head"]["row"]} 行和第 {parent["row"]} 行'
+                          f'各展开了一次，但两处的下级内容不一致')
+    _raise_errors(errors)
+    return boms
 
 
 def _erp_info(erp_codes):
@@ -139,7 +266,10 @@ class MaterialBomService:
     # ── 编码对应 ──────────────────────────────────────
     @staticmethod
     def _erp_resolver(pairs):
-        """返回 (code, version) → ERP 编码 的函数；只查一次库。"""
+        """返回 (code, version) → ERP 编码 的函数；候选编码按 1000 个一批查库。
+
+        比较时统一大写，返回 ERP 表里的原始写法。
+        """
         candidates = set()
         for code, version in pairs:
             candidates.add(code)
@@ -148,74 +278,80 @@ class MaterialBomService:
                 m = _VERSION_LETTERS_RE.match(version)
                 if m:
                     candidates.add(f'{code}-{m.group(1)}')
-        existing = set()
+        existing = {}
         cand = list(candidates)
         for i in range(0, len(cand), 1000):
-            existing.update(
-                c for (c,) in db.session.query(ImportProductRaw.code)
-                .filter(ImportProductRaw.code.in_(cand[i:i + 1000])).all()
-            )
+            for (c,) in db.session.query(ImportProductRaw.code).filter(
+                ImportProductRaw.code.in_(cand[i:i + 1000])
+            ).all():
+                existing[c.upper()] = c
 
         def resolve(code, version):
+            code, version = _norm(code), _norm(version)
             if version:
                 if f'{code}-{version}' in existing:
-                    return f'{code}-{version}'
+                    return existing[f'{code}-{version}']
                 m = _VERSION_LETTERS_RE.match(version)
                 if m and f'{code}-{m.group(1)}' in existing:
-                    return f'{code}-{m.group(1)}'
-            return code if code in existing else None
+                    return existing[f'{code}-{m.group(1)}']
+            return existing.get(code)
         return resolve
 
     # ── 导入 ──────────────────────────────────────────
     def import_file(self, data: bytes, filename: str, username: str):
         try:
-            rows = parse_bom_rows(data)
+            rows, skipped = parse_bom_rows(data)
+            if not rows:
+                return Result.fail('文件中没有有效的 BOM 行')
+            boms = build_single_level_boms(rows)
         except UploadValidationError as exc:
             return Result.fail(str(exc))
-        if not rows:
-            return Result.fail('文件中没有有效的 BOM 行')
-        boms = build_single_level_boms(rows)
         if not boms:
             return Result.fail('文件中没有带下级的物料，无法生成 BOM')
 
         pairs = {(r['code'], r['version']) for r in rows}
         resolve = self._erp_resolver(pairs)
-        existing = {
-            (b.code, b.version): b for b in MaterialBom.query.filter(
-                tuple_(MaterialBom.code, MaterialBom.version).in_(list(boms.keys()))
-            ).all()
-        } if boms else {}
-
-        now = now_cst()
-        created = updated = line_count = 0
-        # 覆盖：已有的同版本 BOM 先删掉旧子件行，表头原地更新
-        if existing:
-            MaterialBomLine.query.filter(
-                MaterialBomLine.bom_id.in_([b.id for b in existing.values()])
-            ).delete(synchronize_session=False)
-        for key, entry in boms.items():
-            head = entry['head']
-            bom = existing.get(key)
-            if bom is None:
-                bom = MaterialBom(code=head['code'], version=head['version'])
-                db.session.add(bom)
-                created += 1
-            else:
-                updated += 1
-            bom.erp_code = resolve(head['code'], head['version'])
-            bom.name, bom.spec, bom.category = head['name'], head['spec'], head['category']
-            bom.source_file = (filename or '')[:255] or None
-            bom.imported_by, bom.imported_at = username, now
-            db.session.flush()
-            for seq, line in enumerate(entry['lines'], start=1):
-                db.session.add(MaterialBomLine(
-                    bom_id=bom.id, seq=seq, code=line['code'], version=line['version'],
-                    erp_code=resolve(line['code'], line['version']),
-                    name=line['name'], spec=line['spec'], category=line['category'],
-                    qty=line['qty'], unit=line['unit'],
-                ))
-                line_count += 1
-        db.session.commit()
+        try:
+            existing = {
+                (b.code.upper(), b.version.upper()): b for b in MaterialBom.query.filter(
+                    tuple_(MaterialBom.code, MaterialBom.version).in_(list(boms.keys()))
+                ).all()
+            }
+            now = now_cst()
+            created = updated = line_count = 0
+            # 覆盖：已有的同版本 BOM 先删掉旧子件行，表头原地更新
+            if existing:
+                MaterialBomLine.query.filter(
+                    MaterialBomLine.bom_id.in_([b.id for b in existing.values()])
+                ).delete(synchronize_session=False)
+            for key, entry in boms.items():
+                head = entry['head']
+                bom = existing.get(key)
+                if bom is None:
+                    bom = MaterialBom(code=head['code'], version=head['version'])
+                    db.session.add(bom)
+                    created += 1
+                else:
+                    bom.code, bom.version = head['code'], head['version']
+                    updated += 1
+                bom.erp_code = resolve(head['code'], head['version'])
+                bom.name, bom.spec, bom.category = head['name'], head['spec'], head['category']
+                bom.source_file = (filename or '')[:255] or None
+                bom.imported_by, bom.imported_at = username, now
+                db.session.flush()
+                for seq, line in enumerate(entry['lines'], start=1):
+                    db.session.add(MaterialBomLine(
+                        bom_id=bom.id, seq=seq, code=line['code'], version=line['version'],
+                        erp_code=resolve(line['code'], line['version']),
+                        name=line['name'], spec=line['spec'], category=line['category'],
+                        qty=line['qty'], unit=line['unit'],
+                    ))
+                    line_count += 1
+            db.session.commit()
+        except Exception:
+            # 服务也可能被脚本/测试直接调用，不能只指望请求结束时的 session 清理
+            db.session.rollback()
+            raise
 
         unmatched = sorted({
             _drawing(c, v) for c, v in pairs if resolve(c, v) is None
@@ -224,8 +360,40 @@ class MaterialBomService:
         return Result.ok(data={
             'created': created, 'updated': updated, 'lines': line_count,
             'roots': [_drawing(r['code'], r['version']) for r in roots],
-            'unmatched': unmatched,
+            'unmatched': unmatched, 'skipped': skipped,
         })
+
+    # ── ERP 重导后补关联 ──────────────────────────────
+    def relink_unmatched_erp_codes(self):
+        """ERP 物料表导入后调用：只给 erp_code 为空的表头/子件行补匹配，已匹配的不重写。"""
+        head_rows = db.session.query(MaterialBom.id, MaterialBom.code, MaterialBom.version) \
+            .filter(MaterialBom.erp_code.is_(None)).all()
+        line_pairs = db.session.query(MaterialBomLine.code, MaterialBomLine.version) \
+            .filter(MaterialBomLine.erp_code.is_(None)).distinct().all()
+        pairs = {(r.code, r.version) for r in head_rows} | {(c, v) for c, v in line_pairs}
+        if not pairs:
+            return {'bom_headers_relinked': 0, 'bom_lines_relinked': 0}
+        resolve = self._erp_resolver(pairs)
+        headers = lines = 0
+        try:
+            for r in head_rows:
+                erp = resolve(r.code, r.version)
+                if erp:
+                    MaterialBom.query.filter_by(id=r.id).update(
+                        {'erp_code': erp}, synchronize_session=False)
+                    headers += 1
+            for code, version in line_pairs:
+                erp = resolve(code, version)
+                if erp:
+                    lines += MaterialBomLine.query.filter(
+                        MaterialBomLine.code == code, MaterialBomLine.version == version,
+                        MaterialBomLine.erp_code.is_(None),
+                    ).update({'erp_code': erp}, synchronize_session=False)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            raise
+        return {'bom_headers_relinked': headers, 'bom_lines_relinked': lines}
 
     # ── 列表 ──────────────────────────────────────────
     def list_boms(self, keyword=None, category=None, page=1, page_size=50):
@@ -253,10 +421,23 @@ class MaterialBomService:
             'categories': sorted(categories),
         })
 
-    def delete_bom(self, bom_id):
+    def delete_bom(self, bom_id, force=False):
+        """硬删除一层 BOM。被其他 BOM 当子件引用时先返回引用它的上级（needs_force），
+        前端二次确认后带 force 再删——删掉后这些上级里它会从「可展开」退化成叶子。"""
         bom = db.session.get(MaterialBom, bom_id)
         if bom is None:
             return Result.fail('BOM 不存在')
+        if not force:
+            parent_ids = [i for (i,) in db.session.query(MaterialBomLine.bom_id).filter(
+                MaterialBomLine.code == bom.code, MaterialBomLine.version == bom.version,
+            ).distinct().all()]
+            if parent_ids:
+                parents = MaterialBom.query.filter(MaterialBom.id.in_(parent_ids))                     .order_by(MaterialBom.code, MaterialBom.version).all()
+                return Result.fail(
+                    f'{_drawing(bom.code, bom.version)} 被 {len(parents)} 个上级 BOM 引用',
+                    data={'needs_force': True,
+                          'references': [p.to_dict() for p in parents]},
+                )
         MaterialBomLine.query.filter_by(bom_id=bom_id).delete(synchronize_session=False)
         db.session.delete(bom)
         db.session.commit()

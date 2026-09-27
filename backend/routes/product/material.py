@@ -139,7 +139,8 @@ def material_bom_tree(bom_id):
 
 @material_bp.delete('/boms/<int:bom_id>')
 def delete_material_bom(bom_id):
-    return material_bom_service.delete_bom(bom_id).to_response()
+    force = request.args.get('force') in ('1', 'true', 'True')
+    return material_bom_service.delete_bom(bom_id, force=force).to_response()
 
 
 @material_bp.get('/items/<path:code>/bom')

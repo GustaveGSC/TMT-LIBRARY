@@ -53,9 +53,13 @@ class ImportProductService:
         # 物料库按类型筛选/分组计数用的判定结果缓存依赖 ERP 物料清单，导入后必须失效
         from services.product.material import material_service
         material_service.invalidate_classification_cache()
+        # 研发 BOM 里导入时没匹配上的编码，ERP 新增后自动补关联（只处理 erp_code 为空的）
+        from services.product.material_bom import material_bom_service
+        relinked = material_bom_service.relink_unmatched_erp_codes()
         return {
             'total':           len(raw_rows),
             **result,
+            **relinked,
             # 兼容旧前端字段；现在仅代表内容完全相同、无需写入的重复行。
             'skipped_dup':     result['unchanged'],
             'skipped_invalid': skipped_invalid,

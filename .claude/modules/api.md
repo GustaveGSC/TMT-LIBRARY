@@ -151,15 +151,22 @@ POST /api/material/combos
 PUT  /api/material/combos/:id
 DELETE /api/material/combos/:id
 # 物料 BOM（研发 BOM，material_bom/material_bom_line）
-POST /api/material/boms/import          # multipart file（.xlsx，PDM 或 ERP 层次格式，表头识别复用 change_documents._bom_columns）
-                                        # → {created, updated, lines, roots[], unmatched[]}（unmatched=ERP 物料表里找不到的研发编码）
+POST /api/material/boms/import          # multipart file（.xlsx，PDM 或 ERP 层次格式，表头识别在 services/common/bom_excel.py，与 ECR 共用）
+                                        # → {created, updated, lines, roots[], unmatched[], skipped}
+                                        #   全有或全无：层次（必须文本、不重复、上级在前）/数量（>0、≤4 位小数）/字段长度/
+                                        #   同父同子单位一致/同父件重复展开内容一致，任一不满足整份拒绝，message 用「；」分隔列出带行号的错误
+                                        #   编码/版本统一大写；带「.」子零件与 14ST10* 连同其下级跳过（skipped 计数，与 ECR 一致）
+                                        #   「状态」列目前不读取（用户 2026-09-27：暂时不管）
 GET  /api/material/boms                 # ?keyword=&category=&page=&page_size= → {items[+line_count], total, categories}
 GET  /api/material/boms/:id/tree        # 完整多层展开 {bom, children:[{drawing, erp_code, name, spec, category, qty, unit, children?}]}
                                         #   每层一次查询；名称/规格优先用 ERP 的，文件里的兜底
-DELETE /api/material/boms/:id           # 只删这一层子件清单，下级半成品自己的 BOM 不动
+DELETE /api/material/boms/:id           # ?force=1。只删这一层子件清单，下级半成品自己的 BOM 不动
+                                        #   被其他 BOM 引用且无 force → success=false, data={needs_force:true, references:[上级 BOM]}
 GET  /api/material/items/:code/bom      # ?bom_id= 物料卡片用：{versions[], selected_id, tree, direct_parents[], top_products[]}
                                         #   versions=挂在该 ERP 编码下的研发版本（新→旧）；top_products=沿上级一直往上找到的顶层父件
 # GET /api/material/items 每行带 has_bom（当前页一条查询）
+# POST /api/product/import（ERP 物料导入）完成后自动调用 relink_unmatched_erp_codes()，只给 erp_code 为空的
+#   BOM 表头/子件行补关联，返回里多 bom_headers_relinked / bom_lines_relinked
 
 # material_cost_bp：全部方法统一需要 material:price（查看/编辑不分级，与 rd:view/edit 的两档设计不同）
 GET  /api/material/items/:code/prices

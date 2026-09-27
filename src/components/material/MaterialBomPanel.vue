@@ -32,6 +32,8 @@ const fileInput  = ref(null)
 const importing  = ref(false)
 const importResult = ref(null)   // 导入结果弹窗
 const resultOpen   = ref(false)
+const importErrors    = ref([])  // 导入校验失败：逐条错误（含 Excel 行号）
+const importErrorOpen = ref(false)
 
 const cardCode    = ref('')
 const cardVisible = ref(false)
@@ -112,7 +114,9 @@ async function onFileChange(e) {
       page.value = 1
       await loadList()
     } else {
-      ElMessage.error(res.message || '导入失败')
+      // 校验错误可能一次列出多行（后端用「；」分隔），弹窗逐条显示，便于对照 Excel 修改
+      importErrors.value = (res.message || '导入失败').split('；').filter(Boolean)
+      importErrorOpen.value = true
     }
   } catch (err) {
     ElMessage.error(err.message || '网络错误')
@@ -129,7 +133,22 @@ async function deleteBom() {
       `确认删除 ${bom.drawing} 的 BOM？只删除这一层的子件清单，下级半成品自己的 BOM 不受影响。`,
       '删除 BOM', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' })
   } catch { return }
-  const res = await http.delete(`/api/material/boms/${bom.id}`)
+  let res = await http.delete(`/api/material/boms/${bom.id}`)
+  // 被其他 BOM 引用：列出引用它的上级，再确认一次才强制删除
+  if (!res.success && res.data?.needs_force) {
+    const refs = res.data.references || []
+    const list = refs.slice(0, 10).map(r => `${r.drawing}${r.name ? ' ' + r.name : ''}`).join('\n')
+    const more = refs.length > 10 ? `\n……等 ${refs.length} 个` : ''
+    try {
+      await ElMessageBox.confirm(
+        `${bom.drawing} 正被以下上级 BOM 使用，删除后它在这些上级里将无法再展开下级：\n\n${list}${more}\n\n仍要删除吗？`,
+        '仍被引用', {
+          type: 'warning', confirmButtonText: '仍然删除', cancelButtonText: '取消',
+          customStyle: { whiteSpace: 'pre-line' },
+        })
+    } catch { return }
+    res = await http.delete(`/api/material/boms/${bom.id}`, { params: { force: 1 } })
+  }
   if (res.success) {
     ElMessage.success('已删除')
     selectedId.value = null
@@ -229,6 +248,9 @@ onMounted(loadList)
           <div><b>{{ importResult.updated }}</b><span>覆盖更新</span></div>
           <div><b>{{ importResult.lines }}</b><span>子件行</span></div>
         </div>
+        <div v-if="importResult.skipped" class="ir-row ir-muted">
+          已按规则跳过 {{ importResult.skipped }} 行（带「.」的 PDM 子零件、14ST10 标准件及其下级）
+        </div>
         <div v-if="importResult.roots?.length" class="ir-row">
           顶层：<span class="mono">{{ importResult.roots.join('、') }}</span>
         </div>
@@ -242,6 +264,17 @@ onMounted(loadList)
       </div>
       <template #footer>
         <el-button type="primary" @click="resultOpen = false">知道了</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 导入校验失败：整份文件未写入，逐条列出问题 -->
+    <el-dialog v-model="importErrorOpen" title="BOM 导入失败" width="560" align-center append-to-body>
+      <div class="ie-tip">文件未导入，请按下列问题修改 Excel 后重新导入：</div>
+      <ul class="ie-list">
+        <li v-for="(e, i) in importErrors" :key="i">{{ e }}</li>
+      </ul>
+      <template #footer>
+        <el-button type="primary" @click="importErrorOpen = false">知道了</el-button>
       </template>
     </el-dialog>
 
@@ -335,6 +368,13 @@ onMounted(loadList)
 .ir-stats b { display: block; font-size: 20px; color: #2c2420; }
 .ir-stats span { font-size: 12px; color: #6b5e4e; }
 .ir-row { font-size: 13px; color: #3a3028; margin-bottom: 10px; }
+.ir-muted { font-size: 12px; color: #6b5e4e; }
+.ie-tip { font-size: 13px; color: #3a3028; margin-bottom: 8px; }
+.ie-list {
+  margin: 0; padding: 10px 10px 10px 28px; max-height: 320px; overflow-y: auto;
+  border-radius: 8px; background: #fff4f1; border: 1px solid #f0c4b8;
+  font-size: 13px; line-height: 1.8; color: #a33b1f;
+}
 .ir-unmatched {
   padding: 10px; border-radius: 8px;
   background: #fff8e6; border: 1px solid #f0d48a;
