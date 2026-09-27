@@ -7,9 +7,9 @@ import DataTable from '@/components/common/DataTable.vue'
 import MaterialCard from './MaterialCard.vue'
 import { usePermission } from '@/composables/usePermission'
 
-// ── 大类定义 ──────────────────────────────────────
-// 与后端大类判定服务返回的 categories 数组取值一致。
-// 「未分类」不是一个大类，而是「一个大类都没命中」，走独立的 unclassified 参数。
+// ── 物料类型定义 ──────────────────────────────────
+// 与后端物料类型判定返回的 categories 数组取值一致。
+// 「未分类」不是一种物料类型，而是「单独指定/编码前缀规则/分组默认类型都没命中」，走独立的 unclassified 参数。
 const CATEGORIES = [
   { key: 'finished', label: '成品',     color: '#c4883a' },
   { key: 'packaged', label: '产成品',   color: '#4a8fc0' },
@@ -65,7 +65,7 @@ const columns = computed(() => [
     filterOptions: groups.value.map(g => ({
       label: `${g.group_code} ${g.group_name}`, value: g.group_code,
     })) },
-  { prop: 'categories', label: '大类',     width: 170, filterable: true,
+  { prop: 'categories', label: '物料类型', width: 190, filterable: true,
     filterOptions: [
       ...CATEGORIES.map(c => ({ label: c.label, value: c.key })),
       { label: '未分类', value: 'unclassified' },
@@ -216,6 +216,8 @@ onMounted(() => { loadGroups(); loadItems() })
             }"
           >{{ catMap[c]?.label || c }}</span>
           <span v-if="!(row.categories || []).length" class="cat-badge badge-none">未分类</span>
+          <span v-if="row.category_source === 'manual'" class="manual-mark"
+                title="该物料在物料卡片中单独指定了物料类型">指定</span>
         </template>
 
         <!-- 停用状态：只来源于导入数据（ERP 状态失效 或 名称含停用关键词），
@@ -348,6 +350,11 @@ onMounted(() => { loadGroups(); loadItems() })
   border: 1px solid; border-radius: 4px; padding: 1px 6px;
 }
 .cat-badge.badge-none { color: var(--text-secondary); background: var(--bg-table-header); border-color: var(--border); }
+.manual-mark {
+  display: inline-block; margin-left: 2px; padding: 0 4px;
+  font-size: 10px; line-height: 16px; border-radius: 3px;
+  color: #3a3028; border: 1px dashed #8a7a6a; cursor: help;
+}
 
 .price-val {
   font-family: 'SF Mono', Consolas, monospace; font-size: 12px;

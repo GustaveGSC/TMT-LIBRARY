@@ -54,6 +54,9 @@ class ProductMaterial(db.Model):
     cover_image_original = db.Column(db.String(500), nullable=True)
     img_updated_at = db.Column(db.Integer, nullable=True)
     remark = db.Column(db.Text, nullable=True)
+    # 单独指定的物料类型（逗号分隔，取值同 CATEGORY_TYPES），优先级最高：
+    # 单独指定 > 编码前缀规则 > 分组默认类型。NULL 表示不单独指定，按规则判定。
+    type_override = db.Column(db.String(100), nullable=True)
     # NULL 跟随 ERP/关键词默认；True/False 分别为人工强制停用/启用。
     is_disabled = db.Column(db.Boolean, nullable=True, default=None, index=True)
     created_at = db.Column(db.DateTime, nullable=False, default=now_cst)
@@ -65,6 +68,7 @@ class ProductMaterial(db.Model):
             'spec': self.spec, 'cover_image': self.cover_image,
             'cover_image_original': self.cover_image_original,
             'img_updated_at': self.img_updated_at, 'remark': self.remark,
+            'type_override': [t for t in (self.type_override or '').split(',') if t],
         }
 
 

@@ -55,7 +55,7 @@ def list_items():
         return Result.fail('分页参数无效').to_response()
     category = request.args.get('category', '').strip() or None
     if category and category not in CATEGORY_TYPES:
-        return Result.fail('大类参数无效').to_response()
+        return Result.fail('物料类型参数无效').to_response()
     disabled_arg = request.args.get('is_disabled')
     disabled = None if disabled_arg is None else disabled_arg in ('1', 'true', 'True')
     sort_by = request.args.get('sort_by', 'code').strip() or 'code'

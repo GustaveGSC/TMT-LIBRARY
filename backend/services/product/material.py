@@ -10,11 +10,26 @@ from services.product.material_price import material_price_service
 BOOLEAN_KEYS = ('is_finished', 'is_packaged', 'is_semi', 'is_material', 'is_useless')
 CATEGORY_TYPES = ('finished', 'packaged', 'semi', 'material', 'useless')
 
+# 物料类型的判定来源，按优先级从高到低：单独指定 > 编码前缀规则 > 分组默认类型
+SOURCE_MANUAL = 'manual'
+SOURCE_RULE = 'rule'
+SOURCE_GROUP = 'group'
+
 
 class MaterialService:
     _rule_cache = None
     _disable_keyword_cache = None
     _group_config_cache = None
+    _override_cache = None
+
+    @classmethod
+    def invalidate_override_cache(cls):
+        cls._override_cache = None
+
+    def _overrides(self):
+        if self._override_cache is None:
+            self.__class__._override_cache = MaterialRepository.type_overrides()
+        return self._override_cache
 
     @classmethod
     def invalidate_rule_cache(cls):
@@ -56,24 +71,39 @@ class MaterialService:
     def _config_categories(config):
         return [name for name in CATEGORY_TYPES if config and getattr(config, f'is_{name}')]
 
-    def _categories(self, code, group_code, rules, configs):
+    def _classify(self, code, group_code, rules, configs, overrides):
+        """返回 (物料类型列表, 判定来源)；三级均未命中时来源为 None（未分类）。"""
+        manual = overrides.get(code)
+        if manual:
+            return [t for t in CATEGORY_TYPES if t in manual], SOURCE_MANUAL
         # 所有命中的前缀类型都保留，因同一编码允许同时属于成品与产成品。
         result = set()
         for prefix, types in rules:
             if code.startswith(prefix):
                 result.update(types)
-        return sorted(result) if result else self._config_categories(configs.get(group_code))
+        if result:
+            return sorted(result), SOURCE_RULE
+        group_types = self._config_categories(configs.get(group_code))
+        return group_types, (SOURCE_GROUP if group_types else None)
+
+    def _categories(self, code, group_code, rules, configs, overrides):
+        return self._classify(code, group_code, rules, configs, overrides)[0]
 
     def group_categories(self):
         raw_rows = MaterialRepository.all_raw_identity_rows()
-        configs, rules = self._group_configs(), self._rules()
+        configs, rules, overrides = self._group_configs(), self._rules(), self._overrides()
         aggregates = {}
         for code, group_code, group_name in raw_rows:
-            item = aggregates.setdefault(group_code, {'names': set(), 'count': 0, 'override_count': 0})
+            item = aggregates.setdefault(
+                group_code, {'names': set(), 'count': 0, 'manual_count': 0, 'rule_count': 0},
+            )
             item['names'].add(group_name)
             item['count'] += 1
-            if any(code.startswith(prefix) for prefix, _types in rules):
-                item['override_count'] += 1
+            # 按实际生效的来源计数：单独指定的物料即使也命中前缀规则，只计入单独指定
+            if overrides.get(code):
+                item['manual_count'] += 1
+            elif any(code.startswith(prefix) for prefix, _types in rules):
+                item['rule_count'] += 1
         data = []
         for group_code in sorted(aggregates):
             aggregate, config = aggregates[group_code], configs.get(group_code)
@@ -81,7 +111,8 @@ class MaterialService:
                 'group_code': group_code,
                 'group_name': ' / '.join(sorted(aggregate['names'])),
                 'material_count': aggregate['count'],
-                'override_count': aggregate['override_count'],
+                'manual_count': aggregate['manual_count'],
+                'rule_count': aggregate['rule_count'],
             }
             item.update({key: bool(config and getattr(config, key)) for key in BOOLEAN_KEYS})
             item['remark'] = config.remark if config else None
@@ -121,7 +152,7 @@ class MaterialService:
             sort_by=filters.get('sort_by', 'code'), sort_dir=filters.get('sort_dir', 'asc'),
             price_state=filters.get('price_state'),
         )
-        configs, rules = self._group_configs(), self._rules()
+        configs, rules, overrides = self._group_configs(), self._rules(), self._overrides()
         category = filters.get('category')
         unclassified = filters.get('unclassified')
         exclude_useless = filters.get('exclude_useless')
@@ -129,7 +160,7 @@ class MaterialService:
             total = query.order_by(None).count()
             raw_rows = query.offset((page - 1) * page_size).limit(page_size).all()
             selected = [
-                (raw, self._categories(raw.code, raw.group_code, rules, configs))
+                (raw, *self._classify(raw.code, raw.group_code, rules, configs, overrides))
                 for raw in raw_rows
             ]
         else:
@@ -137,14 +168,13 @@ class MaterialService:
                 ImportProductRaw.code, ImportProductRaw.group_code,
                 ImportProductRaw.name, ProductMaterial.short_name,
             ).all()
-            classified = [
-                {
+            classified = []
+            for code, group_code, name, short_name in identities:
+                cats, source = self._classify(code, group_code, rules, configs, overrides)
+                classified.append({
                     'code': code, 'group_code': group_code, 'name': name,
-                    'short_name': short_name,
-                    'categories': self._categories(code, group_code, rules, configs),
-                }
-                for code, group_code, name, short_name in identities
-            ]
+                    'short_name': short_name, 'categories': cats, 'source': source,
+                })
             if category:
                 classified = [item for item in classified if category in item['categories']]
             elif unclassified:
@@ -163,13 +193,17 @@ class MaterialService:
             classified = non_null + nulls
             total = len(classified)
             page_rows = classified[(page - 1) * page_size:page * page_size]
-            categories_by_code = {
-                item['code']: item['categories'] for item in page_rows
-            }
+            by_code = {item['code']: item for item in page_rows}
             raw_rows = MaterialRepository.raw_for_codes([item['code'] for item in page_rows])
-            selected = [(raw, categories_by_code[raw.code]) for raw in raw_rows]
-        materials = MaterialRepository.materials_for_codes([raw.code for raw, _ in selected])
-        items = [self._serialize(raw, cats, materials.get(raw.code)) for raw, cats in selected]
+            selected = [
+                (raw, by_code[raw.code]['categories'], by_code[raw.code]['source'])
+                for raw in raw_rows
+            ]
+        materials = MaterialRepository.materials_for_codes([raw.code for raw, _c, _s in selected])
+        items = [
+            self._serialize(raw, cats, materials.get(raw.code), source)
+            for raw, cats, source in selected
+        ]
         if filters.get('include_cost'):
             prices = material_price_service.latest_for_materials([
                 item['code'] for item in items
@@ -189,9 +223,18 @@ class MaterialService:
         raw = MaterialRepository.raw_by_code(code)
         if not raw:
             return Result.fail('物料不存在')
-        cats = self._categories(code, raw.group_code, self._rules(), self._group_configs())
+        cats, source = self._classify(
+            code, raw.group_code, self._rules(), self._group_configs(), self._overrides(),
+        )
         material = MaterialRepository.materials_for_codes([code]).get(code)
-        data = self._serialize(raw, cats, material)
+        data = self._serialize(raw, cats, material, source)
+        # 卡片需要同时看到「如果不单独指定，规则会判成什么」，方便决定要不要指定
+        if source == SOURCE_MANUAL:
+            data['rule_categories'], data['rule_source'] = self._classify(
+                code, raw.group_code, self._rules(), self._group_configs(), {},
+            )
+        else:
+            data['rule_categories'], data['rule_source'] = cats, source
         if include_cost:
             data.update(material_price_service.detail_fields(data))
         return Result.ok(data=data)
@@ -266,14 +309,26 @@ class MaterialService:
         for key in ('short_name', 'category', 'spec', 'remark'):
             if key in values:
                 values[key] = (values[key] or '').strip() or None
+        if 'type_override' in body:
+            raw_types = body.get('type_override') or []
+            if not isinstance(raw_types, list):
+                return Result.fail('物料类型参数格式无效')
+            invalid = [t for t in raw_types if t not in CATEGORY_TYPES]
+            if invalid:
+                return Result.fail('物料类型参数无效')
+            # 空列表 = 取消单独指定，恢复按编码前缀规则/分组默认类型判定
+            chosen = [t for t in CATEGORY_TYPES if t in raw_types]
+            values['type_override'] = ','.join(chosen) or None
         MaterialRepository.save_material(code, values)
+        if 'type_override' in values:
+            self.invalidate_override_cache()
         return self.detail(code)
 
-    def _serialize(self, raw, categories, material):
+    def _serialize(self, raw, categories, material, source=None):
         manual = material.to_dict() if material else {
             'code': raw.code, 'short_name': None, 'category': None, 'spec': raw.spec,
             'cover_image': None, 'cover_image_original': None, 'img_updated_at': None,
-            'remark': None,
+            'remark': None, 'type_override': [],
         }
         if manual.get('spec') is None:
             manual['spec'] = raw.spec
@@ -281,6 +336,7 @@ class MaterialService:
             'code': raw.code, 'name': raw.name, 'group_code': raw.group_code,
             'group_name': raw.group_name, 'erp_spec': raw.spec, 'categories': categories,
             'category_labels': [TYPE_LABELS[x] for x in categories],
+            'category_source': source,
             'status': raw.status,
         })
         default_disabled = raw.status == '失效' or any(

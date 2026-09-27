@@ -168,7 +168,12 @@ DELETE /api/material/suppliers/:id
 （`POST /api/product/import`，挂在 `product_bp`），仍按 `product:view/edit` 鉴权，不受本次拆分影响。
 
 - `GET group-categories` 返回全部 ERP 分组：
-  `{group_code,group_name,material_count,override_count,is_finished,is_packaged,is_semi,is_material,is_useless,remark}`。
+  `{group_code,group_name,material_count,manual_count,rule_count,is_finished,is_packaged,is_semi,is_material,is_useless,remark}`。
+  `manual_count`=单独指定了物料类型的物料数；`rule_count`=未单独指定、由编码前缀规则确定类型的物料数（2026-09-27 起，
+  替代旧 `override_count`；按实际生效来源计数，三者关系：material_count = manual + rule + 按分组默认/未分类）。
+- 物料类型判定优先级：单独指定（`product_material.type_override`）> 编码前缀规则（`erp_code_rules`）> 分组默认类型。
+  物料项返回 `categories`（生效类型）与 `category_source`（`manual|rule|group|null`）；详情另返回
+  `rule_categories/rule_source`（不考虑单独指定时规则会判成什么）与 `type_override`（数组）。
 - `PUT group-categories/:group_code` 接收五个 `is_*` 布尔字段及可选 `remark`。
 - `GET items` 参数：`page`（默认 1）、`page_size`（默认 20，上限 100）、
   `category=finished|packaged|semi|material|useless`、`group_code`、`keyword`、
@@ -185,7 +190,8 @@ DELETE /api/material/suppliers/:id
   data 为 `{items,total,page,page_size}`。
 - `GET items` 可选 `price_state=has|none`，仅 `rd:view` 用户可用；用于按是否存在价格记录筛选。
   本期不支持 `sort_by=price`，避免破坏 8,091 行物料的数据库分页。
-- `PUT items/:code` 可写 `short_name/category/spec/remark`；
+- `PUT items/:code` 可写 `short_name/category/spec/remark/type_override`；`type_override` 为类型数组，
+  空数组=取消单独指定，非法值返回 400 语义的失败；
   首次保存时按需创建 `product_material`。
 - 物料项返回只读 `is_disabled`，仅由 ERP `status=失效` 或启用的原始品名关键词判定；
   不支持人工覆盖。`is_disabled` 查询参数仍可用于用户主动筛选停用/启用物料。

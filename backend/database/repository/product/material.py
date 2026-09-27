@@ -101,6 +101,17 @@ class MaterialRepository:
         }
 
     @staticmethod
+    def type_overrides():
+        """全部单独指定了物料类型的物料：{code: [type, ...]}。行数很少，一次查全。"""
+        rows = ProductMaterial.query.with_entities(
+            ProductMaterial.code, ProductMaterial.type_override,
+        ).filter(ProductMaterial.type_override.isnot(None)).all()
+        return {
+            code: [t for t in value.split(',') if t]
+            for code, value in rows if value
+        }
+
+    @staticmethod
     def raw_by_code(code):
         return ImportProductRaw.query.filter_by(code=code).first()
 

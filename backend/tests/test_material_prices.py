@@ -52,6 +52,7 @@ def price_app(monkeypatch):
         material_service.invalidate_rule_cache()
         material_service.invalidate_disable_keyword_cache()
         material_service.invalidate_group_config_cache()
+        material_service.invalidate_override_cache()
         yield app
         db.session.remove()
         db.metadata.drop_all(bind=db.engine, tables=list(reversed(tables)))
@@ -83,6 +84,7 @@ def test_lazy_node_creation_reuses_base_code_across_versions(price_app):
         ])
         db.session.commit()
         material_service.invalidate_group_config_cache()
+        material_service.invalidate_override_cache()
 
         first = material_price_service.add_price(
             material_service.detail('14WD11001-A01').data,
@@ -119,6 +121,7 @@ def test_material_price_fields_are_permission_gated_and_add_only_one_query(price
         material_service._rules()
         material_service._disable_keywords()
         material_service._group_configs()
+        material_service._overrides()
 
         statements = []
 
@@ -230,6 +233,7 @@ def test_useless_material_cannot_create_price_or_empty_cost_node(price_app):
         ])
         db.session.commit()
         material_service.invalidate_group_config_cache()
+        material_service.invalidate_override_cache()
         material = material_service.detail('OLD001-A01').data
         assert material['categories'] == ['material', 'useless']
         assert material_price_service.detail_fields(material)['can_add_price'] is False

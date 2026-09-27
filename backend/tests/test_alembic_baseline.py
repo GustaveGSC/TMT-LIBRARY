@@ -39,7 +39,8 @@ USER_PROFILE_REVISION = '20260904_01'
 ROLE_CATEGORY_REVISION = '20260904_02'
 MATERIAL_GATE_REVISION = '20260925_01'
 MATERIAL_GATE_NAME_REVISION = '20260926_01'
-HEAD_REVISION = MATERIAL_GATE_NAME_REVISION
+MATERIAL_TYPE_OVERRIDE_REVISION = '20260927_01'
+HEAD_REVISION = MATERIAL_TYPE_OVERRIDE_REVISION
 CRITICAL_INDEXES = {
     'shipping_order_finished': {
         'ix_sof_source',
@@ -91,6 +92,10 @@ def test_baseline_has_linear_history_and_task_lease_is_the_only_head():
     assert scripts.get_revision(ROLE_CATEGORY_REVISION).down_revision == USER_PROFILE_REVISION
     assert scripts.get_revision(MATERIAL_GATE_REVISION).down_revision == ROLE_CATEGORY_REVISION
     assert scripts.get_revision(MATERIAL_GATE_NAME_REVISION).down_revision == MATERIAL_GATE_REVISION
+    assert (
+        scripts.get_revision(MATERIAL_TYPE_OVERRIDE_REVISION).down_revision
+        == MATERIAL_GATE_NAME_REVISION
+    )
     assert scripts.get_revision(PERMISSION_REVISION).down_revision == TASK_REVISION
     assert scripts.get_revision(CUSTOMER_MAPPING_REVISION).down_revision == PERMISSION_REVISION
     assert scripts.get_revision(ORDER_ALIAS_REVISION).down_revision == CUSTOMER_MAPPING_REVISION

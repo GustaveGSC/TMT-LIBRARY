@@ -7,7 +7,7 @@ import http from '@/api/http'
 import { usePermission } from '@/composables/usePermission'
 
 // 价格属于研发成本数据。usePermission 返回普通布尔值不是 ref，不能写 .value。
-const { canViewRd, canEditRd } = usePermission()
+const { canMaterialPrice, canEditMaterial } = usePermission()
 
 // ── Props / Emits ─────────────────────────────────
 const props = defineProps({
@@ -22,12 +22,37 @@ const loading  = ref(false)
 const saving   = ref(false)
 const errorMsg = ref('')
 
-// 人工可编辑的字段草稿。ERP 侧字段（code/name/group/大类）只读展示，
+// 人工可编辑的字段草稿。ERP 侧字段（code/name/group）只读展示，
 // 它们归 import_product_raw 所有，不在这里改。
 //
 // 停用状态**不可人工设置**（用户 2026-08-07 决定：只来源于导入数据），
 // 所以表单里没有它，卡片只在 ERP 信息区做只读展示。
-const form = ref({ short_name: '', category: '', spec: '', remark: '' })
+//
+// type_override：单独指定的物料类型，空数组 = 不单独指定（按编码前缀规则/分组默认类型判定）。
+// 判定优先级：单独指定 > 编码前缀规则 > 分组默认类型。
+const form = ref({ short_name: '', category: '', spec: '', remark: '', type_override: [] })
+
+// 物料类型定义，与后端 CATEGORY_TYPES / TYPE_LABELS 一致
+const TYPE_OPTIONS = [
+  { key: 'finished', label: '成品',     color: '#c4883a' },
+  { key: 'packaged', label: '产成品',   color: '#4a8fc0' },
+  { key: 'semi',     label: '半成品',   color: '#9c6fba' },
+  { key: 'material', label: '原材料',   color: '#6ab47a' },
+  { key: 'useless',  label: '无用物料', color: '#8a7a6a' },
+]
+const typeLabel = Object.fromEntries(TYPE_OPTIONS.map(t => [t.key, t.label]))
+const SOURCE_TEXT = { manual: '单独指定', rule: '编码前缀规则', group: '分组默认类型' }
+
+function toggleType(key) {
+  const list = form.value.type_override
+  const i = list.indexOf(key)
+  if (i >= 0) list.splice(i, 1)
+  else list.push(key)
+}
+
+function formatTypes(list) {
+  return (list || []).map(k => typeLabel[k] || k).join(' / ') || '未分类'
+}
 
 // 新选的图片（base64）；空串表示未改动
 const newImage = ref('')
@@ -48,14 +73,14 @@ const priceErr      = ref('')
 // 后端同样有门禁，这里只是不给入口。后端若返回 can_add_price 则优先用它。
 const canAddPrice = computed(() => {
   const d = detail.value
-  if (!d || !canEditRd) return false
+  if (!d || !canMaterialPrice) return false
   if (typeof d.can_add_price === 'boolean') return d.can_add_price
   return !(d.categories || []).includes('useless')
 })
 const isUseless = computed(() => (detail.value?.categories || []).includes('useless'))
 
 async function loadCost() {
-  if (!canViewRd || !props.code) return
+  if (!canMaterialPrice || !props.code) return
   costLoading.value = true
   const c = encodeURIComponent(props.code)
   try {
@@ -122,7 +147,7 @@ const SOURCE_LABELS = { bom_import: 'BOM 导入', manual: '手动', bom_calc: 'B
 // 登记进 material_supplier 并回填 supplier_id，不用先去供应商页登记一遍。
 const supplierOptions = ref([])
 async function loadSupplierOptions() {
-  if (!canViewRd) return
+  if (!canMaterialPrice) return
   try {
     const res = await http.get('/api/material/suppliers/options')
     if (res.success) supplierOptions.value = res.data || []
@@ -144,6 +169,7 @@ async function loadDetail() {
         category:   res.data.category   || '',
         spec:       res.data.spec       || '',
         remark:     res.data.remark     || '',
+        type_override: [...(res.data.type_override || [])],
       }
       newImage.value = ''
       loadCost()
@@ -179,6 +205,7 @@ async function handleSave() {
       category:   form.value.category,
       spec:       form.value.spec,
       remark:     form.value.remark,
+      type_override: form.value.type_override,
     }
     const res = await http.put(
       `/api/material/items/${encodeURIComponent(props.code)}`, payload,
@@ -237,7 +264,7 @@ watch(() => props.visible, v => {
   <el-dialog
     :model-value="props.visible"
     title="物料卡片"
-    :width="canViewRd ? 1000 : 560"
+    :width="canMaterialPrice ? 1000 : 560"
     align-center
     append-to-body
     @update:model-value="emit('update:visible', $event)"
@@ -254,7 +281,7 @@ watch(() => props.visible, v => {
       <template v-else-if="detail">
        <!-- 双列：左列物料本身的信息，右列价格（价格是研发成本域的数据，
             与物料属性并列而不是压在下面，避免要滚很久才看到） -->
-       <div class="mc-cols" :class="{ single: !canViewRd }">
+       <div class="mc-cols" :class="{ single: !canMaterialPrice }">
         <div class="mc-col-left">
         <!-- 图片 -->
         <div class="mc-image">
@@ -264,7 +291,7 @@ watch(() => props.visible, v => {
             <span>暂无图片</span>
           </div>
         </div>
-        <div class="mc-image-bar">
+        <div v-if="canEditMaterial" class="mc-image-bar">
           <button class="mc-img-btn" @click="chooseImage">
             <el-icon><Upload /></el-icon><span>{{ shownImage ? '更换图片' : '选择图片' }}</span>
           </button>
@@ -289,31 +316,58 @@ watch(() => props.visible, v => {
             <span v-if="detail.is_disabled" class="ro-badge off">已停用</span>
             <span v-else class="ro-badge on">启用</span>
           </div>
-          <div class="mc-field">
-            <label>大类</label>
-            <span v-if="(detail.categories || []).length">{{ (detail.category_labels || detail.categories).join(' / ') }}</span>
-            <span v-else class="muted">未分类</span>
-          </div>
         </div>
 
         <!-- 人工维护字段 -->
         <div class="mc-section">
           <div class="mc-section-title">人工维护</div>
+          <!-- 物料类型：单独指定 > 编码前缀规则 > 分组默认类型 -->
+          <div class="mc-field mc-field-top">
+            <label>物料类型</label>
+            <div class="mt-box">
+              <div class="mt-chips">
+                <button
+                  class="mt-chip"
+                  :class="{ on: !form.type_override.length }"
+                  :disabled="!canEditMaterial"
+                  @click="form.type_override = []"
+                >按规则判定</button>
+                <button
+                  v-for="t in TYPE_OPTIONS"
+                  :key="t.key"
+                  class="mt-chip"
+                  :class="{ on: form.type_override.includes(t.key) }"
+                  :style="form.type_override.includes(t.key)
+                    ? { color: t.color, borderColor: t.color, background: t.color + '18' } : {}"
+                  :disabled="!canEditMaterial"
+                  @click="toggleType(t.key)"
+                >{{ t.label }}</button>
+              </div>
+              <div class="mt-hint">
+                当前生效：<b>{{ formatTypes(detail.categories) }}</b>
+                <span v-if="detail.category_source">（{{ SOURCE_TEXT[detail.category_source] }}）</span>
+                <template v-if="detail.category_source === 'manual'">
+                  ；若取消单独指定，将按{{ SOURCE_TEXT[detail.rule_source] || '规则' }}判定为
+                  <b>{{ formatTypes(detail.rule_categories) }}</b>
+                </template>
+              </div>
+            </div>
+          </div>
           <div class="mc-field">
             <label>简称</label>
-            <input v-model="form.short_name" class="mc-input" placeholder="录入/挑选时显示的简称" />
+            <input v-model="form.short_name" class="mc-input" :disabled="!canEditMaterial" placeholder="录入/挑选时显示的简称" />
           </div>
           <div class="mc-field">
             <label>分类</label>
-            <input v-model="form.category" class="mc-input" placeholder="自由文本，用于下拉分组" />
+            <input v-model="form.category" class="mc-input" :disabled="!canEditMaterial" placeholder="自由文本，用于下拉分组" />
           </div>
           <div class="mc-field">
             <label>规格</label>
-            <input v-model="form.spec" class="mc-input" placeholder="规格" />
+            <input v-model="form.spec" class="mc-input" :disabled="!canEditMaterial" placeholder="规格" />
           </div>
           <div class="mc-field mc-field-top">
             <label>备注</label>
-            <textarea v-model="form.remark" class="mc-textarea" rows="3"></textarea>
+            <textarea v-model="form.remark" class="mc-textarea" :disabled="!canEditMaterial" rows="3"></textarea>
           </div>
 
         </div>
@@ -323,7 +377,7 @@ watch(() => props.visible, v => {
         <!-- ── 价格（仅 rd:view 可见）────────────────────────
              与研发部 BOM 共用同一份 cost_material_price，不是副本。
              后端在无 rd:view 时根本不返回价格字段，此处隐藏只是体验层。 -->
-        <div v-if="canViewRd" class="mc-section mc-col-right">
+        <div v-if="canMaterialPrice" class="mc-section mc-col-right">
           <div class="mc-section-title">
             <span>价格</span>
             <span v-if="detail.latest_price != null" class="mc-latest">
@@ -389,7 +443,7 @@ watch(() => props.visible, v => {
                 <th style="width:96px" class="ta-r">单价</th>
                 <th>供应商</th>
                 <th style="width:104px">来源</th>
-                <th v-if="canEditRd" style="width:44px"></th>
+                <th v-if="canMaterialPrice" style="width:44px"></th>
               </tr>
             </thead>
             <tbody>
@@ -397,7 +451,7 @@ watch(() => props.visible, v => {
                 <td>{{ row.price_date || '—' }}</td>
                 <td class="ta-r price-val">¥{{ Number(row.unit_price).toFixed(4) }}</td>
                 <td>
-                  <template v-if="canEditRd">
+                  <template v-if="canMaterialPrice">
                     <div class="sup-cell">
                       <el-select
                         v-model="row._supplierDraft" class="sup-select" size="small"
@@ -417,7 +471,7 @@ watch(() => props.visible, v => {
                     {{ SOURCE_LABELS[row.source] || row.source }}
                   </span>
                 </td>
-                <td v-if="canEditRd">
+                <td v-if="canMaterialPrice">
                   <button class="del-btn" title="删除" @click="removePrice(row)">删除</button>
                 </td>
               </tr>
@@ -462,7 +516,7 @@ watch(() => props.visible, v => {
 
         <div class="mc-actions">
           <button class="btn btn-secondary" @click="close">取消</button>
-          <button class="btn btn-primary" :disabled="saving" @click="handleSave">
+          <button v-if="canEditMaterial" class="btn btn-primary" :disabled="saving" @click="handleSave">
             {{ saving ? '保存中...' : '保存' }}
           </button>
         </div>
@@ -512,9 +566,26 @@ watch(() => props.visible, v => {
 .mc-field:last-of-type { margin-bottom: 0; }
 .mc-field-top { align-items: flex-start; }
 .mc-field label {
-  width: 42px; flex-shrink: 0;
+  width: 52px; flex-shrink: 0;
   font-size: 12px; color: #6b5e4e; text-align: right;
 }
+.mc-field-top > label { padding-top: 5px; }
+
+/* 物料类型：单独指定 */
+.mt-box { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.mt-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.mt-chip {
+  padding: 3px 10px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg);
+  color: #6b5e4e; font-size: 11px; font-family: inherit;
+  cursor: pointer; transition: all 0.15s;
+}
+.mt-chip:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.mt-chip.on { font-weight: 600; }
+.mt-chip:first-child.on { color: #3a3028; border-color: #8a7a6a; background: rgba(138,122,106,0.1); }
+.mt-chip:disabled { cursor: not-allowed; opacity: 0.7; }
+.mt-hint { font-size: 11px; color: #6b5e4e; line-height: 1.6; }
+.mt-hint b { color: #3a3028; }
 .mc-field > span { flex: 1; min-width: 0; word-break: break-all; }
 .mono { font-family: monospace; font-size: 12px; }
 .muted { color: #6b5e4e; }

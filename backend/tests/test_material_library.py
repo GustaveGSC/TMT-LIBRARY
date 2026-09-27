@@ -116,11 +116,13 @@ def material_app():
         material_service.invalidate_rule_cache()
         material_service.invalidate_disable_keyword_cache()
         material_service.invalidate_group_config_cache()
+        material_service.invalidate_override_cache()
         yield app
         db.session.remove()
         material_service.invalidate_rule_cache()
         material_service.invalidate_disable_keyword_cache()
         material_service.invalidate_group_config_cache()
+        material_service.invalidate_override_cache()
         db.metadata.drop_all(bind=db.engine, tables=list(reversed(material_tables)))
 
 
@@ -276,6 +278,50 @@ def test_material_list_exclude_useless_hides_only_useless_items(material_app):
         assert {item['code'] for item in excluded} == {'M1'}
 
 
+def test_material_type_priority_manual_over_rule_over_group(material_app):
+    with material_app.app_context():
+        db.session.add_all([
+            ImportProductRaw(code='R1', name='规则命中', group_code='G', group_name='组',
+                             imported_at=now_cst()),
+            ImportProductRaw(code='X1', name='走分组默认', group_code='G', group_name='组',
+                             imported_at=now_cst()),
+            ErpCodeRule(prefix='R', type='finished', is_disabled=False),
+            ErpGroupCategory(group_code='G', is_material=True),
+        ])
+        db.session.commit()
+
+        assert material_service.detail('R1').data['categories'] == ['finished']
+        assert material_service.detail('R1').data['category_source'] == 'rule'
+        assert material_service.detail('X1').data['categories'] == ['material']
+        assert material_service.detail('X1').data['category_source'] == 'group'
+
+        # 单独指定优先级最高，同时压过前缀规则和分组默认
+        saved = material_service.save_item('R1', {'type_override': ['useless']}).data
+        assert saved['categories'] == ['useless']
+        assert saved['category_source'] == 'manual'
+        assert saved['type_override'] == ['useless']
+        assert saved['rule_categories'] == ['finished']
+        assert saved['rule_source'] == 'rule'
+
+        listed = material_service.list_items(
+            1, 20, is_disabled=False, exclude_useless=True,
+        ).data['items']
+        assert [item['code'] for item in listed] == ['X1']
+
+        groups = {g['group_code']: g for g in material_service.group_categories().data}
+        assert groups['G']['material_count'] == 2
+        assert groups['G']['manual_count'] == 1
+        assert groups['G']['rule_count'] == 0
+
+        # 空列表 = 取消单独指定，恢复规则判定
+        cleared = material_service.save_item('R1', {'type_override': []}).data
+        assert cleared['categories'] == ['finished']
+        assert cleared['category_source'] == 'rule'
+        assert cleared['type_override'] == []
+
+        assert not material_service.save_item('R1', {'type_override': ['bogus']}).success
+
+
 def test_material_route_rejects_invalid_sort_field(material_app, monkeypatch):
     material_app.register_blueprint(material_bp, url_prefix='/api/material')
     monkeypatch.setattr(UserRepository, 'get_auth_state', lambda _id: (True, 0))
@@ -301,6 +347,7 @@ def test_default_sorted_list_keeps_three_business_queries_when_caches_are_warm(m
         material_service._rules()
         material_service._disable_keywords()
         material_service._group_configs()
+        material_service._overrides()
         statements = []
 
         def capture(_conn, _cursor, statement, _parameters, _context, _executemany):

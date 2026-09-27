@@ -3,9 +3,13 @@
 import { ref, computed, onMounted } from 'vue'
 import { WarningFilled, Refresh } from '@element-plus/icons-vue'
 import http from '@/api/http'
+import { usePermission } from '@/composables/usePermission'
 
-// ── 大类定义 ──────────────────────────────────────
-// 五个大类是固定的，与后端 erp_group_category 的五个布尔列一一对应。
+// usePermission 返回普通布尔值不是 ref，不能写 .value
+const { canEditMaterial } = usePermission()
+
+// ── 物料类型定义 ──────────────────────────────────
+// 五种物料类型是固定的，与后端 erp_group_category 的五个布尔列一一对应。
 // 成品与产成品**可以同时勾选**：成品只含一个包装时技术人员省略了产成品层，
 // 生产数据里确有 276 条编码两者兼具，所以这里不是单选。
 const CATEGORIES = [
@@ -28,19 +32,20 @@ const savingId = ref(null)
 
 // ── 筛选 ──────────────────────────────────────────
 const keyword     = ref('')
-const filterState = ref('')   // '' 全部 / 'unset' 未配置 / 'override' 含前缀例外
+const filterState = ref('')   // '' 全部 / 'unset' 未配置 / 'manual' 含单独指定 / 'rule' 含编码前缀规则
 
 const filteredGroups = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
   return groups.value.filter(g => {
     if (kw && !(`${g.group_code}${g.group_name}`.toLowerCase().includes(kw))) return false
     if (filterState.value === 'unset'    && hasAnyCategory(g)) return false
-    if (filterState.value === 'override' && !g.override_count) return false
+    if (filterState.value === 'manual' && !g.manual_count) return false
+    if (filterState.value === 'rule'   && !g.rule_count)   return false
     return true
   })
 })
 
-// 未配置任何大类的分组数，用于提示还剩多少要收口
+// 未配置分组默认类型的分组数，用于提示还剩多少要收口
 const unsetCount = computed(() => groups.value.filter(g => !hasAnyCategory(g)).length)
 
 // 有未保存改动的分组，用于顶部提示条与批量操作
@@ -148,8 +153,10 @@ onMounted(loadGroups)
                 @click="filterState = ''">全部</button>
         <button class="filter-tab" :class="{ active: filterState === 'unset' }"
                 @click="filterState = 'unset'">未配置<span v-if="unsetCount"> {{ unsetCount }}</span></button>
-        <button class="filter-tab" :class="{ active: filterState === 'override' }"
-                @click="filterState = 'override'">含前缀例外</button>
+        <button class="filter-tab" :class="{ active: filterState === 'manual' }"
+                @click="filterState = 'manual'">含单独指定</button>
+        <button class="filter-tab" :class="{ active: filterState === 'rule' }"
+                @click="filterState = 'rule'">含编码前缀规则</button>
       </div>
       <button class="btn-refresh" title="刷新" :disabled="loading" @click="loadGroups">
         <el-icon :class="{ spinning: loading }"><Refresh /></el-icon>
@@ -157,7 +164,8 @@ onMounted(loadGroups)
     </div>
 
     <div class="rules-tip">
-      分组默认大类对该分组下<b>未被前缀例外命中</b>的编码生效。未配置的分组，其物料归入「未分类」。
+      物料类型判定优先级：<b>单独指定</b>（物料卡片）＞ <b>编码前缀规则</b> ＞ <b>分组默认类型</b>。
+      分组默认类型仅对该分组内既未单独指定、也未命中编码前缀规则的物料生效；三者均未命中的物料归入「未分类」。
     </div>
 
     <!-- 有未保存改动时置顶提示，避免只靠行内按钮而被忽略 -->
@@ -182,8 +190,9 @@ onMounted(loadGroups)
         <div class="gc-col col-code">分组编码</div>
         <div class="gc-col col-name">分组名称</div>
         <div class="gc-col col-count">物料数</div>
-        <div class="gc-col col-override">前缀例外</div>
-        <div class="gc-col col-cats">大类（成品/产成品可同时勾选）</div>
+        <div class="gc-col col-override" title="物料卡片中单独指定了物料类型的物料数">单独指定</div>
+        <div class="gc-col col-override" title="未单独指定、由编码前缀规则确定物料类型的物料数">前缀规则</div>
+        <div class="gc-col col-cats">分组默认类型（成品/产成品可同时勾选）</div>
         <div class="gc-col col-actions"></div>
       </div>
       <div class="gc-body">
@@ -197,8 +206,14 @@ onMounted(loadGroups)
           <div class="gc-col col-name" :title="g.group_name">{{ g.group_name || '—' }}</div>
           <div class="gc-col col-count">{{ g.material_count ?? '—' }}</div>
           <div class="gc-col col-override">
-            <span v-if="g.override_count" class="override-tag" :title="`该分组内有 ${g.override_count} 条被前缀例外规则覆盖`">
-              {{ g.override_count }}
+            <span v-if="g.manual_count" class="override-tag manual" :title="`该分组内有 ${g.manual_count} 条物料单独指定了物料类型`">
+              {{ g.manual_count }}
+            </span>
+            <span v-else class="muted">—</span>
+          </div>
+          <div class="gc-col col-override">
+            <span v-if="g.rule_count" class="override-tag" :title="`该分组内有 ${g.rule_count} 条物料由编码前缀规则确定物料类型`">
+              {{ g.rule_count }}
             </span>
             <span v-else class="muted">—</span>
           </div>
@@ -211,6 +226,7 @@ onMounted(loadGroups)
               :style="valueOf(g, c.key) ? {
                 color: c.color, borderColor: c.color, background: c.color + '18',
               } : {}"
+              :disabled="!canEditMaterial"
               @click="toggle(g, c.key)"
             >{{ c.label }}</button>
           </div>
@@ -340,6 +356,9 @@ onMounted(loadGroups)
   font-size: 11px; color: #9c6fba;
   background: rgba(156,111,186,0.12); border: 1px solid rgba(156,111,186,0.3);
   border-radius: 4px; padding: 2px 7px; cursor: help;
+}
+.override-tag.manual {
+  color: #3a3028; background: rgba(138,122,106,0.12); border-color: rgba(138,122,106,0.4);
 }
 .muted { color: var(--text-secondary); }
 

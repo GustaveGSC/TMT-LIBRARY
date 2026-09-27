@@ -4,6 +4,10 @@ import { ref, onMounted, computed } from 'vue'
 import { WarningFilled, Plus, Delete, Edit, VideoPause, VideoPlay } from '@element-plus/icons-vue'
 import http from '@/api/http'
 import { useFinishedStore } from '@/stores/product/finished'
+import { usePermission } from '@/composables/usePermission'
+
+// usePermission 返回普通布尔值不是 ref，不能写 .value
+const { canEditMaterial } = usePermission()
 
 // ── Store ─────────────────────────────────────────
 const finishedStore = useFinishedStore()
@@ -181,7 +185,7 @@ onMounted(loadRules)
           @click="filterType = t.value"
         >{{ t.label }}</button>
       </div>
-      <button class="btn-add" @click="openCreate">
+      <button v-if="canEditMaterial" class="btn-add" @click="openCreate">
         <el-icon><Plus /></el-icon>
         <span>新增规则</span>
       </button>
@@ -189,8 +193,8 @@ onMounted(loadRules)
 
     <!-- 说明文字 -->
     <div class="rules-tip">
-      前缀规则是<b>例外覆盖</b>：命中前缀的编码以这里的类型为准，未命中的才按「分组默认大类」判定。
-      同一前缀可同时对应多个类型（成品与产成品常常并存）。
+      物料类型判定优先级：<b>单独指定</b>（物料卡片）＞ <b>编码前缀规则</b> ＞ <b>分组默认类型</b>。
+      物料编码以规则前缀开头的，以规则指定的物料类型为准；同一前缀可同时对应多种物料类型（成品与产成品常常并存）。
     </div>
 
     <!-- 错误提示 -->
@@ -206,7 +210,7 @@ onMounted(loadRules)
     <div v-else-if="filteredRules.length" class="rules-table">
       <div class="rt-head">
         <div class="rt-col col-prefix">前缀</div>
-        <div class="rt-col col-type">类型</div>
+        <div class="rt-col col-type">物料类型</div>
         <div class="rt-col col-desc">说明</div>
         <div class="rt-col col-actions"></div>
       </div>
@@ -232,7 +236,7 @@ onMounted(loadRules)
             >{{ rule.type_label }}</span>
           </div>
           <div class="rt-col col-desc">{{ rule.description || '—' }}</div>
-          <div class="rt-col col-actions">
+          <div v-if="canEditMaterial" class="rt-col col-actions">
             <button
               class="btn-icon"
               :class="rule.is_disabled ? 'btn-enable' : 'btn-disable'"
@@ -263,7 +267,7 @@ onMounted(loadRules)
 
     <!-- 新增/编辑表单 -->
     <div v-if="showForm" class="form-card">
-      <div class="form-title">{{ isEditing ? '编辑规则' : '新增规则' }}</div>
+      <div class="form-title">{{ isEditing ? '编辑编码前缀规则' : '新增编码前缀规则' }}</div>
 
       <div class="form-row">
         <label class="form-label">前缀 <span class="required">*</span></label>
@@ -276,7 +280,7 @@ onMounted(loadRules)
       </div>
 
       <div class="form-row">
-        <label class="form-label">类型 <span class="required">*</span></label>
+        <label class="form-label">物料类型 <span class="required">*</span></label>
         <div class="type-selector">
           <button
             v-for="t in TYPE_OPTIONS"

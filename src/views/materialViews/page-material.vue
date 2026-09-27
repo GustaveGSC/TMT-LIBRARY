@@ -13,26 +13,28 @@ import MaterialComboPanel from '@/components/material/MaterialComboPanel.vue'
 import MaterialImportPanel from '@/components/material/MaterialImportPanel.vue'
 import MaterialSupplierPanel from '@/components/material/MaterialSupplierPanel.vue'
 import { usePermission } from '@/composables/usePermission'
+import { smartBack } from '@/utils/smartBack'
 
 // ── 路由 ──────────────────────────────────────────
 const router = useRouter()
-const { canEditProduct, canViewRd } = usePermission()
+const { canEditProduct, canMaterialPrice } = usePermission()
 
 // ── 响应式状态 ────────────────────────────────────
 const activeTab = ref('items')
-const ruleTab   = ref('group')   // group 分组默认大类 / prefix 前缀例外规则
+const ruleTab   = ref('group')   // group 分组默认类型 / prefix 编码前缀规则
 
 // 已挂载过的 tab，避免切走后重新拉数据；与产品库 mountedTabs 的做法一致
 const mountedTabs = ref({ items: true, rules: false, combos: false, import: false, suppliers: false })
 
 // ── Tab 定义 ──────────────────────────────────────
-// 导入数据需要 product:edit（接口挂在 product_bp 上，权限码未变），只读用户不显示该 tab
 // 注意：usePermission 返回的是普通布尔值，不是 ref，不能写 .value
+// 导入数据这个 tab 走的是产品库的 BOM/成本导入接口（/api/product/import，挂在 product_bp 上，
+// 后端仍按 product:edit 鉴权，不是物料专属功能，不能改成 material:edit，否则前后端权限对不上
 const tabs = [
   { key: 'items',  label: '物料清单',     icon: PhListDashes },
   { key: 'combos', label: '售后物料组合', icon: PhPackage },
-  // 供应商是成本域数据，与价格同级，仅研发权限（rd:view）可见
-  ...(canViewRd ? [{ key: 'suppliers', label: '供应商', icon: PhTruck }] : []),
+  // 供应商是成本域数据，与价格同级，仅 material:price 可见
+  ...(canMaterialPrice ? [{ key: 'suppliers', label: '供应商', icon: PhTruck }] : []),
   { key: 'rules',  label: '编码规则',     icon: PhBarcode },
   ...(canEditProduct ? [{ key: 'import', label: '导入数据', icon: PhUploadSimple }] : []),
 ]
@@ -48,7 +50,7 @@ function switchTab(key) {
 
 function handleBack() {
   window.electronAPI?.unmaximizeApp?.()
-  router.back()
+  smartBack(router)
 }
 
 // 返回主页：与 handleBack 区别是不依赖浏览历史，始终回到 /index
@@ -102,22 +104,22 @@ function handleHome() {
       </div>
 
       <!-- 供应商 -->
-      <div v-if="canViewRd && mountedTabs.suppliers" v-show="activeTab === 'suppliers'" class="tab-panel">
+      <div v-if="canMaterialPrice && mountedTabs.suppliers" v-show="activeTab === 'suppliers'" class="tab-panel">
         <MaterialSupplierPanel />
       </div>
 
-      <!-- 导入数据 -->
+      <!-- 导入数据（产品库 BOM/成本导入，需要 product:edit，见上方 tabs 定义注释） -->
       <div v-if="canEditProduct && mountedTabs.import" v-show="activeTab === 'import'" class="tab-panel">
         <MaterialImportPanel />
       </div>
 
-      <!-- 编码规则：分组默认大类 + 前缀例外规则 -->
+      <!-- 编码规则：分组默认类型 + 编码前缀规则（优先级更高） -->
       <div v-if="mountedTabs.rules" v-show="activeTab === 'rules'" class="tab-panel">
         <div class="sub-tabs">
           <button class="sub-tab" :class="{ active: ruleTab === 'group' }"
-                  @click="ruleTab = 'group'">分组默认大类</button>
+                  @click="ruleTab = 'group'">分组默认类型</button>
           <button class="sub-tab" :class="{ active: ruleTab === 'prefix' }"
-                  @click="ruleTab = 'prefix'">前缀例外规则</button>
+                  @click="ruleTab = 'prefix'">编码前缀规则</button>
         </div>
         <div class="sub-panel">
           <GroupCategoryConfig v-show="ruleTab === 'group'" />

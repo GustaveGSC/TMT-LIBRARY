@@ -3,6 +3,10 @@
 import { ref, computed, onMounted } from 'vue'
 import { WarningFilled, Refresh, Plus, Delete, Search } from '@element-plus/icons-vue'
 import http from '@/api/http'
+import { usePermission } from '@/composables/usePermission'
+
+// usePermission 返回普通布尔值不是 ref，不能写 .value
+const { canEditMaterial } = usePermission()
 
 // ── 数据 ──────────────────────────────────────────
 const combos   = ref([])
@@ -118,9 +122,9 @@ async function searchMaterials() {
   if (!kw) { pickerRows.value = []; return }
   pickerLoading.value = true
   try {
-    // 复用物料清单接口。**刻意不限定大类**：用户 2026-08-07 明确
+    // 复用物料清单接口。**刻意不限定物料类型**：用户 2026-08-07 明确
     // 「未分类里的物料很复杂，建议不去管它，但是也可以进行选择」——
-    // 即未分类物料长期可选，这不是等分组大类配好后要收紧的临时妥协。
+    // 即未分类物料长期可选，这不是等分组默认类型配好后要收紧的临时妥协。
     // 不按停用过滤：停用只作为提示，停用物料同样允许加入组合
     const res = await http.get('/api/material/items', {
       params: { page: 1, page_size: 30, keyword: kw },
@@ -252,7 +256,7 @@ onMounted(loadCombos)
         </label>
       </div>
 
-      <button class="btn-new" @click="newCombo">
+      <button v-if="canEditMaterial" class="btn-new" @click="newCombo">
         <el-icon><Plus /></el-icon><span>新建组合</span>
       </button>
 
@@ -304,21 +308,21 @@ onMounted(loadCombos)
         <div class="combo-head">
           <div class="ch-row">
             <label>名称</label>
-            <input v-model="draft.name" class="ch-input" placeholder="如：领航员桌腿维修包" />
+            <input v-model="draft.name" class="ch-input" :disabled="!canEditMaterial" placeholder="如：领航员桌腿维修包" />
             <label class="ml">分类</label>
-            <input v-model="draft.category" class="ch-input short" placeholder="如：桌腿" list="combo-cats" />
+            <input v-model="draft.category" class="ch-input short" :disabled="!canEditMaterial" placeholder="如：桌腿" list="combo-cats" />
             <datalist id="combo-cats">
               <option v-for="c in categories" :key="c" :value="c" />
             </datalist>
           </div>
           <div class="ch-row">
             <label>备注</label>
-            <input v-model="draft.remark" class="ch-input" placeholder="可选" />
+            <input v-model="draft.remark" class="ch-input" :disabled="!canEditMaterial" placeholder="可选" />
             <label class="ch-check ml">
-              <input v-model="draft.is_disabled" type="checkbox" />
+              <input v-model="draft.is_disabled" type="checkbox" :disabled="!canEditMaterial" />
               <span>停用</span>
             </label>
-            <button v-if="draft.id != null" class="btn-del" :disabled="saving" @click="remove">
+            <button v-if="draft.id != null && canEditMaterial" class="btn-del" :disabled="saving" @click="remove">
               <el-icon><Delete /></el-icon><span>删除组合</span>
             </button>
           </div>
@@ -327,7 +331,7 @@ onMounted(loadCombos)
         <!-- 明细 -->
         <div class="items-head">
           <span class="ih-title">明细 <b>{{ draft.items.length }}</b> 项</span>
-          <button class="btn-add-item" @click="pickerVisible = true">
+          <button v-if="canEditMaterial" class="btn-add-item" @click="pickerVisible = true">
             <el-icon><Plus /></el-icon><span>添加物料</span>
           </button>
         </div>
@@ -363,9 +367,9 @@ onMounted(loadCombos)
                 </template>
               </div>
               <div class="it-col col-qty">
-                <input v-model.number="it.quantity" class="qty-input" type="number" min="1" step="1" />
+                <input v-model.number="it.quantity" class="qty-input" type="number" min="1" step="1" :disabled="!canEditMaterial" />
               </div>
-              <div class="it-col col-act">
+              <div v-if="canEditMaterial" class="it-col col-act">
                 <button class="mini" title="上移" @click="moveItem(idx, -1)">↑</button>
                 <button class="mini" title="下移" @click="moveItem(idx, 1)">↓</button>
                 <button class="mini danger" title="移除" @click="removeItem(idx)">✕</button>
@@ -391,7 +395,7 @@ onMounted(loadCombos)
           </button>
         </div>
         <div class="pk-hint">
-          全部物料均可选，<b>不按大类、不按停用状态限定</b>——未分类与已停用的物料同样可加入组合，
+          全部物料均可选，<b>不按物料类型、不按停用状态限定</b>——未分类与已停用的物料同样可加入组合，
           已停用的会标出来供判断。
         </div>
         <div v-if="pickerLoading" class="state-tip">搜索中...</div>
