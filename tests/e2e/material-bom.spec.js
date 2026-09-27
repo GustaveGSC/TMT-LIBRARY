@@ -44,10 +44,21 @@ async function setup(page) {
 
 test('物料BOM tab：列表、多层结构、导入结果', async ({ page }) => {
   await setup(page)
-  const list = [bomHead(1, 'F1', 'A02'), bomHead(2, 'P1', 'A01', { category: '产成品' })]
-  await page.route('**/api/material/boms?*', r => r.fulfill({
-    json: OK({ items: list.map(b => ({ ...b, line_count: 2 })), total: 2, page: 1, page_size: 50,
-               categories: ['产成品', '成品'] }) }))
+  const list = [
+    { ...bomHead(1, 'F1', 'A02'), material_types: ['finished'] },
+    { ...bomHead(2, 'P1', 'A01', { category: '产成品' }), material_types: ['packaged'] },
+  ]
+  const listParams = []
+  await page.route('**/api/material/boms?*', r => {
+    const type = new URL(r.request().url()).searchParams.get('material_type')
+    listParams.push(type)
+    const items = list.filter(b => !type || b.material_types.includes(type))
+    return r.fulfill({ json: OK({
+      items: items.map(b => ({ ...b, line_count: 2 })), total: items.length, all_total: 2,
+      page: 1, page_size: 50,
+      type_counts: { finished: 1, packaged: 1, semi: 0, material: 0, useless: 0, unclassified: 0, unmatched: 0 },
+    }) })
+  })
   await page.route('**/api/material/boms/*/tree', r => r.fulfill({
     json: OK({ bom: list[0], children: TREE }) }))
   let uploaded = false
@@ -62,6 +73,9 @@ test('物料BOM tab：列表、多层结构、导入结果', async ({ page }) =>
   await page.locator('.nav-item', { hasText: '物料BOM' }).click()
 
   await expect(page.locator('.bp-item')).toHaveCount(2)
+  // 按物料类型分类：全部 + 有数据的分类；列表项显示物料类型标签
+  await expect(page.locator('.bp-type')).toHaveText(['全部2', '成品1', '产成品1'])
+  await expect(page.locator('.bp-item').first().locator('.bp-cat-tag')).toHaveText('成品')
   await expect(page.locator('.bp-item').first()).toHaveClass(/active/)
   // 标题显示完整研发编码（成品带完整版本 -A02，而非 ERP 的 -A）；不显示上传文件名
   await expect(page.locator('.bd-drawing')).toHaveText('F1-A02')
@@ -88,6 +102,14 @@ test('物料BOM tab：列表、多层结构、导入结果', async ({ page }) =>
   await expect(page.locator('.ir-muted')).toContainText('已按规则跳过 5 行')
   expect(uploaded).toBe(true)
   await page.locator('.el-dialog button', { hasText: '知道了' }).click()
+
+  // 切换分类：带 material_type 重新请求，列表只剩该类
+  await page.locator('.bp-type', { hasText: '产成品' }).click()
+  await expect(page.locator('.bp-item')).toHaveCount(1)
+  await expect(page.locator('.bp-item .bp-drawing')).toHaveText('P1-A01')
+  expect(listParams).toContain('packaged')
+  await page.locator('.bp-type', { hasText: '全部' }).click()
+  await expect(page.locator('.bp-item')).toHaveCount(2)
 
   // 点树里的 ERP 编码打开物料卡片
   await page.locator('.bom-tree .bt-erp', { hasText: 'P1-A' }).click()
@@ -170,8 +192,8 @@ test('物料BOM：导入校验失败逐条列出；删除被引用的 BOM 需二
   await setup(page)
   const list = [bomHead(2, 'M1', 'A01', { category: '半成品' })]
   await page.route('**/api/material/boms?*', r => r.fulfill({
-    json: OK({ items: list.map(b => ({ ...b, line_count: 1 })), total: 1, page: 1, page_size: 50,
-               categories: ['半成品'] }) }))
+    json: OK({ items: list.map(b => ({ ...b, line_count: 1, material_types: ['semi'] })), total: 1,
+               all_total: 1, page: 1, page_size: 50, type_counts: { semi: 1 } }) }))
   await page.route('**/api/material/boms/*/tree', r => r.fulfill({
     json: OK({ bom: list[0], children: [] }) }))
   await page.route('**/api/material/boms/import', r => r.fulfill({

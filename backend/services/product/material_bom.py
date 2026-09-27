@@ -396,29 +396,56 @@ class MaterialBomService:
         return {'bom_headers_relinked': headers, 'bom_lines_relinked': lines}
 
     # ── 列表 ──────────────────────────────────────────
-    def list_boms(self, keyword=None, category=None, page=1, page_size=50):
-        q = MaterialBom.query
+    # 列表按「物料类型」分类（与物料表同一套判定：单独指定 > 编码前缀规则 > 分组默认类型），
+    # 另有两个兜底分类：unclassified=对应到 ERP 物料但没判出类型，unmatched=对应不到 ERP 物料
+    TYPE_KEYS = ('finished', 'packaged', 'semi', 'material', 'useless', 'unclassified', 'unmatched')
+
+    @staticmethod
+    def _bom_types(erp_code, by_code):
+        if not erp_code:
+            return ['unmatched']
+        cats = by_code.get(erp_code, ([], None))[0]
+        return list(cats) or ['unclassified']
+
+    def list_boms(self, keyword=None, material_type=None, page=1, page_size=50):
+        """BOM 列表。分类要用物料类型判定缓存（内存），数据库里没有这一列，所以先取出
+        关键词命中的 (id, erp_code) 在内存里分类计数，再按 id 取当前页——共 3 条查询。"""
+        from services.product.material import material_service
+        q = db.session.query(MaterialBom.id, MaterialBom.erp_code)
         if keyword:
             like = f'%{keyword}%'
             q = q.filter(or_(
                 MaterialBom.code.like(like), MaterialBom.erp_code.like(like),
                 MaterialBom.name.like(like), MaterialBom.spec.like(like),
             ))
-        if category:
-            q = q.filter(MaterialBom.category == category)
-        total = q.count()
-        rows = (q.order_by(MaterialBom.code.asc(), MaterialBom.version.desc())
-                .offset((page - 1) * page_size).limit(page_size).all())
+        ordered = q.order_by(MaterialBom.code.asc(), MaterialBom.version.desc()).all()
+        by_code = material_service._classification()['by_code']
+        types_by_id = {r.id: self._bom_types(r.erp_code, by_code) for r in ordered}
+
+        # 各分类数量（多标签物料，如同时是成品和产成品，两边都计）
+        type_counts = {k: 0 for k in self.TYPE_KEYS}
+        for types in types_by_id.values():
+            for t in types:
+                type_counts[t] = type_counts.get(t, 0) + 1
+
+        ids = [r.id for r in ordered
+               if not material_type or material_type in types_by_id[r.id]]
+        page_ids = ids[(page - 1) * page_size: page * page_size]
+        rows = {b.id: b for b in MaterialBom.query.filter(MaterialBom.id.in_(page_ids)).all()}             if page_ids else {}
         counts = dict(
             db.session.query(MaterialBomLine.bom_id, func.count(MaterialBomLine.id))
-            .filter(MaterialBomLine.bom_id.in_([r.id for r in rows]))
+            .filter(MaterialBomLine.bom_id.in_(page_ids))
             .group_by(MaterialBomLine.bom_id).all()
-        ) if rows else {}
-        categories = [c for (c,) in db.session.query(MaterialBom.category).distinct().all() if c]
+        ) if page_ids else {}
         return Result.ok(data={
-            'items': [{**r.to_dict(), 'line_count': counts.get(r.id, 0)} for r in rows],
-            'total': total, 'page': page, 'page_size': page_size,
-            'categories': sorted(categories),
+            'items': [
+                {**rows[i].to_dict(), 'line_count': counts.get(i, 0),
+                 'material_types': types_by_id[i]}
+                for i in page_ids if i in rows
+            ],
+            'total': len(ids), 'all_total': len(ordered),
+            'page': page, 'page_size': page_size,
+            'type_counts': type_counts,
         })
 
     def delete_bom(self, bom_id, force=False):

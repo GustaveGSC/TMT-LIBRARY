@@ -157,7 +157,11 @@ POST /api/material/boms/import          # multipart file（.xlsx，PDM 或 ERP �
                                         #   同父同子单位一致/同父件重复展开内容一致，任一不满足整份拒绝，message 用「；」分隔列出带行号的错误
                                         #   编码/版本统一大写；带「.」子零件与 14ST10* 连同其下级跳过（skipped 计数，与 ECR 一致）
                                         #   「状态」列目前不读取（用户 2026-09-27：暂时不管）
-GET  /api/material/boms                 # ?keyword=&category=&page=&page_size= → {items[+line_count], total, categories}
+GET  /api/material/boms                 # ?keyword=&material_type=&page=&page_size=
+                                        #   → {items[+line_count, material_types], total, all_total, type_counts}
+                                        #   material_type 取值 finished/packaged/semi/material/useless/unclassified/unmatched，
+                                        #   按 erp_code 走物料类型判定缓存（与物料表同口径），unmatched=ERP 对应不到；
+                                        #   关键词命中的 (id, erp_code) 先全取出在内存分类计数再按 id 取当前页，共 3 条查询
 GET  /api/material/boms/:id/tree        # 完整多层展开 {bom, children:[{drawing, erp_code, name, spec, category, qty, unit, children?}]}
                                         #   每层一次查询；名称/规格优先用 ERP 的，文件里的兜底
 DELETE /api/material/boms/:id           # ?force=1。只删这一层子件清单，下级半成品自己的 BOM 不动

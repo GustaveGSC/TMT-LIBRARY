@@ -9,9 +9,13 @@ from database.base import db
 import database.models.product.category  # noqa: F401
 import database.models.product.finished  # noqa: F401
 import database.models.product.resource  # noqa: F401
+from database.models.product.erp_code_rules import ErpCodeRule
 from database.models.product.import_raw import ImportProductRaw
-from database.models.product.material import MaterialBom, MaterialBomLine
+from database.models.product.material import (
+    ErpGroupCategory, MaterialBom, MaterialBomLine, ProductMaterial,
+)
 from routes.product.material import material_bp
+from services.product.material import material_service
 from services.product.material_bom import (
     build_single_level_boms, material_bom_service, parse_bom_rows,
 )
@@ -75,9 +79,17 @@ def bom_app():
     app = Flask(__name__)
     app.config.update(SQLALCHEMY_DATABASE_URI='sqlite://', SQLALCHEMY_TRACK_MODIFICATIONS=False)
     db.init_app(app)
-    tables = [ImportProductRaw.__table__, MaterialBom.__table__, MaterialBomLine.__table__]
+    tables = [ImportProductRaw.__table__, MaterialBom.__table__, MaterialBomLine.__table__,
+              ErpCodeRule.__table__, ErpGroupCategory.__table__, ProductMaterial.__table__]
+
+    def reset_caches():
+        material_service.invalidate_rule_cache()
+        material_service.invalidate_group_config_cache()
+        material_service.invalidate_override_cache()
+
     with app.app_context():
         db.metadata.create_all(bind=db.engine, tables=tables)
+        reset_caches()
         # ERP：成品/产成品只到 -A，半成品/原材料带 -A01；S1 在 ERP 里没有
         for code, name in [('F1-A', 'ERP书桌'), ('P1-A', 'ERP桌面'),
                            ('M1-A01', 'ERP钢架'), ('R1-A01', 'ERP方管')]:
@@ -86,6 +98,7 @@ def bom_app():
         db.session.commit()
         yield app
         db.session.remove()
+        reset_caches()
         db.metadata.drop_all(bind=db.engine, tables=list(reversed(tables)))
 
 
@@ -340,3 +353,35 @@ def test_bom_routes_do_not_collide_with_item_routes():
     assert routes.match('/api/material/items/A/B')[0] == 'material.material_detail'
     assert routes.match('/api/material/boms/3/tree')[0] == 'material.material_bom_tree'
     assert routes.match('/api/material/boms/import', method='POST')[0] == 'material.import_material_bom'
+
+
+def test_list_groups_boms_by_material_type(bom_app):
+    """左侧列表按物料类型分类：与物料表同一套判定；对应不到 ERP 的归「未匹配」。"""
+    with bom_app.app_context():
+        for group, flag in [('GF', 'is_finished'), ('GP', 'is_packaged'), ('GS', 'is_semi')]:
+            db.session.add(ErpGroupCategory(group_code=group, **{flag: True}))
+        for code, group in [('F1-A', 'GF'), ('P1-A', 'GP'), ('M1-A01', 'GS')]:
+            ImportProductRaw.query.filter_by(code=code).update({'group_code': group})
+        db.session.commit()
+        material_service.invalidate_group_config_cache()
+        material_bom_service.import_file(_pdm(SAMPLE), 'a.xlsx', 'tester')
+        # ERP 里没有的父件：归入 unmatched
+        material_bom_service.import_file(_pdm([
+            ('1', '11_成品', 'Z9', 'A01', 1, '无'), ('1.1', '14_原材料', 'R1', 'A01', 1, '方管')]),
+            'b.xlsx', 'tester')
+
+        data = material_bom_service.list_boms().data
+        assert data['all_total'] == data['total'] == 4
+        assert data['type_counts']['finished'] == 1
+        assert data['type_counts']['packaged'] == 1
+        assert data['type_counts']['semi'] == 1
+        assert data['type_counts']['unmatched'] == 1
+        assert {i['drawing']: i['material_types'] for i in data['items']}['F1-A01'] == ['finished']
+
+        semi = material_bom_service.list_boms(material_type='semi').data
+        assert [i['drawing'] for i in semi['items']] == ['M1-A01']
+        assert semi['total'] == 1 and semi['all_total'] == 4
+        # 关键词与分类叠加；分类计数跟随关键词
+        kw = material_bom_service.list_boms(keyword='Z9').data
+        assert kw['all_total'] == 1 and kw['type_counts']['unmatched'] == 1
+        assert kw['type_counts']['finished'] == 0

@@ -125,9 +125,12 @@ def list_material_boms():
         page_size = min(200, max(1, int(request.args.get('page_size', 50))))
     except ValueError:
         return Result.fail('分页参数无效').to_response()
+    material_type = request.args.get('material_type', '').strip() or None
+    if material_type and material_type not in material_bom_service.TYPE_KEYS:
+        return Result.fail('物料类型参数无效').to_response()
     return material_bom_service.list_boms(
         keyword=request.args.get('keyword', '').strip() or None,
-        category=request.args.get('category', '').strip() or None,
+        material_type=material_type,
         page=page, page_size=page_size,
     ).to_response()
 

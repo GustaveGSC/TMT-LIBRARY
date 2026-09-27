@@ -15,10 +15,24 @@ const { canEditMaterial } = usePermission()
 
 // ── 响应式状态 ────────────────────────────────────
 const keyword   = ref('')
-const category  = ref('')
+// 物料类型分类（与物料表同一套判定）；'' = 全部
+const materialType = ref('')
 const items     = ref([])
 const total     = ref(0)
-const categories = ref([])
+const typeCounts = ref({})
+const allTotal   = ref(0)
+
+// 分类定义：颜色与物料表的类型标签一致；unclassified / unmatched 是 BOM 列表特有的兜底分类
+const TYPE_TABS = [
+  { key: 'finished',     label: '成品',     color: '#c4883a' },
+  { key: 'packaged',     label: '产成品',   color: '#4a8fc0' },
+  { key: 'semi',         label: '半成品',   color: '#9c6fba' },
+  { key: 'material',     label: '原材料',   color: '#6ab47a' },
+  { key: 'useless',      label: '无用物料', color: '#8a7a6a' },
+  { key: 'unclassified', label: '未分类',   color: '#8a7a6a' },
+  { key: 'unmatched',    label: 'ERP未匹配', color: '#8a7a6a' },
+]
+const typeMap = Object.fromEntries(TYPE_TABS.map(t => [t.key, t]))
 const page      = ref(1)
 const pageSize  = 50
 const listLoading = ref(false)
@@ -48,12 +62,13 @@ async function loadList() {
   try {
     const params = { page: page.value, page_size: pageSize }
     if (keyword.value.trim()) params.keyword = keyword.value.trim()
-    if (category.value) params.category = category.value
+    if (materialType.value) params.material_type = materialType.value
     const res = await http.get('/api/material/boms', { params })
     if (res.success) {
       items.value = res.data.items || []
       total.value = res.data.total || 0
-      categories.value = res.data.categories || []
+      typeCounts.value = res.data.type_counts || {}
+      allTotal.value = res.data.all_total ?? total.value
       // 当前选中的不在列表里时默认选第一条
       if (!items.value.some(i => i.id === selectedId.value)) {
         selectBom(items.value[0]?.id ?? null)
@@ -92,7 +107,7 @@ watch(keyword, () => {
   clearTimeout(searchTimer)
   searchTimer = setTimeout(() => { page.value = 1; loadList() }, 300)
 })
-watch(category, () => { page.value = 1; loadList() })
+watch(materialType, () => { page.value = 1; loadList() })
 watch(page, loadList)
 
 function pickFile() { fileInput.value?.click() }
@@ -174,12 +189,25 @@ onMounted(loadList)
       <div class="bp-toolbar">
         <el-input v-model="keyword" size="small" clearable placeholder="编码 / 名称"
                   :prefix-icon="Search" class="bp-search" />
-        <el-select v-model="category" size="small" clearable placeholder="类别" class="bp-cat">
-          <el-option v-for="c in categories" :key="c" :label="c" :value="c" />
-        </el-select>
         <el-button v-if="canEditMaterial" size="small" type="primary" :icon="Upload"
                    :loading="importing" @click="pickFile">导入BOM</el-button>
         <input ref="fileInput" type="file" accept=".xlsx" hidden @change="onFileChange" />
+      </div>
+
+      <!-- 物料类型分类：全部 + 有数据的分类（当前选中的即使为 0 也保留，避免选中项消失） -->
+      <div class="bp-types">
+        <button class="bp-type" :class="{ active: !materialType }" @click="materialType = ''">
+          全部<span class="bp-type-n">{{ allTotal }}</span>
+        </button>
+        <template v-for="t in TYPE_TABS" :key="t.key">
+          <button
+            v-if="typeCounts[t.key] || materialType === t.key"
+            class="bp-type"
+            :class="{ active: materialType === t.key }"
+            :style="materialType === t.key ? { color: t.color, borderColor: t.color, background: t.color + '14' } : {}"
+            @click="materialType = t.key"
+          >{{ t.label }}<span class="bp-type-n">{{ typeCounts[t.key] || 0 }}</span></button>
+        </template>
       </div>
 
       <div v-if="errorMsg" class="bp-error">
@@ -188,7 +216,7 @@ onMounted(loadList)
 
       <div v-loading="listLoading" class="bp-items">
         <div v-if="!items.length && !listLoading" class="bp-empty">
-          <template v-if="keyword || category">没有符合条件的 BOM</template>
+          <template v-if="keyword || materialType">没有符合条件的 BOM</template>
           <template v-else>还没有导入 BOM<br /><span>点击「导入BOM」上传研发 BOM 表格（PDM / ERP 层次格式）</span></template>
         </div>
         <button
@@ -200,7 +228,11 @@ onMounted(loadList)
         >
           <div class="bp-item-top">
             <span class="bp-drawing mono">{{ b.drawing }}</span>
-            <span v-if="b.category" class="bp-cat-tag">{{ b.category }}</span>
+            <span
+              v-for="t in (b.material_types || [])" :key="t" class="bp-cat-tag"
+              :style="{ color: typeMap[t]?.color, borderColor: (typeMap[t]?.color || '#8a7a6a') + '66',
+                        background: (typeMap[t]?.color || '#8a7a6a') + '14' }"
+            >{{ typeMap[t]?.label || t }}</span>
             <span class="bp-count">{{ b.line_count }} 项</span>
           </div>
           <div class="bp-item-name">{{ b.name || '—' }}</div>
@@ -292,7 +324,17 @@ onMounted(loadList)
 }
 .bp-toolbar { display: flex; gap: 6px; align-items: center; margin-bottom: 10px; }
 .bp-search { flex: 1; min-width: 0; }
-.bp-cat { width: 96px; }
+.bp-types { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+.bp-type {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 10px; border-radius: 12px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg-card);
+  font-size: 12px; font-family: inherit; color: #6b5e4e; transition: all 0.15s;
+}
+.bp-type:hover { border-color: var(--accent); color: var(--accent); }
+.bp-type.active { font-weight: 600; }
+.bp-type:first-child.active { color: #3a3028; border-color: #8a7a6a; background: rgba(138,122,106,0.1); }
+.bp-type-n { font-size: 11px; opacity: 0.75; }
 .bp-error {
   display: flex; align-items: center; gap: 6px; margin-bottom: 8px; padding: 6px 10px;
   border-radius: 7px; font-size: 12px; color: #d05a3c;
