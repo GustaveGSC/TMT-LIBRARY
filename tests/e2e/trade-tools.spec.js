@@ -36,6 +36,13 @@ test('有 trade:view：主页出现外贸工具，进入后可查看产品改制
   await expect(page.locator('.plan-sec h2', { hasText: '改制提醒清单' })).toBeVisible()
   await page.screenshot({ path: 'test-results/trade-tools-plan.png', fullPage: false })
   await page.locator('.plan-sec').filter({ has: page.locator('h2', { hasText: '改制提醒清单' }) }).screenshot({ path: 'test-results/trade-tools-reminder.png' })
+  // 改动规则：区分最外层与部件内部；新建编码示例包含「最外层新增」
+  await expect(page.locator('.plan-sec').filter({ has: page.locator('h2', { hasText: '外贸怎么标改动' }) }).locator('th'))
+    .toHaveText(['操作', '最外层（成品下一级）', '部件内部'])
+  const codeSec = page.locator('.plan-sec').filter({ has: page.locator('h2', { hasText: '需要新建编码' }) })
+  await expect(codeSec.locator('.code-tbl')).toContainText('最外层新增')
+  await page.locator('.plan-sec').filter({ has: page.locator('h2', { hasText: '外贸怎么标改动' }) }).screenshot({ path: 'test-results/trade-tools-ops.png' })
+  await codeSec.screenshot({ path: 'test-results/trade-tools-newcode.png' })
 })
 
 test('没有 trade:view：主页不显示外贸工具', async ({ page }) => {

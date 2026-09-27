@@ -16,11 +16,11 @@ const STEPS = [
 
 // ── 改动类型 ──────────────────────────────────────
 const CHANGE_TYPES = [
-  { op: '删除', example: '去掉中文说明书' },
-  { op: '替换', example: '国标插头 → 美标插头' },
-  { op: '改数量', example: '螺钉 4 个 → 6 个' },
-  { op: '新增', example: '包装里加一张英文警示贴' },
-  { op: '文字需求', example: '「电源要适配欧洲」——写不出具体编码时用，由研发落实成上面四种' },
+  { op: '删除', top: '可以', inner: '可以（它的上级部件要新建编码）' },
+  { op: '新增', top: '可以', inner: '不可以，一律加到最外层' },
+  { op: '增加数量', top: '可以', inner: '不改部件内部，在最外层新增差额（如内部螺钉 4→6，最外层加 2 个）' },
+  { op: '替换', top: '可以', inner: '拆成两步：内部删除旧物料 + 最外层新增新物料' },
+  { op: '文字需求', top: '可以', inner: '可以；研发落实时同样遵守上面的规则' },
 ]
 
 // ── 状态 ──────────────────────────────────────────
@@ -30,6 +30,17 @@ const STATUSES = [
   { name: 'OA 审批中', who: '外贸 / 研发文员', can: '系统不接 OA，手动标记「通过」并填 OA 单号；驳回则回到草稿' },
   { name: '待建码', who: '研发文员', can: '在研发系统建码后，把新编码填到清单列出的每个节点' },
   { name: '已生效', who: '—', can: '改制 BOM 挂在外贸成品号上，物料库可查，可导出 ERP 文件' },
+]
+
+// ── 「哪些部件需要新建编码」示例：depth 为层级缩进，kind 决定行颜色 ──
+const NEW_CODE_EXAMPLE = [
+  { depth: 0, node: '外贸成品（基于 1108SG07-A01）', note: '要新码（外贸成品号）', kind: 'new' },
+  { depth: 1, node: '1208SGZM07-A01 产成品·桌面', note: '要新码（下级删了东西）', kind: 'new' },
+  { depth: 2, node: '14PA…… 包装', note: '要新码（下级删了东西）', kind: 'new' },
+  { depth: 3, node: '中文说明书', note: '删除', kind: 'del' },
+  { depth: 1, node: '钢架（内部螺钉 4 个不动）', note: '沿用原编码', kind: 'keep' },
+  { depth: 1, node: '英文说明书 ×1', note: '最外层新增（替换的另一半）', kind: 'add' },
+  { depth: 1, node: '螺钉 ×2', note: '最外层新增（增加的差额）', kind: 'add' },
 ]
 
 // ── 改制提醒清单：示例条目（实际内容由维护人自行增删改）──
@@ -47,8 +58,8 @@ const REMINDER_EXAMPLES = [
 // ── 待确认问题 ────────────────────────────────────
 const QUESTIONS = [
   {
-    q: '改动能改到部件内部吗？',
-    a: '比如改「产成品·桌面」里「包装」中的说明书。能改的话，路过的每一层部件都要新建编码（见第四节）；只允许改成品第一层会简单很多，但包装、说明书这类常见改动就改不了。建议：允许改到任意层。',
+    q: '部件内部的物料能减少数量吗？',
+    a: '已定：部件内部只能删除，新增和增量都放最外层。还需确认：内部物料「减少数量」（如 4 个改 2 个）算不算「部分删除」允许做（上级部件同样要新编码），还是只能整行删除？',
   },
   {
     q: '导出 ERP 时导哪些层？',
@@ -132,18 +143,22 @@ const QUESTIONS = [
       <h2>三、外贸怎么标改动</h2>
       <p>
         选好内销基准产品（例如 1108SG07-A01）后，系统展示它的完整 BOM 树，带物料名称和图片，
-        外贸不需要认编码。在树上任意位置点选：
+        外贸不需要认编码。改动规则：<b>部件内部只能删除；新增的物料、增加的数量一律放到最外层。</b>
       </p>
       <div class="tbl-wrap">
         <table class="tbl">
-          <thead><tr><th style="width:110px">操作</th><th>例子</th></tr></thead>
+          <thead><tr><th style="width:100px">操作</th><th style="width:170px">最外层（成品下一级）</th><th>部件内部</th></tr></thead>
           <tbody>
-            <tr v-for="c in CHANGE_TYPES" :key="c.op"><td><b>{{ c.op }}</b></td><td>{{ c.example }}</td></tr>
+            <tr v-for="c in CHANGE_TYPES" :key="c.op">
+              <td><b>{{ c.op }}</b></td><td>{{ c.top }}</td><td>{{ c.inner }}</td>
+            </tr>
           </tbody>
         </table>
       </div>
       <ul class="plan-list">
+        <li>「文字需求」用于写不出具体编码的情况，比如「电源要适配欧洲」，由研发落实成具体改动。</li>
         <li>替换、新增的物料从物料表里带图片搜索选择；物料表里没有的，写「文字需求」由研发落实。</li>
+        <li>在部件内部点「新增」「替换」「增加数量」时，系统自动换成规则里的做法（放到最外层），不用外贸自己判断。</li>
         <li>每条改动可以留言，来回沟通记录留在系统里，不再靠表格和聊天记录。</li>
         <li>系统只记录「基准 + 改动」，改制后的完整 BOM 随时算出来，改了什么一目了然。</li>
       </ul>
@@ -179,14 +194,27 @@ const QUESTIONS = [
     <section class="plan-sec">
       <h2>五、哪些部件需要新建编码</h2>
       <p>
-        内销部件的 BOM 在 ERP 里是和内销产品共用的，不能直接改。所以<b>改动点往上直到成品，
-        路过的每一层都要新编码；没改的部件沿用原编码。</b>系统会自动列出这些节点写进清单，研发文员照着建码即可。
+        内销部件的 BOM 在 ERP 里是和内销产品共用的，不能直接改。因为部件内部只允许删除，
+        新增和增量都放在最外层，所以规则很简单：
       </p>
-      <pre class="tree">1108SG07-A01 成品                ← 要新码（外贸成品号）
- ├ 1208SGZM07-A01 产成品·桌面      ← 要新码（下级变了）
- │  └ 14PA…… 包装                 ← 要新码（下级变了）
- │     └ 中文说明书 → 英文说明书     ← 改动点
- └ 钢架（没改）                    ← 沿用原编码</pre>
+      <ul class="plan-list">
+        <li><b>外贸成品本身</b>：总是要新编码（外贸成品号）。</li>
+        <li><b>部件</b>：只有内部删过物料的部件，以及它往上的每一层部件，才要新编码。</li>
+        <li><b>其余部件</b>（包括只在最外层加了东西、内部没删的）：沿用原编码。</li>
+      </ul>
+      <p class="plan-sub">例：中文说明书换成英文说明书，钢架里的螺钉从 4 个增加到 6 个。</p>
+      <div class="tbl-wrap">
+        <table class="tbl code-tbl">
+          <thead><tr><th>结构</th><th style="width:220px">说明</th></tr></thead>
+          <tbody>
+            <tr v-for="(r, i) in NEW_CODE_EXAMPLE" :key="i" :class="r.kind">
+              <td :style="{ paddingLeft: 10 + r.depth * 22 + 'px' }">{{ r.node }}</td>
+              <td>{{ r.note }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="plan-sub">系统自动列出所有「要新码」的节点写进清单，研发文员照着建码即可。</p>
     </section>
 
     <!-- 五、导出 -->
@@ -277,13 +305,12 @@ const QUESTIONS = [
 .tbl td { padding: 7px 10px; border-bottom: 1px solid #efe7da; vertical-align: top; }
 .tbl tr:last-child td { border-bottom: none; }
 
-/* 结构示意 */
-.tree {
-  margin: 10px 0 0; padding: 12px 14px; border-radius: 8px; overflow-x: auto;
-  background: #faf7f2; border: 1px solid #e0d4c0;
-  font-family: 'SF Mono', Consolas, 'Microsoft YaHei UI', monospace; font-size: 13px; line-height: 1.7;
-  color: #2c2420; white-space: pre;
-}
+/* 新建编码示例：行颜色区分 要新码 / 删除 / 新增 / 沿用 */
+.code-tbl tr.new td:last-child { color: #c4883a; font-weight: 600; }
+.code-tbl tr.del td { color: #d05a3c; }
+.code-tbl tr.del td:first-child { text-decoration: line-through; }
+.code-tbl tr.add td { color: #4a8f6a; }
+.code-tbl tr.keep td { color: #8a7a6a; }
 
 /* 待确认问题 */
 .qa-list { display: flex; flex-direction: column; gap: 10px; }
