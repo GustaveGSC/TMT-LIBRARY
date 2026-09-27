@@ -387,3 +387,31 @@ def test_list_groups_boms_by_material_type(bom_app):
         kw = material_bom_service.list_boms(keyword='Z9').data
         assert kw['all_total'] == 1 and kw['type_counts']['unmatched'] == 1
         assert kw['type_counts']['finished'] == 0
+
+
+def test_export_xlsx_matches_tree_with_hierarchical_seq(bom_app):
+    with bom_app.app_context():
+        material_bom_service.import_file(_pdm(SAMPLE), 'a.xlsx', 'tester')
+        f1 = MaterialBom.query.filter_by(code='F1').one()
+        data, name = material_bom_service.export_xlsx(f1.id)
+        assert name == 'BOM-F1-A01.xlsx'
+        ws = openpyxl.load_workbook(io.BytesIO(data)).active
+        assert ws['A1'].value.startswith('BOM：F1-A01')
+        assert [c.value for c in ws[4]] == ['序号', '层级', '编码', 'ERP编码', '名称', '数量', '单位']
+        rows = [[c.value for c in r] for r in ws.iter_rows(min_row=5)]
+        # 与页面树一致：P1 → M1 → R1，S1，M1 → R1
+        assert [(r[0], r[1], r[2]) for r in rows] == [
+            ('1', 1, 'P1-A01'), ('1.1', 2, 'M1-A01'), ('1.1.1', 3, 'R1-A01'),
+            ('2', 1, 'S1-A01'), ('3', 1, 'M1-A01'), ('3.1', 2, 'R1-A01'),
+        ]
+        assert rows[0][3] == 'P1-A' and rows[0][4] == 'ERP桌面'
+        assert rows[3][3] is None and rows[3][4] == '螺钉'   # ERP 未匹配：ERP编码留空，名称用文件里的
+        assert rows[2][5] == 3 and rows[2][6] == 'PCS'
+        assert material_bom_service.export_xlsx(99999)[0] is None
+
+
+def test_export_route_is_registered():
+    app = Flask(__name__)
+    app.register_blueprint(material_bp, url_prefix='/api/material')
+    routes = app.url_map.bind('localhost')
+    assert routes.match('/api/material/boms/3/export')[0] == 'material.export_material_bom'

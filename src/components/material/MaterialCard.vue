@@ -1,10 +1,11 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
 import { ref, computed, watch } from 'vue'
-import { WarningFilled, Picture, Plus, Edit, Delete, ZoomIn, Close, Check, Back, View, Search } from '@element-plus/icons-vue'
+import { WarningFilled, Picture, Plus, Edit, Delete, ZoomIn, Close, Check, Back, View, Search, Download } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import MediaViewer from '@/components/common/MediaViewer.vue'
 import MaterialBomTree from './MaterialBomTree.vue'
+import { exportBom } from './bomExport'
 import { pickFile } from '@/utils/download'
 import http from '@/api/http'
 import { usePermission } from '@/composables/usePermission'
@@ -275,6 +276,14 @@ async function openBomDialog(v, keyword = '') {
   } finally {
     if (bomDialogHead.value?.id === v.id) bomDialogLoading.value = false
   }
+}
+
+// 弹窗里导出当前 BOM 为 Excel
+const bomExporting = ref(false)
+async function exportBomDialog() {
+  if (bomExporting.value) return
+  bomExporting.value = true
+  try { await exportBom(bomDialogHead.value) } finally { bomExporting.value = false }
 }
 
 // 弹窗里点子件编码：关掉弹窗，卡片跳到该物料
@@ -831,6 +840,8 @@ watch(() => props.visible, v => {
         <span class="bom-dlg-code mono">{{ bomDialogHead.drawing }}</span>
         <span class="bom-dlg-name">{{ bomDialogHead.name }}</span>
         <span class="bom-dlg-meta">{{ bomDialogHead.imported_by || '—' }} · {{ bomDialogHead.imported_at }}</span>
+        <el-button size="small" :icon="Download" class="bom-dlg-export" :loading="bomExporting"
+                   @click="exportBomDialog">导出</el-button>
       </div>
     </template>
     <div class="bom-dlg-filter">
@@ -1090,6 +1101,8 @@ watch(() => props.visible, v => {
 .bom-dlg-code { font-size: 17px; font-weight: 700; color: #000; }
 .bom-dlg-name { font-size: 15px; color: #3a3028; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bom-dlg-meta { font-size: 12px; color: #8a7a6a; flex-shrink: 0; }
+/* 导出按钮靠右，给 el-dialog 右上角的关闭按钮留出位置 */
+.bom-dlg-export { margin-left: auto; margin-right: 28px; align-self: center; }
 .bom-dlg-filter { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
 .bom-dlg-search { width: 280px; }
 .bom-dlg-hit { font-size: 12px; color: #6b5e4e; }

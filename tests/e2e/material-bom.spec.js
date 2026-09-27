@@ -30,6 +30,13 @@ const item = (code, extra = {}) => ({
   has_bom: false, ...extra,
 })
 
+// 最小的「像 xlsx」的响应体：前端只校验 zip 头 PK
+const XLSX_BODY = Buffer.from([0x50, 0x4B, 0x03, 0x04, 0, 0, 0, 0])
+const exportRoute = (page, hits) => page.route('**/api/material/boms/*/export', r => {
+  hits.push(Number(new URL(r.request().url()).pathname.split('/').slice(-2)[0]))
+  return r.fulfill({ body: XLSX_BODY, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+})
+
 async function setup(page) {
   await page.addInitScript((u) => {
     localStorage.setItem('user', JSON.stringify(u))
@@ -68,6 +75,8 @@ test('物料BOM tab：列表、多层结构、导入结果', async ({ page }) =>
                                   unmatched: ['S1-A01'], skipped: 5 }) })
   })
   await page.route('**/api/material/items/*', r => r.fulfill({ json: OK(item('P1-A')) }))
+  const exportHits = []
+  await exportRoute(page, exportHits)
 
   await page.goto('/#/material')
   await page.locator('.nav-item', { hasText: '物料BOM' }).click()
@@ -90,6 +99,14 @@ test('物料BOM tab：列表、多层结构、导入结果', async ({ page }) =>
   expect(seqWidth).toBeLessThanOrEqual(121)
   // ERP 里没有的显示研发编码并置灰
   await expect(page.locator('.bom-tree .bt-none')).toHaveText('S1-A01')
+
+  // 导出：下载当前选中的 BOM
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.locator('.bd-export').click(),
+  ])
+  expect(download.suggestedFilename()).toBe('BOM-F1-A02.xlsx')
+  expect(exportHits).toEqual([1])
   await page.screenshot({ path: 'test-results/material-bom-panel.png' })
 
   // 导入：选文件后直接上传，弹结果
@@ -173,6 +190,15 @@ test('物料表 BOM 标记 + 物料卡片：BOM下级按研发版本列出并弹
   await expect(dlg.locator('.bom-dlg-code')).toHaveText('F1-A01')
   await expect(dlg.locator('.bt-seq')).toHaveText(['1', '1.1', '2'])
   expect(treeRequests).toEqual([3])
+  // 弹窗里也能导出
+  const exportHits = []
+  await exportRoute(page, exportHits)
+  const [dlgDownload] = await Promise.all([
+    page.waitForEvent('download'),
+    dlg.locator('.bom-dlg-export').click(),
+  ])
+  expect(dlgDownload.suggestedFilename()).toBe('BOM-F1-A01.xlsx')
+  expect(exportHits).toEqual([3])
   // 弹窗更大：宽度明显超过卡片
   const dlgBox = await dlg.boundingBox()
   expect(dlgBox.width).toBeGreaterThan(1200)

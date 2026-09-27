@@ -1,8 +1,9 @@
 import os
 import uuid
 import hashlib
+import urllib.parse
 
-from flask import Blueprint, g, request
+from flask import Blueprint, Response, g, request
 
 from auth import has_permission, make_blueprint_guard
 from error_handling import internal_error_response
@@ -138,6 +139,21 @@ def list_material_boms():
 @material_bp.get('/boms/<int:bom_id>/tree')
 def material_bom_tree(bom_id):
     return material_bom_service.tree(bom_id).to_response()
+
+
+@material_bp.get('/boms/<int:bom_id>/export')
+def export_material_bom(bom_id):
+    data, name_or_error = material_bom_service.export_xlsx(bom_id)
+    if data is None:
+        return Result.fail(name_or_error).to_response(404)
+    return Response(
+        data,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={
+            'Content-Disposition': f"attachment; filename*=UTF-8''{urllib.parse.quote(name_or_error)}",
+            'Content-Length': str(len(data)),
+        },
+    )
 
 
 @material_bp.delete('/boms/<int:bom_id>')

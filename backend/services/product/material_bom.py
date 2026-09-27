@@ -531,6 +531,61 @@ class MaterialBomService:
             'children': build(root, {(root.code, root.version)}, 1),
         })
 
+    # ── 导出 Excel ────────────────────────────────────
+    def export_xlsx(self, bom_id):
+        """把一份 BOM 的完整多层结构导出成 Excel（与页面上的树一致：序号按层级编号）。
+
+        返回 (bytes, 文件名)；BOM 不存在返回 (None, 错误信息)。
+        """
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+        res = self.tree(bom_id)
+        if not res.success:
+            return None, res.message
+        bom, children = res.data['bom'], res.data['children']
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = 'BOM'
+        headers = ['序号', '层级', '编码', 'ERP编码', '名称', '数量', '单位']
+        ws.append([f"BOM：{bom['drawing']}  {bom.get('name') or ''}"])
+        ws.append([f"ERP编码：{bom.get('erp_code') or '未匹配'}    导入：{bom.get('imported_by') or '—'} "
+                   f"{bom.get('imported_at') or ''}    导出：{now_cst().strftime('%Y-%m-%d %H:%M')}"])
+        ws.append([])
+        ws.append(headers)
+        ws['A1'].font = Font(bold=True, size=13)
+        ws['A2'].font = Font(size=10, color='6B5E4E')
+        head_fill = PatternFill('solid', fgColor='F5F0E8')
+        thin = Side(style='thin', color='E0D4C0')
+        for cell in ws[4]:
+            cell.font = Font(bold=True)
+            cell.fill = head_fill
+            cell.border = Border(bottom=thin)
+
+        def walk(nodes, prefix, depth):
+            for i, n in enumerate(nodes, start=1):
+                seq = f'{prefix}.{i}' if prefix else str(i)
+                ws.append([seq, depth, n['drawing'], n.get('erp_code') or '', n.get('name') or '',
+                           n.get('qty'), n.get('unit') or ''])
+                row = ws.max_row
+                # 编码按层级缩进，打开就能看出结构
+                ws.cell(row, 3).alignment = Alignment(indent=depth - 1)
+                if depth == 1:
+                    ws.cell(row, 1).font = Font(bold=True)
+                    ws.cell(row, 3).font = Font(bold=True)
+                if n.get('children'):
+                    walk(n['children'], seq, depth + 1)
+
+        walk(children, '', 1)
+        for col, width in zip('ABCDEFG', (12, 6, 22, 20, 60, 10, 8)):
+            ws.column_dimensions[col].width = width
+        ws.freeze_panes = 'A5'
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue(), f"BOM-{bom['drawing']}.xlsx"
+
     # ── 物料视角：自身 BOM + 被哪些产品使用 ─────────────
     def for_material(self, erp_code):
         """物料卡片用：该 ERP 物料挂的全部研发 BOM（每个研发版本一条，带下级数量）+

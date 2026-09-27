@@ -5,9 +5,10 @@
 // 右侧是选中 BOM 展开后的完整多层结构。采购 BOM 不在这里导入（只作价格来源）。
 import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search, Upload, Delete, WarningFilled } from '@element-plus/icons-vue'
+import { Search, Upload, Delete, Download, WarningFilled } from '@element-plus/icons-vue'
 import http from '@/api/http'
 import MaterialBomTree from './MaterialBomTree.vue'
+import { exportBom } from './bomExport'
 import MaterialCard from './MaterialCard.vue'
 import { usePermission } from '@/composables/usePermission'
 
@@ -48,6 +49,9 @@ const importResult = ref(null)   // 导入结果弹窗
 const resultOpen   = ref(false)
 const importErrors    = ref([])  // 导入校验失败：逐条错误（含 Excel 行号）
 const importErrorOpen = ref(false)
+
+// 导出 Excel 进行中
+const exporting = ref(false)
 
 const cardCode    = ref('')
 const cardVisible = ref(false)
@@ -173,6 +177,13 @@ async function deleteBom() {
   }
 }
 
+// 导出当前选中 BOM 的完整结构为 Excel
+async function handleExport() {
+  if (exporting.value) return
+  exporting.value = true
+  try { await exportBom(treeData.value?.bom) } finally { exporting.value = false }
+}
+
 function openCard(code) {
   cardCode.value = code
   cardVisible.value = true
@@ -260,6 +271,7 @@ onMounted(loadList)
           <span v-else class="bd-drawing mono" title="ERP 物料表里没有对应编码">{{ treeData.bom.drawing }}</span>
           <span class="bd-name">{{ treeData.bom.name }}</span>
           <span class="bd-meta">{{ treeData.bom.imported_by || '—' }} · {{ treeData.bom.imported_at }}</span>
+          <el-button size="small" :icon="Download" class="bd-export" :loading="exporting" @click="handleExport">导出</el-button>
           <el-button v-if="canEditMaterial" size="small" :icon="Delete" class="bd-del" @click="deleteBom">删除</el-button>
         </header>
         <div class="bd-tree">
@@ -392,7 +404,8 @@ onMounted(loadList)
 .bd-drawing.link:hover { color: var(--accent); text-decoration: underline; }
 
 .bd-meta { font-size: 11px; color: #8a7a6a; }
-.bd-del { margin-left: auto; }
+.bd-export { margin-left: auto; }
+.bd-del { margin-left: 0; }
 .bd-tree { flex: 1; min-height: 0; }
 
 /* ── 导入结果 ── */
