@@ -148,8 +148,7 @@ def delete_material_bom(bom_id):
 
 @material_bp.get('/items/<path:code>/bom')
 def material_item_bom(code):
-    bom_id = request.args.get('bom_id', type=int)
-    return material_bom_service.for_material(code, bom_id).to_response()
+    return material_bom_service.for_material(code).to_response()
 
 
 @material_bp.get('/disable-keywords')

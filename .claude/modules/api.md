@@ -166,8 +166,9 @@ GET  /api/material/boms/:id/tree        # 完整多层展开 {bom, children:[{dr
                                         #   每层一次查询；名称/规格优先用 ERP 的，文件里的兜底
 DELETE /api/material/boms/:id           # ?force=1。只删这一层子件清单，下级半成品自己的 BOM 不动
                                         #   被其他 BOM 引用且无 force → success=false, data={needs_force:true, references:[上级 BOM]}
-GET  /api/material/items/:code/bom      # ?bom_id= 物料卡片用：{versions[], selected_id, tree, direct_parents[], top_products[]}
-                                        #   versions=挂在该 ERP 编码下的研发版本（新→旧）；top_products=沿上级一直往上找到的顶层父件
+GET  /api/material/items/:code/bom      # 物料卡片用：{versions[+line_count], direct_parents[], top_products[]}
+                                        #   versions=挂在该 ERP 编码下的全部研发 BOM（新→旧，如 -A02/-A01 各一条），卡片「BOM下级」逐条列出，
+                                        #   点「查看」再调 /boms/:id/tree 弹窗展开；top_products=沿上级一直往上找到的顶层父件（「被使用」分区）
 # GET /api/material/items 每行带 has_bom（当前页一条查询）
 # POST /api/product/import（ERP 物料导入）完成后自动调用 relink_unmatched_erp_codes()，只给 erp_code 为空的
 #   BOM 表头/子件行补关联，返回里多 bom_headers_relinked / bom_lines_relinked

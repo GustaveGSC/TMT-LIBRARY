@@ -1,7 +1,7 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
 import { ref, computed, watch } from 'vue'
-import { WarningFilled, Picture, Plus, Edit, Delete, ZoomIn, Close, Check, Back } from '@element-plus/icons-vue'
+import { WarningFilled, Picture, Plus, Edit, Delete, ZoomIn, Close, Check, Back, View } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import MediaViewer from '@/components/common/MediaViewer.vue'
 import MaterialBomTree from './MaterialBomTree.vue'
@@ -228,29 +228,55 @@ async function loadSupplierOptions() {
   } catch { /* 候选拿不到仍可自由输入 */ }
 }
 
-// ── 研发 BOM：自身结构（可能有多个研发版本）+ 被哪些上级/最终产品使用 ─────
-const bom        = ref(null)     // { versions, selected_id, tree, direct_parents, top_products }
+// ── 研发 BOM：「BOM下级」列出该物料挂的全部研发 BOM（如 -A01、-A02 各一条），
+//    点「查看」单独弹窗展开完整结构；「被使用」是另一个分区 ─────
+const bom        = ref(null)     // { versions[+line_count], direct_parents, top_products }
 const bomLoading = ref(false)
-const bomTab     = ref('tree')   // tree | used
-const bomVersion = ref(null)
 
-async function loadBom(bomId = null) {
+async function loadBom() {
   const code = activeCode.value
   bomLoading.value = true
   try {
-    const res = await http.get(`/api/material/items/${encodeURIComponent(code)}/bom`,
-      { params: bomId ? { bom_id: bomId } : {} })
+    const res = await http.get(`/api/material/items/${encodeURIComponent(code)}/bom`)
     if (code !== activeCode.value) return
     // 只接受形状完整的数据，避免异常响应让模板渲染报错、拖垮整张卡片
-    if (res.success && Array.isArray(res.data?.tree)) {
-      bom.value = res.data
-      bomVersion.value = res.data.selected_id
-      // 没有自身 BOM 但被使用时，默认展示「被使用」
-      if (!bomId) bomTab.value = res.data.tree.length || !res.data.direct_parents.length ? 'tree' : 'used'
-    }
+    if (res.success && Array.isArray(res.data?.versions)) bom.value = res.data
   } catch { /* BOM 拿不到不影响卡片其余内容 */ } finally {
     if (code === activeCode.value) bomLoading.value = false
   }
+}
+
+// BOM 下级弹窗：展开某一个研发版本的完整多层结构
+const bomDialogOpen    = ref(false)
+const bomDialogHead    = ref(null)   // 列表里点的那一条（先用它显示标题，树加载完再替换）
+const bomDialogTree    = ref([])
+const bomDialogLoading = ref(false)
+
+async function openBomDialog(v) {
+  bomDialogHead.value = v
+  bomDialogTree.value = []
+  bomDialogOpen.value = true
+  bomDialogLoading.value = true
+  try {
+    const res = await http.get(`/api/material/boms/${v.id}/tree`)
+    if (bomDialogHead.value?.id !== v.id) return
+    if (res.success) {
+      bomDialogHead.value = { ...v, ...res.data.bom }
+      bomDialogTree.value = res.data.children || []
+    } else {
+      ElMessage.error(res.message || '加载 BOM 失败')
+    }
+  } catch (e) {
+    ElMessage.error(e.message || '网络错误')
+  } finally {
+    if (bomDialogHead.value?.id === v.id) bomDialogLoading.value = false
+  }
+}
+
+// 弹窗里点子件编码：关掉弹窗，卡片跳到该物料
+function onBomDialogCode(code) {
+  bomDialogOpen.value = false
+  navigateTo(code)
 }
 
 // 在卡片内跳到另一个物料（BOM 子件/上级）；有未保存的人工维护时先确认
@@ -272,7 +298,7 @@ async function navigateBack() {
 function resetForCode() {
   prices.value = []; usages.value = []
   priceFormOpen.value = false; priceErr.value = ''; costTab.value = 'prices'
-  bom.value = null; bomTab.value = 'tree'
+  bom.value = null; bomDialogOpen.value = false
   loadDetail()
 }
 
@@ -581,36 +607,48 @@ watch(() => props.visible, v => {
         </div>
         </div><!-- /mc-top -->
 
-        <!-- ── 研发 BOM：下级结构 / 被使用（在「物料BOM」页导入）── -->
+        <!-- ── BOM下级：该物料挂的全部研发 BOM（每个研发版本一行），点「查看」弹窗看完整结构
+             （在「物料BOM」页导入）── -->
         <div class="mc-section mc-bom">
           <div class="mc-section-title">
-            <span>BOM</span>
-            <el-select
-              v-if="bom && bom.versions.length > 1 && bomTab === 'tree'"
-              v-model="bomVersion" size="small" class="bom-ver"
-              @change="loadBom"
-            >
-              <el-option v-for="v in bom.versions" :key="v.id" :value="v.id"
-                         :label="`研发版本 ${v.version}`" />
-            </el-select>
-            <span v-else-if="bom && bom.versions.length === 1" class="bom-ver-text">
-              研发版本 {{ bom.versions[0].version }}
-            </span>
-          </div>
-          <div class="cost-tabs">
-            <button class="cost-tab" :class="{ active: bomTab === 'tree' }" @click="bomTab = 'tree'">
-              下级结构（{{ bom?.tree.length ?? 0 }}）
-            </button>
-            <button class="cost-tab" :class="{ active: bomTab === 'used' }" @click="bomTab = 'used'">
-              被使用（{{ bom?.top_products.length ?? 0 }} 个产品）
-            </button>
+            <span>BOM下级</span>
+            <span v-if="bom?.versions.length" class="bom-ver-text">{{ bom.versions.length }} 个研发版本</span>
           </div>
           <div v-if="bomLoading && !bom" class="state-tip mini">加载中...</div>
-          <template v-else-if="bomTab === 'tree'">
-            <MaterialBomTree v-if="bom?.tree.length" :rows="bom.tree" max-height="320"
-                             :expand-all="false" @open-code="navigateTo" />
-            <div v-else class="cost-empty">没有下级 BOM</div>
-          </template>
+          <table v-else-if="bom?.versions.length" class="cost-table bom-ver-table">
+            <thead>
+              <tr>
+                <th style="width:160px">研发编码</th>
+                <th>名称</th>
+                <th style="width:70px" class="ta-r">下级</th>
+                <th style="width:150px">导入</th>
+                <th style="width:90px"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="v in bom.versions" :key="v.id">
+                <td class="mono bom-drawing">{{ v.drawing }}</td>
+                <td class="ellip">{{ v.name || '—' }}</td>
+                <td class="ta-r">{{ v.line_count }} 项</td>
+                <td class="cell-muted">{{ v.imported_at }}</td>
+                <td class="ta-r">
+                  <button class="bom-view-btn" type="button" @click="openBomDialog(v)">
+                    <el-icon><View /></el-icon>查看
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else class="cost-empty">没有下级 BOM</div>
+        </div>
+
+        <!-- ── 被使用：直接上级 + 沿上级一路找到的最终产品 ── -->
+        <div class="mc-section mc-used">
+          <div class="mc-section-title">
+            <span>被使用</span>
+            <span v-if="bom?.top_products.length" class="bom-ver-text">{{ bom.top_products.length }} 个最终产品</span>
+          </div>
+          <div v-if="bomLoading && !bom" class="state-tip mini">加载中...</div>
           <template v-else>
             <div v-if="bom?.top_products.length" class="used-block">
               <div class="used-label">最终产品</div>
@@ -788,6 +826,26 @@ watch(() => props.visible, v => {
        </div><!-- /mc-scroll -->
 
       </template>
+    </div>
+  </el-dialog>
+
+  <el-dialog
+    v-model="bomDialogOpen"
+    class="material-bom-dialog"
+    width="960"
+    align-center
+    append-to-body
+  >
+    <template #header>
+      <div v-if="bomDialogHead" class="bom-dlg-head">
+        <span class="bom-dlg-code mono">{{ bomDialogHead.drawing }}</span>
+        <span class="bom-dlg-name">{{ bomDialogHead.name }}</span>
+        <span class="bom-dlg-meta">{{ bomDialogHead.imported_by || '—' }} · {{ bomDialogHead.imported_at }}</span>
+      </div>
+    </template>
+    <div v-loading="bomDialogLoading" class="bom-dlg-body">
+      <MaterialBomTree :rows="bomDialogTree" height="100%" @open-code="onBomDialogCode"
+                       :empty-text="bomDialogLoading ? '加载中...' : '暂无 BOM 数据'" />
     </div>
   </el-dialog>
 
@@ -1021,8 +1079,20 @@ watch(() => props.visible, v => {
 .mc-back-btn:hover { border-color: var(--accent); color: var(--accent); }
 
 /* ── 研发 BOM 区 ── */
-.mc-bom .mc-section-title { align-items: center; }
-.bom-ver { width: 150px; }
+.mc-bom .mc-section-title, .mc-used .mc-section-title { align-items: center; }
+.bom-drawing { font-weight: 700; color: #2c2420; }
+.bom-view-btn {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 2px 10px; border-radius: 12px; cursor: pointer;
+  border: 1px solid var(--accent); background: transparent; color: var(--accent);
+  font-size: 12px; font-family: inherit; white-space: nowrap; transition: all 0.15s;
+}
+.bom-view-btn:hover { background: var(--accent); color: #fff; }
+.bom-dlg-head { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.bom-dlg-code { font-size: 17px; font-weight: 700; color: #000; }
+.bom-dlg-name { font-size: 15px; color: #3a3028; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bom-dlg-meta { font-size: 12px; color: #8a7a6a; flex-shrink: 0; }
+.bom-dlg-body { height: 62vh; }
 .bom-ver-text { font-size: 12px; font-weight: 400; color: #6b5e4e; letter-spacing: 0; }
 .used-block { margin-bottom: 10px; }
 .used-label { font-size: 12px; color: #6b5e4e; margin-bottom: 6px; }

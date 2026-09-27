@@ -116,7 +116,7 @@ test('物料BOM tab：列表、多层结构、导入结果', async ({ page }) =>
   await expect(page.locator('.el-dialog__header .mc-erp-code')).toHaveText('P1-A')
 })
 
-test('物料表 BOM 标记 + 物料卡片 BOM 区：版本、被使用、卡片内跳转与返回', async ({ page }) => {
+test('物料表 BOM 标记 + 物料卡片：BOM下级按研发版本列出并弹窗查看、被使用分区、卡片内跳转', async ({ page }) => {
   await setup(page)
   const F = item('F1-A', { has_bom: true })
   const R = item('R1-A01', { categories: ['material'], rule_categories: ['material'] })
@@ -126,21 +126,25 @@ test('物料表 BOM 标记 + 物料卡片 BOM 区：版本、被使用、卡片�
     const code = decodeURIComponent(new URL(r.request().url()).pathname.split('/').pop())
     return r.fulfill({ json: OK(code === 'R1-A01' ? R : F) })
   })
-  const bomRequests = []
   await page.route('**/api/material/items/*/bom*', r => {
     const u = new URL(r.request().url())
-    bomRequests.push(u.pathname + u.search)
     if (u.pathname.includes('R1-A01')) {
       return r.fulfill({ json: OK({
-        versions: [], selected_id: null, tree: [],
+        versions: [],
         direct_parents: [{ ...bomHead(2, 'P1', 'A01', { category: '产成品' }), qty: 3, unit: 'PCS', child_drawing: 'R1-A01' }],
         top_products: [bomHead(1, 'F1', 'A02')],
       }) })
     }
     return r.fulfill({ json: OK({
-      versions: [bomHead(1, 'F1', 'A02'), bomHead(3, 'F1', 'A01')], selected_id: 1,
-      tree: TREE, direct_parents: [], top_products: [],
+      versions: [{ ...bomHead(1, 'F1', 'A02'), line_count: 2 }, { ...bomHead(3, 'F1', 'A01'), line_count: 5 }],
+      direct_parents: [], top_products: [],
     }) })
+  })
+  const treeRequests = []
+  await page.route('**/api/material/boms/*/tree', r => {
+    const id = Number(new URL(r.request().url()).pathname.split('/').slice(-2)[0])
+    treeRequests.push(id)
+    return r.fulfill({ json: OK({ bom: bomHead(id, 'F1', id === 1 ? 'A02' : 'A01'), children: TREE }) })
   })
 
   await page.goto('/#/material')
@@ -150,39 +154,47 @@ test('物料表 BOM 标记 + 物料卡片 BOM 区：版本、被使用、卡片�
   const card = page.locator('.material-card')
   await expect(page.locator('.el-dialog__header .mc-erp-code')).toHaveText('F1-A')
 
-  // 下级结构：多版本时有版本下拉；树默认只展开第一层
+  // BOM下级与被使用是两个独立分区
   const bomSec = card.locator('.mc-bom')
-  await expect(bomSec.locator('.cost-tab.active')).toContainText('下级结构（2）')
-  await expect(bomSec.locator('.bom-ver')).toBeVisible()
-  // 折叠的子行仍在 DOM 里（el-table 只是隐藏），所以只数可见的
-  await expect(bomSec.locator('.bt-seq:visible')).toHaveText(['1', '2'])
+  const usedSec = card.locator('.mc-used')
+  await expect(bomSec.locator('.mc-section-title')).toContainText('BOM下级')
+  await expect(usedSec.locator('.mc-section-title')).toContainText('被使用')
+  // 1 个 ERP 物料挂 2 个研发 BOM：两个都列出来，各带下级数量；卡片里不直接展开树
+  await expect(bomSec.locator('.bom-drawing')).toHaveText(['F1-A02', 'F1-A01'])
+  await expect(bomSec.locator('tbody tr').nth(1)).toContainText('5 项')
+  await expect(bomSec.locator('.bom-tree')).toHaveCount(0)
+  await expect(usedSec).toContainText('没有被任何 BOM 使用')
   await bomSec.scrollIntoViewIfNeeded()
-  await page.locator('.el-dialog').screenshot({ path: 'test-results/material-card-bom.png' })
+  await page.locator('.el-dialog.material-card-dialog').screenshot({ path: 'test-results/material-card-bom.png' })
 
-  // 切换研发版本：带 bom_id 重新请求
-  await bomSec.locator('.bom-ver').click()
-  await page.locator('.el-select-dropdown__item', { hasText: '研发版本 A01' }).click()
-  await expect.poll(() => bomRequests.some(u => u.includes('bom_id=3'))).toBe(true)
+  // 点第二个版本的「查看」：单独弹窗显示该版本的完整结构
+  await bomSec.locator('.bom-view-btn').nth(1).click()
+  const dlg = page.locator('.el-dialog.material-bom-dialog')
+  await expect(dlg.locator('.bom-dlg-code')).toHaveText('F1-A01')
+  await expect(dlg.locator('.bt-seq')).toHaveText(['1', '1.1', '2'])
+  expect(treeRequests).toEqual([3])
+  await dlg.screenshot({ path: 'test-results/material-card-bom-dialog.png' })
 
-  // 点子件 ERP 编码在卡片内跳转 → 没有自身 BOM、被使用，默认切到「被使用」
-  await bomSec.locator('.bt-erp', { hasText: 'P1-A' }).click()
-  // P1-A 在 mock 里返回 F 的详情；这里只验证跳转发生并出现返回按钮
+  // 弹窗里点子件编码：关弹窗，卡片内跳到该物料，出现返回按钮
+  await dlg.locator('.bt-erp', { hasText: 'P1-A01' }).click()
+  await expect(dlg).toBeHidden()
   await expect(page.locator('.el-dialog__header .mc-back-btn')).toBeVisible()
   await page.locator('.el-dialog__header .mc-back-btn').click()
   await expect(page.locator('.el-dialog__header .mc-back-btn')).toHaveCount(0)
 
-  // 关闭后打开原材料 R1：默认显示「被使用」
+  // 打开原材料 R1：没有下级 BOM，被使用分区显示最终产品和直接上级
   await page.locator('.el-dialog__header .mc-close-btn').click()
   await page.locator('.code-link', { hasText: 'R1-A01' }).click()
   await expect(page.locator('.el-dialog__header .mc-erp-code')).toHaveText('R1-A01')
-  await expect(bomSec.locator('.cost-tab.active')).toContainText('被使用（1 个产品）')
-  await expect(bomSec.locator('.used-chip')).toContainText('F1-A02')
-  await expect(bomSec.locator('.cost-table tbody tr')).toHaveCount(1)
-  await bomSec.scrollIntoViewIfNeeded()
-  await page.locator('.el-dialog').screenshot({ path: 'test-results/material-card-bom-used.png' })
+  await expect(bomSec).toContainText('没有下级 BOM')
+  await expect(usedSec.locator('.mc-section-title')).toContainText('1 个最终产品')
+  await expect(usedSec.locator('.used-chip')).toContainText('F1-A02')
+  await expect(usedSec.locator('.cost-table tbody tr')).toHaveCount(1)
+  await usedSec.scrollIntoViewIfNeeded()
+  await page.locator('.el-dialog.material-card-dialog').screenshot({ path: 'test-results/material-card-bom-used.png' })
 
   // 点最终产品跳到 F1-A，再返回 R1-A01
-  await bomSec.locator('.used-chip').click()
+  await usedSec.locator('.used-chip').click()
   await expect(page.locator('.el-dialog__header .mc-erp-code')).toHaveText('F1-A')
   await page.locator('.el-dialog__header .mc-back-btn').click()
   await expect(page.locator('.el-dialog__header .mc-erp-code')).toHaveText('R1-A01')

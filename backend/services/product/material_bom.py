@@ -532,14 +532,16 @@ class MaterialBomService:
         })
 
     # ── 物料视角：自身 BOM + 被哪些产品使用 ─────────────
-    def for_material(self, erp_code, bom_id=None):
-        """物料卡片用：该 ERP 物料的研发 BOM（可能有多个研发版本）+ 反查使用它的上级与最终产品。"""
+    def for_material(self, erp_code):
+        """物料卡片用：该 ERP 物料挂的全部研发 BOM（每个研发版本一条，带下级数量）+
+        反查使用它的上级与最终产品。下级结构不在这里展开，卡片点「查看」时单独调 tree()。"""
         versions = (MaterialBom.query.filter(MaterialBom.erp_code == erp_code)
                     .order_by(MaterialBom.version.desc()).all())
-        selected = None
-        if versions:
-            selected = next((b for b in versions if b.id == bom_id), versions[0])
-        tree = self.tree(selected.id).data['children'] if selected else []
+        line_counts = dict(
+            db.session.query(MaterialBomLine.bom_id, func.count(MaterialBomLine.id))
+            .filter(MaterialBomLine.bom_id.in_([b.id for b in versions]))
+            .group_by(MaterialBomLine.bom_id).all()
+        ) if versions else {}
 
         # 直接上级：子件行里对应到本物料的
         direct_lines = MaterialBomLine.query.filter(MaterialBomLine.erp_code == erp_code).all()
@@ -583,9 +585,7 @@ class MaterialBomService:
             d['name'] = erp_name or d['name']
             d['spec'] = erp_spec or d['spec']
         return Result.ok(data={
-            'versions': [b.to_dict() for b in versions],
-            'selected_id': selected.id if selected else None,
-            'tree': tree,
+            'versions': [{**b.to_dict(), 'line_count': line_counts.get(b.id, 0)} for b in versions],
             'direct_parents': direct,
             'top_products': top_list,
         })

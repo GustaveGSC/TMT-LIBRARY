@@ -224,9 +224,11 @@ def test_import_maps_erp_codes_and_overwrites_same_version(bom_app):
         a02 = [(l, c, code, 'A02' if code == 'F1' else v, q, d)
                for l, c, code, v, q, d in SAMPLE]
         material_bom_service.import_file(_pdm(a02), 'c.xlsx', 'tester')
+        # 卡片列出该物料下的全部研发 BOM（新→旧），各带下级数量
         view = material_bom_service.for_material('F1-A').data
-        assert [v['version'] for v in view['versions']] == ['A02', 'A01']
-        assert view['selected_id'] == view['versions'][0]['id']
+        assert [(v['drawing'], v['line_count']) for v in view['versions']] == [
+            ('F1-A02', 3), ('F1-A01', 3)]
+        assert 'tree' not in view
 
 
 def test_invalid_file_writes_nothing(bom_app):
@@ -270,13 +272,13 @@ def test_where_used_direct_parents_and_top_products(bom_app):
     with bom_app.app_context():
         material_bom_service.import_file(_pdm(SAMPLE), 'a.xlsx', 'tester')
         r1 = material_bom_service.for_material('R1-A01').data
-        assert r1['versions'] == [] and r1['tree'] == []
+        assert r1['versions'] == []
         assert [(d['drawing'], d['qty']) for d in r1['direct_parents']] == [('M1-A01', 3)]
         assert [t['drawing'] for t in r1['top_products']] == ['F1-A01']
         m1 = material_bom_service.for_material('M1-A01').data
         assert sorted(d['drawing'] for d in m1['direct_parents']) == ['F1-A01', 'P1-A01']
         assert [t['drawing'] for t in m1['top_products']] == ['F1-A01']
-        assert [n['drawing'] for n in m1['tree']] == ['R1-A01']
+        assert [(v['drawing'], v['line_count']) for v in m1['versions']] == [('M1-A01', 1)]
         f1 = material_bom_service.for_material('F1-A').data
         assert f1['direct_parents'] == [] and f1['top_products'] == []
         assert material_bom_service.codes_with_bom(['F1-A', 'R1-A01', 'M1-A01']) == {'F1-A', 'M1-A01'}
