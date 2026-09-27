@@ -110,3 +110,53 @@ class MaterialDisableKeyword(db.Model):
             'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S')
             if self.created_at else None,
         }
+
+
+class MaterialBom(db.Model):
+    """研发 BOM 的单层记录：一个父件（研发编码+版本）及其直接子件。
+
+    研发 BOM Excel 是多层展开的树，导入时拆成「每个有下级的节点一份单层 BOM」存储，
+    查看时再逐层展开。这样同一个半成品被多个产品引用时只存一份，改一次处处生效。
+    研发版本比 ERP 细（成品/产成品 ERP 只到 -A，研发是 -A01/-A02），所以按研发
+    编码+版本存，erp_code 是导入时匹配到的 ERP 物料编码（匹配不到为空）。
+    """
+    __tablename__ = 'material_bom'
+    __table_args__ = (db.UniqueConstraint('code', 'version', name='uq_material_bom_code_version'),)
+    id          = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    code        = db.Column(db.String(64), nullable=False)             # 研发编码（不含版本）
+    version     = db.Column(db.String(16), nullable=False, default='')  # 研发版本，如 A01
+    erp_code    = db.Column(_join_key_string(255), nullable=True, index=True)
+    name        = db.Column(db.String(255), nullable=True)
+    spec        = db.Column(db.String(512), nullable=True)
+    category    = db.Column(db.String(64), nullable=True)              # 研发一级分类，如 成品/产成品/半成品
+    source_file = db.Column(db.String(255), nullable=True)
+    imported_by = db.Column(db.String(100), nullable=True)
+    imported_at = db.Column(db.DateTime, nullable=False, default=now_cst)
+
+    def to_dict(self):
+        return {
+            'id': self.id, 'code': self.code, 'version': self.version,
+            'drawing': f'{self.code}-{self.version}' if self.version else self.code,
+            'erp_code': self.erp_code, 'name': self.name, 'spec': self.spec,
+            'category': self.category, 'source_file': self.source_file,
+            'imported_by': self.imported_by,
+            'imported_at': self.imported_at.strftime('%Y-%m-%d %H:%M') if self.imported_at else None,
+        }
+
+
+class MaterialBomLine(db.Model):
+    """单层 BOM 的一个子件行；子件若自身也有 BOM，按 code+version 找对应的 MaterialBom。"""
+    __tablename__ = 'material_bom_line'
+    __table_args__ = (db.Index('ix_material_bom_line_code_version', 'code', 'version'),)
+    id       = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    bom_id   = db.Column(db.Integer, db.ForeignKey('material_bom.id', ondelete='CASCADE'),
+                         nullable=False, index=True)
+    seq      = db.Column(db.Integer, nullable=False, default=0)
+    code     = db.Column(db.String(64), nullable=False)
+    version  = db.Column(db.String(16), nullable=False, default='')
+    erp_code = db.Column(_join_key_string(255), nullable=True, index=True)
+    name     = db.Column(db.String(255), nullable=True)
+    spec     = db.Column(db.String(512), nullable=True)
+    category = db.Column(db.String(64), nullable=True)
+    qty      = db.Column(db.Numeric(14, 4, asdecimal=False), nullable=False, default=1)
+    unit     = db.Column(db.String(16), nullable=True)

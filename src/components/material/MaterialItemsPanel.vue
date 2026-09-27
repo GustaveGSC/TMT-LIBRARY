@@ -70,6 +70,8 @@ const columns = computed(() => [
       ...CATEGORIES.map(c => ({ label: c.label, value: c.key })),
       { label: '未分类', value: 'unclassified' },
     ] },
+  // 研发 BOM：有 BOM 的物料显示标记，点击打开物料卡片看结构与被使用情况
+  { prop: 'has_bom',    label: 'BOM',      width: 80, align: 'center' },
   { prop: 'is_disabled', label: '停用状态', width: 130, filterable: true,
     filterOptions: [{ label: '启用', value: '0' }, { label: '停用', value: '1' }] },
   // 价格列仅研发权限可见；后端在无 rd:view 时根本不返回 latest_price 字段，
@@ -221,6 +223,10 @@ onMounted(() => { loadItems(); loadGroups() })
                 title="该物料在物料卡片中单独指定了物料类型">指定</span>
         </template>
 
+        <template #cell-has_bom="{ row }">
+          <span v-if="row.has_bom" class="bom-mark" title="已导入研发 BOM，点击查看" @click.stop="openCard(row)">BOM</span>
+        </template>
+
         <!-- 停用状态：只来源于导入数据（ERP 状态失效 或 名称含停用关键词），
              不可人工设置，所以只做展示、没有「人工覆盖」标记。 -->
         <template #cell-is_disabled="{ row }">
@@ -356,6 +362,14 @@ onMounted(() => { loadItems(); loadGroups() })
   font-size: 10px; line-height: 16px; border-radius: 3px;
   color: #3a3028; border: 1px dashed #8a7a6a; cursor: help;
 }
+
+.bom-mark {
+  display: inline-block; padding: 0 6px;
+  font-size: 10px; font-weight: 700; line-height: 16px; border-radius: 4px;
+  color: #4a8fc0; background: rgba(74,143,192,0.1); border: 1px solid rgba(74,143,192,0.4);
+  cursor: pointer;
+}
+.bom-mark:hover { background: rgba(74,143,192,0.2); }
 
 .price-val {
   font-family: 'SF Mono', Consolas, monospace; font-size: 12px;

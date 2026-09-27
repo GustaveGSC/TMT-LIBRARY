@@ -10,6 +10,7 @@ import MaterialItemsPanel from '@/components/material/MaterialItemsPanel.vue'
 import GroupCategoryConfig from '@/components/material/GroupCategoryConfig.vue'
 import CodePrefixRules from '@/components/material/CodePrefixRules.vue'
 import MaterialComboPanel from '@/components/material/MaterialComboPanel.vue'
+import MaterialBomPanel from '@/components/material/MaterialBomPanel.vue'
 import MaterialImportPanel from '@/components/material/MaterialImportPanel.vue'
 import MaterialSupplierPanel from '@/components/material/MaterialSupplierPanel.vue'
 import { usePermission } from '@/composables/usePermission'
@@ -99,13 +100,9 @@ function handleHome() {
         <MaterialItemsPanel />
       </div>
 
-      <!-- 物料BOM：功能待定，先放占位 -->
+      <!-- 物料BOM：研发 BOM 导入与多层结构浏览 -->
       <div v-if="mountedTabs.bom" v-show="activeTab === 'bom'" class="tab-panel">
-        <div class="placeholder">
-          <PhTreeStructure :size="40" weight="duotone" />
-          <div class="placeholder-title">物料BOM</div>
-          <div class="placeholder-desc">功能建设中</div>
-        </div>
+        <MaterialBomPanel />
       </div>
 
       <!-- 售后BOM（售后物料组合） -->
@@ -193,15 +190,6 @@ function handleHome() {
   display: flex; flex-direction: column;
 }
 .tab-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-
-/* ── 占位页 ───────────────────────────────────── */
-.placeholder {
-  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
-  background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
-  color: var(--text-muted);
-}
-.placeholder-title { font-size: 15px; font-weight: 600; color: var(--text-primary); }
-.placeholder-desc { font-size: 13px; }
 
 /* ── 子 tab ───────────────────────────────────── */
 .sub-tabs { display: flex; gap: 6px; margin-bottom: 12px; flex-shrink: 0; }

@@ -9,11 +9,12 @@ from error_handling import internal_error_response
 from result import Result
 from routes.product.finished import _decode_image_data_url
 from services.product.material import CATEGORY_TYPES, material_service
+from services.product.material_bom import material_bom_service
 from services.product.material_combo import material_combo_service
 from services.product.material_price import material_price_service
 from services.product.material_supplier import material_supplier_service
 from storage.client import get_bucket
-from upload_validation import UploadValidationError
+from upload_validation import UploadValidationError, read_spreadsheet_upload
 from services.product.material_filter import FilterExpressionError
 
 
@@ -96,6 +97,55 @@ def list_items():
     except FilterExpressionError as exc:
         return Result.fail(str(exc)).to_response()
     return result.to_response()
+
+
+# ── 物料 BOM（研发 BOM）─────────────────────────────
+@material_bp.post('/boms/import')
+def import_material_bom():
+    file = request.files.get('file')
+    if not file:
+        return Result.fail('请选择 BOM 文件').to_response()
+    if not (file.filename or '').lower().endswith('.xlsx'):
+        return Result.fail('仅支持 .xlsx 文件').to_response()
+    try:
+        data = read_spreadsheet_upload(file, label='BOM 文件')
+        return material_bom_service.import_file(
+            data, file.filename, (g.current_user or {}).get('username'),
+        ).to_response()
+    except UploadValidationError as exc:
+        return Result.fail(str(exc)).to_response(413 if '不能超过' in str(exc) else 400)
+    except Exception:
+        return internal_error_response('物料 BOM 导入失败', 'BOM 导入失败')
+
+
+@material_bp.get('/boms')
+def list_material_boms():
+    try:
+        page = max(1, int(request.args.get('page', 1)))
+        page_size = min(200, max(1, int(request.args.get('page_size', 50))))
+    except ValueError:
+        return Result.fail('分页参数无效').to_response()
+    return material_bom_service.list_boms(
+        keyword=request.args.get('keyword', '').strip() or None,
+        category=request.args.get('category', '').strip() or None,
+        page=page, page_size=page_size,
+    ).to_response()
+
+
+@material_bp.get('/boms/<int:bom_id>/tree')
+def material_bom_tree(bom_id):
+    return material_bom_service.tree(bom_id).to_response()
+
+
+@material_bp.delete('/boms/<int:bom_id>')
+def delete_material_bom(bom_id):
+    return material_bom_service.delete_bom(bom_id).to_response()
+
+
+@material_bp.get('/items/<path:code>/bom')
+def material_item_bom(code):
+    bom_id = request.args.get('bom_id', type=int)
+    return material_bom_service.for_material(code, bom_id).to_response()
 
 
 @material_bp.get('/disable-keywords')

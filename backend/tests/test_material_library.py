@@ -15,7 +15,8 @@ from database.models.product.finished import ProductFinished
 import database.models.product.resource  # noqa: F401
 from database.models.product.import_raw import ImportProductRaw
 from database.models.product.material import (
-    ErpGroupCategory, MaterialDisableKeyword, MaterialImage, ProductMaterial,
+    ErpGroupCategory, MaterialBom, MaterialBomLine, MaterialDisableKeyword, MaterialImage,
+    ProductMaterial,
 )
 from database.repository.account import UserRepository
 from routes.product.import_raw import _parse_excel
@@ -117,6 +118,8 @@ def material_app():
         ProductMaterial.__table__,
         MaterialImage.__table__,
         ProductFinished.__table__,
+        MaterialBom.__table__,
+        MaterialBomLine.__table__,
         MaterialDisableKeyword.__table__,
     ]
     with app.app_context():
@@ -428,7 +431,7 @@ def test_material_route_rejects_invalid_sort_field(material_app, monkeypatch):
     assert response.get_json()['message'] == '排序字段无效'
 
 
-def test_default_sorted_list_keeps_three_business_queries_when_caches_are_warm(material_app):
+def test_default_sorted_list_keeps_four_business_queries_when_caches_are_warm(material_app):
     with material_app.app_context():
         db.session.add_all([
             ImportProductRaw(code='A', name='甲', group_code='G', group_name='组',
@@ -455,7 +458,8 @@ def test_default_sorted_list_keeps_three_business_queries_when_caches_are_warm(m
         finally:
             event.remove(db.engine, 'before_cursor_execute', capture)
 
-        assert len(statements) == 3
+        # 计数、当前页、人工维护字段、当前页的研发 BOM 标记
+        assert len(statements) == 4
 
 
 def test_material_expression_filters_and_literal_like_escaping(material_app):

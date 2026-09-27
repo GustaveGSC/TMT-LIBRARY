@@ -1,9 +1,10 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
 import { ref, computed, watch } from 'vue'
-import { WarningFilled, Picture, Plus, Edit, Delete, ZoomIn, Close, Check } from '@element-plus/icons-vue'
+import { WarningFilled, Picture, Plus, Edit, Delete, ZoomIn, Close, Check, Back } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import MediaViewer from '@/components/common/MediaViewer.vue'
+import MaterialBomTree from './MaterialBomTree.vue'
 import { pickFile } from '@/utils/download'
 import http from '@/api/http'
 import { usePermission } from '@/composables/usePermission'
@@ -19,6 +20,10 @@ const props = defineProps({
 const emit = defineEmits(['update:visible', 'saved'])
 
 // ── 响应式状态 ────────────────────────────────────
+// 当前显示的物料编码：打开时取 props.code；在 BOM 区点编码可以在卡片内跳到其他物料，
+// 跳转前的编码压进 navStack，标题栏出现「返回」
+const activeCode = ref('')
+const navStack   = ref([])
 const detail   = ref(null)
 const loading  = ref(false)
 const saving   = ref(false)
@@ -149,9 +154,9 @@ const canAddPrice = computed(() => {
 const isUseless = computed(() => (detail.value?.categories || []).includes('useless'))
 
 async function loadCost() {
-  if (!canMaterialPrice || !props.code) return
+  if (!canMaterialPrice || !activeCode.value) return
   costLoading.value = true
-  const c = encodeURIComponent(props.code)
+  const c = encodeURIComponent(activeCode.value)
   try {
     const [pRes, uRes] = await Promise.all([
       http.get(`/api/material/items/${c}/prices`),
@@ -171,7 +176,7 @@ async function submitPrice() {
   priceSaving.value = true
   try {
     const res = await http.post(
-      `/api/material/items/${encodeURIComponent(props.code)}/prices`, {
+      `/api/material/items/${encodeURIComponent(activeCode.value)}/prices`, {
         unit_price:    priceForm.value.unit_price,
         price_date:    priceForm.value.price_date || '',
         supplier_name: priceForm.value.supplier_name || '',
@@ -223,14 +228,62 @@ async function loadSupplierOptions() {
   } catch { /* 候选拿不到仍可自由输入 */ }
 }
 
+// ── 研发 BOM：自身结构（可能有多个研发版本）+ 被哪些上级/最终产品使用 ─────
+const bom        = ref(null)     // { versions, selected_id, tree, direct_parents, top_products }
+const bomLoading = ref(false)
+const bomTab     = ref('tree')   // tree | used
+const bomVersion = ref(null)
+
+async function loadBom(bomId = null) {
+  const code = activeCode.value
+  bomLoading.value = true
+  try {
+    const res = await http.get(`/api/material/items/${encodeURIComponent(code)}/bom`,
+      { params: bomId ? { bom_id: bomId } : {} })
+    if (code !== activeCode.value) return
+    // 只接受形状完整的数据，避免异常响应让模板渲染报错、拖垮整张卡片
+    if (res.success && Array.isArray(res.data?.tree)) {
+      bom.value = res.data
+      bomVersion.value = res.data.selected_id
+      // 没有自身 BOM 但被使用时，默认展示「被使用」
+      if (!bomId) bomTab.value = res.data.tree.length || !res.data.direct_parents.length ? 'tree' : 'used'
+    }
+  } catch { /* BOM 拿不到不影响卡片其余内容 */ } finally {
+    if (code === activeCode.value) bomLoading.value = false
+  }
+}
+
+// 在卡片内跳到另一个物料（BOM 子件/上级）；有未保存的人工维护时先确认
+async function navigateTo(code) {
+  if (!code || code === activeCode.value) return
+  if (!(await confirmDiscard())) return
+  navStack.value.push(activeCode.value)
+  activeCode.value = code
+  resetForCode()
+}
+
+async function navigateBack() {
+  if (!navStack.value.length) return
+  if (!(await confirmDiscard())) return
+  activeCode.value = navStack.value.pop()
+  resetForCode()
+}
+
+function resetForCode() {
+  prices.value = []; usages.value = []
+  priceFormOpen.value = false; priceErr.value = ''; costTab.value = 'prices'
+  bom.value = null; bomTab.value = 'tree'
+  loadDetail()
+}
+
 // ── 加载详情 ──────────────────────────────────────
 async function loadDetail() {
-  if (!props.code) return
+  if (!activeCode.value) return
   loading.value  = true
   errorMsg.value = ''
   detail.value   = null
   try {
-    const res = await http.get(`/api/material/items/${encodeURIComponent(props.code)}`)
+    const res = await http.get(`/api/material/items/${encodeURIComponent(activeCode.value)}`)
     if (res.success) {
       detail.value = res.data
       fillForm(res.data)
@@ -238,6 +291,7 @@ async function loadDetail() {
       productImages.value = res.data.product_images || []
       currentIdx.value = 0
       loadCost()
+      loadBom()
     } else {
       errorMsg.value = res.message || '加载失败'
     }
@@ -265,7 +319,7 @@ async function handleSave() {
       type_override: form.value.type_override,
     }
     const res = await http.put(
-      `/api/material/items/${encodeURIComponent(props.code)}`, payload,
+      `/api/material/items/${encodeURIComponent(activeCode.value)}`, payload,
     )
     if (res.success) {
       // 用服务端返回值回写（物料类型的判定结果也会随之更新），并通知列表更新对应行
@@ -296,7 +350,7 @@ async function pickImageDataUrl() {
   })
 }
 
-const imagesUrl = () => `/api/material/items/${encodeURIComponent(props.code)}/images`
+const imagesUrl = () => `/api/material/items/${encodeURIComponent(activeCode.value)}/images`
 
 // 各操作后端都返回最新的完整图片列表，直接替换
 async function runImageOp(request, { selectLast = false } = {}) {
@@ -365,9 +419,9 @@ async function beforeClose(done) {
 // 打开时才拉详情，关闭不清理（同一条再打开可秒开）
 watch(() => props.visible, v => {
   if (!v) return
-  prices.value = []; usages.value = []
-  priceFormOpen.value = false; priceErr.value = ''; costTab.value = 'prices'
-  loadDetail()
+  activeCode.value = props.code
+  navStack.value = []
+  resetForCode()
 })
 </script>
 
@@ -386,6 +440,10 @@ watch(() => props.visible, v => {
          下方分割线与内容隔开。名称单行省略（悬停看全文） -->
     <template #header>
       <div class="mc-erp-line">
+        <button v-if="navStack.length" class="mc-back-btn" type="button"
+                :title="`返回 ${navStack[navStack.length - 1]}`" aria-label="返回" @click="navigateBack">
+          <el-icon><Back /></el-icon>
+        </button>
         <template v-if="detail">
           <span
             class="ro-badge"
@@ -522,6 +580,75 @@ watch(() => props.visible, v => {
           </div>
         </div>
         </div><!-- /mc-top -->
+
+        <!-- ── 研发 BOM：下级结构 / 被使用（在「物料BOM」页导入）── -->
+        <div class="mc-section mc-bom">
+          <div class="mc-section-title">
+            <span>BOM</span>
+            <el-select
+              v-if="bom && bom.versions.length > 1 && bomTab === 'tree'"
+              v-model="bomVersion" size="small" class="bom-ver"
+              @change="loadBom"
+            >
+              <el-option v-for="v in bom.versions" :key="v.id" :value="v.id"
+                         :label="`研发版本 ${v.version}`" />
+            </el-select>
+            <span v-else-if="bom && bom.versions.length === 1" class="bom-ver-text">
+              研发版本 {{ bom.versions[0].version }}
+            </span>
+          </div>
+          <div class="cost-tabs">
+            <button class="cost-tab" :class="{ active: bomTab === 'tree' }" @click="bomTab = 'tree'">
+              下级结构（{{ bom?.tree.length ?? 0 }}）
+            </button>
+            <button class="cost-tab" :class="{ active: bomTab === 'used' }" @click="bomTab = 'used'">
+              被使用（{{ bom?.top_products.length ?? 0 }} 个产品）
+            </button>
+          </div>
+          <div v-if="bomLoading && !bom" class="state-tip mini">加载中...</div>
+          <template v-else-if="bomTab === 'tree'">
+            <MaterialBomTree v-if="bom?.tree.length" :rows="bom.tree" max-height="320"
+                             :expand-all="false" @open-code="navigateTo" />
+            <div v-else class="cost-empty">没有下级 BOM</div>
+          </template>
+          <template v-else>
+            <div v-if="bom?.top_products.length" class="used-block">
+              <div class="used-label">最终产品</div>
+              <div class="used-chips">
+                <button v-for="t in bom.top_products" :key="t.id" class="used-chip"
+                        :class="{ nolink: !t.erp_code }"
+                        :title="t.erp_code ? `${t.name || ''}（点击查看 ${t.erp_code}）` : 'ERP 未匹配'"
+                        @click="navigateTo(t.erp_code)">
+                  <b class="mono">{{ t.drawing }}</b><span>{{ t.name }}</span>
+                </button>
+              </div>
+            </div>
+            <table v-if="bom?.direct_parents.length" class="cost-table">
+              <thead>
+                <tr>
+                  <th style="width:150px">直接上级（研发）</th>
+                  <th style="width:140px">ERP 编码</th>
+                  <th>名称</th>
+                  <th style="width:90px">类别</th>
+                  <th style="width:70px" class="ta-r">用量</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="p in bom.direct_parents" :key="p.id + '-' + p.child_drawing">
+                  <td class="mono">{{ p.drawing }}</td>
+                  <td class="mono">
+                    <span v-if="p.erp_code" class="bom-link" @click="navigateTo(p.erp_code)">{{ p.erp_code }}</span>
+                    <span v-else class="cell-muted">未匹配</span>
+                  </td>
+                  <td class="ellip">{{ p.name || '—' }}</td>
+                  <td class="ellip">{{ p.category || '—' }}</td>
+                  <td class="ta-r">{{ p.qty }}{{ p.unit ? ' ' + p.unit : '' }}</td>
+                </tr>
+              </tbody>
+            </table>
+            <div v-if="!bom?.direct_parents.length" class="cost-empty">没有被任何 BOM 使用</div>
+          </template>
+        </div>
 
         <!-- ── 价格（仅 rd:view 可见）────────────────────────
              与研发部 BOM 共用同一份 cost_material_price，不是副本。
@@ -888,6 +1015,35 @@ watch(() => props.visible, v => {
   color: #3a3028; font-size: 15px; cursor: pointer;
   transition: all 0.15s;
 }
+.mc-back-btn {
+  flex-shrink: 0; width: 30px; height: 30px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); background: var(--bg-card);
+  color: #3a3028; font-size: 15px; cursor: pointer; transition: all 0.15s;
+}
+.mc-back-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ── 研发 BOM 区 ── */
+.mc-bom .mc-section-title { align-items: center; }
+.bom-ver { width: 150px; }
+.bom-ver-text { font-size: 12px; font-weight: 400; color: #6b5e4e; letter-spacing: 0; }
+.used-block { margin-bottom: 10px; }
+.used-label { font-size: 12px; color: #6b5e4e; margin-bottom: 6px; }
+.used-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.used-chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+  padding: 3px 10px; border-radius: 12px; cursor: pointer;
+  border: 1px solid rgba(196,136,58,0.4); background: rgba(196,136,58,0.08);
+  font-size: 12px; font-family: inherit; color: #3a3028;
+}
+.used-chip b { font-weight: 700; color: #000; }
+.used-chip span { color: #6b5e4e; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.used-chip:hover:not(.nolink) { border-color: var(--accent); }
+.used-chip.nolink { cursor: default; }
+.bom-link { cursor: pointer; }
+.bom-link:hover { color: var(--accent); text-decoration: underline; }
+.cell-muted { color: var(--text-muted); }
+
 .mc-close-btn:hover { border-color: #d05a3c; color: #d05a3c; background: rgba(208,90,60,0.06); }
 
 /* 人工维护标题行：右侧确认图标。按键高度压在 22px 内，保证分区仍与图片列等高 */

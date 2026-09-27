@@ -211,6 +211,11 @@ class MaterialService:
             self._serialize(raw, cats, materials.get(raw.code), source)
             for raw, cats, source in selected
         ]
+        # 研发 BOM 标记：当前页一条查询
+        from services.product.material_bom import material_bom_service
+        with_bom = material_bom_service.codes_with_bom([item['code'] for item in items])
+        for item in items:
+            item['has_bom'] = item['code'] in with_bom
         if filters.get('include_cost'):
             prices = material_price_service.latest_for_materials([
                 item['code'] for item in items

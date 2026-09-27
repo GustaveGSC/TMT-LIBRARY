@@ -267,6 +267,21 @@ material_image
   # 迁移时把 product_material.cover_image 历史单图（428 条）搬进来作为第一张；
   # product_material.cover_image/cover_image_original/img_updated_at 自此停用（列保留，便于回退）
 
+material_bom
+  id, code(VARCHAR 64), version(VARCHAR 16), erp_code(INDEX, utf8mb4_0900_ai_ci, NULL), name, spec,
+  category(研发一级分类，如 成品/产成品/半成品), source_file, imported_by, imported_at
+  # UNIQUE(code, version)。研发 BOM 的单层记录（2026-09-27，迁移 20260927_03）：多层 Excel 导入时拆成
+  #   「每个有下级的节点一份」，查看时逐层展开；同一研发编码+版本重复导入 = 覆盖（先删旧子件行）
+  # 研发版本比 ERP 细：erp_code 按「code-完整版本 → code-仅字母版本 → code」依次去 import_product_raw 匹配，
+  #   所以成品 X-A01/X-A02 都对应 ERP 的 X-A（一个物料下可挂多个研发版本）；匹配不到为 NULL
+  # 只存研发 BOM；采购 BOM 只作价格来源（cost_import），不进这张表
+
+material_bom_line
+  id, bom_id(FK→material_bom CASCADE, INDEX), seq, code, version, erp_code(INDEX, NULL),
+  name, spec, category, qty(NUMERIC 14,4, asdecimal=False), unit
+  # INDEX(code, version)：子件若自身有 BOM，按 code+version 找 material_bom（展开/反查都走它）
+  # 同一父件下同一子件多行时合并数量；同一父件在文件里被重复展开只取第一次
+
 material_disable_keyword
   id, keyword(VARCHAR 64 UNIQUE), is_disabled, remark, created_at
   # 名称停用规则由界面维护；迁移预置“停用”“作废”，可增删改/停用
