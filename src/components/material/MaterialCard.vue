@@ -793,8 +793,9 @@ watch(() => props.visible, v => {
 }
 .mc-erp-code {
   flex-shrink: 0;
-  font-size: 15px; font-weight: 700; color: var(--accent);
-  background: var(--accent-bg); border: 1px solid var(--border);
+  /* 固定配色，不跟随主题：黑字加粗、浅蓝底 */
+  font-size: 15px; font-weight: 700; color: #000;
+  background: #e6f0fa; border: 1px solid #b9d3ec;
   border-radius: 6px; padding: 3px 10px; line-height: 1.4;
 }
 .mc-erp-name {

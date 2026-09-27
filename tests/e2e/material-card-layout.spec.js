@@ -145,8 +145,10 @@ test('物料卡片：ERP 信息在最上方无卡片，图片|人工维护，价
   // 编码为标签样式；编码、名称加粗且字号加大
   const code = await erp.locator('.mc-erp-code').evaluate(el => {
     const cs = getComputedStyle(el)
-    return { w: Number(cs.fontWeight), size: parseFloat(cs.fontSize), border: cs.borderTopWidth, bg: cs.backgroundColor }
+    return { w: Number(cs.fontWeight), size: parseFloat(cs.fontSize), border: cs.borderTopWidth, bg: cs.backgroundColor, color: cs.color }
   })
+  expect(code.color).toBe('rgb(0, 0, 0)')
+  expect(code.bg).toBe('rgb(230, 240, 250)')   // 浅蓝底
   expect(code.w).toBeGreaterThanOrEqual(600)
   expect(code.size).toBeGreaterThanOrEqual(15)
   expect(code.border).not.toBe('0px')
