@@ -614,7 +614,8 @@ watch(() => props.visible, v => {
   background: var(--bg); overflow: hidden;
   display: flex; align-items: center; justify-content: center;
 }
-.mc-image img { max-width: 100%; max-height: 100%; object-fit: contain; }
+/* 图片在固定尺寸的框内等比缩放居中，框本身不随图片实际尺寸变化 */
+.mc-image img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .mc-image-empty {
   display: flex; flex-direction: column; align-items: center; gap: 6px;
   color: var(--text-muted); font-size: 12px;
@@ -711,7 +712,7 @@ watch(() => props.visible, v => {
 
 .mc-top { display: flex; align-items: stretch; gap: 16px; margin-bottom: 18px; }
 .mc-top-image { width: 40%; flex-shrink: 0; display: flex; flex-direction: column; }
-.mc-top-image .mc-image { flex: 1; min-height: 180px; margin-bottom: 0; }
+.mc-top-image .mc-image { flex: none; height: 220px; margin-bottom: 0; }
 
 /* 图片悬停遮罩 + 圆形图标按键 */
 .mc-image { position: relative; }

@@ -67,6 +67,29 @@ test('多图：悬停出现 新增/编辑/删除/查看 圆形按键，缩略图
   await page.locator('.material-card').page().keyboard.press('Escape')
 })
 
+// 大图/小图的尺寸差异不能影响图片框大小
+const svg = (w, h) => 'data:image/svg+xml;utf8,' + encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="${w}" height="${h}" fill="#c4883a"/></svg>`)
+
+test('图片框尺寸固定，不随图片实际尺寸变化', async ({ page }) => {
+  const card = await openCard(page, { ...ITEM, images: [
+    { id: 1, url: svg(1600, 3000), orig_url: null, sort_order: 0 },
+    { id: 2, url: svg(40, 20), orig_url: null, sort_order: 1 },
+  ] })
+  await page.waitForTimeout(500)
+  const frame = card.locator('.mc-image')
+  const big = await frame.boundingBox()
+  await card.locator('.mc-thumb').nth(1).click()
+  await page.waitForTimeout(100)
+  const small = await frame.boundingBox()
+  expect(Math.round(big.height)).toBe(220)
+  expect(Math.abs(big.height - small.height)).toBeLessThan(1)
+  expect(Math.abs(big.width - small.width)).toBeLessThan(1)
+  // 图片不能溢出框
+  const imgBox = await frame.locator('img').boundingBox()
+  expect(imgBox.height).toBeLessThanOrEqual(small.height + 1)
+})
+
 test('物料卡片按 图片|ERP / 人工维护 / 价格 排版', async ({ page }) => {
   await page.addInitScript((u) => {
     localStorage.setItem('user', JSON.stringify(u))
