@@ -375,18 +375,18 @@ watch(() => props.visible, v => {
     append-to-body
     @update:model-value="emit('update:visible', $event)"
   >
-    <!-- 标题栏：不用 el-dialog 原生标题，改为「编码 名称 状态 …… 关闭」一行，
-         下方分割线与内容隔开。名称单行省略（悬停看全文），状态紧挨名称 -->
+    <!-- 标题栏：不用 el-dialog 原生标题，改为「状态 编码 名称 …… 关闭」一行，
+         下方分割线与内容隔开。名称单行省略（悬停看全文） -->
     <template #header>
       <div class="mc-erp-line">
         <template v-if="detail">
-          <span class="mc-erp-code mono">{{ detail.code }}</span>
-          <span class="mc-erp-name" :title="detail.name">{{ detail.name }}</span>
           <span
             class="ro-badge"
             :class="detail.is_disabled ? 'off' : 'on'"
             :title="`ERP 状态：${detail.status || '—'}`"
           >{{ detail.is_disabled ? '已停用' : '启用' }}</span>
+          <span class="mc-erp-code mono">{{ detail.code }}</span>
+          <span class="mc-erp-name" :title="detail.name">{{ detail.name }}</span>
         </template>
         <span v-else class="mc-erp-name">物料卡片</span>
         <button class="mc-close-btn" type="button" aria-label="关闭" @click="requestClose">
@@ -848,7 +848,7 @@ watch(() => props.visible, v => {
 .mc-manual .mc-field-remark { flex: 1; min-height: 0; margin-bottom: 0; }
 .mc-manual .mc-field-remark .mc-textarea { height: 100%; min-height: 48px; resize: none; }
 
-/* 标题栏（el-dialog #header 插槽）：编码 名称 状态 …… 关闭，底部分割线 */
+/* 标题栏（el-dialog #header 插槽）：状态 编码 名称 …… 关闭，底部分割线 */
 .mc-erp-line {
   display: flex; align-items: center; gap: 12px; min-width: 0;
 }

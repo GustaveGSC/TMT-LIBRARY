@@ -173,12 +173,15 @@ test('物料卡片：编码/名称/状态作为标题栏，图片|人工维护�
   })
   expect(name.w).toBeLessThan(600)
   expect(name.size).toBe(15)
-  // 状态紧挨名称；原状态位置（最右侧）是「关闭」按键
+  // 状态在编码左侧（行首）；最右侧是「关闭」按键
   const nameBox = await erp.locator('.mc-erp-name').boundingBox()
   const badgeBox = await erp.locator('.ro-badge').boundingBox()
   const closeBox = await erp.locator('.mc-close-btn').boundingBox()
-  expect(badgeBox.x - (nameBox.x + nameBox.width)).toBeLessThan(16)
-  expect(closeBox.x).toBeGreaterThan(badgeBox.x + badgeBox.width)
+  const codeBox = await erp.locator('.mc-erp-code').boundingBox()
+  expect(Math.abs(badgeBox.x - erpBox.x)).toBeLessThan(1)
+  expect(codeBox.x - (badgeBox.x + badgeBox.width)).toBeLessThan(16)
+  expect(codeBox.x).toBeGreaterThan(badgeBox.x + badgeBox.width)
+  expect(closeBox.x).toBeGreaterThan(nameBox.x + nameBox.width)
   expect(Math.abs((closeBox.x + closeBox.width) - (erpBox.x + erpBox.width))).toBeLessThan(1)
   // 关闭是纯图标按键（圆形）
   await expect(erp.locator('.mc-close-btn')).toHaveText('')
