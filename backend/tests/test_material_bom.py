@@ -9,6 +9,8 @@ from database.base import db
 import database.models.product.category  # noqa: F401
 import database.models.product.finished  # noqa: F401
 import database.models.product.resource  # noqa: F401
+import database.models.product.material_supplier  # noqa: F401
+from database.models.rd.cost import CostBomNode, CostMaterialPrice, CostSnapshot
 from database.models.product.erp_code_rules import ErpCodeRule
 from database.models.product.import_raw import ImportProductRaw
 from database.models.product.material import (
@@ -80,7 +82,8 @@ def bom_app():
     app.config.update(SQLALCHEMY_DATABASE_URI='sqlite://', SQLALCHEMY_TRACK_MODIFICATIONS=False)
     db.init_app(app)
     tables = [ImportProductRaw.__table__, MaterialBom.__table__, MaterialBomLine.__table__,
-              ErpCodeRule.__table__, ErpGroupCategory.__table__, ProductMaterial.__table__]
+              ErpCodeRule.__table__, ErpGroupCategory.__table__, ProductMaterial.__table__,
+              CostSnapshot.__table__, CostBomNode.__table__, CostMaterialPrice.__table__]
 
     def reset_caches():
         material_service.invalidate_rule_cache()
@@ -415,3 +418,111 @@ def test_export_route_is_registered():
     app.register_blueprint(material_bp, url_prefix='/api/material')
     routes = app.url_map.bind('localhost')
     assert routes.match('/api/material/boms/3/export')[0] == 'material.export_material_bom'
+
+
+# ── 实时计价 ──────────────────────────────────────────
+
+def _price(code, price, day, source='bom_import'):
+    node = CostBomNode.query.filter_by(code=code).first()
+    if node is None:
+        node = CostBomNode(code=code, code_with_version=f'{code}-A01', node_type='material')
+        db.session.add(node)
+        db.session.flush()
+    db.session.add(CostMaterialPrice(node_id=node.id, unit_price=price, price_date=day, source=source))
+    db.session.commit()
+
+
+def _flat(nodes):
+    for n in nodes:
+        yield n
+        yield from _flat(n.get('children') or [])
+
+
+def test_tree_prices_by_price_date_with_missing_count(bom_app):
+    from datetime import date
+    with bom_app.app_context():
+        material_bom_service.import_file(_pdm(SAMPLE), 'a.xlsx', 'tester')
+        f1 = MaterialBom.query.filter_by(code='F1').one()
+        # 没有价格权限时不带任何价格字段
+        plain = material_bom_service.tree(f1.id).data
+        assert 'unit_price' not in plain['bom'] and 'unit_price' not in plain['children'][0]
+
+        _price('R1', 3, date(2024, 1, 1))
+        _price('R1', 4, date(2024, 6, 1))
+        _price('P1', 999, date(2024, 1, 1), source='bom_calc')   # 旧推算价不参与
+
+        latest = material_bom_service.tree(f1.id, include_price=True).data
+        nodes = {n['id']: n for n in _flat(latest['children'])}
+        p1 = latest['children'][0]
+        m1_under_p1 = p1['children'][0]
+        assert m1_under_p1['unit_price'] == 12 and m1_under_p1['price_source'] == 'calc'   # 3 × 4
+        assert m1_under_p1['children'][0]['price_date'] == '2024-06-01'
+        assert p1['unit_price'] == 24 and p1['amount'] == 24                                # 2 × 12
+        s1 = latest['children'][1]
+        assert s1['unit_price'] is None and s1['missing'] == 1
+        # 根：P1 24 + M1 12；S1 无价格
+        assert latest['bom']['unit_price'] == 36 and latest['bom']['missing'] == 1
+        assert latest['bom']['priced_as_of'] is None
+        assert len(nodes) == 6
+
+        early = material_bom_service.tree(f1.id, include_price=True, price_date=date(2024, 3, 1)).data
+        assert early['bom']['unit_price'] == 27 and early['bom']['priced_as_of'] == '2024-03-01'
+        none = material_bom_service.tree(f1.id, include_price=True, price_date=date(2023, 1, 1)).data
+        assert none['bom']['unit_price'] is None and none['bom']['missing'] == 3
+
+
+def test_semi_without_priced_children_uses_own_purchase_price(bom_app):
+    from datetime import date
+    with bom_app.app_context():
+        material_bom_service.import_file(_pdm(SAMPLE), 'a.xlsx', 'tester')
+        f1 = MaterialBom.query.filter_by(code='F1').one()
+        _price('M1', 50, date(2024, 1, 1))     # 采购导入的特例半成品价（R1 无价格）
+        data = material_bom_service.tree(f1.id, include_price=True).data
+        m1 = data['children'][2]
+        assert m1['unit_price'] == 50 and m1['price_source'] == 'own' and m1['missing'] == 0
+        assert data['children'][0]['unit_price'] == 100           # P1 = 2 × 50
+        assert data['bom']['unit_price'] == 150 and data['bom']['missing'] == 1
+
+
+def test_calc_price_current_and_history_points(bom_app):
+    from datetime import date
+    with bom_app.app_context():
+        material_bom_service.import_file(_pdm(SAMPLE), 'a.xlsx', 'tester')
+        _price('R1', 3, date(2024, 1, 1))
+        _price('R1', 4, date(2024, 6, 1))
+        _price('S1', 0.5, date(2024, 6, 1))
+        data = material_bom_service.calc_price('F1-A').data
+        assert data['bom']['drawing'] == 'F1-A01'
+        assert data['current'] == {'unit_price': 38.0, 'missing': 0, 'price_source': 'calc', 'price_date': None}
+        # 每个价格日期重算一次，新→旧
+        assert data['history'] == [
+            {'date': '2024-06-01', 'unit_price': 38.0, 'missing': 0},
+            {'date': '2024-01-01', 'unit_price': 27.0, 'missing': 1},
+        ]
+        assert material_bom_service.calc_price('R1-A01').data is None   # 没有 BOM 的物料
+
+
+def test_export_includes_price_columns_only_with_permission(bom_app):
+    from datetime import date
+    with bom_app.app_context():
+        material_bom_service.import_file(_pdm(SAMPLE), 'a.xlsx', 'tester')
+        _price('R1', 4, date(2024, 6, 1))
+        f1 = MaterialBom.query.filter_by(code='F1').one()
+        data, _ = material_bom_service.export_xlsx(f1.id, include_price=True)
+        ws = openpyxl.load_workbook(io.BytesIO(data)).active
+        assert [c.value for c in ws[4]][-3:] == ['单价', '金额', '价格日期']
+        assert '合计单价：36' in ws['A2'].value
+        first = [c.value for c in ws[5]]
+        assert first[7] == 24 and first[8] == 24
+        plain, _ = material_bom_service.export_xlsx(f1.id)
+        assert [c.value for c in openpyxl.load_workbook(io.BytesIO(plain)).active[4]][-1] == '单位'
+
+
+def test_calc_price_route_registered():
+    from routes.product.material import material_cost_bp
+    app = Flask(__name__)
+    app.register_blueprint(material_bp, url_prefix='/api/material')
+    app.register_blueprint(material_cost_bp, url_prefix='/api/material')
+    routes = app.url_map.bind('localhost')
+    assert routes.match('/api/material/items/A/B/calc-price') == (
+        'material_cost.material_calc_price', {'code': 'A/B'})

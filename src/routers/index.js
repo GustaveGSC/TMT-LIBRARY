@@ -106,6 +106,11 @@ const router = createRouter({
       meta: { permission: 'rd:view' }
     },
     {
+      path: '/purchase-tools',
+      component: () => import('@/views/purchaseToolsViews/page-purchase-tools.vue'),
+      meta: { permission: 'purchase:view' }
+    },
+    {
       path: '/trade-tools',
       component: () => import('@/views/tradeToolsViews/page-trade-tools.vue'),
       meta: { permission: 'trade:view' }

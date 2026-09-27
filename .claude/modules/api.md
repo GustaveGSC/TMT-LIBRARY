@@ -162,9 +162,12 @@ GET  /api/material/boms                 # ?keyword=&material_type=&page=&page_si
                                         #   material_type 取值 finished/packaged/semi/material/useless/unclassified/unmatched，
                                         #   按 erp_code 走物料类型判定缓存（与物料表同口径），unmatched=ERP 对应不到；
                                         #   关键词命中的 (id, erp_code) 先全取出在内存分类计数再按 id 取当前页，共 3 条查询
-GET  /api/material/boms/:id/tree        # 完整多层展开 {bom, children:[{drawing, erp_code, name, spec, category, qty, unit, children?}]}
+GET  /api/material/boms/:id/tree        # ?price_date=YYYY-MM-DD 完整多层展开 {bom, children:[{id(路径), drawing, erp_code, name, spec, category, qty, unit, children?}]}
+                                        #   有 material:price 时每个节点另带 unit_price/amount/price_date/price_source(material|own|calc)/missing，
+                                        #   bom 带 unit_price/missing/priced_as_of：原材料取计价日期当天或之前最近价，部件=Σ下级，
+                                        #   下级全无价格时用部件自己的采购价；不传日期=最新价。价格只多一条查询
                                         #   每层一次查询；名称/规格优先用 ERP 的，文件里的兜底
-GET  /api/material/boms/:id/export      # 下载 xlsx（BOM-{研发编码}.xlsx）：序号(层级编号)/层级/图纸编码/ERP编码/名称/数量/单位，与页面树一致
+GET  /api/material/boms/:id/export      # ?price_date= 有价格权限时另带 单价/金额/价格日期 列；下载 xlsx（BOM-{研发编码}.xlsx）：序号(层级编号)/层级/图纸编码/ERP编码/名称/数量/单位，与页面树一致
 DELETE /api/material/boms/:id           # ?force=1。只删这一层子件清单，下级半成品自己的 BOM 不动
                                         #   被其他 BOM 引用且无 force → success=false, data={needs_force:true, references:[上级 BOM]}
 GET  /api/material/items/:code/bom      # 物料卡片用：{versions[+line_count], direct_parents[], top_products[]}
@@ -175,6 +178,8 @@ GET  /api/material/items/:code/bom      # 物料卡片用：{versions[+line_coun
 #   BOM 表头/子件行补关联，返回里多 bom_headers_relinked / bom_lines_relinked
 
 # material_cost_bp：全部方法统一需要 material:price（查看/编辑不分级，与 rd:view/edit 的两档设计不同）
+GET  /api/material/items/:code/calc-price   # ?bom_id= 按研发 BOM 实时计算的价格 {bom, versions, current{unit_price,missing,price_source}, history[{date,unit_price,missing}]}
+                                            #   history = 在下级各价格日期上重算（新→旧，相邻相同合并），不存库；无 BOM 返回 data=null
 GET  /api/material/items/:code/prices
 POST /api/material/items/:code/prices
 GET  /api/material/items/:code/usages
@@ -671,3 +676,12 @@ PUT    /api/rd/cost/col-aliases           # 更新 Excel 列名映射
 
 ### material_category 规则
 物料分类通过 `erp_code_rules` 表前缀匹配得出（最长前缀优先），与产品库编码规则完全一致。不存储在 `cost_bom_node`，每次查询时动态计算。
+
+## 采购工具（purchase_bp，/api/purchase；GET 需 purchase:view，POST 另需 material:price）
+```
+POST /api/purchase/price-import/preview   # multipart file(+price_date)：解析采购 BOM（成本核算格式，复用 rd/cost_import 解析）
+                                          #   → {order_no, suggested_date(订单号里的日期), price_date, items[{code(去版本),name,price,kind(material|semi),status(new|skip),in_erp}],
+                                          #      new_count, skip_count, special_semis, zero_items, conflicts, warnings}
+POST /api/purchase/price-import           # multipart file + price_date(必填)：写 cost_material_price（见 database.md），返回 {created, skipped, ...}
+GET  /api/purchase/price-import/history   # 最近 20 次导入批次
+```

@@ -77,6 +77,7 @@ export function usePermission() {
   const canViewRd  = can('rd:view')
   const canEditRd  = can('rd:edit')
   const canViewTrade = can('trade:view')   // 外贸工具
+  const canViewPurchase = can('purchase:view')   // 采购工具（导入价格另需 material:price）
   const canAdminRd = can('rd:admin')   // 研发部管理员：管理变更提醒
 
   return {
@@ -106,5 +107,6 @@ export function usePermission() {
     canEditRd,
     canAdminRd,
     canViewTrade,
+    canViewPurchase,
   }
 }

@@ -2,36 +2,23 @@
 // ── 导入 ──────────────────────────────────────────
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowLeft, HomeFilled, Setting as SettingIcon } from '@element-plus/icons-vue'
+import { ArrowLeft, HomeFilled } from '@element-plus/icons-vue'
+import { PhHouseLine, PhCurrencyCny } from '@phosphor-icons/vue'
 import WindowControls from '@/components/common/WindowControls.vue'
-import { PhHouseLine, PhArrowsLeftRight, PhClipboardText, PhBell, PhShieldWarning } from '@phosphor-icons/vue'
-import EcrForm from '@/components/rdTools/EcrForm.vue'
-import EcnForm from '@/components/rdTools/EcnForm.vue'
-import PdmToBomForm from '@/components/rdTools/PdmToBomForm.vue'
-import MaterialGateCheckPage from '@/components/rdTools/MaterialGateCheckPage.vue'
-import MaterialGateManageDialog from '@/components/rdTools/MaterialGateManageDialog.vue'
 import AppBottomBar from '@/components/common/AppBottomBar.vue'
+import PriceImport from '@/components/purchaseTools/PriceImport.vue'
 import { smartBack } from '@/utils/smartBack'
-import { usePermission } from '@/composables/usePermission'
 
-// ── 路由 & 权限 ────────────────────────────────────
+// ── 路由 ──────────────────────────────────────────
 const router = useRouter()
-const { canAdminRd } = usePermission()
 
 // ── 响应式状态 ────────────────────────────────────
 const activeTab = ref('home')
-// 物料门禁维护弹窗：入口固定在首页"设置"分组，不在具体功能 tab 里（2026-09-25 起）
-const showGateMgmtDialog = ref(false)
 
 // ── Tab 定义（首页"功能"分组 + 顶部导航）─────────────
-// 「BOM成本」已移除（2026-09-27）：采购价格导入迁到「采购工具 → 导入价格」，
-// 部件价格改为在物料库「物料BOM」里按计价日期实时计算。BomCost.vue 与后端 /api/rd/cost 接口暂留未删。
 const tabs = [
-  { key: 'home',     label: '主页',          icon: PhHouseLine },
-  { key: 'pdm2bom', label: 'PDM转BOM',      icon: PhArrowsLeftRight },
-  { key: 'ecr',     label: '变更申请单填写', icon: PhClipboardText },
-  { key: 'ecn',     label: '变更通知单填写', icon: PhBell },
-  { key: 'gate',    label: '材料清单校验',   icon: PhShieldWarning },
+  { key: 'home',        label: '主页',     icon: PhHouseLine },
+  { key: 'priceImport', label: '导入价格', icon: PhCurrencyCny },
 ]
 
 // ── 生命周期 ──────────────────────────────────────
@@ -51,8 +38,8 @@ function handleHome() {
 </script>
 
 <template>
-  <div class="rd-page">
-    <WindowControls :confirm-close="true" confirm-text="确认退出两平米资料站？" />
+  <div class="purchase-page">
+    <WindowControls :confirm-close="true" confirm-text="确认退出两平米软件库？" />
 
     <!-- ── 顶部导航栏 ──────────────────────────── -->
     <header class="top-bar">
@@ -63,7 +50,7 @@ function handleHome() {
         <button class="btn-back" title="返回" @click="handleBack">
           <el-icon><ArrowLeft /></el-icon>
         </button>
-        <span class="page-title">研发部工具</span>
+        <span class="page-title">采购工具</span>
         <div class="title-divider"></div>
         <nav class="top-nav">
           <button
@@ -99,61 +86,32 @@ function handleHome() {
                   <component :is="tab.icon" :size="32" weight="duotone" color="#c4883a" />
                 </div>
                 <div class="tool-card-name">{{ tab.label }}</div>
-                <div v-if="tab.coming" class="tool-card-badge">即将上线</div>
-              </div>
-            </div>
-          </div>
-
-          <div v-if="canAdminRd" class="home-group">
-            <div class="home-group-label">设置</div>
-            <div class="home-grid">
-              <div class="tool-card" @click="showGateMgmtDialog = true">
-                <div class="tool-card-icon">
-                  <el-icon :size="30" color="#c4883a"><SettingIcon /></el-icon>
-                </div>
-                <div class="tool-card-name">物料门禁维护</div>
+                <div v-if="tab.badge" class="tool-card-badge">{{ tab.badge }}</div>
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- PDM转BOM -->
-      <div v-show="activeTab === 'pdm2bom'" class="tab-panel pdm2bom-panel">
-        <PdmToBomForm />
-      </div>
-
-      <!-- 变更申请单填写 -->
-      <div v-show="activeTab === 'ecr'" class="tab-panel ecr-panel">
-        <EcrForm />
-      </div>
-
-      <!-- 变更通知单填写 -->
-      <div v-show="activeTab === 'ecn'" class="tab-panel ecn-panel">
-        <EcnForm />
-      </div>
-
-      <!-- 材料清单校验 -->
-      <div v-show="activeTab === 'gate'" class="tab-panel gate-panel">
-        <MaterialGateCheckPage />
+      <!-- 导入价格：采购带价格的 BOM → 原材料价格绑定到物料库 -->
+      <div v-show="activeTab === 'priceImport'" class="tab-panel scroll-panel">
+        <PriceImport />
       </div>
 
     </main>
     <AppBottomBar />
-
-    <MaterialGateManageDialog v-model="showGateMgmtDialog" />
   </div>
 </template>
 
 <style scoped>
-.rd-page {
+.purchase-page {
   width: 100vw; height: 100vh;
   background: var(--bg);
   display: flex; flex-direction: column;
   overflow: hidden;
 }
 
-/* ── 顶部栏（与其他页面一致）── */
+/* ── 顶部栏（与研发部工具一致）── */
 .top-bar {
   height: 50px; display: flex; align-items: center;
   padding: 0 14px;
@@ -162,10 +120,10 @@ function handleHome() {
   backdrop-filter: blur(12px);
   flex-shrink: 0; z-index: 10;
 }
-.top-left { display: flex; align-items: center; gap: 8px; }
+.top-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
 
 .btn-back, .btn-home {
-  width: 30px; height: 30px;
+  width: 30px; height: 30px; flex-shrink: 0;
   border: 1px solid var(--border); border-radius: 7px;
   background: transparent; color: var(--text-muted);
   cursor: pointer; display: flex; align-items: center; justify-content: center;
@@ -173,17 +131,17 @@ function handleHome() {
 }
 .btn-back:hover, .btn-home:hover { background: var(--bg-card); color: var(--text-primary); }
 
-.page-title { font-size: 14px; font-weight: 600; color: var(--text-primary); letter-spacing: 0.05em; }
-.title-divider { width: 1px; height: 16px; background: var(--border); margin-left: 8px; }
+.page-title { font-size: 14px; font-weight: 600; color: var(--text-primary); letter-spacing: 0.05em; white-space: nowrap; }
+.title-divider { width: 1px; height: 16px; background: var(--border); margin-left: 8px; flex-shrink: 0; }
 
-.top-nav { display: flex; align-items: center; gap: 2px; margin-left: 8px; }
+.top-nav { display: flex; align-items: center; gap: 2px; margin-left: 8px; overflow-x: auto; }
 .nav-item {
   height: 32px; padding: 0 13px;
   border: none; border-radius: 7px;
   background: transparent; color: var(--text-muted);
   font-size: 13px; font-family: var(--font-family);
   cursor: pointer; transition: all 0.15s;
-  position: relative;
+  position: relative; white-space: nowrap;
   display: flex; align-items: center; gap: 5px;
 }
 .nav-item:hover { color: var(--text-primary); background: var(--bg); }
@@ -196,26 +154,22 @@ function handleHome() {
 }
 
 /* ── 主内容区 ── */
-.main-content { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+.main-content { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+.tab-panel { flex: 1; width: 100%; min-height: 0; }
+.scroll-panel { overflow-y: auto; }
+.scroll-panel::-webkit-scrollbar { width: 4px; }
+.scroll-panel::-webkit-scrollbar-track { background: transparent; }
+.scroll-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
-.tab-panel { flex: 1; width: 100%; height: 100%; }
-
-/* 主页：工具卡片网格，按"功能"/"设置"分组 */
+/* 主页：工具卡片网格 */
 .home-panel {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 40px;
-  overflow-y: auto;
+  display: flex; align-items: center; justify-content: center;
+  padding: 40px; overflow-y: auto;
 }
 .home-groups { display: flex; flex-direction: column; gap: 28px; }
 .home-group-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-muted);
-  letter-spacing: 0.08em;
-  margin-bottom: 10px;
-  padding-left: 2px;
+  font-size: 12px; font-weight: 600; color: var(--text-muted);
+  letter-spacing: 0.08em; margin-bottom: 10px; padding-left: 2px;
 }
 .home-grid { display: flex; gap: 24px; flex-wrap: wrap; }
 
@@ -252,26 +206,7 @@ function handleHome() {
   font-size: 10px; color: var(--text-muted);
 }
 
-/* 功能开发中占位 */
-.coming-panel {
-  display: flex; flex-direction: column;
-  align-items: center; justify-content: center;
-  gap: 12px; padding: 40px;
-}
-.coming-title {
-  font-size: 16px; font-weight: 600;
-  color: var(--text-primary); letter-spacing: 0.04em;
-  margin-top: 4px;
-}
-.coming-desc { font-size: 13px; color: var(--text-muted); text-align: center; max-width: 280px; line-height: 1.6; }
-
-.ecr-panel,
-.ecn-panel,
-.pdm2bom-panel,
-
-.gate-panel {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+@media (max-width: 768px) {
+  .home-panel { padding: 24px 16px; align-items: flex-start; }
 }
 </style>

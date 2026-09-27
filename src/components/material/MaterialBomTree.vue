@@ -12,6 +12,8 @@ const props = defineProps({
   emptyText:  { type: String,  default: '暂无 BOM 数据' },
   // 筛选词（编码/名称，不区分大小写）：命中的行连同它的上级链路保留，其余隐藏
   keyword:    { type: String,  default: '' },
+  // 显示单价/金额列（调用方已确认 material:price；后端无权限时本来也不返回价格）
+  showPrice:  { type: Boolean, default: false },
 })
 // 点击编码：由上层决定打开哪个物料卡片
 const emit = defineEmits(['open-code'])
@@ -88,6 +90,20 @@ defineExpose({
 })
 
 // ── 方法 ──────────────────────────────────────────
+function fmtMoney(v) {
+  return v == null ? '—' : '¥' + String(+Number(v).toFixed(4))
+}
+
+// 单价的来源说明（悬停提示）
+function priceTitle(row) {
+  if (row.price_source === 'material') return `价格日期：${row.price_date || '未填'}`
+  if (row.price_source === 'own') return `下级都没有价格，使用该部件自己的采购价（${row.price_date || '未填日期'}）`
+  if (row.price_source === 'calc') {
+    return row.missing ? `由下级计算；其中 ${row.missing} 项原材料无价格，合计偏低` : '由下级计算'
+  }
+  return row.children?.length ? `下级 ${row.missing} 项原材料都没有价格` : '没有价格'
+}
+
 function formatQty(q) {
   if (q == null) return ''
   return Number.isInteger(q) ? String(q) : String(+Number(q).toFixed(4))
@@ -131,11 +147,25 @@ function formatQty(q) {
       </template>
     </el-table-column>
     <!-- 名称已包含规格，不再单列规格/类别 -->
-    <el-table-column prop="name" label="名称" min-width="240" show-overflow-tooltip />
+    <el-table-column prop="name" label="名称" min-width="160" show-overflow-tooltip />
     <el-table-column label="数量" width="70" align="right">
       <template #default="{ row }">{{ formatQty(row.qty) }}</template>
     </el-table-column>
     <el-table-column prop="unit" label="单位" width="60" align="center" />
+    <template v-if="showPrice">
+      <el-table-column label="单价" width="130" align="right">
+        <template #default="{ row }">
+          <span :title="priceTitle(row)" class="bt-price mono" :class="['src-' + (row.price_source || 'none')]">
+            {{ fmtMoney(row.unit_price) }}
+          </span>
+          <span v-if="row.price_source === 'own'" class="bt-own" :title="priceTitle(row)">自身价</span>
+          <span v-if="row.children?.length && row.missing" class="bt-miss" :title="priceTitle(row)">缺{{ row.missing }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="金额" width="110" align="right">
+        <template #default="{ row }"><span class="mono">{{ fmtMoney(row.amount) }}</span></template>
+      </el-table-column>
+    </template>
   </el-table>
 </template>
 
@@ -152,4 +182,12 @@ function formatQty(q) {
 .bt-erp:hover { color: var(--accent); text-decoration: underline; }
 .bt-none { font-size: 12px; color: var(--text-muted); }
 :deep(.bt-hit-row > td.el-table__cell) { background: #fff6dc !important; }
+.bt-price { font-size: 12px; color: #2c2420; }
+.bt-price.src-calc { color: #4a8fc0; font-weight: 600; }
+.bt-price.src-none { color: var(--text-muted); }
+.bt-own, .bt-miss {
+  margin-left: 4px; padding: 0 4px; border-radius: 4px; font-size: 10px; line-height: 15px; display: inline-block;
+}
+.bt-own { color: #9c6fba; background: rgba(156,111,186,0.12); }
+.bt-miss { color: #c0782a; background: rgba(224,144,80,0.15); }
 </style>

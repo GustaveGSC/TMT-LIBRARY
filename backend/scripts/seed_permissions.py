@@ -36,6 +36,8 @@ PERMISSIONS = [
     ("rd:admin", "研发部管理员：管理物料门禁条目"),
     # 外贸工具（2026-09-27 起，先只有查看；产品改制方案确认后再加编辑/建码权限）
     ("trade:view", "查看外贸工具（产品改制等）"),
+    # 采购工具（2026-09-27 起；导入价格另需 material:price）
+    ("purchase:view", "查看采购工具（导入价格等）"),
     # 开发者
     ("developer:analytics:view", "查看登录日志、DAU 和用户登录统计"),
     ("developer:tasks:view", "查看/创建/编辑/关闭开发任务"),

@@ -12,7 +12,7 @@ import { exportBom } from './bomExport'
 import MaterialCard from './MaterialCard.vue'
 import { usePermission } from '@/composables/usePermission'
 
-const { canEditMaterial } = usePermission()
+const { canEditMaterial, canMaterialPrice } = usePermission()
 
 // ── 响应式状态 ────────────────────────────────────
 const keyword   = ref('')
@@ -42,6 +42,8 @@ const errorMsg  = ref('')
 const selectedId  = ref(null)
 const treeData    = ref(null)    // { bom, children }
 const treeLoading = ref(false)
+// 计价日期（仅 material:price 可见）：空 = 各原材料最新价格；选了日期就用当天或之前最近的价格现算
+const priceDate = ref('')
 
 const fileInput  = ref(null)
 const importing  = ref(false)
@@ -95,7 +97,8 @@ async function selectBom(id) {
   if (!id) return
   treeLoading.value = true
   try {
-    const res = await http.get(`/api/material/boms/${id}/tree`)
+    const res = await http.get(`/api/material/boms/${id}/tree`,
+      { params: priceDate.value ? { price_date: priceDate.value } : {} })
     // 快速连点时只认最后一次
     if (selectedId.value !== id) return
     if (res.success) treeData.value = res.data
@@ -183,7 +186,16 @@ async function deleteBom() {
 async function handleExport() {
   if (exporting.value) return
   exporting.value = true
-  try { await exportBom(treeData.value?.bom) } finally { exporting.value = false }
+  try { await exportBom(treeData.value?.bom, priceDate.value) } finally { exporting.value = false }
+}
+
+// 改计价日期：重新计算当前 BOM
+function onPriceDateChange() {
+  if (selectedId.value) selectBom(selectedId.value)
+}
+
+function money(v) {
+  return v == null ? '—' : '¥' + String(+Number(v).toFixed(4))
 }
 
 function openCard(code) {
@@ -273,6 +285,17 @@ onMounted(loadList)
           <span v-else class="bd-drawing mono" title="ERP 物料表里没有对应编码">{{ treeData.bom.drawing }}</span>
           <span class="bd-name">{{ treeData.bom.name }}</span>
           <span class="bd-meta">{{ treeData.bom.imported_by || '—' }} · {{ treeData.bom.imported_at }}</span>
+          <!-- 计价：按计价日期由下级实时计算（仅物料价格权限可见） -->
+          <template v-if="canMaterialPrice">
+            <el-date-picker
+              v-model="priceDate" type="date" value-format="YYYY-MM-DD" size="small" clearable
+              placeholder="计价日期：最新价格" class="bd-date" @change="onPriceDateChange"
+            />
+            <span class="bd-total" :title="treeData.bom.missing ? `其中 ${treeData.bom.missing} 项原材料无价格，合计偏低` : '由下级价格计算'">
+              合计 <b class="mono">{{ money(treeData.bom.unit_price) }}</b>
+              <span v-if="treeData.bom.missing" class="bd-miss">缺 {{ treeData.bom.missing }} 项价格</span>
+            </span>
+          </template>
           <el-button v-if="treeRef?.hasNested" size="small" class="bd-toggle"
                      :icon="treeRef.allExpanded ? ArrowUp : ArrowDown" @click="treeRef.toggleAll()">
             {{ treeRef.allExpanded ? '全部收起' : '全部展开' }}
@@ -281,7 +304,8 @@ onMounted(loadList)
           <el-button v-if="canEditMaterial" size="small" :icon="Delete" class="bd-del" @click="deleteBom">删除</el-button>
         </header>
         <div class="bd-tree">
-          <MaterialBomTree ref="treeRef" :rows="treeData.children" height="100%" @open-code="openCard" />
+          <MaterialBomTree ref="treeRef" :rows="treeData.children" height="100%" :show-price="canMaterialPrice"
+                           @open-code="openCard" />
         </div>
       </template>
       <div v-else-if="!treeLoading" class="bp-empty">选择左侧的 BOM 查看结构</div>
@@ -410,6 +434,13 @@ onMounted(loadList)
 .bd-drawing.link:hover { color: var(--accent); text-decoration: underline; }
 
 .bd-meta { font-size: 11px; color: #8a7a6a; }
+.bd-date { width: 170px !important; }
+.bd-total { font-size: 13px; color: #3a3028; }
+.bd-total b { color: #4a8fc0; font-size: 14px; }
+.bd-miss {
+  margin-left: 4px; padding: 0 6px; border-radius: 4px; font-size: 11px;
+  color: #c0782a; background: rgba(224,144,80,0.15);
+}
 .bd-toggle { margin-left: auto; }
 .bd-toggle + .bd-export { margin-left: 0; }
 .bd-export { margin-left: auto; }

@@ -89,8 +89,8 @@ test('物料BOM tab：列表、多层结构、导入结果', async ({ page }) =>
   // 标题显示完整研发编码（成品带完整版本 -A02，而非 ERP 的 -A）；不显示上传文件名
   await expect(page.locator('.bd-drawing')).toHaveText('F1-A02')
   await expect(page.locator('.bd-meta')).not.toContainText('a.xlsx')
-  // 列：序号 / 图纸编码 / ERP编码 / 名称 / 数量 / 单位
-  await expect(page.locator('.bom-tree th')).toHaveText(['序号', '图纸编码', 'ERP编码', '名称', '数量', '单位'])
+  // 列：序号 / 图纸编码 / ERP编码 / 名称 / 数量 / 单位（有物料价格权限时另有单价/金额）
+  await expect(page.locator('.bom-tree th')).toHaveText(['序号', '图纸编码', 'ERP编码', '名称', '数量', '单位', '单价', '金额'])
   await expect(page.locator('.bom-tree .bt-seq')).toHaveText(['1', '1.1', '2'])
   // 图纸编码显示完整版本，ERP 编码显示 ERP 里的写法（产成品只到 -A）
   await expect(page.locator('.bom-tree .bt-drawing')).toHaveText(['P1-A01', 'R1-A01', 'S1-A01'])
@@ -304,4 +304,75 @@ test('物料BOM：导入校验失败逐条列出；删除被引用的 BOM 需二
   await expect(second).toContainText('P1-A01')
   await second.locator('button', { hasText: '仍然删除' }).click()
   await expect.poll(() => deletes).toEqual([null, '1'])
+})
+
+// 计价：有物料价格权限时，BOM 树显示单价/金额，按计价日期现算；卡片价格区显示按 BOM 计算的价格与历史
+const PRICED_TREE = [
+  { id: '1', code: 'P1', version: 'A01', drawing: 'P1-A01', erp_code: 'P1-A', name: '桌面', qty: 1, unit: 'PCS',
+    unit_price: 24, amount: 24, price_source: 'calc', price_date: null, missing: 0,
+    children: [
+      { id: '1/2', code: 'R1', version: 'A01', drawing: 'R1-A01', erp_code: 'R1-A01', name: '方管', qty: 6, unit: 'PCS',
+        unit_price: 4, amount: 24, price_source: 'material', price_date: '2024-06-01', missing: 0 },
+    ] },
+  { id: '3', code: 'S1', version: 'A01', drawing: 'S1-A01', erp_code: null, name: '螺钉', qty: 4, unit: 'PCS',
+    unit_price: null, amount: null, price_source: null, price_date: null, missing: 1 },
+]
+
+test('BOM 计价：单价/金额列、合计、计价日期；卡片显示按 BOM 计算的价格', async ({ page }) => {
+  await setup(page)
+  const head = { ...bomHead(1, 'F1', 'A02'), material_types: ['finished'] }
+  await page.route('**/api/material/boms?*', r => r.fulfill({ json: OK({
+    items: [{ ...head, line_count: 2 }], total: 1, all_total: 1, page: 1, page_size: 50,
+    type_counts: { finished: 1 } }) }))
+  const treeDates = []
+  await page.route('**/api/material/boms/*/tree*', r => {
+    const d = new URL(r.request().url()).searchParams.get('price_date')
+    treeDates.push(d)
+    return r.fulfill({ json: OK({
+      bom: { ...head, unit_price: d ? 20 : 24, missing: 1, price_source: 'calc', priced_as_of: d },
+      children: PRICED_TREE }) })
+  })
+  await page.route('**/api/material/items/*', r => r.fulfill({ json: OK(item('F1-A')) }))
+  await page.route('**/api/material/items/*/bom', r => r.fulfill({ json: OK({
+    versions: [{ ...head, line_count: 2 }], direct_parents: [], top_products: [] }) }))
+  await page.route('**/api/material/items/*/calc-price', r => r.fulfill({ json: OK({
+    bom: head, versions: [{ id: 1, drawing: 'F1-A02' }],
+    current: { unit_price: 24, missing: 1, price_source: 'calc', price_date: null },
+    history: [{ date: '2024-06-01', unit_price: 24, missing: 1 }, { date: '2024-01-01', unit_price: 18, missing: 1 }],
+  }) }))
+  await page.route('**/api/material/items/*/prices', r => r.fulfill({ json: OK([]) }))
+  await page.route('**/api/material/items/*/usages', r => r.fulfill({ json: OK([]) }))
+
+  await page.goto('/#/material')
+  await page.locator('.nav-item', { hasText: '物料BOM' }).click()
+  await expect(page.locator('.bom-tree th')).toHaveText(['序号', '图纸编码', 'ERP编码', '名称', '数量', '单位', '单价', '金额'])
+  // 部件价格由下级计算（蓝色）；缺价显示 —，部件带「缺N」
+  await expect(page.locator('.bom-tree .bt-price').first()).toHaveText('¥24')
+  await expect(page.locator('.bom-tree .bt-price.src-calc')).toHaveCount(1)
+  await expect(page.locator('.bom-tree .bt-price.src-none')).toHaveText('—')
+  await expect(page.locator('.bd-total')).toContainText('¥24')
+  await expect(page.locator('.bd-total .bd-miss')).toHaveText('缺 1 项价格')
+  await page.screenshot({ path: 'test-results/material-bom-priced.png' })
+  // 所有列都在可视范围内（不被挤进横向滚动区）
+  const fits = await page.locator('.bom-tree').evaluate(t => {
+    const wrap = t.querySelector('.el-table__body-wrapper .el-scrollbar__wrap') || t
+    return wrap.scrollWidth <= wrap.clientWidth + 1
+  })
+  expect(fits).toBe(true)
+
+  // 改计价日期：带 price_date 重新计算
+  await page.locator('.bd-date input').fill('2024-03-01')
+  await page.locator('.bd-date input').press('Enter')
+  await expect.poll(() => treeDates.at(-1)).toBe('2024-03-01')
+  await expect(page.locator('.bd-total')).toContainText('¥20')
+
+  // 物料卡片：价格区显示按 BOM 计算的价格与价格变化历史
+  await page.locator('.bd-drawing').click()
+  const card = page.locator('.material-card')
+  await expect(card.locator('.calc-box .calc-val')).toHaveText('¥24')
+  await expect(card.locator('.calc-box .calc-miss')).toHaveText('缺 1 项价格')
+  await card.locator('.calc-toggle').click()
+  await expect(card.locator('.calc-history tbody tr')).toHaveCount(2)
+  await card.locator('.calc-box').scrollIntoViewIfNeeded()
+  await page.locator('.el-dialog.material-card-dialog').screenshot({ path: 'test-results/material-card-calc-price.png' })
 })

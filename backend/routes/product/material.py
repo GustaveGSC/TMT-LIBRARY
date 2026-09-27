@@ -2,6 +2,7 @@ import os
 import uuid
 import hashlib
 import urllib.parse
+from datetime import datetime
 
 from flask import Blueprint, Response, g, request
 
@@ -136,14 +137,38 @@ def list_material_boms():
     ).to_response()
 
 
+def _price_date_arg():
+    """计价日期参数：YYYY-MM-DD；空 = 最新价格。格式不对返回 False。"""
+    raw = (request.args.get('price_date') or '').strip()
+    if not raw:
+        return None
+    try:
+        return datetime.strptime(raw, '%Y-%m-%d').date()
+    except ValueError:
+        return False
+
+
 @material_bp.get('/boms/<int:bom_id>/tree')
 def material_bom_tree(bom_id):
-    return material_bom_service.tree(bom_id).to_response()
+    # 价格属于成本数据：只有 material:price 才带单价/金额
+    price_date = _price_date_arg()
+    if price_date is False:
+        return Result.fail('计价日期格式无效').to_response()
+    return material_bom_service.tree(
+        bom_id, include_price=has_permission(g.current_user or {}, 'material:price'),
+        price_date=price_date,
+    ).to_response()
 
 
 @material_bp.get('/boms/<int:bom_id>/export')
 def export_material_bom(bom_id):
-    data, name_or_error = material_bom_service.export_xlsx(bom_id)
+    price_date = _price_date_arg()
+    if price_date is False:
+        return Result.fail('计价日期格式无效').to_response()
+    data, name_or_error = material_bom_service.export_xlsx(
+        bom_id, include_price=has_permission(g.current_user or {}, 'material:price'),
+        price_date=price_date,
+    )
     if data is None:
         return Result.fail(name_or_error).to_response(404)
     return Response(
@@ -308,6 +333,11 @@ def replace_material_image(code, image_id):
 @material_bp.delete('/items/<path:code>/images/<int:image_id>')
 def delete_material_image(code, image_id):
     return material_service.delete_image(code, image_id).to_response()
+
+
+@material_cost_bp.get('/items/<path:code>/calc-price')
+def material_calc_price(code):
+    return material_bom_service.calc_price(code, request.args.get('bom_id', type=int)).to_response()
 
 
 @material_cost_bp.get('/items/<path:code>/prices')

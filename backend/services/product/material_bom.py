@@ -23,6 +23,7 @@ from database.models.product.import_raw import ImportProductRaw
 from database.models.product.material import MaterialBom, MaterialBomLine
 from result import Result
 from services.common.bom_excel import bom_columns, category_name, numeric_code_text
+from services.product import material_bom_price as bom_price
 from upload_validation import UploadValidationError
 from utils import now_cst
 
@@ -471,8 +472,11 @@ class MaterialBomService:
         return Result.ok()
 
     # ── 展开 ──────────────────────────────────────────
-    def tree(self, bom_id):
-        """展开一份 BOM 的完整多层结构；每层一次查询（O(层数)）。"""
+    def tree(self, bom_id, include_price=False, price_date=None):
+        """展开一份 BOM 的完整多层结构；每层一次查询（O(层数)）。
+
+        include_price=True（调用方已确认 material:price 权限）时，按计价日期给每个节点算单价/金额，
+        价格只多一条查询（见 material_bom_price）。"""
         root = db.session.get(MaterialBom, bom_id)
         if root is None:
             return Result.fail('BOM 不存在')
@@ -502,14 +506,17 @@ class MaterialBomService:
             [l.erp_code for ls in lines_by_bom.values() for l in ls] + [root.erp_code]
         )
 
-        def build(bom, path, depth):
+        # 节点 id 按「从根到这一行」的路径生成：同一个半成品在树里出现多次时，
+        # 它下面的行也必须是不同的 id（前端表格按 id 区分行、记展开状态）
+        def build(bom, path, depth, prefix=''):
             nodes = []
             for line in lines_by_bom.get(bom.id, []):
                 key = (line.code, line.version)
                 child_bom = boms_by_key.get(key)
                 erp_name, erp_spec = info.get(line.erp_code, (None, None))
+                node_id = f'{prefix}/{line.id}' if prefix else str(line.id)
                 node = {
-                    'id': f'{bom.id}-{line.id}',
+                    'id': node_id,
                     'code': line.code, 'version': line.version,
                     'drawing': _drawing(line.code, line.version),
                     'erp_code': line.erp_code,
@@ -518,7 +525,7 @@ class MaterialBomService:
                     'bom_id': child_bom.id if child_bom else None,
                 }
                 if child_bom and key not in path and depth < _MAX_DEPTH:
-                    node['children'] = build(child_bom, path | {key}, depth + 1)
+                    node['children'] = build(child_bom, path | {key}, depth + 1, node_id)
                 nodes.append(node)
             return nodes
 
@@ -526,13 +533,34 @@ class MaterialBomService:
         root_name, root_spec = info.get(root.erp_code, (None, None))
         root_dict['name'] = root_name or root.name
         root_dict['spec'] = root_spec or root.spec
+        children = build(root, {(root.code, root.version)}, 1)
+        if include_price:
+            histories = bom_price.price_histories(bom_price.collect_codes(children) | {root.code})
+            root_dict.update(bom_price.root_price(children, root.code, histories, price_date))
+            root_dict['priced_as_of'] = price_date.isoformat() if price_date else None
+        return Result.ok(data={'bom': root_dict, 'children': children})
+
+    # ── 物料卡片：按 BOM 实时计算的价格 + 价格变化历史 ───
+    def calc_price(self, erp_code, bom_id=None):
+        """该 ERP 物料挂的研发 BOM（默认最新版本）的当前计算价，以及在各价格日期上重算的历史。"""
+        versions = (MaterialBom.query.filter(MaterialBom.erp_code == erp_code)
+                    .order_by(MaterialBom.version.desc()).all())
+        if not versions:
+            return Result.ok(data=None)
+        bom = next((b for b in versions if b.id == bom_id), versions[0])
+        children = self.tree(bom.id).data['children']
+        histories = bom_price.price_histories(bom_price.collect_codes(children) | {bom.code})
+        current = bom_price.root_price(children, bom.code, histories, None, annotate=False)
         return Result.ok(data={
-            'bom': root_dict,
-            'children': build(root, {(root.code, root.version)}, 1),
+            'bom': bom.to_dict(),
+            'versions': [{'id': b.id, 'drawing': f'{b.code}-{b.version}' if b.version else b.code}
+                         for b in versions],
+            'current': current,
+            'history': bom_price.history_points(children, bom.code, histories),
         })
 
     # ── 导出 Excel ────────────────────────────────────
-    def export_xlsx(self, bom_id):
+    def export_xlsx(self, bom_id, include_price=False, price_date=None):
         """把一份 BOM 的完整多层结构导出成 Excel（与页面上的树一致：序号按层级编号）。
 
         返回 (bytes, 文件名)；BOM 不存在返回 (None, 错误信息)。
@@ -540,7 +568,7 @@ class MaterialBomService:
         from openpyxl import Workbook
         from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
-        res = self.tree(bom_id)
+        res = self.tree(bom_id, include_price=include_price, price_date=price_date)
         if not res.success:
             return None, res.message
         bom, children = res.data['bom'], res.data['children']
@@ -549,9 +577,15 @@ class MaterialBomService:
         ws = wb.active
         ws.title = 'BOM'
         headers = ['序号', '层级', '图纸编码', 'ERP编码', '名称', '数量', '单位']
+        if include_price:
+            headers += ['单价', '金额', '价格日期']
         ws.append([f"BOM：{bom['drawing']}  {bom.get('name') or ''}"])
         ws.append([f"ERP编码：{bom.get('erp_code') or '未匹配'}    导入：{bom.get('imported_by') or '—'} "
-                   f"{bom.get('imported_at') or ''}    导出：{now_cst().strftime('%Y-%m-%d %H:%M')}"])
+                   f"{bom.get('imported_at') or ''}    导出：{now_cst().strftime('%Y-%m-%d %H:%M')}"
+                   + (f"    计价日期：{bom.get('priced_as_of') or '最新价格'}    合计单价："
+                      f"{bom['unit_price'] if bom.get('unit_price') is not None else '—'}"
+                      + (f"（{bom['missing']} 项无价格）" if bom.get('missing') else '')
+                      if include_price else '')])
         ws.append([])
         ws.append(headers)
         ws['A1'].font = Font(bold=True, size=13)
@@ -566,8 +600,11 @@ class MaterialBomService:
         def walk(nodes, prefix, depth):
             for i, n in enumerate(nodes, start=1):
                 seq = f'{prefix}.{i}' if prefix else str(i)
-                ws.append([seq, depth, n['drawing'], n.get('erp_code') or '', n.get('name') or '',
-                           n.get('qty'), n.get('unit') or ''])
+                row_values = [seq, depth, n['drawing'], n.get('erp_code') or '', n.get('name') or '',
+                              n.get('qty'), n.get('unit') or '']
+                if include_price:
+                    row_values += [n.get('unit_price'), n.get('amount'), n.get('price_date') or '']
+                ws.append(row_values)
                 row = ws.max_row
                 # 编码按层级缩进，打开就能看出结构
                 ws.cell(row, 3).alignment = Alignment(indent=depth - 1)
@@ -578,7 +615,7 @@ class MaterialBomService:
                     walk(n['children'], seq, depth + 1)
 
         walk(children, '', 1)
-        for col, width in zip('ABCDEFG', (12, 6, 22, 20, 60, 10, 8)):
+        for col, width in zip('ABCDEFGHIJ', (12, 6, 22, 20, 60, 10, 8, 12, 12, 12)):
             ws.column_dimensions[col].width = width
         ws.freeze_panes = 'A5'
 

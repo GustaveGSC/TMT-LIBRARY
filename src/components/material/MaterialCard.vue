@@ -230,6 +230,26 @@ async function loadSupplierOptions() {
   } catch { /* 候选拿不到仍可自由输入 */ }
 }
 
+// ── 按 BOM 计算的价格（仅 material:price）：部件价格不存储，由下级原材料价格实时计算 ──
+// 历史 = 在下级各价格日期上重算一次（新→旧），也是后端现算的
+const calcPrice   = ref(null)    // { bom, versions, current, history } | null
+const calcHistoryOpen = ref(false)
+
+async function loadCalcPrice() {
+  const code = activeCode.value
+  calcPrice.value = null
+  if (!canMaterialPrice || !bom.value?.versions?.length) return
+  try {
+    const res = await http.get(`/api/material/items/${encodeURIComponent(code)}/calc-price`)
+    if (code !== activeCode.value) return
+    if (res.success && res.data?.current) calcPrice.value = res.data
+  } catch { /* 计算价拿不到不影响卡片 */ }
+}
+
+function money(v) {
+  return v == null ? '—' : '¥' + String(+Number(v).toFixed(4))
+}
+
 // ── 研发 BOM：「BOM下级」列出该物料挂的全部研发 BOM（如 -A01、-A02 各一条），
 //    点「查看」单独弹窗展开完整结构；「被使用」是另一个分区 ─────
 const bom        = ref(null)     // { versions[+line_count], direct_parents, top_products }
@@ -242,7 +262,10 @@ async function loadBom() {
     const res = await http.get(`/api/material/items/${encodeURIComponent(code)}/bom`)
     if (code !== activeCode.value) return
     // 只接受形状完整的数据，避免异常响应让模板渲染报错、拖垮整张卡片
-    if (res.success && Array.isArray(res.data?.versions)) bom.value = res.data
+    if (res.success && Array.isArray(res.data?.versions)) {
+      bom.value = res.data
+      loadCalcPrice()
+    }
   } catch { /* BOM 拿不到不影响卡片其余内容 */ } finally {
     if (code === activeCode.value) bomLoading.value = false
   }
@@ -254,16 +277,19 @@ const bomDialogHead    = ref(null)   // 列表里点的那一条（先用它显�
 const bomDialogTree    = ref([])
 const bomDialogLoading = ref(false)
 const bomDialogKeyword = ref('')     // 弹窗内筛选：编码/名称
+const bomDialogPriceDate = ref('')   // 计价日期（仅 material:price）：空 = 最新价格
 const bomTreeRef       = ref(null)   // 读取树组件暴露的匹配数
 
-async function openBomDialog(v, keyword = '') {
+async function openBomDialog(v, keyword = '', priceDate = '') {
   bomDialogKeyword.value = keyword
+  bomDialogPriceDate.value = priceDate
   bomDialogHead.value = v
   bomDialogTree.value = []
   bomDialogOpen.value = true
   bomDialogLoading.value = true
   try {
-    const res = await http.get(`/api/material/boms/${v.id}/tree`)
+    const res = await http.get(`/api/material/boms/${v.id}/tree`,
+      { params: bomDialogPriceDate.value ? { price_date: bomDialogPriceDate.value } : {} })
     if (bomDialogHead.value?.id !== v.id) return
     if (res.success) {
       bomDialogHead.value = { ...v, ...res.data.bom }
@@ -283,12 +309,17 @@ const bomExporting = ref(false)
 async function exportBomDialog() {
   if (bomExporting.value) return
   bomExporting.value = true
-  try { await exportBom(bomDialogHead.value) } finally { bomExporting.value = false }
+  try { await exportBom(bomDialogHead.value, bomDialogPriceDate.value) } finally { bomExporting.value = false }
 }
 
 // 弹窗里点子件编码：关掉弹窗，卡片跳到该物料
+// 弹窗里改计价日期：保留筛选词重新加载
+function onBomDialogPriceDate() {
+  if (bomDialogHead.value) openBomDialog(bomDialogHead.value, bomDialogKeyword.value, bomDialogPriceDate.value)
+}
+
 async function onBomDialogCode(code) {
-  const snapshot = { head: bomDialogHead.value, keyword: bomDialogKeyword.value }
+  const snapshot = { head: bomDialogHead.value, keyword: bomDialogKeyword.value, priceDate: bomDialogPriceDate.value }
   // 先确认能跳（可能有未保存修改被取消），再关弹窗
   if (await navigateTo(code, snapshot)) bomDialogOpen.value = false
 }
@@ -310,13 +341,13 @@ async function navigateBack() {
   activeCode.value = prev.code
   resetForCode()
   // 从 BOM 弹窗点进来的：回到那个弹窗（保留当时的筛选词）
-  if (prev.bomDialog?.head) openBomDialog(prev.bomDialog.head, prev.bomDialog.keyword)
+  if (prev.bomDialog?.head) openBomDialog(prev.bomDialog.head, prev.bomDialog.keyword, prev.bomDialog.priceDate)
 }
 
 function resetForCode() {
   prices.value = []; usages.value = []
   priceFormOpen.value = false; priceErr.value = ''; costTab.value = 'prices'
-  bom.value = null; bomDialogOpen.value = false
+  bom.value = null; bomDialogOpen.value = false; calcPrice.value = null; calcHistoryOpen.value = false
   loadDetail()
 }
 
@@ -696,6 +727,33 @@ watch(() => props.visible, v => {
             </span>
           </div>
 
+          <!-- 有研发 BOM 的部件：价格由下级实时计算（不存储） -->
+          <div v-if="calcPrice" class="calc-box">
+            <div class="calc-line">
+              <span class="calc-label">按 BOM 计算</span>
+              <span class="mono calc-bom">{{ calcPrice.bom.drawing }}</span>
+              <b class="mono calc-val">{{ money(calcPrice.current.unit_price) }}</b>
+              <span v-if="calcPrice.current.price_source === 'own'" class="calc-own"
+                    title="下级都没有价格，使用该部件自己的采购价">自身采购价</span>
+              <span v-if="calcPrice.current.missing" class="calc-miss"
+                    :title="`其中 ${calcPrice.current.missing} 项原材料无价格，合计偏低`">缺 {{ calcPrice.current.missing }} 项价格</span>
+              <button v-if="calcPrice.history.length" class="calc-toggle" type="button"
+                      @click="calcHistoryOpen = !calcHistoryOpen">
+                {{ calcHistoryOpen ? '收起历史' : `价格变化 ${calcPrice.history.length} 次` }}
+              </button>
+            </div>
+            <table v-if="calcHistoryOpen" class="cost-table calc-history">
+              <thead><tr><th style="width:120px">价格日期</th><th class="ta-r" style="width:120px">计算单价</th><th>说明</th></tr></thead>
+              <tbody>
+                <tr v-for="h in calcPrice.history" :key="h.date">
+                  <td>{{ h.date }}</td>
+                  <td class="ta-r price-val">{{ money(h.unit_price) }}</td>
+                  <td class="cell-muted">{{ h.missing ? `缺 ${h.missing} 项价格` : '下级价格齐全' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
           <div class="cost-tabs">
             <button class="cost-tab" :class="{ active: costTab === 'prices' }"
                     @click="costTab = 'prices'">价格记录（{{ prices.length }}）</button>
@@ -850,6 +908,17 @@ watch(() => props.visible, v => {
       <span v-if="bomDialogKeyword.trim()" class="bom-dlg-hit">
         匹配 {{ bomTreeRef?.matchCount ?? 0 }} 项（保留其上级层次）
       </span>
+      <template v-if="canMaterialPrice">
+        <el-date-picker
+          v-model="bomDialogPriceDate" type="date" value-format="YYYY-MM-DD" size="small" clearable
+          placeholder="计价日期：最新价格" class="bom-dlg-date" @change="onBomDialogPriceDate"
+        />
+        <span v-if="bomDialogHead && 'unit_price' in bomDialogHead" class="bom-dlg-total"
+              :title="bomDialogHead.missing ? `其中 ${bomDialogHead.missing} 项原材料无价格，合计偏低` : '由下级价格计算'">
+          合计 <b class="mono">{{ money(bomDialogHead.unit_price) }}</b>
+          <span v-if="bomDialogHead.missing" class="calc-miss">缺 {{ bomDialogHead.missing }} 项价格</span>
+        </span>
+      </template>
       <el-button v-if="bomTreeRef?.hasNested" size="small" class="bom-dlg-toggle"
                  :icon="bomTreeRef.allExpanded ? ArrowUp : ArrowDown" @click="bomTreeRef.toggleAll()">
         {{ bomTreeRef.allExpanded ? '全部收起' : '全部展开' }}
@@ -857,6 +926,7 @@ watch(() => props.visible, v => {
     </div>
     <div v-loading="bomDialogLoading" class="bom-dlg-body">
       <MaterialBomTree ref="bomTreeRef" :rows="bomDialogTree" height="100%" :keyword="bomDialogKeyword"
+                       :show-price="canMaterialPrice"
                        @open-code="onBomDialogCode"
                        :empty-text="bomDialogLoading ? '加载中...' : (bomDialogKeyword.trim() ? '没有匹配的物料' : '暂无 BOM 数据')" />
     </div>
@@ -1111,6 +1181,27 @@ watch(() => props.visible, v => {
 .bom-dlg-search { width: 280px; }
 .bom-dlg-hit { font-size: 12px; color: #6b5e4e; }
 .bom-dlg-toggle { margin-left: auto; }
+.bom-dlg-date { width: 170px !important; }
+.bom-dlg-total { font-size: 13px; color: #3a3028; }
+.bom-dlg-total b { color: #4a8fc0; font-size: 14px; }
+
+/* 按 BOM 计算的价格 */
+.calc-box {
+  margin-bottom: 10px; padding: 8px 12px; border-radius: 8px;
+  background: rgba(74,143,192,0.06); border: 1px solid rgba(74,143,192,0.25);
+}
+.calc-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+.calc-label { color: #6b5e4e; }
+.calc-bom { color: #3a3028; font-size: 12px; }
+.calc-val { color: #4a8fc0; font-size: 15px; }
+.calc-own { padding: 0 6px; border-radius: 4px; font-size: 11px; color: #9c6fba; background: rgba(156,111,186,0.12); }
+.calc-miss { padding: 0 6px; border-radius: 4px; font-size: 11px; color: #c0782a; background: rgba(224,144,80,0.15); }
+.calc-toggle {
+  margin-left: auto; padding: 1px 10px; border-radius: 10px; cursor: pointer;
+  border: 1px solid rgba(74,143,192,0.4); background: #fff; color: #4a8fc0;
+  font-size: 12px; font-family: inherit;
+}
+.calc-history { margin-top: 8px; }
 .bom-dlg-body { height: 72vh; }
 .bom-ver-text { font-size: 12px; font-weight: 400; color: #6b5e4e; letter-spacing: 0; }
 .used-block { margin-bottom: 10px; }

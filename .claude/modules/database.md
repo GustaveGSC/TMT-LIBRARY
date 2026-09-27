@@ -454,6 +454,11 @@ cost_bom_line                              # BOM 父子关系行（属于某个 
   total_price(DECIMAL 12,4 nullable)
 
 cost_material_price                        # 物料价格记录（手动 + BOM导入自动写入）
+  # 2026-09-27 起：采购价格由「采购工具 → 导入价格」写入（source=bom_import，snapshot_id 指向 notes='采购导入价格'
+  #   的 cost_snapshot 批次，只记订单号/日期/导入人，不再写 sku/bom_line）；只收原材料 + 「下级全为 0」的半成品；
+  #   同一节点同一 price_date 同一 unit_price 视为重复跳过（任何来源）。
+  # source=bom_calc（部件推算价）已停用并删除（21 条，备份在服务器 /root/backup_bom_calc_prices_20260927.json）；
+  #   部件价格改为按研发 BOM 实时计算（services/product/material_bom_price.py），不存储。
   id, node_id(FK→cost_bom_node CASCADE),
   snapshot_id(FK→cost_snapshot SET NULL nullable),  # BOM导入时关联快照
   unit_price(DECIMAL 12,4), price_date(DATE nullable),

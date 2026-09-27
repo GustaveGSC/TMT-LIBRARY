@@ -21,7 +21,7 @@
 | `pdm2bom` | PDM转BOM | `PdmToBomForm.vue` | 已上线 |
 | `ecr` | 变更申请单填写 | `EcrForm.vue` | 已上线 |
 | `ecn` | 变更通知单填写 | `EcnForm.vue` | 已上线 |
-| `cost` | BOM成本 | `BomCost.vue` | 已上线 |
+| `cost` | BOM成本 | `BomCost.vue` | **已移除（2026-09-27）**：价格导入迁到采购工具，部件价格在物料BOM 实时计算；组件与 /api/rd/cost 接口暂留 |
 | `gate` | 材料清单校验 | `MaterialGateCheckPage.vue` | 已上线（2026-09-25） |
 
 图标使用 `@phosphor-icons/vue`（`PhHouseLine / PhArrowsLeftRight / PhClipboardText / PhBell / PhCurrencyDollar / PhShieldWarning`）。

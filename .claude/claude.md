@@ -25,7 +25,7 @@ electron/main/index.ts   # 主进程/IPC（桌面端已暂停，代码保留不�
 electron/main/window.ts  # 登录窗/主窗（桌面端已暂停，代码保留不再维护）
 electron/main/python.ts  # 已不使用
 src/api/http.js          # axios；getBaseURL() 已 export：Electron→https://tmt-library.cn，Web→VITE_API_BASE 或代理
-src/routers/index.js     # Hash路由：/login /index /product /shipping /data-mgmt /aftersale /rd-tools /trade-tools /admin/*
+src/routers/index.js     # Hash路由：/login /index /product /shipping /data-mgmt /aftersale /rd-tools /trade-tools /purchase-tools /admin/*
 src/styles/themes.css    # 全局CSS变量（勿硬编码颜色）
 backend/app.py           # Flask 工厂；SQLAlchemy QueuePool + connect/read/write 超时（见源码）
                           # 生产：1 个 Gunicorn worker，POOL_SIZE=5 + MAX_OVERFLOW=5（.env 显式配置），单进程理论峰值 10 个数据库连接
@@ -166,7 +166,7 @@ window.electronAPI = {
 - 开发者：`developer:analytics:view`
 - 管理者：`account:users:view/edit`、`account:roles:view/edit`
 - 运维：`ops:login-config:edit`、`ops:department:edit`
-- 业务：`product:view/edit`、`material:view/edit/price`、`shipping:view/edit/export`、`aftersale:view/edit/export`、`rd:view/edit/admin`、`trade:view`
+- 业务：`product:view/edit`、`material:view/edit/price`、`shipping:view/edit/export`、`aftersale:view/edit/export`、`rd:view/edit/admin`、`trade:view`、`purchase:view`
 
 - `developer`、`manager`、`ops` 是标准角色权限包；功能授权只认显式权限码，不因 `admin` 角色名或 `author` 用户名直接放行。
 - **角色分类**（2026-09-04 起，同日追加自定义分组）：`roles.category` 只有 `system`（内置标准角色包：admin/管理员/developer/manager/ops，
@@ -175,6 +175,7 @@ window.electronAPI = {
   角色的 category 改名，`PUT /role-categories/:name`）。仅用于权限管理页的展示分组，不影响鉴权逻辑，纯展示/组织用途。
 - legacy `admin` 通过数据库角色关联显式拥有全部标准权限；`admin`/`author` 不可删除禁用属于账号保护，不是授权绕过。
 - rd 路由对应研发工具页（`/rd-tools`），权限码 `rd:view/edit`
+- 采购工具页（`/purchase-tools`，2026-09-27 起）权限码 `purchase:view`（已授给 `admin`）；其中「导入价格」写操作另需 `material:price`
 - 外贸工具页（`/trade-tools`，2026-09-27 起）权限码 `trade:view`，已授给 `admin` 与「外贸部」角色；内部「产品改制」目前只是方案讨论稿（`ProductModificationPlan.vue`），功能待流程确认后开发
 - **物料库（`/material`）权限独立于产品库**（2026-09-04 起，此前借用 `product:view/edit` + `rd:view/edit`）：`material:view`
   （路由准入+查看）、`material:edit`（分组大类/编码规则/组合套餐/物料基础信息/图片，不含"导入数据"tab——那个 tab 走的是产品库

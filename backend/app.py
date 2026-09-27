@@ -100,6 +100,7 @@ def create_app() -> Flask:
     from routes.product.resource import resource_bp
     from routes.product.detail_package import detail_package_bp
     from routes.product.material import material_bp, material_cost_bp
+    from routes.purchase import purchase_bp
     from routes.config import config_bp
     from database.repository.shipping import shipping_repository
     from database.repository.product.lifecycle import product_lifecycle_task_repository
@@ -134,6 +135,7 @@ def create_app() -> Flask:
     app.register_blueprint(detail_package_bp, url_prefix="/api/product-detail-packages")
     app.register_blueprint(material_bp,       url_prefix="/api/material")
     app.register_blueprint(material_cost_bp,  url_prefix="/api/material")
+    app.register_blueprint(purchase_bp,       url_prefix="/api/purchase")
     app.register_blueprint(config_bp,         url_prefix="/api/config")
 
     # ── 健康检查 ──────────────────────────────────────
