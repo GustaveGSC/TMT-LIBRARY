@@ -111,6 +111,34 @@ def test_pdm_bom_parses_new_material_and_compare_assigns_a01(tmp_path):
     assert added['spec'] == 'π桌_1200x600_喷粉_A01'
 
 
+def test_pdm_blank_version_published_row_is_not_dropped(tmp_path):
+    """回归测试：'物料编码'"版本"列为空、状态为已发布的标准件行不能被 _parse_bom 静默丢弃。
+
+    真实 bug：before 文件里螺母/螺钉等标准件的"版本"列常年是空的（该 ERP 对标准件不
+    走版本号管理），旧代码 `if not version and status != STATUS_NEW: continue` 会把
+    这类行整行丢弃；如果同一物料在 after 文件里"版本"列刚好被补填了，比对就会把这个
+    本来没有任何变化的物料误判成"新增"。见 handoff 2026-09-15 用户反馈的实际 BOM。
+    """
+    before_path = tmp_path / 'before-blank-version.xlsx'
+    after_path = tmp_path / 'after-blank-version.xlsx'
+    root = ['1', 'ROOT', 'A01', '12_产成品', '01_桌类', '', '整机',
+            1, 'PCS', '已发布', '', '', '', '', '', '', '', '', '']
+    # 螺母行：before 里"版本"列为空，after 里补填为 A01；状态、数量、层次均不变
+    nut_before = ['1.1', 'NUT01', '', '14_原材料', 'ST_标准件', '02_螺母', '锁紧六角螺母',
+                  1, 'PCS', '已发布', '', '', '', '', '', '', '', '', '']
+    nut_after  = ['1.1', 'NUT01', 'A01', '14_原材料', 'ST_标准件', '02_螺母', '锁紧六角螺母',
+                  1, 'PCS', '已发布', '', '', '', '', '', '', '', '', '']
+    _write_pdm_bom(before_path, [root, nut_before])
+    _write_pdm_bom(after_path, [root, nut_after])
+
+    parsed_before = _parse_bom(before_path)
+    assert ('ROOT', 'NUT01') in parsed_before, '版本列为空的已发布行不应被丢弃'
+
+    result = compare_bom(before_path, after_path)
+    assert result['stats'] == {'version': 0, 'added': 0, 'deleted': 0, 'total': 0}, \
+        '版本列从空补填为 A01、其余字段不变，不应被误判为新增'
+
+
 def test_pdm_packaged_spec_and_three_status_versions(tmp_path):
     path = tmp_path / 'pdm.xlsx'
     _write_pdm_bom(path, [[

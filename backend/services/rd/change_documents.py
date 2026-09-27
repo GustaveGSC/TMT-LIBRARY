@@ -323,8 +323,6 @@ def _parse_bom(path):
             version = str(_get(r, '版本') or '').strip()
             if not code:
                 continue
-            if not version and status != STATUS_NEW:
-                continue
             drawing = f'{code}-{version}' if version else ''
             categories = [
                 _category_name(_get(r, column))
@@ -601,6 +599,7 @@ def compare_bom(before_path, after_path):
             changes.append({
                 'row_type':      'added',
                 'change_kind':   '新增',
+                'qty_desc':      f"新增 {_qty_str(a['qty'])} {a['unit']}",
                 'level':         a['level'],
                 'main_drawing':  _new_main_drawing(a['level']),
                 'drawing':       new_drawing,
