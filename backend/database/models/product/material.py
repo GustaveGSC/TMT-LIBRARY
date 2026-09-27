@@ -47,9 +47,7 @@ class ProductMaterial(db.Model):
     __tablename__ = 'product_material'
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     code = db.Column(_join_key_string(255), nullable=False, unique=True)
-    short_name = db.Column(db.String(255), nullable=True)
-    category = db.Column(db.String(100), nullable=True)
-    spec = db.Column(db.String(512), nullable=True)
+    # short_name/category/spec 已于 2026-09-27 删列（迁移 20260927_04）：没有下游使用，名称/规格以 ERP 为准
     # cover_image/cover_image_original/img_updated_at：2026-09-27 起停用，图片改存 material_image（支持多张）
     cover_image = db.Column(db.String(500), nullable=True)
     cover_image_original = db.Column(db.String(500), nullable=True)
@@ -65,8 +63,7 @@ class ProductMaterial(db.Model):
 
     def to_dict(self):
         return {
-            'code': self.code, 'short_name': self.short_name, 'category': self.category,
-            'spec': self.spec, 'remark': self.remark,
+            'code': self.code, 'remark': self.remark,
             'type_override': [t for t in (self.type_override or '').split(',') if t],
         }
 

@@ -80,7 +80,7 @@ def test_combo_crud_replaces_items_and_preserves_missing_reference(combo_app):
                 status='生效', group_code='14ME',
                 group_name='原材料_金属件', imported_at=now_cst(),
             ),
-            ProductMaterial(code='ERP001', short_name='桌腿'),
+            ProductMaterial(code='ERP001'),
             MaterialDisableKeyword(keyword='停用', is_disabled=False),
         ])
         db.session.commit()
@@ -92,7 +92,7 @@ def test_combo_crud_replaces_items_and_preserves_missing_reference(combo_app):
         assert created.data['items'][0] == {
             'id': created.data['items'][0]['id'], 'material_code': 'ERP001',
             'quantity': 2, 'sort_order': 0, 'material_name': '桌腿钢架',
-            'short_name': '桌腿', 'group_name': '原材料_金属件',
+            'group_name': '原材料_金属件',
             'is_missing': False, 'is_disabled': True,
         }
         assert created.data['items'][1]['is_missing'] is True

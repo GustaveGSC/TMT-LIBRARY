@@ -60,7 +60,7 @@ def list_items():
     disabled_arg = request.args.get('is_disabled')
     disabled = None if disabled_arg is None else disabled_arg in ('1', 'true', 'True')
     sort_by = request.args.get('sort_by', 'code').strip() or 'code'
-    if sort_by not in ('code', 'name', 'short_name', 'group_code'):
+    if sort_by not in ('code', 'name', 'group_code'):
         return Result.fail('排序字段无效').to_response()
     sort_dir = request.args.get('sort_dir', 'asc').strip().lower()
     if sort_dir not in ('asc', 'desc'):
@@ -69,7 +69,7 @@ def list_items():
     if match_mode not in ('like', 'expr'):
         return Result.fail('匹配模式无效').to_response()
     text_filters = {}
-    for key in ('code', 'name', 'short_name'):
+    for key in ('code', 'name'):
         raw_value = request.args.get(key)
         if raw_value is None:
             text_filters[key] = None

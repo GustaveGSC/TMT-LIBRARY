@@ -115,6 +115,8 @@ ssh tmt "mkdir -p /tmp/dist-web-new && tar xzf /tmp/dist-web-deploy.tar.gz -C /t
 # 后端部署（按需上传修改的文件，然后 reload）
 scp e:/Project/tmt-library/backend/路径/__init__.py tmt:/opt/tmt-library/backend/路径/__init__.py
 ssh tmt "systemctl reload gunicorn"
+# ⚠️ 有新迁移时：先 `cd /opt/tmt-library && python3.11 -m alembic upgrade head`，再 reload。app 启动会校验
+#    数据库版本 == 代码里的最新迁移，先上传迁移文件就 reload 会让 worker 拒绝启动、整个后端中断（2026-09-27 踩过）
 # ⚠️ 用 reload（SIGHUP 优雅替换 worker），不要用 fuser -k + restart（SIGKILL 冷启动会导致内存压力，SSH/VNC 卡死数小时）
 # ⚠️ reload 后不要只看一次 `systemctl is-active`——worker 可能先报 active 后台再崩溃重启循环。
 #    要等几秒后再查一遍 `systemctl status` + `journalctl -u gunicorn -n 20`，确认 master 进程没有变化、无崩溃退出记录

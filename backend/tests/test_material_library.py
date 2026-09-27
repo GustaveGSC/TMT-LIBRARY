@@ -162,7 +162,7 @@ def test_material_save_is_lazy_and_list_filters_disabled(material_app):
         db.session.commit()
 
         assert ProductMaterial.query.count() == 0
-        saved = material_service.save_item('14WD001', {'short_name': '桌面'})
+        saved = material_service.save_item('14WD001', {'remark': '桌面'})
         assert saved.success and ProductMaterial.query.count() == 1
         assert material_service.list_items(1, 20, is_disabled=False).data['total'] == 1
         assert material_service.list_items(1, 20, is_disabled=True).data['total'] == 0
@@ -182,7 +182,7 @@ def test_material_disabled_is_readonly_and_ignores_legacy_override_input(materia
         material_service.invalidate_disable_keyword_cache()
         assert material_service.detail('A1').data['is_disabled'] is True
         saved = material_service.save_item('A1', {
-            'short_name': '测试简称', 'is_disabled': False,
+            'remark': '测试备注', 'is_disabled': False,
         })
         row = ProductMaterial.query.filter_by(code='A1').one()
         assert row.is_disabled is None
@@ -233,7 +233,7 @@ def test_default_list_only_loads_manual_rows_for_current_page(material_app, monk
         assert seen == [[f'C{i:03d}' for i in range(10, 20)]]
 
 
-def test_material_list_column_filters_and_short_name_nulls_last(material_app):
+def test_material_list_column_filters_and_name_sort(material_app):
     with material_app.app_context():
         db.session.add_all([
             ImportProductRaw(code='A', name='甲物料', group_code='G', group_name='组',
@@ -242,30 +242,26 @@ def test_material_list_column_filters_and_short_name_nulls_last(material_app):
                              imported_at=now_cst()),
             ImportProductRaw(code='C', name='丙物料', group_code='G', group_name='组',
                              imported_at=now_cst()),
-            ProductMaterial(code='B', short_name='Zeta'),
-            ProductMaterial(code='C', short_name='Alpha'),
             ErpGroupCategory(group_code='G', is_material=True),
         ])
         db.session.commit()
 
-        asc = material_service.list_items(
-            1, 20, sort_by='short_name', sort_dir='asc', is_disabled=False,
-        ).data['items']
         desc = material_service.list_items(
-            1, 20, sort_by='short_name', sort_dir='desc', is_disabled=False,
+            1, 20, sort_by='code', sort_dir='desc', is_disabled=False,
         ).data['items']
         filtered = material_service.list_items(
-            1, 20, code='B', name='乙', short_name='Ze', is_disabled=False,
+            1, 20, code='B', name='乙', is_disabled=False,
         ).data['items']
         category_sorted = material_service.list_items(
-            1, 20, category='material', sort_by='short_name', sort_dir='asc',
+            1, 20, category='material', sort_by='code', sort_dir='desc',
             is_disabled=False,
         ).data['items']
 
-        assert [item['code'] for item in asc] == ['C', 'B', 'A']
-        assert [item['code'] for item in desc] == ['B', 'C', 'A']
+        assert [item['code'] for item in desc] == ['C', 'B', 'A']
         assert [item['code'] for item in filtered] == ['B']
         assert [item['code'] for item in category_sorted] == ['C', 'B', 'A']
+        # 简称/分类已删列，列表项不再带这两个字段；规格直接取 ERP
+        assert 'short_name' not in desc[0] and 'category' not in desc[0]
 
 
 def test_material_list_exclude_useless_hides_only_useless_items(material_app):
@@ -436,7 +432,7 @@ def test_default_sorted_list_keeps_four_business_queries_when_caches_are_warm(ma
         db.session.add_all([
             ImportProductRaw(code='A', name='甲', group_code='G', group_name='组',
                              imported_at=now_cst()),
-            ProductMaterial(code='A', short_name='简称'),
+            ProductMaterial(code='A', remark='备注'),
         ])
         db.session.commit()
         material_service._rules()
@@ -452,7 +448,7 @@ def test_default_sorted_list_keeps_four_business_queries_when_caches_are_warm(ma
         event.listen(db.engine, 'before_cursor_execute', capture)
         try:
             material_service.list_items(
-                1, 50, code='A', short_name='简称', sort_by='short_name',
+                1, 50, code='A', sort_by='name',
                 sort_dir='asc', is_disabled=False,
             )
         finally:

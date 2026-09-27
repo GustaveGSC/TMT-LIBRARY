@@ -46,9 +46,8 @@ class MaterialRepository:
         keyword=None, group_code=None, disabled=None, disable_keywords=(),
         text_conditions=(), sort_by='code', sort_dir='asc', price_state=None,
     ):
-        query = ImportProductRaw.query.outerjoin(
-            ProductMaterial, ProductMaterial.code == ImportProductRaw.code,
-        )
+        # 列表只查 ERP 表；人工字段（备注/单独指定类型）按当前页另行批量取，不再 JOIN
+        query = ImportProductRaw.query
         if keyword:
             like = f'%{keyword}%'
             query = query.filter(or_(ImportProductRaw.code.like(like), ImportProductRaw.name.like(like)))
@@ -74,14 +73,10 @@ class MaterialRepository:
         sort_columns = {
             'code': ImportProductRaw.code,
             'name': ImportProductRaw.name,
-            'short_name': ProductMaterial.short_name,
             'group_code': ImportProductRaw.group_code,
         }
         column = sort_columns[sort_by]
         direction = column.desc() if sort_dir == 'desc' else column.asc()
-        if sort_by == 'short_name':
-            # MySQL 的 NULL 默认会在 ASC 最前；两个方向均显式放到最后。
-            return query.order_by(ProductMaterial.short_name.is_(None).asc(), direction)
         return query.order_by(direction)
 
     @staticmethod

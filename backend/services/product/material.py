@@ -154,7 +154,6 @@ class MaterialService:
         text_columns = {
             'code': ImportProductRaw.code,
             'name': ImportProductRaw.name,
-            'short_name': ProductMaterial.short_name,
         }
         text_conditions = []
         for key, column in text_columns.items():
@@ -323,11 +322,10 @@ class MaterialService:
         if not raw:
             return Result.fail('物料不存在')
         # 图片改走 material_image（add_image/replace_image/delete_image），这里不再接收封面字段
-        allowed = ('short_name', 'category', 'spec', 'remark')
-        values = {key: body[key] for key in allowed if key in body}
-        for key in ('short_name', 'category', 'spec', 'remark'):
-            if key in values:
-                values[key] = (values[key] or '').strip() or None
+        # 人工字段只剩备注（简称/分类/规格 2026-09-27 删列）
+        values = {}
+        if 'remark' in body:
+            values['remark'] = (body.get('remark') or '').strip() or None
         if 'type_override' in body:
             raw_types = body.get('type_override') or []
             if not isinstance(raw_types, list):
@@ -369,12 +367,10 @@ class MaterialService:
 
     def _serialize(self, raw, categories, material, source=None):
         manual = material.to_dict() if material else {
-            'code': raw.code, 'short_name': None, 'category': None, 'spec': raw.spec,
-            'remark': None, 'type_override': [],
+            'code': raw.code, 'remark': None, 'type_override': [],
         }
-        if manual.get('spec') is None:
-            manual['spec'] = raw.spec
         manual.update({
+            'spec': raw.spec,
             'code': raw.code, 'name': raw.name, 'group_code': raw.group_code,
             'group_name': raw.group_name, 'erp_spec': raw.spec, 'categories': categories,
             'category_labels': [TYPE_LABELS[x] for x in categories],

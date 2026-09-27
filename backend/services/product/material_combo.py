@@ -76,7 +76,7 @@ class MaterialComboService:
         items_by_combo = {combo.id: [] for combo in combos}
         for item in items:
             detail = material_details.get(item.material_code, {
-                'material_name': None, 'short_name': None,
+                'material_name': None,
                 'group_name': None, 'is_missing': True, 'is_disabled': False,
             })
             payload = item.to_dict()

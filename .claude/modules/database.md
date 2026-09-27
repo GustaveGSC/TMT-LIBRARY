@@ -252,12 +252,13 @@ erp_group_category
   # group_code 在 MySQL 显式使用 utf8mb4_0900_ai_ci，与 import_product_raw 对齐
 
 product_material
-  id, code(UNIQUE), short_name, category, spec, cover_image, cover_image_original,
+  id, code(UNIQUE), cover_image, cover_image_original,
   img_updated_at, remark, type_override(VARCHAR 100, NULL), is_disabled(INDEX), created_at, updated_at
+  # short_name/category/spec 已于 2026-09-27 删列（迁移 20260927_04，删前数据备份在服务器
+  #   /root/backup_product_material_fields_20260927.json）：无下游使用，名称/规格以 import_product_raw 为准
   # 只存人工属性，按首次保存/传图创建；ERP name/group_code/group_name 不复制
   # type_override：物料卡片单独指定的物料类型，逗号分隔（取值同 finished/packaged/semi/material/useless），
   #   优先级最高；NULL=不单独指定。迁移 20260927_01 添加
-  # category 是自由文本备注性字段（卡片"分类"），与物料类型无关，目前无下游消费
   # is_disabled 为保留列，当前运行时不读写；停用只读状态由 ERP status/关键词实时判定
   # code 在 MySQL 显式使用 utf8mb4_0900_ai_ci，与 import_product_raw 对齐
 
