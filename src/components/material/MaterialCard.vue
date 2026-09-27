@@ -333,12 +333,12 @@ watch(() => props.visible, v => {
             第二行 人工维护（通栏）；第三行 价格（通栏，仅 material:price 可见） -->
        <div class="mc-scroll">
         <!-- ERP 信息（只读）：放在最上方，不做卡片样式、不带字段标签。
-             编码用标签样式；名称固定单行（超长省略，悬停看全文），保证卡片高度稳定。
+             编码黑色加粗，名称常规字重；名称固定单行（超长省略，悬停看全文），保证卡片高度稳定。
              状态只显示「启用/已停用」角标：ERP 原始状态（生效/失效）已折算进角标，
              原文放在角标悬停提示里 -->
         <div class="mc-erp-line">
           <span class="mc-erp-code mono">{{ detail.code }}</span>
-          <b class="mc-erp-name" :title="detail.name">{{ detail.name }}</b>
+          <span class="mc-erp-name" :title="detail.name">{{ detail.name }}</span>
           <span
             class="ro-badge"
             :class="detail.is_disabled ? 'off' : 'on'"
@@ -792,15 +792,13 @@ watch(() => props.visible, v => {
   padding: 2px 2px 14px; min-width: 0;
 }
 .mc-erp-code {
+  /* 固定黑色加粗，不跟随主题 */
   flex-shrink: 0;
-  /* 固定配色，不跟随主题：黑字加粗、浅蓝底 */
   font-size: 15px; font-weight: 700; color: #000;
-  background: #e6f0fa; border: 1px solid #b9d3ec;
-  border-radius: 6px; padding: 3px 10px; line-height: 1.4;
 }
 .mc-erp-name {
   flex: 1 1 auto; min-width: 0;
-  font-size: 17px; font-weight: 700; color: var(--text-primary);
+  font-size: 17px; font-weight: 400; color: var(--text-primary);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .mc-erp-line .ro-badge { flex-shrink: 0; font-size: 11px; padding: 2px 8px; }

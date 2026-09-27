@@ -142,22 +142,21 @@ test('物料卡片：ERP 信息在最上方无卡片，图片|人工维护，价
   await expect(erp).not.toContainText(ITEM.status)
   await expect(erp.locator('.ro-badge')).toHaveText('启用')
   await expect(erp.locator('.ro-badge')).toHaveAttribute('title', `ERP 状态：${ITEM.status}`)
-  // 编码为标签样式；编码、名称加粗且字号加大
+  // 编码：黑色加粗、不是标签（无边框无底色）；名称：不加粗，字号加大
   const code = await erp.locator('.mc-erp-code').evaluate(el => {
     const cs = getComputedStyle(el)
     return { w: Number(cs.fontWeight), size: parseFloat(cs.fontSize), border: cs.borderTopWidth, bg: cs.backgroundColor, color: cs.color }
   })
-  expect(code.color).toBe('rgb(0, 0, 0)')
-  expect(code.bg).toBe('rgb(230, 240, 250)')   // 浅蓝底
   expect(code.w).toBeGreaterThanOrEqual(600)
   expect(code.size).toBeGreaterThanOrEqual(15)
-  expect(code.border).not.toBe('0px')
-  expect(code.bg).not.toBe('rgba(0, 0, 0, 0)')
+  expect(code.color).toBe('rgb(0, 0, 0)')
+  expect(code.border).toBe('0px')
+  expect(code.bg).toBe('rgba(0, 0, 0, 0)')
   const name = await erp.locator('.mc-erp-name').evaluate(el => {
     const cs = getComputedStyle(el)
     return { w: Number(cs.fontWeight), size: parseFloat(cs.fontSize) }
   })
-  expect(name.w).toBeGreaterThanOrEqual(600)
+  expect(name.w).toBeLessThan(600)
   expect(name.size).toBeGreaterThanOrEqual(16)
 
   // 图片在左、人工维护在右，等高；价格在下方通栏
