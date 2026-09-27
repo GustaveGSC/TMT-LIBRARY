@@ -1,7 +1,7 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
 import { ref, computed, watch } from 'vue'
-import { WarningFilled, Picture, Plus, Edit, Delete, ZoomIn, Close, Check, Back, View, Search, Download } from '@element-plus/icons-vue'
+import { WarningFilled, Picture, Plus, Edit, Delete, ZoomIn, Close, Check, Back, View, Search, Download, ArrowDown, ArrowUp } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import MediaViewer from '@/components/common/MediaViewer.vue'
 import MaterialBomTree from './MaterialBomTree.vue'
@@ -850,6 +850,10 @@ watch(() => props.visible, v => {
       <span v-if="bomDialogKeyword.trim()" class="bom-dlg-hit">
         匹配 {{ bomTreeRef?.matchCount ?? 0 }} 项（保留其上级层次）
       </span>
+      <el-button v-if="bomTreeRef?.hasNested" size="small" class="bom-dlg-toggle"
+                 :icon="bomTreeRef.allExpanded ? ArrowUp : ArrowDown" @click="bomTreeRef.toggleAll()">
+        {{ bomTreeRef.allExpanded ? '全部收起' : '全部展开' }}
+      </el-button>
     </div>
     <div v-loading="bomDialogLoading" class="bom-dlg-body">
       <MaterialBomTree ref="bomTreeRef" :rows="bomDialogTree" height="100%" :keyword="bomDialogKeyword"
@@ -1106,6 +1110,7 @@ watch(() => props.visible, v => {
 .bom-dlg-filter { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
 .bom-dlg-search { width: 280px; }
 .bom-dlg-hit { font-size: 12px; color: #6b5e4e; }
+.bom-dlg-toggle { margin-left: auto; }
 .bom-dlg-body { height: 72vh; }
 .bom-ver-text { font-size: 12px; font-weight: 400; color: #6b5e4e; letter-spacing: 0; }
 .used-block { margin-bottom: 10px; }

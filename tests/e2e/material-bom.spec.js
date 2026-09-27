@@ -101,6 +101,16 @@ test('物料BOM tab：列表、多层结构、导入结果', async ({ page }) =>
   // ERP 里没有的显示「未匹配」
   await expect(page.locator('.bom-tree .bt-none')).toHaveText('未匹配')
 
+  // 一键展开/收起：默认全部展开 → 收起只剩第一层 → 再展开恢复
+  const toggle = page.locator('.bd-toggle')
+  await expect(toggle).toHaveText('全部收起')
+  await toggle.click()
+  await expect(toggle).toHaveText('全部展开')
+  await expect(page.locator('.bom-tree .bt-seq:visible')).toHaveText(['1', '2'])
+  await toggle.click()
+  await expect(toggle).toHaveText('全部收起')
+  await expect(page.locator('.bom-tree .bt-seq:visible')).toHaveText(['1', '1.1', '2'])
+
   // 导出：下载当前选中的 BOM
   const [download] = await Promise.all([
     page.waitForEvent('download'),
@@ -191,6 +201,12 @@ test('物料表 BOM 标记 + 物料卡片：BOM下级按研发版本列出并弹
   await expect(dlg.locator('.bom-dlg-code')).toHaveText('F1-A01')
   await expect(dlg.locator('.bt-seq')).toHaveText(['1', '1.1', '2'])
   expect(treeRequests).toEqual([3])
+  // 弹窗里也有一键展开/收起
+  const dlgToggle = dlg.locator('.bom-dlg-toggle')
+  await dlgToggle.click()
+  await expect(dlg.locator('.bt-seq:visible')).toHaveText(['1', '2'])
+  await dlgToggle.click()
+  await expect(dlg.locator('.bt-seq:visible')).toHaveText(['1', '1.1', '2'])
   // 弹窗里也能导出
   const exportHits = []
   await exportRoute(page, exportHits)

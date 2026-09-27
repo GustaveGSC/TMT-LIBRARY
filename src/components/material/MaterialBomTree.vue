@@ -2,7 +2,7 @@
 // ── 导入 ──────────────────────────────────────────
 // 研发 BOM 多层结构表（物料BOM 页与物料卡片共用）。
 // 数据来自后端展开好的树：[{ id, drawing, erp_code, name, spec, category, qty, unit, children? }]
-import { computed } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 
 const props = defineProps({
   rows:       { type: Array,  default: () => [] },
@@ -58,7 +58,34 @@ const filtered = computed(() => {
 // 命中行浅色高亮，上级链路行保持原样
 function rowClass({ row }) { return row._hit ? 'bt-hit-row' : '' }
 
-defineExpose({ matchCount: computed(() => filtered.value.hits) })
+// ── 一键展开/收起 ─────────────────────────────────
+// 数据变化（换 BOM、改筛选词）后 el-table 按 default-expand-all 重新决定展开，状态跟着复位
+const tableRef = ref(null)
+const allExpanded = ref(props.expandAll)
+watch(() => filtered.value.rows, () => { allExpanded.value = props.expandAll })
+
+function setAllExpanded(expanded) {
+  const walk = rows => rows.forEach(r => {
+    if (r.children?.length) {
+      tableRef.value?.toggleRowExpansion(r, expanded)
+      walk(r.children)
+    }
+  })
+  walk(filtered.value.rows)
+  allExpanded.value = expanded
+}
+
+function toggleAll() {
+  nextTick(() => setAllExpanded(!allExpanded.value))
+}
+
+// 有下级的行才需要展开/收起按键
+const hasNested = computed(() => filtered.value.rows.some(r => r.children?.length))
+
+defineExpose({
+  matchCount: computed(() => filtered.value.hits),
+  allExpanded, hasNested, toggleAll, setAllExpanded,
+})
 
 // ── 方法 ──────────────────────────────────────────
 function formatQty(q) {
@@ -69,6 +96,7 @@ function formatQty(q) {
 
 <template>
   <el-table
+    ref="tableRef"
     class="bom-tree"
     :data="filtered.rows"
     row-key="id"

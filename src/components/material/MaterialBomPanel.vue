@@ -5,7 +5,7 @@
 // 右侧是选中 BOM 展开后的完整多层结构。采购 BOM 不在这里导入（只作价格来源）。
 import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search, Upload, Delete, Download, WarningFilled } from '@element-plus/icons-vue'
+import { Search, Upload, Delete, Download, WarningFilled, ArrowDown, ArrowUp } from '@element-plus/icons-vue'
 import http from '@/api/http'
 import MaterialBomTree from './MaterialBomTree.vue'
 import { exportBom } from './bomExport'
@@ -52,6 +52,8 @@ const importErrorOpen = ref(false)
 
 // 导出 Excel 进行中
 const exporting = ref(false)
+// 树组件引用：一键展开/收起
+const treeRef = ref(null)
 
 const cardCode    = ref('')
 const cardVisible = ref(false)
@@ -271,11 +273,15 @@ onMounted(loadList)
           <span v-else class="bd-drawing mono" title="ERP 物料表里没有对应编码">{{ treeData.bom.drawing }}</span>
           <span class="bd-name">{{ treeData.bom.name }}</span>
           <span class="bd-meta">{{ treeData.bom.imported_by || '—' }} · {{ treeData.bom.imported_at }}</span>
+          <el-button v-if="treeRef?.hasNested" size="small" class="bd-toggle"
+                     :icon="treeRef.allExpanded ? ArrowUp : ArrowDown" @click="treeRef.toggleAll()">
+            {{ treeRef.allExpanded ? '全部收起' : '全部展开' }}
+          </el-button>
           <el-button size="small" :icon="Download" class="bd-export" :loading="exporting" @click="handleExport">导出</el-button>
           <el-button v-if="canEditMaterial" size="small" :icon="Delete" class="bd-del" @click="deleteBom">删除</el-button>
         </header>
         <div class="bd-tree">
-          <MaterialBomTree :rows="treeData.children" height="100%" @open-code="openCard" />
+          <MaterialBomTree ref="treeRef" :rows="treeData.children" height="100%" @open-code="openCard" />
         </div>
       </template>
       <div v-else-if="!treeLoading" class="bp-empty">选择左侧的 BOM 查看结构</div>
@@ -404,6 +410,8 @@ onMounted(loadList)
 .bd-drawing.link:hover { color: var(--accent); text-decoration: underline; }
 
 .bd-meta { font-size: 11px; color: #8a7a6a; }
+.bd-toggle { margin-left: auto; }
+.bd-toggle + .bd-export { margin-left: 0; }
 .bd-export { margin-left: auto; }
 .bd-del { margin-left: 0; }
 .bd-tree { flex: 1; min-height: 0; }
