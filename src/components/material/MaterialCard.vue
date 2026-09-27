@@ -39,7 +39,10 @@ const errorMsg = ref('')
 //
 // type_override：单独指定的物料类型，空数组 = 不单独指定（按编码前缀规则/分组默认类型判定）。
 // 判定优先级：单独指定 > 编码前缀规则 > 分组默认类型。
-const form = ref({ short_name: '', category: '', spec: '', remark: '', type_override: [] })
+//
+// 简称/分类/规格已去掉（用户 2026-09-27 决定）：生产上简称 0 条、分类 1 条、规格全部等于 ERP 规格，
+// 且没有任何下游使用；名称/规格一律以 ERP 为准。数据库列保留未删，只是不再显示和提交。
+const form = ref({ remark: '', type_override: [] })
 
 // 物料类型定义，与后端 CATEGORY_TYPES / TYPE_LABELS 一致
 const TYPE_OPTIONS = [
@@ -56,8 +59,7 @@ const SOURCE_TEXT = { manual: '单独指定', rule: '编码前缀规则', group:
 const savedSnapshot = ref('')
 function snapshotOf(f) {
   return JSON.stringify({
-    short_name: (f.short_name || '').trim(), category: (f.category || '').trim(),
-    spec: (f.spec || '').trim(), remark: (f.remark || '').trim(),
+    remark: (f.remark || '').trim(),
     type_override: [...(f.type_override || [])].sort(),
   })
 }
@@ -65,9 +67,6 @@ const isDirty = computed(() => !!detail.value && snapshotOf(form.value) !== save
 
 function fillForm(data) {
   form.value = {
-    short_name: data.short_name || '',
-    category:   data.category   || '',
-    spec:       data.spec       || '',
     remark:     data.remark     || '',
     type_override: [...(data.type_override || [])],
   }
@@ -348,9 +347,6 @@ async function handleSave() {
     // 刻意不传 is_disabled：该列是「人工覆盖」，一旦传值就会覆盖导入数据的判定。
     // 停用状态只来源于导入，卡片无权修改。
     const payload = {
-      short_name: form.value.short_name,
-      category:   form.value.category,
-      spec:       form.value.spec,
       remark:     form.value.remark,
       type_override: form.value.type_override,
     }
@@ -597,18 +593,6 @@ watch(() => props.visible, v => {
                 <template v-else>未匹配规则，请单独指定</template>
               </div>
             </div>
-          </div>
-          <div class="mc-field">
-            <label>简称</label>
-            <input v-model="form.short_name" class="mc-input" :disabled="!canEditMaterial" placeholder="录入/挑选时显示的简称" />
-          </div>
-          <div class="mc-field">
-            <label>分类</label>
-            <input v-model="form.category" class="mc-input" :disabled="!canEditMaterial" placeholder="自由文本，用于下拉分组" />
-          </div>
-          <div class="mc-field">
-            <label>规格</label>
-            <input v-model="form.spec" class="mc-input" :disabled="!canEditMaterial" placeholder="规格" />
           </div>
           <div class="mc-field mc-field-top mc-field-remark">
             <label>备注</label>

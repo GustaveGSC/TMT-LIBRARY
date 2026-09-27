@@ -146,7 +146,7 @@ function addMaterial(row) {
   errorMsg.value = ''
   items.push({
     material_code: row.code, quantity: 1,
-    material_name: row.name, short_name: row.short_name,
+    material_name: row.name,
     group_name: row.group_name, is_missing: false, is_disabled: !!row.is_disabled,
   })
 }
@@ -340,7 +340,7 @@ onMounted(loadCombos)
           <div class="it-head">
             <div class="it-col col-idx">#</div>
             <div class="it-col col-code">ERP 编码</div>
-            <div class="it-col col-name">物料名称 / 简称</div>
+            <div class="it-col col-name">物料名称</div>
             <div class="it-col col-qty">数量</div>
             <div class="it-col col-act"></div>
           </div>
@@ -360,10 +360,9 @@ onMounted(loadCombos)
                 </template>
                 <template v-else>
                   <div class="nm-main">
-                    {{ it.short_name || it.material_name || '—' }}
+                    {{ it.material_name || '—' }}
                     <span v-if="it.is_disabled" class="pk-off">已停用</span>
                   </div>
-                  <div v-if="it.short_name && it.material_name" class="nm-sub">{{ it.material_name }}</div>
                 </template>
               </div>
               <div class="it-col col-qty">
@@ -403,7 +402,7 @@ onMounted(loadCombos)
         <div v-else class="pk-list">
           <div v-for="r in pickerRows" :key="r.code" class="pk-row">
             <span class="code-tag">{{ r.code }}</span>
-            <span class="pk-name" :title="r.name">{{ r.short_name || r.name }}</span>
+            <span class="pk-name" :title="r.name">{{ r.name }}</span>
             <span v-if="r.is_disabled" class="pk-off" title="ERP 已停用或名称含停用关键词">已停用</span>
             <span class="pk-group">{{ r.group_name || '' }}</span>
             <button class="btn-save mini-btn" @click="addMaterial(r)">添加</button>

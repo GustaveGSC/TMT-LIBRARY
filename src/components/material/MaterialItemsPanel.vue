@@ -58,8 +58,6 @@ const columns = computed(() => [
     sortable: true, filterable: true, filterType: 'text' },
   { prop: 'name',       label: 'ERP 名称', minWidth: 260,
     sortable: true, filterable: true, filterType: 'text' },
-  { prop: 'short_name', label: '简称',     width: 170,
-    sortable: true, filterable: true, filterType: 'text' },
   { prop: 'group_code', label: '分组',     width: 190,
     sortable: true, filterable: true,
     filterOptions: groups.value.map(g => ({
@@ -117,7 +115,6 @@ async function loadItems() {
     const txt = (v) => (v == null ? '' : String(v).trim())
     if (txt(f.code))       params.code       = txt(f.code)
     if (txt(f.name))       params.name       = txt(f.name)
-    if (txt(f.short_name)) params.short_name = txt(f.short_name)
     if (f.group_code)      params.group_code = f.group_code
     if (f.categories === 'unclassified') params.unclassified = 1
     else if (f.categories)               params.category     = f.categories
@@ -196,11 +193,6 @@ onMounted(() => { loadItems(); loadGroups() })
         <!-- ERP 编码：点击打开物料卡片 -->
         <template #cell-code="{ row }">
           <span class="code-link" title="点击查看物料卡片" @click.stop="openCard(row)">{{ row.code }}</span>
-        </template>
-
-        <template #cell-short_name="{ row }">
-          <span v-if="row.short_name">{{ row.short_name }}</span>
-          <span v-else class="cell-empty">未填</span>
         </template>
 
         <template #cell-group_code="{ row }">

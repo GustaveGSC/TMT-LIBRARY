@@ -247,7 +247,7 @@ test('人工维护用标题行确认图标保存，关闭前提示未保存修�
   await expect(card.locator('.mc-dirty')).toHaveCount(0)
 
   // 改动后：出现"未保存"，确认图标可点
-  await card.locator('.mc-manual input.mc-input').first().fill('新简称')
+  await card.locator('.mc-manual textarea.mc-textarea').fill('新备注')
   await expect(card.locator('.mc-dirty')).toHaveText('未保存')
   await expect(saveBtn).toBeEnabled()
 
@@ -257,11 +257,16 @@ test('人工维护用标题行确认图标保存，关闭前提示未保存修�
   await page.locator('.el-message-box button', { hasText: '继续编辑' }).click()
   await expect(card).toBeVisible()
 
-  // 保存：请求带上新简称，保存后"未保存"消失，卡片仍打开
+  // 保存：请求带上新备注，保存后"未保存"消失，卡片仍打开
   const req = page.waitForRequest(r => r.method() === 'PUT' && r.url().includes('/api/material/items/'))
   await saveBtn.click()
   const put = await req
-  expect(JSON.parse(put.postData()).short_name).toBe('新简称')
+  const body = JSON.parse(put.postData())
+  expect(body.remark).toBe('新备注')
+  // 简称/分类/规格已去掉，不再提交
+  expect(body).not.toHaveProperty('short_name')
+  expect(body).not.toHaveProperty('spec')
+  expect(body).not.toHaveProperty('category')
   await expect(card.locator('.mc-dirty')).toHaveCount(0)
   await expect(saveBtn).toBeDisabled()
   await expect(card).toBeVisible()
@@ -350,4 +355,14 @@ test('成品直接显示产品库图片，只读', async ({ page }) => {
   await card.locator('.mc-thumb').nth(0).click()
   await card.locator('.mc-image').hover()
   await card.locator('.mc-image').screenshot({ path: 'test-results/material-card-product-image.png' })
+})
+
+// 人工维护只剩物料类型和备注；物料表没有「简称」列
+test('人工维护去掉简称/分类/规格，物料表去掉简称列', async ({ page }) => {
+  const card = await openCard(page, ITEM)
+  await page.waitForTimeout(500)
+  await expect(card.locator('.mc-manual label')).toHaveText(['物料类型', '备注'])
+  await expect(card.locator('.mc-manual input.mc-input')).toHaveCount(0)
+  await page.locator('.el-dialog__header .mc-close-btn').click()
+  await expect(page.locator('.el-table__header th', { hasText: '简称' })).toHaveCount(0)
 })
