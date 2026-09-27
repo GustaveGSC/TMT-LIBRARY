@@ -619,7 +619,7 @@ watch(() => props.visible, v => {
                         :class="{ nolink: !t.erp_code }"
                         :title="t.erp_code ? `${t.name || ''}（点击查看 ${t.erp_code}）` : 'ERP 未匹配'"
                         @click="navigateTo(t.erp_code)">
-                  <b class="mono">{{ t.erp_code || t.drawing }}</b><span>{{ t.name }}</span>
+                  <b class="mono">{{ t.drawing }}</b><span>{{ t.name }}</span>
                 </button>
               </div>
             </div>
@@ -628,19 +628,17 @@ watch(() => props.visible, v => {
                 <tr>
                   <th style="width:160px">直接上级</th>
                   <th>名称</th>
-                  <th style="width:90px">类别</th>
                   <th style="width:70px" class="ta-r">用量</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="p in bom.direct_parents" :key="p.id + '-' + p.child_drawing">
-                  <!-- 研发编码与 ERP 编码一致，只显示一列；ERP 里没有时显示研发编码并置灰 -->
+                  <!-- 显示完整研发编码（成品/产成品带完整版本）；能对应到 ERP 物料时可跳转，否则置灰 -->
                   <td class="mono">
-                    <span v-if="p.erp_code" class="bom-link" @click="navigateTo(p.erp_code)">{{ p.erp_code }}</span>
+                    <span v-if="p.erp_code" class="bom-link" @click="navigateTo(p.erp_code)">{{ p.drawing }}</span>
                     <span v-else class="cell-muted" title="ERP 物料表里没有对应编码">{{ p.drawing }}</span>
                   </td>
                   <td class="ellip">{{ p.name || '—' }}</td>
-                  <td class="ellip">{{ p.category || '—' }}</td>
                   <td class="ta-r">{{ p.qty }}{{ p.unit ? ' ' + p.unit : '' }}</td>
                 </tr>
               </tbody>

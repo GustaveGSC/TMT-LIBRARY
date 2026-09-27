@@ -158,11 +158,6 @@ async function deleteBom() {
   }
 }
 
-// 编码显示 ERP 编码；与研发编码不一致（成品 -A 对研发 -A01/-A02）时需要额外标出研发版本
-function versionHint(b) {
-  return !!(b?.erp_code && b.erp_code !== b.drawing && b.version)
-}
-
 function openCard(code) {
   cardCode.value = code
   cardVisible.value = true
@@ -204,8 +199,7 @@ onMounted(loadList)
           @click="selectBom(b.id)"
         >
           <div class="bp-item-top">
-            <span class="bp-drawing mono">{{ b.erp_code || b.drawing }}</span>
-            <span v-if="versionHint(b)" class="bp-ver">{{ b.version }}</span>
+            <span class="bp-drawing mono">{{ b.drawing }}</span>
             <span v-if="b.category" class="bp-cat-tag">{{ b.category }}</span>
             <span class="bp-count">{{ b.line_count }} 项</span>
           </div>
@@ -227,12 +221,11 @@ onMounted(loadList)
     <section v-loading="treeLoading" class="bp-detail">
       <template v-if="treeData">
         <header class="bd-head">
-          <!-- 编码：研发编码与 ERP 编码一致，只显示一个；有 ERP 编码时可点开物料卡片 -->
-          <span v-if="treeData.bom.erp_code" class="bd-drawing mono link" title="点击查看物料卡片"
-                @click="openCard(treeData.bom.erp_code)">{{ treeData.bom.erp_code }}</span>
+          <!-- 编码：显示完整研发编码（含 -A01 这类完整版本）；能对应到 ERP 物料时可点开物料卡片 -->
+          <span v-if="treeData.bom.erp_code" class="bd-drawing mono link"
+                :title="`点击查看物料卡片（ERP：${treeData.bom.erp_code}）`"
+                @click="openCard(treeData.bom.erp_code)">{{ treeData.bom.drawing }}</span>
           <span v-else class="bd-drawing mono" title="ERP 物料表里没有对应编码">{{ treeData.bom.drawing }}</span>
-          <!-- 成品/产成品 ERP 只到 -A，研发版本更细（A01/A02），不一致时补一个版本提示 -->
-          <span v-if="versionHint(treeData.bom)" class="bd-ver">研发版本 {{ treeData.bom.version }}</span>
           <span class="bd-name">{{ treeData.bom.name }}</span>
           <span class="bd-meta">{{ treeData.bom.imported_by || '—' }} · {{ treeData.bom.imported_at }}</span>
           <el-button v-if="canEditMaterial" size="small" :icon="Delete" class="bd-del" @click="deleteBom">删除</el-button>
@@ -355,10 +348,7 @@ onMounted(loadList)
 .bd-name { font-size: 14px; color: #3a3028; }
 .bd-drawing.link { cursor: pointer; }
 .bd-drawing.link:hover { color: var(--accent); text-decoration: underline; }
-.bd-ver, .bp-ver {
-  font-size: 11px; padding: 0 6px; line-height: 16px; border-radius: 4px;
-  color: #4a8fc0; background: rgba(74,143,192,0.1);
-}
+
 .bd-meta { font-size: 11px; color: #8a7a6a; }
 .bd-del { margin-left: auto; }
 .bd-tree { flex: 1; min-height: 0; }

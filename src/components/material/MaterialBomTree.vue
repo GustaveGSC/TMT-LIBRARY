@@ -48,23 +48,23 @@ function formatQty(q) {
     :empty-text="emptyText"
   >
     <!-- 序号列承载树的展开箭头与缩进，层级一目了然 -->
-    <el-table-column label="序号" min-width="120">
+    <el-table-column label="序号" width="120">
       <template #default="{ row }">
         <span class="bt-seq mono">{{ row._seq }}</span>
         <span v-if="row.children?.length" class="bt-sub" title="下级数量">{{ row.children.length }}</span>
       </template>
     </el-table-column>
-    <!-- 编码：研发编码与 ERP 编码一致，只显示一列；ERP 物料表里没有时显示研发编码并置灰 -->
-    <el-table-column label="编码" width="160">
+    <!-- 编码：显示完整研发编码（成品/产成品带 -A01 这类完整版本，ERP 编码只到 -A）；
+         能对应到 ERP 物料时可点开物料卡片，对应不到的置灰 -->
+    <el-table-column label="编码" width="150">
       <template #default="{ row }">
-        <span v-if="row.erp_code" class="bt-erp mono" title="点击查看物料卡片"
-              @click.stop="emit('open-code', row.erp_code)">{{ row.erp_code }}</span>
+        <span v-if="row.erp_code" class="bt-erp mono" :title="`点击查看物料卡片（ERP：${row.erp_code}）`"
+              @click.stop="emit('open-code', row.erp_code)">{{ row.drawing }}</span>
         <span v-else class="bt-none mono" title="ERP 物料表里没有对应编码">{{ row.drawing }}</span>
       </template>
     </el-table-column>
-    <el-table-column prop="name" label="名称" min-width="180" show-overflow-tooltip />
-    <el-table-column prop="spec" label="规格" min-width="160" show-overflow-tooltip />
-    <el-table-column prop="category" label="类别" width="90" show-overflow-tooltip />
+    <!-- 名称已包含规格，不再单列规格/类别 -->
+    <el-table-column prop="name" label="名称" min-width="240" show-overflow-tooltip />
     <el-table-column label="数量" width="70" align="right">
       <template #default="{ row }">{{ formatQty(row.qty) }}</template>
     </el-table-column>
