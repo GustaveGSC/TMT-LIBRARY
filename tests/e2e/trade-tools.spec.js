@@ -32,8 +32,10 @@ test('有 trade:view：主页出现外贸工具，进入后可查看产品改制
   await expect(page.locator('.plan-title')).toHaveText('产品改制')
   await expect(page.locator('.plan-banner')).toContainText('方案讨论稿')
   await expect(page.locator('.step')).toHaveCount(6)
-  await expect(page.locator('.qa')).toHaveCount(7)
+  await expect(page.locator('.qa')).toHaveCount(8)
+  await expect(page.locator('.plan-sec h2', { hasText: '改制提醒清单' })).toBeVisible()
   await page.screenshot({ path: 'test-results/trade-tools-plan.png', fullPage: false })
+  await page.locator('.plan-sec').filter({ has: page.locator('h2', { hasText: '改制提醒清单' }) }).screenshot({ path: 'test-results/trade-tools-reminder.png' })
 })
 
 test('没有 trade:view：主页不显示外贸工具', async ({ page }) => {
