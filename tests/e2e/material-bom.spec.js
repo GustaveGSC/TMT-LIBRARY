@@ -89,16 +89,17 @@ test('物料BOM tab：列表、多层结构、导入结果', async ({ page }) =>
   // 标题显示完整研发编码（成品带完整版本 -A02，而非 ERP 的 -A）；不显示上传文件名
   await expect(page.locator('.bd-drawing')).toHaveText('F1-A02')
   await expect(page.locator('.bd-meta')).not.toContainText('a.xlsx')
-  // 列：序号 / 编码 / 名称 / 数量 / 单位（无研发编码、规格、类别）
-  await expect(page.locator('.bom-tree th')).toHaveText(['序号', '编码', '名称', '数量', '单位'])
+  // 列：序号 / 图纸编码 / ERP编码 / 名称 / 数量 / 单位
+  await expect(page.locator('.bom-tree th')).toHaveText(['序号', '图纸编码', 'ERP编码', '名称', '数量', '单位'])
   await expect(page.locator('.bom-tree .bt-seq')).toHaveText(['1', '1.1', '2'])
-  // 产成品也显示完整版本
-  await expect(page.locator('.bom-tree .bt-erp')).toHaveText(['P1-A01', 'R1-A01'])
+  // 图纸编码显示完整版本，ERP 编码显示 ERP 里的写法（产成品只到 -A）
+  await expect(page.locator('.bom-tree .bt-drawing')).toHaveText(['P1-A01', 'R1-A01', 'S1-A01'])
+  await expect(page.locator('.bom-tree .bt-erp')).toHaveText(['P1-A', 'R1-A01'])
   // 序号列固定窄宽度，不再随表格拉伸
   const seqWidth = await page.locator('.bom-tree th').first().evaluate(el => el.getBoundingClientRect().width)
   expect(seqWidth).toBeLessThanOrEqual(121)
-  // ERP 里没有的显示研发编码并置灰
-  await expect(page.locator('.bom-tree .bt-none')).toHaveText('S1-A01')
+  // ERP 里没有的显示「未匹配」
+  await expect(page.locator('.bom-tree .bt-none')).toHaveText('未匹配')
 
   // 导出：下载当前选中的 BOM
   const [download] = await Promise.all([

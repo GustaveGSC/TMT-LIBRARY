@@ -548,7 +548,7 @@ class MaterialBomService:
         wb = Workbook()
         ws = wb.active
         ws.title = 'BOM'
-        headers = ['序号', '层级', '编码', 'ERP编码', '名称', '数量', '单位']
+        headers = ['序号', '层级', '图纸编码', 'ERP编码', '名称', '数量', '单位']
         ws.append([f"BOM：{bom['drawing']}  {bom.get('name') or ''}"])
         ws.append([f"ERP编码：{bom.get('erp_code') or '未匹配'}    导入：{bom.get('imported_by') or '—'} "
                    f"{bom.get('imported_at') or ''}    导出：{now_cst().strftime('%Y-%m-%d %H:%M')}"])

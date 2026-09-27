@@ -397,7 +397,7 @@ def test_export_xlsx_matches_tree_with_hierarchical_seq(bom_app):
         assert name == 'BOM-F1-A01.xlsx'
         ws = openpyxl.load_workbook(io.BytesIO(data)).active
         assert ws['A1'].value.startswith('BOM：F1-A01')
-        assert [c.value for c in ws[4]] == ['序号', '层级', '编码', 'ERP编码', '名称', '数量', '单位']
+        assert [c.value for c in ws[4]] == ['序号', '层级', '图纸编码', 'ERP编码', '名称', '数量', '单位']
         rows = [[c.value for c in r] for r in ws.iter_rows(min_row=5)]
         # 与页面树一致：P1 → M1 → R1，S1，M1 → R1
         assert [(r[0], r[1], r[2]) for r in rows] == [

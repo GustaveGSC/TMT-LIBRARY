@@ -164,7 +164,7 @@ GET  /api/material/boms                 # ?keyword=&material_type=&page=&page_si
                                         #   关键词命中的 (id, erp_code) 先全取出在内存分类计数再按 id 取当前页，共 3 条查询
 GET  /api/material/boms/:id/tree        # 完整多层展开 {bom, children:[{drawing, erp_code, name, spec, category, qty, unit, children?}]}
                                         #   每层一次查询；名称/规格优先用 ERP 的，文件里的兜底
-GET  /api/material/boms/:id/export      # 下载 xlsx（BOM-{研发编码}.xlsx）：序号(层级编号)/层级/编码/ERP编码/名称/数量/单位，与页面树一致
+GET  /api/material/boms/:id/export      # 下载 xlsx（BOM-{研发编码}.xlsx）：序号(层级编号)/层级/图纸编码/ERP编码/名称/数量/单位，与页面树一致
 DELETE /api/material/boms/:id           # ?force=1。只删这一层子件清单，下级半成品自己的 BOM 不动
                                         #   被其他 BOM 引用且无 force → success=false, data={needs_force:true, references:[上级 BOM]}
 GET  /api/material/items/:code/bom      # 物料卡片用：{versions[+line_count], direct_parents[], top_products[]}

@@ -620,7 +620,7 @@ watch(() => props.visible, v => {
           <table class="cost-table bom-ver-table">
             <thead>
               <tr>
-                <th style="width:160px">研发编码</th>
+                <th style="width:160px">图纸编码</th>
                 <th>名称</th>
                 <th style="width:70px" class="ta-r">下级</th>
                 <th style="width:150px">导入</th>

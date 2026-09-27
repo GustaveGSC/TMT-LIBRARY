@@ -88,13 +88,18 @@ function formatQty(q) {
         <span v-if="row.children?.length" class="bt-sub" title="下级数量">{{ row.children.length }}</span>
       </template>
     </el-table-column>
-    <!-- 编码：显示完整研发编码（成品/产成品带 -A01 这类完整版本，ERP 编码只到 -A）；
-         能对应到 ERP 物料时可点开物料卡片，对应不到的置灰 -->
-    <el-table-column label="编码" width="150">
+    <!-- 图纸编码：研发 BOM 里的完整编码（成品/产成品带 -A01 这类完整版本） -->
+    <el-table-column label="图纸编码" width="150">
       <template #default="{ row }">
-        <span v-if="row.erp_code" class="bt-erp mono" :title="`点击查看物料卡片（ERP：${row.erp_code}）`"
-              @click.stop="emit('open-code', row.erp_code)">{{ row.drawing }}</span>
-        <span v-else class="bt-none mono" title="ERP 物料表里没有对应编码">{{ row.drawing }}</span>
+        <span class="bt-drawing mono">{{ row.drawing }}</span>
+      </template>
+    </el-table-column>
+    <!-- ERP 编码：成品/产成品只到 -A；能对应到 ERP 物料时可点开物料卡片，对应不到的显示「未匹配」 -->
+    <el-table-column label="ERP编码" width="150">
+      <template #default="{ row }">
+        <span v-if="row.erp_code" class="bt-erp mono" title="点击查看物料卡片"
+              @click.stop="emit('open-code', row.erp_code)">{{ row.erp_code }}</span>
+        <span v-else class="bt-none" title="ERP 物料表里没有对应编码">未匹配</span>
       </template>
     </el-table-column>
     <!-- 名称已包含规格，不再单列规格/类别 -->
@@ -114,7 +119,8 @@ function formatQty(q) {
   font-size: 10px; line-height: 15px; display: inline-block;
   color: #4a8fc0; background: rgba(74,143,192,0.12);
 }
-.bt-erp { font-size: 12px; font-weight: 600; color: #2c2420; cursor: pointer; }
+.bt-drawing { font-size: 12px; font-weight: 600; color: #2c2420; }
+.bt-erp { font-size: 12px; color: #3a3028; cursor: pointer; }
 .bt-erp:hover { color: var(--accent); text-decoration: underline; }
 .bt-none { font-size: 12px; color: var(--text-muted); }
 :deep(.bt-hit-row > td.el-table__cell) { background: #fff6dc !important; }
