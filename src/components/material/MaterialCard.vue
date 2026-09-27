@@ -332,21 +332,18 @@ watch(() => props.visible, v => {
        <!-- 排版（用户 2026-09-27 指定）：第一行 图片 | ERP 信息；
             第二行 人工维护（通栏）；第三行 价格（通栏，仅 material:price 可见） -->
        <div class="mc-scroll">
-        <!-- ERP 信息（只读）：放在最上方，不做卡片样式，只显示编码、名称、状态。
-             名称固定单行（超长省略，悬停看全文），保证卡片高度不随名称长短变化 -->
+        <!-- ERP 信息（只读）：放在最上方，不做卡片样式、不带字段标签。
+             编码用标签样式；名称固定单行（超长省略，悬停看全文），保证卡片高度稳定。
+             状态只显示「启用/已停用」角标：ERP 原始状态（生效/失效）已折算进角标，
+             原文放在角标悬停提示里 -->
         <div class="mc-erp-line">
-          <span class="mc-erp-item">
-            <span class="mc-erp-label">编码</span><b class="mono mc-erp-code">{{ detail.code }}</b>
-          </span>
-          <span class="mc-erp-item mc-erp-name-wrap">
-            <span class="mc-erp-label">名称</span><b class="mc-erp-name" :title="detail.name">{{ detail.name }}</b>
-          </span>
-          <span class="mc-erp-item">
-            <span class="mc-erp-label">状态</span>
-            <span class="status-text">{{ detail.status || '—' }}</span>
-            <span v-if="detail.is_disabled" class="ro-badge off">已停用</span>
-            <span v-else class="ro-badge on">启用</span>
-          </span>
+          <span class="mc-erp-code mono">{{ detail.code }}</span>
+          <b class="mc-erp-name" :title="detail.name">{{ detail.name }}</b>
+          <span
+            class="ro-badge"
+            :class="detail.is_disabled ? 'off' : 'on'"
+            :title="`ERP 状态：${detail.status || '—'}`"
+          >{{ detail.is_disabled ? '已停用' : '启用' }}</span>
         </div>
 
         <div class="mc-top">
@@ -791,18 +788,21 @@ watch(() => props.visible, v => {
 
 /* ERP 信息行：卡片最上方，无边框无底色 */
 .mc-erp-line {
-  display: flex; align-items: center; gap: 24px;
+  display: flex; align-items: center; gap: 12px;
   padding: 2px 2px 14px; min-width: 0;
 }
-.mc-erp-item { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.mc-erp-name-wrap { flex: 1 1 auto; min-width: 0; }
-.mc-erp-label { font-size: 12px; color: #6b5e4e; flex-shrink: 0; }
-.mc-erp-code { font-size: 14px; font-weight: 700; color: var(--text-primary); }
-.mc-erp-name {
-  font-size: 14px; font-weight: 700; color: var(--text-primary);
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+.mc-erp-code {
+  flex-shrink: 0;
+  font-size: 15px; font-weight: 700; color: var(--accent);
+  background: var(--accent-bg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 3px 10px; line-height: 1.4;
 }
-.mc-erp-item .status-text { font-size: 13px; }
+.mc-erp-name {
+  flex: 1 1 auto; min-width: 0;
+  font-size: 17px; font-weight: 700; color: var(--text-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mc-erp-line .ro-badge { flex-shrink: 0; font-size: 11px; padding: 2px 8px; }
 
 /* ── 价格区 ───────────────────────────────────── */
 .mc-section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }

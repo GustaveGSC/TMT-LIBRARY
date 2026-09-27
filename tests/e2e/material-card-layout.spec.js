@@ -135,13 +135,28 @@ test('物料卡片：ERP 信息在最上方无卡片，图片|人工维护，价
   expect(style.border).toBe('0px')
   expect(style.bg).toBe('rgba(0, 0, 0, 0)')
   await expect(erp.locator('.mc-section-title')).toHaveCount(0)
-  // 只显示编码、名称、状态；编码与名称加粗
-  await expect(erp.locator('.mc-erp-label')).toHaveText(['编码', '名称', '状态'])
+  // 只显示编码、名称、启用状态角标：无字段标签、不显示分组和 ERP 原始状态文字
+  await expect(erp).not.toContainText('编码')
+  await expect(erp).not.toContainText('名称')
   await expect(erp).not.toContainText('分组')
-  for (const sel of ['.mc-erp-code', '.mc-erp-name']) {
-    const weight = await erp.locator(sel).evaluate(el => Number(getComputedStyle(el).fontWeight))
-    expect(weight).toBeGreaterThanOrEqual(600)
-  }
+  await expect(erp).not.toContainText(ITEM.status)
+  await expect(erp.locator('.ro-badge')).toHaveText('启用')
+  await expect(erp.locator('.ro-badge')).toHaveAttribute('title', `ERP 状态：${ITEM.status}`)
+  // 编码为标签样式；编码、名称加粗且字号加大
+  const code = await erp.locator('.mc-erp-code').evaluate(el => {
+    const cs = getComputedStyle(el)
+    return { w: Number(cs.fontWeight), size: parseFloat(cs.fontSize), border: cs.borderTopWidth, bg: cs.backgroundColor }
+  })
+  expect(code.w).toBeGreaterThanOrEqual(600)
+  expect(code.size).toBeGreaterThanOrEqual(15)
+  expect(code.border).not.toBe('0px')
+  expect(code.bg).not.toBe('rgba(0, 0, 0, 0)')
+  const name = await erp.locator('.mc-erp-name').evaluate(el => {
+    const cs = getComputedStyle(el)
+    return { w: Number(cs.fontWeight), size: parseFloat(cs.fontSize) }
+  })
+  expect(name.w).toBeGreaterThanOrEqual(600)
+  expect(name.size).toBeGreaterThanOrEqual(16)
 
   // 图片在左、人工维护在右，等高；价格在下方通栏
   expect(img.x).toBeLessThan(manual.x)
@@ -168,8 +183,12 @@ test('ERP 名称过长时单行省略、悬停可看全文', async ({ page }) =>
   const longName = '成品_桌类_德罗 (V1.1)手摇1.8米榉木白色_A_外贸专供_带储物抽屉与书架组合_加长加宽版本_二代'
   const card = await openCard(page, { ...ITEM, name: longName })
   await page.waitForTimeout(500)
-  const line = await card.locator('.mc-erp-line').boundingBox()
-  expect(line.height).toBeLessThan(40)
+  // 名称只占一行：元素高度不超过一行行高
+  const nameBox = await card.locator('.mc-erp-name').evaluate(el => ({
+    h: el.getBoundingClientRect().height, lh: parseFloat(getComputedStyle(el).lineHeight) || 0,
+    size: parseFloat(getComputedStyle(el).fontSize),
+  }))
+  expect(nameBox.h).toBeLessThan((nameBox.lh || nameBox.size * 1.5) + 1)
   await expect(card.locator('.mc-erp-name')).toHaveAttribute('title', longName)
 })
 
