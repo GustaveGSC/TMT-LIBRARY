@@ -15,7 +15,7 @@ import database.models.product.finished  # noqa: F401
 import database.models.product.resource  # noqa: F401
 from database.models.product.import_raw import ImportProductRaw
 from database.models.product.material import (
-    ErpGroupCategory, MaterialDisableKeyword, ProductMaterial,
+    ErpGroupCategory, MaterialDisableKeyword, MaterialImage, ProductMaterial,
 )
 from database.repository.account import UserRepository
 from routes.product.import_raw import _parse_excel
@@ -68,7 +68,13 @@ def test_material_routes_accept_codes_containing_slash():
     app.register_blueprint(material_bp, url_prefix='/api/material')
     routes = app.url_map.bind('localhost')
     assert routes.match('/api/material/items/A/B')[1] == {'code': 'A/B'}
-    assert routes.match('/api/material/items/A/B/image', method='POST')[1] == {'code': 'A/B'}
+    assert routes.match('/api/material/items/A/B/images', method='POST')[1] == {'code': 'A/B'}
+    assert routes.match('/api/material/items/A/B/images/7', method='PUT') == (
+        'material.replace_material_image', {'code': 'A/B', 'image_id': 7})
+    assert routes.match('/api/material/items/A/B/images/7', method='DELETE') == (
+        'material.delete_material_image', {'code': 'A/B', 'image_id': 7})
+    # 保存物料属性的 PUT 不能吞掉图片子路由
+    assert routes.match('/api/material/items/A/B', method='PUT')[0] == 'material.save_material'
 
 
 def test_material_join_keys_declare_mysql_0900_collation():
@@ -109,6 +115,7 @@ def material_app():
         ErpCodeRule.__table__,
         ErpGroupCategory.__table__,
         ProductMaterial.__table__,
+        MaterialImage.__table__,
         MaterialDisableKeyword.__table__,
     ]
     with app.app_context():
@@ -320,6 +327,33 @@ def test_material_type_priority_manual_over_rule_over_group(material_app):
         assert cleared['type_override'] == []
 
         assert not material_service.save_item('R1', {'type_override': ['bogus']}).success
+
+
+def test_material_images_add_replace_delete_keep_order(material_app):
+    with material_app.app_context():
+        db.session.add(ImportProductRaw(code='P1', name='件', group_code='G', group_name='组',
+                                        imported_at=now_cst()))
+        db.session.commit()
+
+        assert material_service.detail('P1').data['images'] == []
+        material_service.add_image('P1', 'u1', None, 'tester')
+        images = material_service.add_image('P1', 'u2', 'o2', 'tester').data
+        assert [i['url'] for i in images] == ['u1', 'u2']
+        assert [i['sort_order'] for i in images] == [0, 1]
+
+        first_id, second_id = images[0]['id'], images[1]['id']
+        replaced = material_service.replace_image('P1', first_id, 'u1b', 'o1b').data
+        assert [(i['id'], i['url'], i['orig_url']) for i in replaced] == [
+            (first_id, 'u1b', 'o1b'), (second_id, 'u2', 'o2'),
+        ]
+
+        remaining = material_service.delete_image('P1', first_id).data
+        assert [i['url'] for i in remaining] == ['u2']
+        assert material_service.detail('P1').data['images'] == remaining
+
+        # 图片 id 必须属于该物料，不能跨物料删改
+        assert not material_service.delete_image('OTHER', second_id).success
+        assert not material_service.add_image('NOPE', 'u', None, 'tester').success
 
 
 def test_material_route_rejects_invalid_sort_field(material_app, monkeypatch):

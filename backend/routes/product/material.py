@@ -1,5 +1,5 @@
 import os
-import time
+import uuid
 import hashlib
 
 from flask import Blueprint, g, request
@@ -188,9 +188,11 @@ def save_material(code):
     return material_service.save_item(code, request.get_json() or {}).to_response()
 
 
-@material_bp.post('/items/<path:code>/image')
-def upload_material_image(code):
-    body = request.get_json() or {}
+def _upload_material_image(code, body):
+    """解码 + 上传到 OSS，返回 (url, orig_url) 或出错时的 Response。
+
+    每张图用随机后缀命名：一个物料多张图，且"编辑"替换后 URL 变化，天然破浏览器缓存。
+    """
     try:
         image_bytes, ext = _decode_image_data_url((body.get('data_url') or '').strip(), '物料图片')
         original = (
@@ -198,33 +200,45 @@ def upload_material_image(code):
             if body.get('orig_data_url') else None
         )
     except UploadValidationError as exc:
-        return Result.fail(str(exc)).to_response(413 if '不能超过' in str(exc) else 400)
+        return None, None, Result.fail(str(exc)).to_response(413 if '不能超过' in str(exc) else 400)
     if not material_service.detail(code).success:
-        return Result.fail('物料不存在').to_response(404)
+        return None, None, Result.fail('物料不存在').to_response(404)
     try:
         bucket = get_bucket()
         base_url = os.getenv('OSS_BASE_URL', '').rstrip('/')
-        safe_code = hashlib.sha256(code.encode('utf-8')).hexdigest()
-        rel_path = f'materials/{safe_code}.{ext}'
-        bucket.put_object(f'tmt-library/{rel_path}', image_bytes)
-        url = f'{base_url}/{rel_path}'
+        stem = f"materials/{hashlib.sha256(code.encode('utf-8')).hexdigest()}_{uuid.uuid4().hex[:12]}"
+        bucket.put_object(f'tmt-library/{stem}.{ext}', image_bytes)
+        url = f'{base_url}/{stem}.{ext}'
         orig_url = None
         if original:
             orig_bytes, orig_ext = original
-            orig_path = f'materials/{safe_code}_orig.{orig_ext}'
-            bucket.put_object(f'tmt-library/{orig_path}', orig_bytes)
-            orig_url = f'{base_url}/{orig_path}'
-        timestamp = int(time.time())
-        payload = {'cover_image': url, 'img_updated_at': timestamp}
-        if orig_url:
-            payload['cover_image_original'] = orig_url
-        material_service.save_item(code, payload)
-        return Result.ok(data={
-            'url': url, 'orig_url': orig_url, 'img_updated_at': timestamp,
-            'cover_image': url, 'cover_image_original': orig_url,
-        }).to_response()
+            bucket.put_object(f'tmt-library/{stem}_orig.{orig_ext}', orig_bytes)
+            orig_url = f'{base_url}/{stem}_orig.{orig_ext}'
+        return url, orig_url, None
     except Exception:
-        return internal_error_response('物料图片上传失败', '上传失败')
+        return None, None, internal_error_response('物料图片上传失败', '上传失败')
+
+
+@material_bp.post('/items/<path:code>/images')
+def add_material_image(code):
+    url, orig_url, error = _upload_material_image(code, request.get_json() or {})
+    if error:
+        return error
+    username = (g.current_user or {}).get('username')
+    return material_service.add_image(code, url, orig_url, username).to_response()
+
+
+@material_bp.put('/items/<path:code>/images/<int:image_id>')
+def replace_material_image(code, image_id):
+    url, orig_url, error = _upload_material_image(code, request.get_json() or {})
+    if error:
+        return error
+    return material_service.replace_image(code, image_id, url, orig_url).to_response()
+
+
+@material_bp.delete('/items/<path:code>/images/<int:image_id>')
+def delete_material_image(code, image_id):
+    return material_service.delete_image(code, image_id).to_response()
 
 
 @material_cost_bp.get('/items/<path:code>/prices')

@@ -1,7 +1,8 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
 import { ref, computed, watch } from 'vue'
-import { WarningFilled, Picture, Upload, Delete } from '@element-plus/icons-vue'
+import { WarningFilled, Picture, Plus, Edit, Delete, ZoomIn } from '@element-plus/icons-vue'
+import MediaViewer from '@/components/common/MediaViewer.vue'
 import { pickFile } from '@/utils/download'
 import http from '@/api/http'
 import { usePermission } from '@/composables/usePermission'
@@ -54,8 +55,17 @@ function formatTypes(list) {
   return (list || []).map(k => typeLabel[k] || k).join(' / ') || '未分类'
 }
 
-// 新选的图片（base64）；空串表示未改动
-const newImage = ref('')
+// ── 图片（多张，存 material_image）────────────────────
+// 新增/编辑/删除都是**即时生效**的独立操作，不跟随底部「保存/取消」——
+// 图片要先传 OSS，放进表单草稿里等保存反而会在取消时留下孤儿文件。
+const images     = ref([])   // [{id, url, orig_url, sort_order}]
+const currentIdx = ref(0)
+const imgBusy    = ref(false)
+const viewerOpen = ref(false)
+const currentImage = computed(() => images.value[currentIdx.value] || null)
+const viewerItems = computed(() => images.value.map(img => ({
+  id: img.id, file_type: 'image', oss_url: img.orig_url || img.url, original_filename: '',
+})))
 
 // ── 价格（研发 BOM 成本数据）────────────────────────
 // 价格与研发部 BOM 共用同一份 cost_material_price，不是物料库独有的副本。
@@ -171,7 +181,8 @@ async function loadDetail() {
         remark:     res.data.remark     || '',
         type_override: [...(res.data.type_override || [])],
       }
-      newImage.value = ''
+      images.value = res.data.images || []
+      currentIdx.value = 0
       loadCost()
     } else {
       errorMsg.value = res.message || '加载失败'
@@ -188,16 +199,6 @@ async function handleSave() {
   saving.value   = true
   errorMsg.value = ''
   try {
-    // 有新图先上传，拿到 OSS URL 后随属性一起保存
-    if (newImage.value.startsWith('data:')) {
-      const up = await http.post(
-        `/api/material/items/${encodeURIComponent(props.code)}/image`,
-        { data_url: newImage.value },
-      )
-      if (!up.success) { errorMsg.value = up.message || '图片上传失败'; return }
-      detail.value = { ...detail.value, ...(up.data || {}) }
-      newImage.value = ''
-    }
     // 刻意不传 is_disabled：该列是「人工覆盖」，一旦传值就会覆盖导入数据的判定。
     // 停用状态只来源于导入，卡片无权修改。
     const payload = {
@@ -225,13 +226,13 @@ async function handleSave() {
   }
 }
 
-// ── 图片 ──────────────────────────────────────────
-async function chooseImage() {
+// ── 图片操作 ──────────────────────────────────────
+async function pickImageDataUrl() {
   const file = await pickFile('image/*')
-  if (!file) return
-  if (file.size > 5 * 1024 * 1024) { errorMsg.value = '图片不能超过 5MB'; return }
+  if (!file) return ''
+  if (file.size > 5 * 1024 * 1024) { errorMsg.value = '图片不能超过 5MB'; return '' }
   errorMsg.value = ''
-  newImage.value = await new Promise((resolve) => {
+  return new Promise((resolve) => {
     const fr = new FileReader()
     fr.onload = () => resolve(String(fr.result || ''))
     fr.onerror = () => resolve('')
@@ -239,15 +240,52 @@ async function chooseImage() {
   })
 }
 
-function clearNewImage() { newImage.value = '' }
+const imagesUrl = () => `/api/material/items/${encodeURIComponent(props.code)}/images`
 
-// 优先显示新选的图，其次是已保存的 OSS 图（带时间戳破缓存）
-const shownImage = computed(() => {
-  if (newImage.value) return newImage.value
-  const d = detail.value
-  if (!d?.cover_image) return ''
-  return d.img_updated_at ? `${d.cover_image}?t=${d.img_updated_at}` : d.cover_image
-})
+// 各操作后端都返回最新的完整图片列表，直接替换
+async function runImageOp(request, { selectLast = false } = {}) {
+  imgBusy.value = true
+  try {
+    const res = await request()
+    if (!res.success) { errorMsg.value = res.message || '图片操作失败'; return }
+    images.value = res.data || []
+    if (selectLast) currentIdx.value = images.value.length - 1
+    else if (currentIdx.value >= images.value.length) currentIdx.value = Math.max(0, images.value.length - 1)
+  } catch (e) {
+    errorMsg.value = e.message || '网络错误'
+  } finally {
+    imgBusy.value = false
+  }
+}
+
+async function addImage() {
+  const dataUrl = await pickImageDataUrl()
+  if (!dataUrl) return
+  await runImageOp(() => http.post(imagesUrl(), { data_url: dataUrl }), { selectLast: true })
+}
+
+async function replaceImage() {
+  const img = currentImage.value
+  if (!img) return
+  const dataUrl = await pickImageDataUrl()
+  if (!dataUrl) return
+  await runImageOp(() => http.put(`${imagesUrl()}/${img.id}`, { data_url: dataUrl }))
+}
+
+async function deleteImage() {
+  const img = currentImage.value
+  if (!img) return
+  const { ElMessageBox } = await import('element-plus')
+  try {
+    await ElMessageBox.confirm('确认删除这张图片？删除后不可恢复。', '删除图片',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' })
+  } catch { return }
+  await runImageOp(() => http.delete(`${imagesUrl()}/${img.id}`))
+}
+
+function viewImage() {
+  if (currentImage.value) viewerOpen.value = true
+}
 
 function close() { emit('update:visible', false) }
 
@@ -284,22 +322,46 @@ watch(() => props.visible, v => {
        <div class="mc-scroll">
         <div class="mc-top">
         <div class="mc-top-image">
-        <!-- 图片 -->
-        <div class="mc-image">
-          <img v-if="shownImage" :src="shownImage" alt="" />
+        <!-- 图片：悬停出现遮罩 + 圆形图标按键（新增/编辑/删除/查看）；无图时直接显示新增 -->
+        <div class="mc-image" :class="{ busy: imgBusy }">
+          <template v-if="currentImage">
+            <img :src="currentImage.url" alt="" />
+            <div class="mc-img-mask">
+              <button v-if="canEditMaterial" class="mc-round-btn" title="新增图片" :disabled="imgBusy" @click="addImage">
+                <el-icon><Plus /></el-icon>
+              </button>
+              <button v-if="canEditMaterial" class="mc-round-btn" title="编辑（替换当前图片）" :disabled="imgBusy" @click="replaceImage">
+                <el-icon><Edit /></el-icon>
+              </button>
+              <button v-if="canEditMaterial" class="mc-round-btn danger" title="删除当前图片" :disabled="imgBusy" @click="deleteImage">
+                <el-icon><Delete /></el-icon>
+              </button>
+              <button class="mc-round-btn" title="查看大图" @click="viewImage">
+                <el-icon><ZoomIn /></el-icon>
+              </button>
+            </div>
+            <span v-if="images.length > 1" class="mc-img-count">{{ currentIdx + 1 }} / {{ images.length }}</span>
+          </template>
           <div v-else class="mc-image-empty">
-            <el-icon><Picture /></el-icon>
-            <span>暂无图片</span>
+            <button v-if="canEditMaterial" class="mc-round-btn solo" title="新增图片" :disabled="imgBusy" @click="addImage">
+              <el-icon><Plus /></el-icon>
+            </button>
+            <template v-else>
+              <el-icon><Picture /></el-icon>
+              <span>暂无图片</span>
+            </template>
           </div>
+          <div v-if="imgBusy" class="mc-img-busy">处理中...</div>
         </div>
-        <div v-if="canEditMaterial" class="mc-image-bar">
-          <button class="mc-img-btn" @click="chooseImage">
-            <el-icon><Upload /></el-icon><span>{{ shownImage ? '更换图片' : '选择图片' }}</span>
-          </button>
-          <button v-if="newImage" class="mc-img-btn danger" @click="clearNewImage">
-            <el-icon><Delete /></el-icon><span>撤销选图</span>
-          </button>
-          <span v-if="newImage" class="mc-img-tip">保存后才会上传</span>
+        <!-- 多张时的缩略图条，点击切换当前图 -->
+        <div v-if="images.length > 1" class="mc-thumbs">
+          <button
+            v-for="(img, i) in images"
+            :key="img.id"
+            class="mc-thumb"
+            :class="{ active: i === currentIdx }"
+            @click="currentIdx = i"
+          ><img :src="img.url" alt="" /></button>
         </div>
         </div><!-- /mc-top-image -->
 
@@ -528,6 +590,8 @@ watch(() => props.visible, v => {
       </template>
     </div>
   </el-dialog>
+
+  <MediaViewer v-model="viewerOpen" :items="viewerItems" :initial-index="currentIdx" />
 </template>
 
 <style scoped>
@@ -614,17 +678,6 @@ watch(() => props.visible, v => {
 }
 .mc-textarea:focus { border-color: var(--accent); }
 
-.mc-image-bar { display: flex; align-items: center; gap: 8px; margin: -8px 0 16px; }
-.mc-img-btn {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 4px 12px; border-radius: 6px;
-  border: 1px solid var(--border); background: var(--bg-card);
-  color: var(--text-primary); font-size: 12px; font-family: inherit; cursor: pointer;
-  transition: all 0.15s;
-}
-.mc-img-btn:hover { border-color: var(--accent); color: var(--accent); }
-.mc-img-btn.danger:hover { border-color: #d05a3c; color: #d05a3c; }
-.mc-img-tip { font-size: 11px; color: var(--accent); }
 
 /* 只读的停用角标——停用状态来源于导入数据，卡片不提供修改入口 */
 .ro-badge {
@@ -659,7 +712,52 @@ watch(() => props.visible, v => {
 .mc-top { display: flex; align-items: stretch; gap: 16px; margin-bottom: 18px; }
 .mc-top-image { width: 40%; flex-shrink: 0; display: flex; flex-direction: column; }
 .mc-top-image .mc-image { flex: 1; min-height: 180px; margin-bottom: 0; }
-.mc-top-image .mc-image-bar { margin: 8px 0 0; }
+
+/* 图片悬停遮罩 + 圆形图标按键 */
+.mc-image { position: relative; }
+.mc-img-mask {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  background: rgba(30,24,18,0.45);
+  opacity: 0; transition: opacity 0.18s;
+}
+.mc-image:hover .mc-img-mask { opacity: 1; }
+.mc-round-btn {
+  width: 36px; height: 36px; border-radius: 50%;
+  border: none; background: rgba(255,255,255,0.92); color: #3a3028;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 16px; cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  transition: transform 0.15s, background 0.15s, color 0.15s;
+}
+.mc-round-btn:hover:not(:disabled) { transform: scale(1.08); background: #fff; color: var(--accent); }
+.mc-round-btn.danger:hover:not(:disabled) { color: #d05a3c; }
+.mc-round-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+/* 无图时的新增按键：直接放在图片区域中间 */
+.mc-round-btn.solo {
+  width: 48px; height: 48px; font-size: 22px;
+  background: var(--bg-card); color: var(--accent);
+  border: 1.5px dashed var(--accent); box-shadow: none;
+}
+.mc-img-count {
+  position: absolute; right: 8px; bottom: 8px;
+  font-size: 11px; color: #fff; background: rgba(0,0,0,0.45);
+  border-radius: 10px; padding: 1px 8px; pointer-events: none;
+}
+.mc-img-busy {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,0.6); color: #3a3028; font-size: 12px;
+}
+.mc-thumbs { display: flex; gap: 6px; margin-top: 8px; overflow-x: auto; padding-bottom: 2px; }
+.mc-thumbs::-webkit-scrollbar { height: 4px; }
+.mc-thumbs::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.mc-thumb {
+  width: 44px; height: 44px; flex-shrink: 0; padding: 0;
+  border: 1.5px solid var(--border); border-radius: 6px; background: var(--bg);
+  overflow: hidden; cursor: pointer;
+}
+.mc-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.mc-thumb.active { border-color: var(--accent); }
 .mc-top .mc-erp { flex: 1; min-width: 0; margin-bottom: 0; }
 
 .mc-grid3 {

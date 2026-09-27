@@ -3,7 +3,7 @@ from sqlalchemy import case, false, func, or_
 from database.base import db
 from database.models.product.import_raw import ImportProductRaw
 from database.models.product.material import (
-    ErpGroupCategory, MaterialDisableKeyword, ProductMaterial,
+    ErpGroupCategory, MaterialDisableKeyword, MaterialImage, ProductMaterial,
 )
 from database.models.rd.cost import CostBomNode, CostMaterialPrice
 
@@ -99,6 +99,43 @@ class MaterialRepository:
             row.code: row for row in ProductMaterial.query
             .filter(ProductMaterial.code.in_(codes)).all()
         }
+
+    @staticmethod
+    def images_for_code(code):
+        return (
+            MaterialImage.query.filter_by(code=code)
+            .order_by(MaterialImage.sort_order.asc(), MaterialImage.id.asc()).all()
+        )
+
+    @staticmethod
+    def image(code, image_id):
+        return MaterialImage.query.filter_by(code=code, id=image_id).first()
+
+    @staticmethod
+    def add_image(code, url, orig_url, created_by):
+        last = (
+            MaterialImage.query.filter_by(code=code)
+            .order_by(MaterialImage.sort_order.desc()).first()
+        )
+        row = MaterialImage(
+            code=code, url=url, orig_url=orig_url, created_by=created_by,
+            sort_order=(last.sort_order + 1) if last else 0,
+        )
+        db.session.add(row)
+        db.session.commit()
+        return row
+
+    @staticmethod
+    def replace_image(row, url, orig_url):
+        row.url = url
+        row.orig_url = orig_url
+        db.session.commit()
+        return row
+
+    @staticmethod
+    def delete_image(row):
+        db.session.delete(row)
+        db.session.commit()
 
     @staticmethod
     def type_overrides():

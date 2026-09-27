@@ -50,6 +50,7 @@ class ProductMaterial(db.Model):
     short_name = db.Column(db.String(255), nullable=True)
     category = db.Column(db.String(100), nullable=True)
     spec = db.Column(db.String(512), nullable=True)
+    # cover_image/cover_image_original/img_updated_at：2026-09-27 起停用，图片改存 material_image（支持多张）
     cover_image = db.Column(db.String(500), nullable=True)
     cover_image_original = db.Column(db.String(500), nullable=True)
     img_updated_at = db.Column(db.Integer, nullable=True)
@@ -65,10 +66,31 @@ class ProductMaterial(db.Model):
     def to_dict(self):
         return {
             'code': self.code, 'short_name': self.short_name, 'category': self.category,
-            'spec': self.spec, 'cover_image': self.cover_image,
-            'cover_image_original': self.cover_image_original,
-            'img_updated_at': self.img_updated_at, 'remark': self.remark,
+            'spec': self.spec, 'remark': self.remark,
             'type_override': [t for t in (self.type_override or '').split(',') if t],
+        }
+
+
+class MaterialImage(db.Model):
+    """物料图片，一个物料可有多张，按 sort_order 升序展示，第一张即封面。
+
+    2026-09-27 起取代 product_material.cover_image/cover_image_original/img_updated_at
+    （那三列保留在库里但不再读写，历史数据已由迁移 20260927_02 搬进本表）。
+    """
+    __tablename__ = 'material_image'
+    id         = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    code       = db.Column(_join_key_string(255), nullable=False, index=True)
+    url        = db.Column(db.String(500), nullable=False)
+    orig_url   = db.Column(db.String(500), nullable=True)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    created_by = db.Column(db.String(100), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=now_cst)
+    updated_at = db.Column(db.DateTime, nullable=False, default=now_cst, onupdate=now_cst)
+
+    def to_dict(self):
+        return {
+            'id': self.id, 'url': self.url, 'orig_url': self.orig_url,
+            'sort_order': self.sort_order,
         }
 
 

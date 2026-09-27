@@ -228,6 +228,7 @@ class MaterialService:
         )
         material = MaterialRepository.materials_for_codes([code]).get(code)
         data = self._serialize(raw, cats, material, source)
+        data['images'] = [row.to_dict() for row in MaterialRepository.images_for_code(code)]
         # 卡片需要同时看到「如果不单独指定，规则会判成什么」，方便决定要不要指定
         if source == SOURCE_MANUAL:
             data['rule_categories'], data['rule_source'] = self._classify(
@@ -303,8 +304,8 @@ class MaterialService:
         raw = MaterialRepository.raw_by_code(code)
         if not raw:
             return Result.fail('物料不存在')
-        allowed = ('short_name', 'category', 'spec', 'remark',
-                   'cover_image', 'cover_image_original', 'img_updated_at')
+        # 图片改走 material_image（add_image/replace_image/delete_image），这里不再接收封面字段
+        allowed = ('short_name', 'category', 'spec', 'remark')
         values = {key: body[key] for key in allowed if key in body}
         for key in ('short_name', 'category', 'spec', 'remark'):
             if key in values:
@@ -324,10 +325,33 @@ class MaterialService:
             self.invalidate_override_cache()
         return self.detail(code)
 
+    def add_image(self, code, url, orig_url, created_by):
+        if not MaterialRepository.raw_by_code(code):
+            return Result.fail('物料不存在')
+        MaterialRepository.add_image(code, url, orig_url, created_by)
+        return self.images(code)
+
+    def replace_image(self, code, image_id, url, orig_url):
+        row = MaterialRepository.image(code, image_id)
+        if not row:
+            return Result.fail('图片不存在')
+        MaterialRepository.replace_image(row, url, orig_url)
+        return self.images(code)
+
+    def delete_image(self, code, image_id):
+        row = MaterialRepository.image(code, image_id)
+        if not row:
+            return Result.fail('图片不存在')
+        MaterialRepository.delete_image(row)
+        return self.images(code)
+
+    @staticmethod
+    def images(code):
+        return Result.ok(data=[row.to_dict() for row in MaterialRepository.images_for_code(code)])
+
     def _serialize(self, raw, categories, material, source=None):
         manual = material.to_dict() if material else {
             'code': raw.code, 'short_name': None, 'category': None, 'spec': raw.spec,
-            'cover_image': None, 'cover_image_original': None, 'img_updated_at': None,
             'remark': None, 'type_override': [],
         }
         if manual.get('spec') is None:

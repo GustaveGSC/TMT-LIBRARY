@@ -14,7 +14,58 @@ const ITEM = {
   status: '已发布', is_disabled: false, remark: '', cover_image: null,
   latest_price: 0.12, latest_price_source: 'manual', has_cost_node: true,
   can_add_price: true, cost_notes: '',
+  images: [],
 }
+// 1x1 PNG，避免 mock 场景下图片加载失败撑不开
+const PX = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII='
+
+async function openCard(page, item) {
+  await page.addInitScript((u) => {
+    localStorage.setItem('user', JSON.stringify(u))
+    localStorage.setItem('login_time', String(Date.now()))
+  }, USER)
+  await page.route(url => new URL(url).pathname.startsWith('/api/'), r =>
+    r.request().resourceType() === 'script' ? r.continue() : r.fulfill({ json: OK([]) }))
+  await page.route('**/api/account/me', r => r.fulfill({ json: OK(USER) }))
+  await page.route('**/api/material/items?*', r => r.fulfill({ json: OK({ items: [item], total: 1, page: 1, page_size: 50 }) }))
+  await page.route('**/api/material/items/14ST02001-A01', r => r.fulfill({ json: OK(item) }))
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/#/material')
+  await page.locator('.code-link', { hasText: '14ST02001-A01' }).click()
+  await expect(page.locator('.material-card .mc-erp')).toBeVisible()
+  return page.locator('.material-card')
+}
+
+test('无图时图片区域直接显示圆形新增按键', async ({ page }) => {
+  const card = await openCard(page, ITEM)
+  const solo = card.locator('.mc-image-empty .mc-round-btn.solo')
+  await expect(solo).toBeVisible()
+  await card.locator('.mc-top').screenshot({ path: 'test-results/material-card-empty.png' })
+  await expect(card.locator('.mc-img-mask')).toHaveCount(0)
+})
+
+test('多图：悬停出现 新增/编辑/删除/查看 圆形按键，缩略图可切换', async ({ page }) => {
+  const card = await openCard(page, { ...ITEM, images: [
+    { id: 1, url: PX, orig_url: null, sort_order: 0 },
+    { id: 2, url: PX, orig_url: null, sort_order: 1 },
+  ] })
+  const mask = card.locator('.mc-img-mask')
+  await expect(mask).toHaveCSS('opacity', '0')
+  await card.locator('.mc-image').hover()
+  await expect(mask).toHaveCSS('opacity', '1')
+  await page.locator('.el-dialog').screenshot({ path: 'test-results/material-card-hover.png' })
+  const titles = await mask.locator('.mc-round-btn').evaluateAll(els => els.map(e => e.title))
+  expect(titles).toEqual(['新增图片', '编辑（替换当前图片）', '删除当前图片', '查看大图'])
+  const box = await mask.locator('.mc-round-btn').first().boundingBox()
+  expect(Math.abs(box.width - box.height)).toBeLessThan(1)   // 圆形按键
+  await expect(card.locator('.mc-img-count')).toHaveText('1 / 2')
+  await card.locator('.mc-thumb').nth(1).click()
+  await expect(card.locator('.mc-img-count')).toHaveText('2 / 2')
+  await card.locator('.mc-image').hover()
+  await mask.locator('.mc-round-btn[title="查看大图"]').click()
+  await expect(page.locator('.viewer-media')).toBeVisible()
+  await page.locator('.material-card').page().keyboard.press('Escape')
+})
 
 test('物料卡片按 图片|ERP / 人工维护 / 价格 排版', async ({ page }) => {
   await page.addInitScript((u) => {
@@ -36,6 +87,7 @@ test('物料卡片按 图片|ERP / 人工维护 / 价格 排版', async ({ page 
   await page.locator('.code-link', { hasText: '14ST02001-A01' }).click()
   const card = page.locator('.material-card')
   await expect(card.locator('.mc-erp')).toBeVisible()
+  await page.waitForTimeout(500)   // 等 el-dialog 打开动画结束再量坐标
 
   const img = await card.locator('.mc-top-image').boundingBox()
   const erp = await card.locator('.mc-erp').boundingBox()

@@ -136,7 +136,9 @@ PUT  /api/material/group-categories/:group_code
 GET  /api/material/items
 GET  /api/material/items/:code
 PUT  /api/material/items/:code
-POST /api/material/items/:code/image
+POST /api/material/items/:code/images
+PUT  /api/material/items/:code/images/:image_id
+DELETE /api/material/items/:code/images/:image_id
 GET  /api/material/disable-keywords
 POST /api/material/disable-keywords
 PUT  /api/material/disable-keywords/:id
@@ -195,9 +197,7 @@ DELETE /api/material/suppliers/:id
   首次保存时按需创建 `product_material`。
 - 物料项返回只读 `is_disabled`，仅由 ERP `status=失效` 或启用的原始品名关键词判定；
   不支持人工覆盖。`is_disabled` 查询参数仍可用于用户主动筛选停用/启用物料。
-- `POST items/:code/image` 沿用产品封面图 JSON base64 契约：
-  `{data_url,orig_data_url?}`；仅 PNG/JPEG/WebP，单张解码后最大 10MB。成功 data：
-  `{url,orig_url,img_updated_at,cover_image,cover_image_original}`。
+- 物料图片（2026-09-27 起支持多张，存 `material_image`）：`POST items/:code/images` 新增、`PUT items/:code/images/:image_id` 替换（编辑）、`DELETE items/:code/images/:image_id` 删除，均需 `material:edit`，三者都返回该物料最新完整图片列表 `[{id,url,orig_url,sort_order}]`（按 sort_order 升序，第一张为封面）。请求体沿用产品封面图 JSON base64 契约 `{data_url,orig_data_url?}`；仅 PNG/JPEG/WebP，单张解码后最大 10MB。OSS 文件名带随机后缀（替换后 URL 变化即破缓存）；删除只删库记录，不删 OSS 文件。`GET items/:code` 返回 `images` 数组；旧的 `cover_image/cover_image_original/img_updated_at` 不再返回，旧单图接口 `POST items/:code/image` 已移除。
 - 停用关键词写接口字段为 `{keyword,is_disabled?,remark?}`；`is_disabled=true` 表示该规则停用。
   `GET disable-preview` 返回 `{status_inactive,keyword_hit,union}`，为 ERP 状态、启用关键词及并集
   的实时命中数；关键词表为空时只按 ERP 状态判定。

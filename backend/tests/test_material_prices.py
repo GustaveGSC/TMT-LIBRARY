@@ -12,7 +12,7 @@ import database.models.product.resource  # noqa: F401
 from database.models.product.erp_code_rules import ErpCodeRule
 from database.models.product.import_raw import ImportProductRaw
 from database.models.product.material import (
-    ErpGroupCategory, MaterialDisableKeyword, ProductMaterial,
+    ErpGroupCategory, MaterialDisableKeyword, MaterialImage, ProductMaterial,
 )
 from database.models.product.material_supplier import MaterialSupplier
 from database.models.rd.cost import (
@@ -40,7 +40,7 @@ def price_app(monkeypatch):
     monkeypatch.setattr(UserRepository, 'get_auth_state', lambda _id: (True, 0))
     tables = [
         ImportProductRaw.__table__, ErpCodeRule.__table__, ErpGroupCategory.__table__,
-        ProductMaterial.__table__, MaterialDisableKeyword.__table__,
+        ProductMaterial.__table__, MaterialImage.__table__, MaterialDisableKeyword.__table__,
         MaterialSupplier.__table__,
         CostSnapshot.__table__, CostSnapshotSku.__table__, CostBomNode.__table__,
         CostBomLine.__table__,

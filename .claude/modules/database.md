@@ -261,6 +261,12 @@ product_material
   # is_disabled 为保留列，当前运行时不读写；停用只读状态由 ERP status/关键词实时判定
   # code 在 MySQL 显式使用 utf8mb4_0900_ai_ci，与 import_product_raw 对齐
 
+material_image
+  id, code(INDEX, utf8mb4_0900_ai_ci), url, orig_url, sort_order, created_by, created_at, updated_at
+  # 物料多图（2026-09-27，迁移 20260927_02）；按 sort_order 升序，第一张即封面
+  # 迁移时把 product_material.cover_image 历史单图（428 条）搬进来作为第一张；
+  # product_material.cover_image/cover_image_original/img_updated_at 自此停用（列保留，便于回退）
+
 material_disable_keyword
   id, keyword(VARCHAR 64 UNIQUE), is_disabled, remark, created_at
   # 名称停用规则由界面维护；迁移预置“停用”“作废”，可增删改/停用
