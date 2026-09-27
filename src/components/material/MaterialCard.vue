@@ -332,6 +332,23 @@ watch(() => props.visible, v => {
        <!-- 排版（用户 2026-09-27 指定）：第一行 图片 | ERP 信息；
             第二行 人工维护（通栏）；第三行 价格（通栏，仅 material:price 可见） -->
        <div class="mc-scroll">
+        <!-- ERP 信息（只读）：放在最上方，不做卡片样式，只显示编码、名称、状态。
+             名称固定单行（超长省略，悬停看全文），保证卡片高度不随名称长短变化 -->
+        <div class="mc-erp-line">
+          <span class="mc-erp-item">
+            <span class="mc-erp-label">编码</span><b class="mono mc-erp-code">{{ detail.code }}</b>
+          </span>
+          <span class="mc-erp-item mc-erp-name-wrap">
+            <span class="mc-erp-label">名称</span><b class="mc-erp-name" :title="detail.name">{{ detail.name }}</b>
+          </span>
+          <span class="mc-erp-item">
+            <span class="mc-erp-label">状态</span>
+            <span class="status-text">{{ detail.status || '—' }}</span>
+            <span v-if="detail.is_disabled" class="ro-badge off">已停用</span>
+            <span v-else class="ro-badge on">启用</span>
+          </span>
+        </div>
+
         <div class="mc-top">
         <div class="mc-top-image">
         <!-- 图片：悬停出现遮罩 + 圆形图标按键（新增/编辑/删除/查看）；无图时直接显示新增 -->
@@ -432,25 +449,6 @@ watch(() => props.visible, v => {
           </div>
         </div>
         </div><!-- /mc-top -->
-
-        <!-- ERP 权威字段：只读。通栏两列，内容少所以压成一块紧凑的区域 -->
-        <div class="mc-section mc-erp">
-          <div class="mc-section-title">ERP 信息（只读）</div>
-          <div class="mc-erp-grid">
-            <div class="mc-field"><label>编码</label><span class="mono">{{ detail.code }}</span></div>
-            <div class="mc-field">
-              <label>分组</label>
-              <span>{{ detail.group_code }} · {{ detail.group_name || '—' }}</span>
-            </div>
-            <div class="mc-field"><label>名称</label><span>{{ detail.name }}</span></div>
-            <div class="mc-field">
-              <label>状态</label>
-              <span class="status-text">{{ detail.status || '—' }}</span>
-              <span v-if="detail.is_disabled" class="ro-badge off">已停用</span>
-              <span v-else class="ro-badge on">启用</span>
-            </div>
-          </div>
-        </div>
 
         <!-- ── 价格（仅 rd:view 可见）────────────────────────
              与研发部 BOM 共用同一份 cost_material_price，不是副本。
@@ -791,12 +789,20 @@ watch(() => props.visible, v => {
 .mc-manual .mc-field-remark { flex: 1; min-height: 0; margin-bottom: 0; }
 .mc-manual .mc-field-remark .mc-textarea { height: 100%; min-height: 48px; resize: none; }
 
-/* ERP 信息通栏：两列网格 */
-.mc-erp-grid {
-  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px 24px;
+/* ERP 信息行：卡片最上方，无边框无底色 */
+.mc-erp-line {
+  display: flex; align-items: center; gap: 24px;
+  padding: 2px 2px 14px; min-width: 0;
 }
-.mc-erp-grid .mc-field { margin-bottom: 0; }
+.mc-erp-item { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.mc-erp-name-wrap { flex: 1 1 auto; min-width: 0; }
+.mc-erp-label { font-size: 12px; color: #6b5e4e; flex-shrink: 0; }
+.mc-erp-code { font-size: 14px; font-weight: 700; color: var(--text-primary); }
+.mc-erp-name {
+  font-size: 14px; font-weight: 700; color: var(--text-primary);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mc-erp-item .status-text { font-size: 13px; }
 
 /* ── 价格区 ───────────────────────────────────── */
 .mc-section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }

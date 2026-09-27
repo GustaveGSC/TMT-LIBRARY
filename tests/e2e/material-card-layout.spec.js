@@ -32,7 +32,7 @@ async function openCard(page, item) {
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto('/#/material')
   await page.locator('.code-link', { hasText: '14ST02001-A01' }).click()
-  await expect(page.locator('.material-card .mc-erp')).toBeVisible()
+  await expect(page.locator('.material-card .mc-erp-line')).toBeVisible()
   return page.locator('.material-card')
 }
 
@@ -116,39 +116,61 @@ for (const n of [0, 1, 12]) {
   })
 }
 
-test('物料卡片按 图片|人工维护 / ERP 信息 / 价格 排版，字段对齐', async ({ page }) => {
-  await page.route('**/api/material/items/14ST02001-A01/prices', r => r.fulfill({ json: OK([
-    { id: 1, price_date: '2026-09-01', unit_price: 0.12, supplier_name: '供应商A', source: 'manual' },
-  ]) }))
+test('物料卡片：ERP 信息在最上方无卡片，图片|人工维护，价格通栏，字段对齐', async ({ page }) => {
   const card = await openCard(page, { ...ITEM, name: '成品_桌类_德罗 (V1.1)手摇1.8米榉木白色_A' })
   await page.waitForTimeout(500)   // 等 el-dialog 打开动画结束再量坐标
 
+  const erp = card.locator('.mc-erp-line')
+  const erpBox = await erp.boundingBox()
   const img = await card.locator('.mc-top-image').boundingBox()
   const manual = await card.locator('.mc-manual').boundingBox()
-  const erp = await card.locator('.mc-erp').boundingBox()
   const price = await card.locator('.mc-scroll > .mc-section').last().boundingBox()
 
-  // 第一行：图片在左、人工维护在右，上下边都对齐（等高）
+  // ERP 信息在图片那一行上方；不是卡片（无边框、无底色、无分区标题）
+  expect(erpBox.y + erpBox.height).toBeLessThanOrEqual(img.y + 1)
+  const style = await erp.evaluate(el => {
+    const cs = getComputedStyle(el)
+    return { border: cs.borderTopWidth, bg: cs.backgroundColor }
+  })
+  expect(style.border).toBe('0px')
+  expect(style.bg).toBe('rgba(0, 0, 0, 0)')
+  await expect(erp.locator('.mc-section-title')).toHaveCount(0)
+  // 只显示编码、名称、状态；编码与名称加粗
+  await expect(erp.locator('.mc-erp-label')).toHaveText(['编码', '名称', '状态'])
+  await expect(erp).not.toContainText('分组')
+  for (const sel of ['.mc-erp-code', '.mc-erp-name']) {
+    const weight = await erp.locator(sel).evaluate(el => Number(getComputedStyle(el).fontWeight))
+    expect(weight).toBeGreaterThanOrEqual(600)
+  }
+
+  // 图片在左、人工维护在右，等高；价格在下方通栏
   expect(img.x).toBeLessThan(manual.x)
   expect(Math.abs(img.y - manual.y)).toBeLessThan(1)
   expect(Math.abs(img.height - manual.height)).toBeLessThan(1)
-  // ERP 信息在第一行下方通栏；价格在 ERP 下方通栏
   const rowWidth = manual.x + manual.width - img.x
-  expect(erp.y).toBeGreaterThan(img.y + img.height - 1)
-  expect(Math.abs(erp.width - rowWidth)).toBeLessThan(1)
-  expect(price.y).toBeGreaterThan(erp.y + erp.height - 1)
+  expect(price.y).toBeGreaterThan(img.y + img.height - 1)
   expect(Math.abs(price.width - rowWidth)).toBeLessThan(1)
 
-  // 对齐：人工维护里所有控件左边缘在同一条竖线上；ERP 标签与人工维护标签同宽
+  // 人工维护里所有控件左边缘在同一条竖线上，标签同宽
   const controlLefts = await card.locator(
     '.mc-manual .mt-box, .mc-manual .mc-input, .mc-manual .mc-textarea',
   ).evaluateAll(els => els.map(e => Math.round(e.getBoundingClientRect().left)))
   expect(new Set(controlLefts).size).toBe(1)
-  const labelWidths = await card.locator('.mc-manual .mc-field > label, .mc-erp .mc-field > label')
+  const labelWidths = await card.locator('.mc-manual .mc-field > label')
     .evaluateAll(els => els.map(e => Math.round(e.getBoundingClientRect().width)))
   expect(new Set(labelWidths).size).toBe(1)
 
   await page.locator('.el-dialog').screenshot({ path: 'test-results/material-card-layout.png' })
+})
+
+// 名称很长时单行省略，不能把卡片撑高
+test('ERP 名称过长时单行省略、悬停可看全文', async ({ page }) => {
+  const longName = '成品_桌类_德罗 (V1.1)手摇1.8米榉木白色_A_外贸专供_带储物抽屉与书架组合_加长加宽版本_二代'
+  const card = await openCard(page, { ...ITEM, name: longName })
+  await page.waitForTimeout(500)
+  const line = await card.locator('.mc-erp-line').boundingBox()
+  expect(line.height).toBeLessThan(40)
+  await expect(card.locator('.mc-erp-name')).toHaveAttribute('title', longName)
 })
 
 // 单独指定物料类型时提示最长，也不能把右侧区域撑高
