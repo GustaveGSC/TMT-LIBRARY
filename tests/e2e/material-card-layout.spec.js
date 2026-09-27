@@ -305,3 +305,16 @@ test('物料类型选择器直接显示当前生效类型，改回规则结果�
   await expect(card.locator('.mc-dirty')).toHaveCount(0)
   await card.locator('.mc-manual').screenshot({ path: 'test-results/material-card-types.png' })
 })
+
+// 物料库顶部 tab：物料表 → 物料BOM（占位）→ 售后BOM
+test('物料库 tab 名称与顺序', async ({ page }) => {
+  await openCard(page, ITEM)
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.material-card')).toBeHidden()
+  const labels = await page.locator('.nav-item').allInnerTexts()
+  expect(labels.slice(0, 3).map(t => t.trim())).toEqual(['物料表', '物料BOM', '售后BOM'])
+  await page.locator('.nav-item', { hasText: '物料BOM' }).click()
+  await expect(page.locator('.placeholder')).toContainText('功能建设中')
+  await expect(page.locator('.nav-item.active')).toHaveText('物料BOM')
+  await page.screenshot({ path: 'test-results/material-tabs.png' })
+})

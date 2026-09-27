@@ -3,7 +3,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowLeft, HomeFilled } from '@element-plus/icons-vue'
-import { PhListDashes, PhBarcode, PhPackage, PhUploadSimple, PhTruck } from '@phosphor-icons/vue'
+import { PhListDashes, PhBarcode, PhPackage, PhUploadSimple, PhTruck, PhTreeStructure } from '@phosphor-icons/vue'
 import WindowControls from '@/components/common/WindowControls.vue'
 import AppBottomBar from '@/components/common/AppBottomBar.vue'
 import MaterialItemsPanel from '@/components/material/MaterialItemsPanel.vue'
@@ -24,15 +24,16 @@ const activeTab = ref('items')
 const ruleTab   = ref('group')   // group 分组默认类型 / prefix 编码前缀规则
 
 // 已挂载过的 tab，避免切走后重新拉数据；与产品库 mountedTabs 的做法一致
-const mountedTabs = ref({ items: true, rules: false, combos: false, import: false, suppliers: false })
+const mountedTabs = ref({ items: true, bom: false, rules: false, combos: false, import: false, suppliers: false })
 
 // ── Tab 定义 ──────────────────────────────────────
 // 注意：usePermission 返回的是普通布尔值，不是 ref，不能写 .value
 // 导入数据这个 tab 走的是产品库的 BOM/成本导入接口（/api/product/import，挂在 product_bp 上，
 // 后端仍按 product:edit 鉴权，不是物料专属功能，不能改成 material:edit，否则前后端权限对不上
 const tabs = [
-  { key: 'items',  label: '物料清单',     icon: PhListDashes },
-  { key: 'combos', label: '售后物料组合', icon: PhPackage },
+  { key: 'items',  label: '物料表',     icon: PhListDashes },
+  { key: 'bom',    label: '物料BOM',    icon: PhTreeStructure },
+  { key: 'combos', label: '售后BOM',    icon: PhPackage },
   // 供应商是成本域数据，与价格同级，仅 material:price 可见
   ...(canMaterialPrice ? [{ key: 'suppliers', label: '供应商', icon: PhTruck }] : []),
   { key: 'rules',  label: '编码规则',     icon: PhBarcode },
@@ -93,12 +94,21 @@ function handleHome() {
     <!-- ── 主内容区 ────────────────────────────── -->
     <main class="main-content">
 
-      <!-- 物料清单 -->
+      <!-- 物料表 -->
       <div v-if="mountedTabs.items" v-show="activeTab === 'items'" class="tab-panel">
         <MaterialItemsPanel />
       </div>
 
-      <!-- 售后物料组合 -->
+      <!-- 物料BOM：功能待定，先放占位 -->
+      <div v-if="mountedTabs.bom" v-show="activeTab === 'bom'" class="tab-panel">
+        <div class="placeholder">
+          <PhTreeStructure :size="40" weight="duotone" />
+          <div class="placeholder-title">物料BOM</div>
+          <div class="placeholder-desc">功能建设中</div>
+        </div>
+      </div>
+
+      <!-- 售后BOM（售后物料组合） -->
       <div v-if="mountedTabs.combos" v-show="activeTab === 'combos'" class="tab-panel">
         <MaterialComboPanel />
       </div>
@@ -183,6 +193,15 @@ function handleHome() {
   display: flex; flex-direction: column;
 }
 .tab-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+/* ── 占位页 ───────────────────────────────────── */
+.placeholder {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
+  color: var(--text-muted);
+}
+.placeholder-title { font-size: 15px; font-weight: 600; color: var(--text-primary); }
+.placeholder-desc { font-size: 13px; }
 
 /* ── 子 tab ───────────────────────────────────── */
 .sub-tabs { display: flex; gap: 6px; margin-bottom: 12px; flex-shrink: 0; }

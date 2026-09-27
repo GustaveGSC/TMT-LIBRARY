@@ -229,7 +229,7 @@ DELETE /api/material/suppliers/:id
   - POST 接收 `{name,contact?,remark?}`，PATCH 可修改这三个字段；
   - DELETE 有价格引用且未传 `force=1` 时返回 400，并带 `{price_count}`；强制删除只将价格
     `supplier_id` 置空，不删除价格记录或历史 `supplier_name`。
-- 售后物料组合接口：GET 需要 `product:view`，POST/PUT/DELETE 需要 `product:edit`。
+- 售后物料组合接口（物料库页面 tab 名「售后BOM」；「物料清单」tab 已改名「物料表」，旁边「物料BOM」tab 暂为占位）：GET 需要 `product:view`，POST/PUT/DELETE 需要 `product:edit`。
   `GET combos` 可传 `keyword`（名称模糊）、`category`、`is_disabled=0|1`，返回
   `{items,total}`，每个组合均含完整 `items`。`GET combos/categories` 返回非空分类去重数组。
 - `POST/PUT combos` 请求体为
