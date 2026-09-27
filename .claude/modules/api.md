@@ -182,7 +182,6 @@ GET  /api/material/items/:code/calc-price   # ?bom_id= 按研发 BOM 实时计�
                                             #   history = 在下级各价格日期上重算（新→旧，相邻相同合并），不存库；无 BOM 返回 data=null
 GET  /api/material/items/:code/prices
 POST /api/material/items/:code/prices
-GET  /api/material/items/:code/usages
 PATCH /api/material/prices/:price_id
 DELETE /api/material/prices/:price_id
 GET  /api/material/suppliers

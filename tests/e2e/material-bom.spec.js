@@ -340,8 +340,13 @@ test('BOM 计价：单价/金额列、合计、计价日期；卡片显示按 BO
     current: { unit_price: 24, missing: 1, price_source: 'calc', price_date: null },
     history: [{ date: '2024-06-01', unit_price: 24, missing: 1 }, { date: '2024-01-01', unit_price: 18, missing: 1 }],
   }) }))
-  await page.route('**/api/material/items/*/prices', r => r.fulfill({ json: OK([]) }))
-  await page.route('**/api/material/items/*/usages', r => r.fulfill({ json: OK([]) }))
+  await page.route('**/api/material/items/*/prices', r => r.fulfill({ json: OK([
+    { id: 2, unit_price: 26, price_date: '2025-05-22', order_no: '2M2-SC20250522-025', source: 'bom_import', supplier_name: null },
+    { id: 1, unit_price: 22, price_date: '2024-06-20', order_no: '2M2-SC20240620-050', source: 'bom_import', supplier_name: null },
+    { id: 3, unit_price: 25, price_date: null, order_no: '', source: 'manual', supplier_name: null },
+  ]) }))
+  let usagesCalled = false
+  await page.route('**/api/material/items/*/usages', r => { usagesCalled = true; return r.fulfill({ json: OK([]) }) })
 
   await page.goto('/#/material')
   await page.locator('.nav-item', { hasText: '物料BOM' }).click()
@@ -375,4 +380,21 @@ test('BOM 计价：单价/金额列、合计、计价日期；卡片显示按 BO
   await expect(card.locator('.calc-history tbody tr')).toHaveCount(2)
   await card.locator('.calc-box').scrollIntoViewIfNeeded()
   await page.locator('.el-dialog.material-card-dialog').screenshot({ path: 'test-results/material-card-calc-price.png' })
+
+  // 价格记录：没有「使用记录」，每条带导入时的订单号（手动价格显示 —）
+  await expect(card.locator('.cost-count')).toHaveText('价格记录（3）')
+  await expect(card.getByText('使用记录')).toHaveCount(0)
+  expect(usagesCalled).toBe(false)
+  const priceTable = card.locator('.cost-table').last()
+  await expect(priceTable.locator('th')).toContainText(['日期', '单价', '订单号'])
+  await expect(priceTable.locator('tbody tr').first()).toContainText('2M2-SC20250522-025')
+  await expect(priceTable.locator('tbody tr').nth(2)).toContainText('—')
+
+  // 价格趋势：弹窗画出价格记录与按 BOM 计算两条线
+  await card.locator('.cost-trend').click()
+  const trend = page.locator('.el-dialog.price-trend-dialog')
+  await expect(trend).toBeVisible()
+  await expect(trend.locator('.pt-chart canvas')).toHaveCount(1)
+  await page.waitForTimeout(600)
+  await trend.screenshot({ path: 'test-results/material-price-trend.png' })
 })

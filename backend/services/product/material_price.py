@@ -182,24 +182,5 @@ class MaterialPriceService:
         MaterialPriceRepository.delete_price(price)
         return Result.ok(message='已删除')
 
-    def usages(self, material):
-        node = MaterialPriceRepository.node_for_code(
-            material['code'], _strip_version(material['code'])
-        )
-        if not node:
-            return Result.ok(data=[])
-        data = [{
-            'snapshot_id': row.snapshot_id,
-            'order_no': row.order_no or '',
-            'snapshot_date': row.snapshot_date.strftime('%Y-%m-%d')
-            if row.snapshot_date else '',
-            'sku_id': row.sku_id,
-            'finished_code': row.finished_code,
-            'finished_name': row.finished_name or '',
-            'unit_price': float(row.unit_price) if row.unit_price is not None else None,
-            'quantity': float(row.quantity) if row.quantity is not None else None,
-        } for row in MaterialPriceRepository.usages(node.id)]
-        return Result.ok(data=data)
-
 
 material_price_service = MaterialPriceService()

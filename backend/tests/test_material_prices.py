@@ -181,7 +181,6 @@ def test_price_routes_enforce_rd_permissions_without_requiring_product_edit(pric
     listed = rd_editor.get('/api/material/items/ERP001-A01/prices')
     assert listed.status_code == 200
     assert listed.get_json()['data'][0]['supplier_name'] == '供应商'
-    assert rd_editor.get('/api/material/items/ERP001-A01/usages').get_json()['data'] == []
     changed = rd_editor.patch(
         f'/api/material/prices/{price_id}', json={'supplier_name': '新供应商'},
         headers={'X-CSRF-Token': 'csrf'},

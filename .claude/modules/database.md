@@ -459,6 +459,9 @@ cost_material_price                        # 物料价格记录（手动 + BOM�
   #   同一节点同一 price_date 同一 unit_price 视为重复跳过（任何来源）。
   # source=bom_calc（部件推算价）已停用并删除（21 条，备份在服务器 /root/backup_bom_calc_prices_20260927.json）；
   #   部件价格改为按研发 BOM 实时计算（services/product/material_bom_price.py），不存储。
+  # 2026-09-27 晚：用户要求清空全部价格数据重新导入——cost_material_price/cost_bom_line/cost_snapshot_sku/cost_snapshot
+  #   全部清空（备份 /root/backup_price_data_20260927.json）；物料卡片「使用记录」已去掉（读 cost_bom_line 的接口已删），
+  #   价格记录每行显示导入订单号（snapshot_id → cost_snapshot.order_no），另有「价格趋势」图
   id, node_id(FK→cost_bom_node CASCADE),
   snapshot_id(FK→cost_snapshot SET NULL nullable),  # BOM导入时关联快照
   unit_price(DECIMAL 12,4), price_date(DATE nullable),

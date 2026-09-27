@@ -383,16 +383,6 @@ def delete_material_price(price_id):
     return material_price_service.delete_price(price_id).to_response()
 
 
-@material_cost_bp.get('/items/<path:code>/usages')
-def material_usages(code):
-    denied = _require_material_price()
-    if denied:
-        return denied
-    material = _material_for_cost(code)
-    if not material:
-        return Result.fail('物料不存在').to_response(404)
-    return material_price_service.usages(material).to_response()
-
 
 @material_cost_bp.get('/suppliers')
 def material_suppliers():

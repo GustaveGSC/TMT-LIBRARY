@@ -4,7 +4,7 @@ from sqlalchemy import or_
 
 from database.base import db
 from database.models.rd.cost import (
-    CostBomLine, CostBomNode, CostMaterialPrice, CostSnapshot, CostSnapshotSku,
+    CostBomNode, CostMaterialPrice, CostSnapshot,
 )
 
 
@@ -74,21 +74,6 @@ class MaterialPriceRepository:
             CostSnapshot.id.in_(snapshot_ids)
         ).all()
         return {row.id: row.order_no or '' for row in rows}
-
-    @staticmethod
-    def usages(node_id):
-        return db.session.query(
-            CostBomLine.unit_price, CostBomLine.quantity,
-            CostSnapshotSku.finished_code, CostSnapshotSku.finished_name,
-            CostSnapshotSku.id.label('sku_id'), CostSnapshot.order_no,
-            CostSnapshot.snapshot_date, CostSnapshot.id.label('snapshot_id'),
-        ).join(
-            CostSnapshotSku, CostBomLine.sku_id == CostSnapshotSku.id,
-        ).join(
-            CostSnapshot, CostSnapshotSku.snapshot_id == CostSnapshot.id,
-        ).filter(CostBomLine.child_node_id == node_id).order_by(
-            CostSnapshot.snapshot_date.desc(), CostSnapshot.id.desc(),
-        ).all()
 
     @staticmethod
     def add_price(node, price):

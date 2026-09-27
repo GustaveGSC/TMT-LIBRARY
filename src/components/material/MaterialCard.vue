@@ -1,10 +1,11 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
 import { ref, computed, watch } from 'vue'
-import { WarningFilled, Picture, Plus, Edit, Delete, ZoomIn, Close, Check, Back, View, Search, Download, ArrowDown, ArrowUp } from '@element-plus/icons-vue'
+import { WarningFilled, Picture, Plus, Edit, Delete, ZoomIn, Close, Check, Back, View, Search, Download, ArrowDown, ArrowUp, TrendCharts } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import MediaViewer from '@/components/common/MediaViewer.vue'
 import MaterialBomTree from './MaterialBomTree.vue'
+import MaterialPriceTrendDialog from './MaterialPriceTrendDialog.vue'
 import { exportBom } from './bomExport'
 import { pickFile } from '@/utils/download'
 import http from '@/api/http'
@@ -137,9 +138,9 @@ const viewerItems = computed(() => images.value.map(img => ({
 // 价格与研发部 BOM 共用同一份 cost_material_price，不是物料库独有的副本。
 // 物料若还没有成本节点（8091 个物料里只有 130 个有），首次加价时后端惰性创建。
 const prices        = ref([])
-const usages        = ref([])
 const costLoading   = ref(false)
-const costTab       = ref('prices')     // prices | usages
+// 价格趋势弹窗（「使用记录」已去掉，2026-09-27）
+const trendOpen     = ref(false)
 const priceFormOpen = ref(false)
 const priceSaving   = ref(false)
 const priceForm     = ref({ unit_price: '', price_date: '', supplier_name: '', notes: '' })
@@ -160,14 +161,10 @@ async function loadCost() {
   costLoading.value = true
   const c = encodeURIComponent(activeCode.value)
   try {
-    const [pRes, uRes] = await Promise.all([
-      http.get(`/api/material/items/${c}/prices`),
-      http.get(`/api/material/items/${c}/usages`),
-    ])
+    const pRes = await http.get(`/api/material/items/${c}/prices`)
     loadSupplierOptions()
     prices.value = (pRes.success ? (pRes.data || []) : [])
       .map(x => ({ ...x, _supplierDraft: x.supplier_name || '' }))
-    usages.value = uRes.success ? (uRes.data || []) : []
   } catch { /* 价格拿不到不该阻塞整张卡片 */ }
   finally { costLoading.value = false }
 }
@@ -345,8 +342,8 @@ async function navigateBack() {
 }
 
 function resetForCode() {
-  prices.value = []; usages.value = []
-  priceFormOpen.value = false; priceErr.value = ''; costTab.value = 'prices'
+  prices.value = []
+  priceFormOpen.value = false; priceErr.value = ''; trendOpen.value = false
   bom.value = null; bomDialogOpen.value = false; calcPrice.value = null; calcHistoryOpen.value = false
   loadDetail()
 }
@@ -755,10 +752,11 @@ watch(() => props.visible, v => {
           </div>
 
           <div class="cost-tabs">
-            <button class="cost-tab" :class="{ active: costTab === 'prices' }"
-                    @click="costTab = 'prices'">价格记录（{{ prices.length }}）</button>
-            <button class="cost-tab" :class="{ active: costTab === 'usages' }"
-                    @click="costTab = 'usages'">使用记录（{{ usages.length }}）</button>
+            <span class="cost-count">价格记录（{{ prices.length }}）</span>
+            <button class="cost-trend" type="button" :disabled="!prices.length && !calcPrice?.history?.length"
+                    title="按价格日期显示价格走势" @click="trendOpen = true">
+              <el-icon><TrendCharts /></el-icon>价格趋势
+            </button>
             <button v-if="canAddPrice" class="cost-add" @click="priceFormOpen = !priceFormOpen">
               {{ priceFormOpen ? '取消添加' : '+ 添加价格' }}
             </button>
@@ -804,11 +802,12 @@ watch(() => props.visible, v => {
           <div v-if="costLoading" class="state-tip mini">加载中...</div>
 
           <!-- 价格记录 -->
-          <table v-else-if="costTab === 'prices' && prices.length" class="cost-table">
+          <table v-else-if="prices.length" class="cost-table">
             <thead>
               <tr>
                 <th style="width:96px">日期</th>
                 <th style="width:96px" class="ta-r">单价</th>
+                <th style="width:170px">订单号</th>
                 <th>供应商</th>
                 <th style="width:104px">来源</th>
                 <th v-if="canMaterialPrice" style="width:44px"></th>
@@ -818,6 +817,8 @@ watch(() => props.visible, v => {
               <tr v-for="row in prices" :key="row.id">
                 <td>{{ row.price_date || '—' }}</td>
                 <td class="ta-r price-val">¥{{ Number(row.unit_price).toFixed(4) }}</td>
+                <!-- 导入时的采购订单号；手动添加的价格没有订单号 -->
+                <td class="mono ellip" :title="row.order_no || ''">{{ row.order_no || '—' }}</td>
                 <td>
                   <template v-if="canMaterialPrice">
                     <div class="sup-cell">
@@ -846,33 +847,7 @@ watch(() => props.visible, v => {
             </tbody>
           </table>
 
-          <!-- 使用记录 -->
-          <table v-else-if="costTab === 'usages' && usages.length" class="cost-table">
-            <thead>
-              <tr>
-                <th style="width:96px">快照日期</th>
-                <th>订单号</th>
-                <th>成品品号</th>
-                <th style="width:60px" class="ta-r">数量</th>
-                <th style="width:96px" class="ta-r">单价</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(row, i) in usages" :key="i">
-                <td>{{ row.snapshot_date || '—' }}</td>
-                <td class="ellip">{{ row.order_no || '—' }}</td>
-                <td class="mono ellip">{{ row.finished_code }}</td>
-                <td class="ta-r">{{ row.quantity ?? '—' }}</td>
-                <td class="ta-r price-val">
-                  {{ row.unit_price != null ? '¥' + Number(row.unit_price).toFixed(4) : '—' }}
-                </td>
-              </tr>
-            </tbody>
-          </table>
-
-          <div v-else class="cost-empty">
-            {{ costTab === 'prices' ? '暂无价格记录' : '暂无使用记录' }}
-          </div>
+          <div v-else class="cost-empty">暂无价格记录</div>
 
           <!-- 成本备注：属于 cost_bom_node.notes，与上面「人工维护」的备注是
                两个不同字段，刻意分开显示避免互相覆盖 -->
@@ -931,6 +906,13 @@ watch(() => props.visible, v => {
                        :empty-text="bomDialogLoading ? '加载中...' : (bomDialogKeyword.trim() ? '没有匹配的物料' : '暂无 BOM 数据')" />
     </div>
   </el-dialog>
+
+  <MaterialPriceTrendDialog
+    v-model="trendOpen"
+    :title="detail ? `${detail.code} ${detail.name || ''}` : ''"
+    :prices="prices"
+    :calc-history="calcPrice?.history || []"
+  />
 
   <MediaViewer v-model="viewerOpen" :items="viewerItems" :initial-index="currentIdx" />
 </template>
@@ -1247,14 +1229,15 @@ watch(() => props.visible, v => {
 .mc-src { margin-left: 6px; color: var(--text-secondary); }
 
 .cost-tabs { display: flex; align-items: center; gap: 6px; margin: 10px 0 8px; }
-.cost-tab {
-  padding: 4px 12px; border-radius: 7px;
-  border: 1px solid var(--border); background: var(--bg);
-  color: var(--text-secondary); font-size: 12px; font-family: inherit;
-  cursor: pointer; transition: all 0.15s;
+.cost-count { font-size: 13px; font-weight: 600; color: #3a3028; }
+.cost-trend {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 12px; border-radius: 12px; cursor: pointer;
+  border: 1px solid var(--accent); background: transparent; color: var(--accent);
+  font-size: 12px; font-family: inherit; transition: all 0.15s;
 }
-.cost-tab:hover  { border-color: var(--accent); color: var(--accent); }
-.cost-tab.active { background: var(--accent-bg); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.cost-trend:hover:not(:disabled) { background: var(--accent); color: #fff; }
+.cost-trend:disabled { opacity: 0.45; cursor: not-allowed; }
 .cost-add {
   margin-left: auto; padding: 4px 12px; border-radius: 7px;
   border: 1px solid var(--accent); background: var(--accent-bg);
