@@ -7,10 +7,12 @@
  *
  * 权限码约定：
  *   developer:analytics:view
+ *   developer:tasks:view
  *   account:users:view / account:users:edit
  *   account:roles:view / account:roles:edit
- *   ops:login-config:edit
+ *   ops:login-config:edit / ops:department:edit
  *   product:view / product:edit
+ *   material:view / material:edit / material:price（物料库独立权限，不与产品库共用）
  *   shipping:view / shipping:edit / shipping:export
  *   aftersale:view / aftersale:edit / aftersale:export
  *   rd:view / rd:edit / rd:admin
@@ -40,6 +42,7 @@ export function usePermission() {
 
   // ── 开发者 ────────────────────────────────────────
   const canViewAnalytics = can('developer:analytics:view')
+  const canViewDevTasks  = can('developer:tasks:view')
 
   // ── 管理者 ────────────────────────────────────────
   const canViewUsers = can('account:users:view')
@@ -49,10 +52,16 @@ export function usePermission() {
 
   // ── 运维 ──────────────────────────────────────────
   const canEditOpsLoginConfig = can('ops:login-config:edit')
+  const canEditDepartments    = can('ops:department:edit')
 
   // ── 产品库 ────────────────────────────────────────
   const canViewProduct   = can('product:view')
   const canEditProduct   = can('product:edit')
+
+  // ── 物料库（独立权限，不借用产品库/研发权限）───────
+  const canViewMaterial      = can('material:view')
+  const canEditMaterial      = can('material:edit')
+  const canMaterialPrice     = can('material:price')   // 成本价格/供应商，查看编辑同一档，不再分两级
 
   // ── 发货数据 / 数据管理 ───────────────────────────
   const canViewShipping   = can('shipping:view')
@@ -67,6 +76,7 @@ export function usePermission() {
   // ── 研发数据 ──────────────────────────────────────
   const canViewRd  = can('rd:view')
   const canEditRd  = can('rd:edit')
+  const canViewTrade = can('trade:view')   // 外贸工具
   const canAdminRd = can('rd:admin')   // 研发部管理员：管理变更提醒
 
   return {
@@ -74,13 +84,18 @@ export function usePermission() {
     isAdmin,
     can,
     canViewAnalytics,
+    canViewDevTasks,
     canViewUsers,
     canEditUsers,
     canViewRoles,
     canEditRoles,
     canEditOpsLoginConfig,
+    canEditDepartments,
     canViewProduct,
     canEditProduct,
+    canViewMaterial,
+    canEditMaterial,
+    canMaterialPrice,
     canViewShipping,
     canEditShipping,
     canExportShipping,
@@ -90,5 +105,6 @@ export function usePermission() {
     canViewRd,
     canEditRd,
     canAdminRd,
+    canViewTrade,
   }
 }

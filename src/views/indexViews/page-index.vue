@@ -48,6 +48,7 @@ import iconMaterial from '@/assets/icons/icon_material.png'
 import iconRdTools      from '@/assets/icons/icon_rd_tools.png'
 import iconAftersaleTools from '@/assets/icons/icon_aftersale_tools.png'
 import iconGeneralTools from '@/assets/icons/icon_general_tools.png'
+import iconTradeTools from '@/assets/icons/icon_trade_tools.png'
 import iconLab from '@/assets/icons/icon_handset_sim.png'
 
 const router = useRouter()
@@ -66,7 +67,7 @@ if (!isElectron) {
 
 // 版本检查、用户信息、用户设置抽屉与更新弹窗均已移入 AppBottomBar 组件
 
-const { canViewProduct, canViewShipping, canViewAftersale, canViewRd } = usePermission()
+const { canViewProduct, canViewShipping, canViewAftersale, canViewRd, canViewTrade } = usePermission()
 
 // 模块分组，各组独立渲染
 // 无权限的功能入口直接不渲染（不显示"无权限"标签），与全站其他位置的权限处理方式统一。
@@ -121,6 +122,15 @@ const moduleGroups = computed(() => [
         route: '/rd-tools',
         disabled: false,
         visible: canViewRd,
+      },
+      // 外贸工具：有 trade:view 权限的用户可见（目前内含「产品改制」方案讨论稿）
+      {
+        key: 'trade-tools',
+        name: '外贸工具',
+        icon: iconTradeTools,
+        route: '/trade-tools',
+        disabled: false,
+        visible: canViewTrade,
       },
       // 售后工具：售后记录填写与导出，页面尚未开发，先占位
       {

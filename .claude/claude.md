@@ -25,7 +25,7 @@ electron/main/index.ts   # 主进程/IPC（桌面端已暂停，代码保留不�
 electron/main/window.ts  # 登录窗/主窗（桌面端已暂停，代码保留不再维护）
 electron/main/python.ts  # 已不使用
 src/api/http.js          # axios；getBaseURL() 已 export：Electron→https://tmt-library.cn，Web→VITE_API_BASE 或代理
-src/routers/index.js     # Hash路由：/login /index /product /shipping /data-mgmt /aftersale /rd-tools /admin/*
+src/routers/index.js     # Hash路由：/login /index /product /shipping /data-mgmt /aftersale /rd-tools /trade-tools /admin/*
 src/styles/themes.css    # 全局CSS变量（勿硬编码颜色）
 backend/app.py           # Flask 工厂；SQLAlchemy QueuePool + connect/read/write 超时（见源码）
                           # 生产：1 个 Gunicorn worker，POOL_SIZE=5 + MAX_OVERFLOW=5（.env 显式配置），单进程理论峰值 10 个数据库连接
@@ -45,6 +45,7 @@ backend/result.py        # Result.ok/fail → { success, message, data }
 - **`auto_match`**：每次调用查全量 `AftersaleReason`，不要在循环或批量流程里频繁调用。
 - **`shipping_order_finished` 低选择性索引**：`source` 列仅 2 个值（shipping/finance），MySQL 优化器不自动选复合索引。所有对该表的查询必须加 `with_hint(sof, 'USE INDEX (...)', dialect_name='mysql')`：有日期范围用 `ix_sof_source_date`，否则用 `ix_sof_source_finished_code`。
 - **`get_chart_options` 缓存**：该函数结果已做模块级内存缓存（5 分钟 TTL，key=source+日期范围）。导入/resolve-all 完成后必须调 `_invalidate_chart_options_cache()` 清缓存，否则新数据不生效。
+- **物料类型判定缓存**：`MaterialService._classification()` 缓存全量物料的类型判定与分组计数（物料清单类型筛选、编码规则分组计数都读它）。凡是新增会改变判定结果的写入路径（编码前缀规则、分组默认类型、物料单独指定、ERP 物料导入之外的新入口），必须调用对应 `invalidate_*` 或 `invalidate_classification_cache()`，否则列表筛选结果会过期。
 - **trade_type 过滤禁止走 JOIN**：`needs_trade_filter` 不得触发 JOIN 产品表。FTP 系列判断通过 `_get_ftp_finished_codes()` 缓存集合 + `finished_code IN (...)` 实现，避免每次查询都 JOIN ProductModel/ProductSeries。
 - **单 worker + CPU 密集后台任务的看门狗超时风险**：`gunicorn.service` 是 `-w 1`（单 sync worker）+ `--timeout 1800`（2026-07-21 从 300 调大，原因见下）。导入类接口（发货/财务清单）用后台线程跑解析+写库，Python 解析大 Excel（尤其解压后几十上百MB的那种）是纯 CPU 密集操作，几乎不主动让出 GIL；如果这个后台线程持续占用 CPU 超过 gunicorn `--timeout` 秒数，主线程没机会响应 arbiter 心跳，会被判定"卡死"直接 SIGKILL 整个 worker 进程（连带杀掉正在跑的导入任务，前端表现为"任务因服务重启或重载中断"）。改大 timeout 只是缓解症状，没解决"单 worker 场景下 CPU 密集任务会挤占心跳"这个根因；如果后续导入的文件持续变大，仍可能撞到新的 timeout 上限，需要 Codex 评估是否要让解析循环定期让出控制权，或调整后台任务的执行模型。
 
@@ -135,6 +136,9 @@ ssh tmt "systemctl reload gunicorn"
 - **所有页面必须引入 WindowControls**：
   - 登录页：`<WindowControls />`（showMaximize默认true，登录页不需要传）
   - 其他页：`<WindowControls :confirm-close="true" confirm-text="确认退出两平米软件库？" />`
+- **顶栏"返回"按钮禁止直接写 `router.back()`**：改用 `smartBack(router)`（`src/utils/smartBack.js`）——深链/收藏夹直接进入
+  的页面站内没有"上一页"历史，裸 `router.back()` 会直接离开整个网站跳到浏览器历史里的外部页面；`smartBack` 用
+  `window.history.state?.back` 判断有没有真正的站内上一页，没有则回退到 `/index`。与"返回主页"按钮（固定 `router.push('/index')`）是两个不同的按钮，不要合并。
 
 ## HTTP 响应规范
 ```javascript
@@ -159,20 +163,40 @@ window.electronAPI = {
 权限码：
 - 开发者：`developer:analytics:view`
 - 管理者：`account:users:view/edit`、`account:roles:view/edit`
-- 运维：`ops:login-config:edit`
-- 业务：`product:view/edit`、`shipping:view/edit/export`、`aftersale:view/edit/export`、`rd:view/edit/admin`
+- 运维：`ops:login-config:edit`、`ops:department:edit`
+- 业务：`product:view/edit`、`material:view/edit/price`、`shipping:view/edit/export`、`aftersale:view/edit/export`、`rd:view/edit/admin`、`trade:view`
 
 - `developer`、`manager`、`ops` 是标准角色权限包；功能授权只认显式权限码，不因 `admin` 角色名或 `author` 用户名直接放行。
+- **角色分类**（2026-09-04 起，同日追加自定义分组）：`roles.category` 只有 `system`（内置标准角色包：admin/管理员/developer/manager/ops，
+  保留字，接口不允许手动设置/修改）是固定值，其余分组名完全自定义——分组不是独立表，只是角色 `category` 字段的字符串取值，
+  新增/编辑角色时可从下拉选已有分组名，也可直接输入新名字（≤20字）创建分组；分组标题上可"重命名分组"（批量把该分组下所有
+  角色的 category 改名，`PUT /role-categories/:name`）。仅用于权限管理页的展示分组，不影响鉴权逻辑，纯展示/组织用途。
 - legacy `admin` 通过数据库角色关联显式拥有全部标准权限；`admin`/`author` 不可删除禁用属于账号保护，不是授权绕过。
 - rd 路由对应研发工具页（`/rd-tools`），权限码 `rd:view/edit`
+- 外贸工具页（`/trade-tools`，2026-09-27 起）权限码 `trade:view`，已授给 `admin` 与「外贸部」角色；内部「产品改制」目前只是方案讨论稿（`ProductModificationPlan.vue`），功能待流程确认后开发
+- **物料库（`/material`）权限独立于产品库**（2026-09-04 起，此前借用 `product:view/edit` + `rd:view/edit`）：`material:view`
+  （路由准入+查看）、`material:edit`（分组大类/编码规则/组合套餐/物料基础信息/图片，不含"导入数据"tab——那个 tab 走的是产品库
+  BOM/成本导入接口，仍按 `product:edit` 鉴权）、`material:price`（成本价格+供应商，查看编辑同一档，不再像 `rd:view/edit` 那样
+  分两级）。切换时用过 `backend/scripts/migrate_material_permissions.py` 按旧权限自动补授新权限码，避免存量角色失权。
 - username==='admin' 或 'author'：不可删除/禁用，不显示分配角色按钮（后端拦截）
 - author 账号：显式分配 `developer`；其他既有角色由生产权限审计决定，不靠用户名获得功能权限
+- **登录后强制补充部门/工号**（2026-09-04 起）：`users` 表新增 `department_id`（FK→`departments`，ondelete SET NULL）/`employee_no`；
+  路由守卫（`src/routers/index.js`）检测到两者任一缺失就强制跳转 `/complete-profile`，提交 `PUT /api/account/me/profile`
+  （两个字段都必填）成功后才放行。部门是平铺列表（无层级），运维分组的"部门管理"入口（`ops:department:edit`）在
+  `UserSettingsDrawer.vue` 里维护；管理员也可以在"用户管理"页（`account:users:edit`）直接代填任意用户的部门/工号。
+  **`admin`/`author` 豁免这套强制流程**（按 `username` 判断，和别处的账号保护逻辑一致），不会被拦到补充资料页。
 
 ```javascript
 // usePermission composable
 import { usePermission } from '@/composables/usePermission'
 const { can, canEditProduct, canViewProduct } = usePermission()
 ```
+
+- **前端路由守卫的登录态校验分两层**（`src/routers/index.js`）：本地 `localStorage.user` + 8 小时计时器只是前端估算，不代表
+  后端 Cookie 真的还有效；应用启动后的第一次导航会额外调一次 `GET /api/account/me` 向服务端确认会话是否真的有效（详见
+  `api.md`），无效则跳登录页，之后同一次页面加载内不会重复调用。这是为了解决"收藏夹直接打开深层路由，本地缓存的登录态看起来
+  没过期，但账号已被禁用/权限变更导致后端会话早已失效"时页面显示空壳无数据的问题——之前完全依赖业务接口触发 401 才跳转，
+  但很多"壳"组件（如 `page-shipping.vue`）本身不发请求，要等子组件异步请求失败才会跳转，体感上就是"进来了但没数据"。
 
 ## 版本规则
 - `Beta x.x.x` 或主/次版本变更 → 强制更新
