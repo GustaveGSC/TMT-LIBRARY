@@ -387,10 +387,13 @@ test('BOM 计价：单价/金额列、合计、计价日期；卡片显示按 BO
   expect(usagesCalled).toBe(false)
   const priceTable = card.locator('.cost-table').last()
   await expect(priceTable.locator('th')).toContainText(['日期', '单价', '订单号'])
-  await expect(priceTable.locator('tbody tr').first()).toContainText('2M2-SC20250522-025')
+  await expect(priceTable.locator('tbody tr').first().locator('.order-tag')).toHaveText('2M2-SC20250522-025')
+  await expect(priceTable.locator('.order-tag')).toHaveCount(2)
   await expect(priceTable.locator('tbody tr').nth(2)).toContainText('—')
 
   // 价格趋势：弹窗画出价格记录与按 BOM 计算两条线
+  await priceTable.scrollIntoViewIfNeeded()
+  await priceTable.screenshot({ path: 'test-results/material-price-records.png' })
   await card.locator('.cost-trend').click()
   const trend = page.locator('.el-dialog.price-trend-dialog')
   await expect(trend).toBeVisible()

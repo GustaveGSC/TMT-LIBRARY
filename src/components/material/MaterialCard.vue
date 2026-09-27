@@ -818,7 +818,10 @@ watch(() => props.visible, v => {
                 <td>{{ row.price_date || '—' }}</td>
                 <td class="ta-r price-val">¥{{ Number(row.unit_price).toFixed(4) }}</td>
                 <!-- 导入时的采购订单号；手动添加的价格没有订单号 -->
-                <td class="mono ellip" :title="row.order_no || ''">{{ row.order_no || '—' }}</td>
+                <td>
+                  <span v-if="row.order_no" class="order-tag mono" :title="row.order_no">{{ row.order_no }}</span>
+                  <span v-else class="cell-muted">—</span>
+                </td>
                 <td>
                   <template v-if="canMaterialPrice">
                     <div class="sup-cell">
@@ -1230,6 +1233,13 @@ watch(() => props.visible, v => {
 
 .cost-tabs { display: flex; align-items: center; gap: 6px; margin: 10px 0 8px; }
 .cost-count { font-size: 13px; font-weight: 600; color: #3a3028; }
+/* 订单号 tag：浅蓝底，超长省略（悬停看全文） */
+.order-tag {
+  display: inline-block; max-width: 160px; vertical-align: middle;
+  padding: 0 7px; border-radius: 4px; font-size: 11px; line-height: 18px;
+  color: #3d6f94; background: rgba(74,143,192,0.1); border: 1px solid rgba(74,143,192,0.35);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .cost-trend {
   display: inline-flex; align-items: center; gap: 4px;
   padding: 3px 12px; border-radius: 12px; cursor: pointer;
