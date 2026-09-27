@@ -51,6 +51,18 @@ function toggleType(key) {
   else list.push(key)
 }
 
+// 物料类型提示的完整文案（悬停显示），界面上只显示压缩成一行的版本
+const typeHintFull = computed(() => {
+  const d = detail.value
+  if (!d) return ''
+  let text = `当前生效：${formatTypes(d.categories)}`
+  if (d.category_source) text += `（${SOURCE_TEXT[d.category_source]}）`
+  if (d.category_source === 'manual') {
+    text += `；若取消单独指定，将按${SOURCE_TEXT[d.rule_source] || '规则'}判定为 ${formatTypes(d.rule_categories)}`
+  }
+  return text
+})
+
 function formatTypes(list) {
   return (list || []).map(k => typeLabel[k] || k).join(' / ') || '未分类'
 }
@@ -366,26 +378,9 @@ watch(() => props.visible, v => {
         </div>
         </div><!-- /mc-top-image -->
 
-        <!-- ERP 权威字段：只读 -->
-        <div class="mc-section mc-erp">
-          <div class="mc-section-title">ERP 信息（只读）</div>
-          <div class="mc-field"><label>编码</label><span class="mono">{{ detail.code }}</span></div>
-          <div class="mc-field"><label>名称</label><span>{{ detail.name }}</span></div>
-          <div class="mc-field">
-            <label>分组</label>
-            <span>{{ detail.group_code }} · {{ detail.group_name || '—' }}</span>
-          </div>
-          <div class="mc-field">
-            <label>状态</label>
-            <span class="status-text">{{ detail.status || '—' }}</span>
-            <span v-if="detail.is_disabled" class="ro-badge off">已停用</span>
-            <span v-else class="ro-badge on">启用</span>
-          </div>
-        </div>
-        </div><!-- /mc-top -->
-
-        <!-- 人工维护字段 -->
-        <div class="mc-section">
+        <!-- 人工维护：放在图片右侧（可编辑内容是卡片的主要操作对象），
+             所有字段标签同宽右对齐，输入框左边缘在一条竖线上 -->
+        <div class="mc-section mc-manual">
           <div class="mc-section-title">人工维护</div>
           <!-- 物料类型：单独指定 > 编码前缀规则 > 分组默认类型 -->
           <div class="mc-field mc-field-top">
@@ -409,38 +404,53 @@ watch(() => props.visible, v => {
                   @click="toggleType(t.key)"
                 >{{ t.label }}</button>
               </div>
-              <div class="mt-hint">
-                当前生效：<b>{{ formatTypes(detail.categories) }}</b>
+              <!-- 固定单行（超出省略，悬停看全文），避免换行把右侧区域撑高、破坏与图片列的对齐 -->
+              <div class="mt-hint" :title="typeHintFull">
+                当前：<b>{{ formatTypes(detail.categories) }}</b>
                 <span v-if="detail.category_source">（{{ SOURCE_TEXT[detail.category_source] }}）</span>
                 <template v-if="detail.category_source === 'manual'">
-                  ；若取消单独指定，将按{{ SOURCE_TEXT[detail.rule_source] || '规则' }}判定为
-                  <b>{{ formatTypes(detail.rule_categories) }}</b>
+                  ｜规则判定：<b>{{ formatTypes(detail.rule_categories) }}</b>
                 </template>
               </div>
             </div>
           </div>
-          <!-- 通栏后宽度充足，简称/分类/规格并排成三列 -->
-          <div class="mc-grid3">
-            <div class="mc-field">
-              <label>简称</label>
-              <input v-model="form.short_name" class="mc-input" :disabled="!canEditMaterial" placeholder="录入/挑选时显示的简称" />
-            </div>
-            <div class="mc-field">
-              <label>分类</label>
-              <input v-model="form.category" class="mc-input" :disabled="!canEditMaterial" placeholder="自由文本，用于下拉分组" />
-            </div>
-            <div class="mc-field">
-              <label>规格</label>
-              <input v-model="form.spec" class="mc-input" :disabled="!canEditMaterial" placeholder="规格" />
-            </div>
+          <div class="mc-field">
+            <label>简称</label>
+            <input v-model="form.short_name" class="mc-input" :disabled="!canEditMaterial" placeholder="录入/挑选时显示的简称" />
           </div>
-          <div class="mc-field mc-field-top">
+          <div class="mc-field">
+            <label>分类</label>
+            <input v-model="form.category" class="mc-input" :disabled="!canEditMaterial" placeholder="自由文本，用于下拉分组" />
+          </div>
+          <div class="mc-field">
+            <label>规格</label>
+            <input v-model="form.spec" class="mc-input" :disabled="!canEditMaterial" placeholder="规格" />
+          </div>
+          <div class="mc-field mc-field-top mc-field-remark">
             <label>备注</label>
-            <textarea v-model="form.remark" class="mc-textarea" :disabled="!canEditMaterial" rows="3"></textarea>
+            <textarea v-model="form.remark" class="mc-textarea" :disabled="!canEditMaterial" rows="2"></textarea>
           </div>
-
         </div>
+        </div><!-- /mc-top -->
 
+        <!-- ERP 权威字段：只读。通栏两列，内容少所以压成一块紧凑的区域 -->
+        <div class="mc-section mc-erp">
+          <div class="mc-section-title">ERP 信息（只读）</div>
+          <div class="mc-erp-grid">
+            <div class="mc-field"><label>编码</label><span class="mono">{{ detail.code }}</span></div>
+            <div class="mc-field">
+              <label>分组</label>
+              <span>{{ detail.group_code }} · {{ detail.group_name || '—' }}</span>
+            </div>
+            <div class="mc-field"><label>名称</label><span>{{ detail.name }}</span></div>
+            <div class="mc-field">
+              <label>状态</label>
+              <span class="status-text">{{ detail.status || '—' }}</span>
+              <span v-if="detail.is_disabled" class="ro-badge off">已停用</span>
+              <span v-else class="ro-badge on">启用</span>
+            </div>
+          </div>
+        </div>
 
         <!-- ── 价格（仅 rd:view 可见）────────────────────────
              与研发部 BOM 共用同一份 cost_material_price，不是副本。
@@ -655,7 +665,10 @@ watch(() => props.visible, v => {
 .mt-chip.on { font-weight: 600; }
 .mt-chip:first-child.on { color: #3a3028; border-color: #8a7a6a; background: rgba(138,122,106,0.1); }
 .mt-chip:disabled { cursor: not-allowed; opacity: 0.7; }
-.mt-hint { font-size: 11px; color: #6b5e4e; line-height: 1.6; }
+.mt-hint {
+  font-size: 11px; color: #6b5e4e; line-height: 1.6;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .mt-hint b { color: #3a3028; }
 .mc-field > span { flex: 1; min-width: 0; word-break: break-all; }
 /* 状态文字与停用角标紧挨着显示，角标不参与撑满 */
@@ -768,15 +781,22 @@ watch(() => props.visible, v => {
 }
 .mc-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .mc-thumb.active { border-color: var(--accent); }
-.mc-top .mc-erp { flex: 1; min-width: 0; margin-bottom: 0; }
 
-.mc-grid3 {
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0 14px; margin-bottom: 10px;
+/* 人工维护在图片右侧：与图片列等高，备注框吃掉剩余高度 */
+.mc-top .mc-manual {
+  flex: 1; min-width: 0; margin-bottom: 0;
+  display: flex; flex-direction: column;
 }
-.mc-grid3 .mc-field { margin-bottom: 0; }
-.mc-grid3 .mc-field label { width: 32px; }
-.mc-grid3 .mc-input { min-width: 0; }
+.mc-manual > .mc-field { margin-bottom: 8px; }
+.mc-manual .mc-field-remark { flex: 1; min-height: 0; margin-bottom: 0; }
+.mc-manual .mc-field-remark .mc-textarea { height: 100%; min-height: 48px; resize: none; }
+
+/* ERP 信息通栏：两列网格 */
+.mc-erp-grid {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 24px;
+}
+.mc-erp-grid .mc-field { margin-bottom: 0; }
 
 /* ── 价格区 ───────────────────────────────────── */
 .mc-section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }

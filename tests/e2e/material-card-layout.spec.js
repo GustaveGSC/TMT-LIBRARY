@@ -116,42 +116,51 @@ for (const n of [0, 1, 12]) {
   })
 }
 
-test('物料卡片按 图片|ERP / 人工维护 / 价格 排版', async ({ page }) => {
-  await page.addInitScript((u) => {
-    localStorage.setItem('user', JSON.stringify(u))
-    localStorage.setItem('login_time', String(Date.now()))
-  }, USER)
-  // 只拦后端接口：dev 下 Vite 把 @/api/http 模块也挂在 /api/http.js，脚本请求必须放行，否则白屏
-  await page.route(url => new URL(url).pathname.startsWith('/api/'), r =>
-    r.request().resourceType() === 'script' ? r.continue() : r.fulfill({ json: OK([]) }))
-  await page.route('**/api/account/me', r => r.fulfill({ json: OK(USER) }))
-  await page.route('**/api/material/items?*', r => r.fulfill({ json: OK({ items: [ITEM], total: 1, page: 1, page_size: 50 }) }))
-  await page.route('**/api/material/items/14ST02001-A01', r => r.fulfill({ json: OK(ITEM) }))
+test('物料卡片按 图片|人工维护 / ERP 信息 / 价格 排版，字段对齐', async ({ page }) => {
   await page.route('**/api/material/items/14ST02001-A01/prices', r => r.fulfill({ json: OK([
     { id: 1, price_date: '2026-09-01', unit_price: 0.12, supplier_name: '供应商A', source: 'manual' },
   ]) }))
-
-  await page.setViewportSize({ width: 1440, height: 900 })
-  await page.goto('/#/material')
-  await page.locator('.code-link', { hasText: '14ST02001-A01' }).click()
-  const card = page.locator('.material-card')
-  await expect(card.locator('.mc-erp')).toBeVisible()
+  const card = await openCard(page, { ...ITEM, name: '成品_桌类_德罗 (V1.1)手摇1.8米榉木白色_A' })
   await page.waitForTimeout(500)   // 等 el-dialog 打开动画结束再量坐标
 
   const img = await card.locator('.mc-top-image').boundingBox()
+  const manual = await card.locator('.mc-manual').boundingBox()
   const erp = await card.locator('.mc-erp').boundingBox()
-  const sections = card.locator('.mc-scroll > .mc-section')
-  const manual = await sections.nth(0).boundingBox()
-  const price = await sections.nth(1).boundingBox()
+  const price = await card.locator('.mc-scroll > .mc-section').last().boundingBox()
 
-  // 第一行：图片在左、ERP 在右，顶部对齐
-  expect(img.x).toBeLessThan(erp.x)
-  expect(Math.abs(img.y - erp.y)).toBeLessThan(2)
-  // 人工维护在第一行下方且通栏；价格在人工维护下方且通栏
-  expect(manual.y).toBeGreaterThan(erp.y + erp.height - 1)
-  expect(price.y).toBeGreaterThan(manual.y + manual.height - 1)
-  expect(Math.abs(manual.width - (erp.x + erp.width - img.x))).toBeLessThan(2)
-  expect(Math.abs(price.width - manual.width)).toBeLessThan(2)
+  // 第一行：图片在左、人工维护在右，上下边都对齐（等高）
+  expect(img.x).toBeLessThan(manual.x)
+  expect(Math.abs(img.y - manual.y)).toBeLessThan(1)
+  expect(Math.abs(img.height - manual.height)).toBeLessThan(1)
+  // ERP 信息在第一行下方通栏；价格在 ERP 下方通栏
+  const rowWidth = manual.x + manual.width - img.x
+  expect(erp.y).toBeGreaterThan(img.y + img.height - 1)
+  expect(Math.abs(erp.width - rowWidth)).toBeLessThan(1)
+  expect(price.y).toBeGreaterThan(erp.y + erp.height - 1)
+  expect(Math.abs(price.width - rowWidth)).toBeLessThan(1)
+
+  // 对齐：人工维护里所有控件左边缘在同一条竖线上；ERP 标签与人工维护标签同宽
+  const controlLefts = await card.locator(
+    '.mc-manual .mt-box, .mc-manual .mc-input, .mc-manual .mc-textarea',
+  ).evaluateAll(els => els.map(e => Math.round(e.getBoundingClientRect().left)))
+  expect(new Set(controlLefts).size).toBe(1)
+  const labelWidths = await card.locator('.mc-manual .mc-field > label, .mc-erp .mc-field > label')
+    .evaluateAll(els => els.map(e => Math.round(e.getBoundingClientRect().width)))
+  expect(new Set(labelWidths).size).toBe(1)
 
   await page.locator('.el-dialog').screenshot({ path: 'test-results/material-card-layout.png' })
+})
+
+// 单独指定物料类型时提示最长，也不能把右侧区域撑高
+test('单独指定物料类型时人工维护区仍与图片列等高', async ({ page }) => {
+  const card = await openCard(page, {
+    ...ITEM, categories: ['useless'], category_source: 'manual', type_override: ['useless'],
+    rule_categories: ['finished', 'packaged'], rule_source: 'rule',
+  })
+  await page.waitForTimeout(500)
+  const img = await card.locator('.mc-top-image').boundingBox()
+  const manual = await card.locator('.mc-manual').boundingBox()
+  expect(Math.abs(img.height - manual.height)).toBeLessThan(1)
+  await expect(card.locator('.mt-hint')).toHaveAttribute('title', /若取消单独指定/)
+  await page.locator('.el-dialog').screenshot({ path: 'test-results/material-card-manual.png' })
 })
