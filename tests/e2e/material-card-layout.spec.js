@@ -231,7 +231,7 @@ test('单独指定物料类型时人工维护区仍与图片列等高', async ({
   const img = await card.locator('.mc-top-image').boundingBox()
   const manual = await card.locator('.mc-manual').boundingBox()
   expect(Math.abs(img.height - manual.height)).toBeLessThan(1)
-  await expect(card.locator('.mt-hint')).toHaveAttribute('title', /若取消单独指定/)
+  await expect(card.locator('.mt-hint')).toHaveAttribute('title', /若恢复规则判定/)
   await page.locator('.el-dialog').screenshot({ path: 'test-results/material-card-manual.png' })
 })
 
@@ -266,4 +266,39 @@ test('人工维护用标题行确认图标保存，关闭前提示未保存修�
   // 已保存后关闭不再提示
   await page.locator('.el-dialog__header .mc-close-btn').click()
   await expect(card).toBeHidden()
+})
+
+// 物料类型直接显示当前生效的类型，没有「按规则判定」选项
+test('物料类型选择器直接显示当前生效类型，改回规则结果时自动取消单独指定', async ({ page }) => {
+  const card = await openCard(page, ITEM)
+  await page.waitForTimeout(500)
+  const chips = card.locator('.mt-chip')
+  await expect(chips).toHaveCount(5)
+  await expect(card.locator('.mt-chip', { hasText: '按规则判定' })).toHaveCount(0)
+  await expect(card.locator('.mt-chip.on')).toHaveText(['原材料'])
+  await expect(card.locator('.mt-hint')).toContainText('编码前缀规则')
+
+  // 已选的唯一类型点了不会取消
+  await card.locator('.mt-chip', { hasText: '原材料' }).click()
+  await expect(card.locator('.mt-chip.on')).toHaveText(['原材料'])
+  await expect(card.locator('.mc-dirty')).toHaveCount(0)
+
+  // 加选半成品 → 变成单独指定
+  await card.locator('.mt-chip', { hasText: '半成品' }).click()
+  await expect(card.locator('.mt-chip.on')).toHaveText(['半成品', '原材料'])
+  await expect(card.locator('.mc-dirty')).toBeVisible()
+  await expect(card.locator('.mt-hint')).toContainText('单独指定')
+
+  // 再取消半成品 → 与规则结果一致，自动回到规则判定，不算修改
+  await card.locator('.mt-chip', { hasText: '半成品' }).click()
+  await expect(card.locator('.mc-dirty')).toHaveCount(0)
+
+  // 恢复规则判定链接
+  await card.locator('.mt-chip', { hasText: '成品' }).first().click()
+  await card.locator('.mt-chip', { hasText: '原材料' }).click()
+  await expect(card.locator('.mt-chip.on')).toHaveText(['成品'])
+  await card.locator('.mt-reset').click()
+  await expect(card.locator('.mt-chip.on')).toHaveText(['原材料'])
+  await expect(card.locator('.mc-dirty')).toHaveCount(0)
+  await card.locator('.mc-manual').screenshot({ path: 'test-results/material-card-types.png' })
 })

@@ -67,23 +67,41 @@ function fillForm(data) {
   savedSnapshot.value = snapshotOf(form.value)
 }
 
-function toggleType(key) {
-  const list = form.value.type_override
-  const i = list.indexOf(key)
-  if (i >= 0) list.splice(i, 1)
-  else list.push(key)
+// 规则判定的类型（不含单独指定）：编码前缀规则 > 分组默认类型
+const ruleTypes = computed(() => detail.value?.rule_categories || [])
+
+// 类型选择器直接显示「当前生效」的类型：有单独指定显示指定值，否则显示规则判定结果
+const shownTypes = computed(() =>
+  form.value.type_override.length ? form.value.type_override : ruleTypes.value)
+
+function sameSet(a, b) {
+  return a.length === b.length && a.every(k => b.includes(k))
 }
 
-// 物料类型提示的完整文案（悬停显示），界面上只显示压缩成一行的版本
+// 点选类型：在「当前生效」的基础上增减。
+// 选完与规则判定结果一致时自动回到「按规则判定」（清空单独指定）；至少保留一个类型。
+function toggleType(key) {
+  const list = [...shownTypes.value]
+  const i = list.indexOf(key)
+  if (i >= 0) {
+    if (list.length === 1) return
+    list.splice(i, 1)
+  } else {
+    list.push(key)
+  }
+  form.value.type_override = sameSet(list, ruleTypes.value) ? [] : list
+}
+
+// 恢复按规则判定
+function resetTypes() { form.value.type_override = [] }
+
+// 物料类型来源说明（悬停显示完整文案）
 const typeHintFull = computed(() => {
   const d = detail.value
   if (!d) return ''
-  let text = `当前生效：${formatTypes(d.categories)}`
-  if (d.category_source) text += `（${SOURCE_TEXT[d.category_source]}）`
-  if (d.category_source === 'manual') {
-    text += `；若取消单独指定，将按${SOURCE_TEXT[d.rule_source] || '规则'}判定为 ${formatTypes(d.rule_categories)}`
-  }
-  return text
+  const ruleText = `${SOURCE_TEXT[d.rule_source] || '规则'}判定为 ${formatTypes(ruleTypes.value)}`
+  if (form.value.type_override.length) return `单独指定；若恢复规则判定，将按${ruleText}`
+  return d.rule_source ? `按${ruleText}` : '未匹配到编码前缀规则或分组默认类型'
 })
 
 function formatTypes(list) {
@@ -457,17 +475,11 @@ watch(() => props.visible, v => {
             <div class="mt-box">
               <div class="mt-chips">
                 <button
-                  class="mt-chip"
-                  :class="{ on: !form.type_override.length }"
-                  :disabled="!canEditMaterial"
-                  @click="form.type_override = []"
-                >按规则判定</button>
-                <button
                   v-for="t in TYPE_OPTIONS"
                   :key="t.key"
                   class="mt-chip"
-                  :class="{ on: form.type_override.includes(t.key) }"
-                  :style="form.type_override.includes(t.key)
+                  :class="{ on: shownTypes.includes(t.key) }"
+                  :style="shownTypes.includes(t.key)
                     ? { color: t.color, borderColor: t.color, background: t.color + '18' } : {}"
                   :disabled="!canEditMaterial"
                   @click="toggleType(t.key)"
@@ -475,11 +487,12 @@ watch(() => props.visible, v => {
               </div>
               <!-- 固定单行（超出省略，悬停看全文），避免换行把右侧区域撑高、破坏与图片列的对齐 -->
               <div class="mt-hint" :title="typeHintFull">
-                当前：<b>{{ formatTypes(detail.categories) }}</b>
-                <span v-if="detail.category_source">（{{ SOURCE_TEXT[detail.category_source] }}）</span>
-                <template v-if="detail.category_source === 'manual'">
-                  ｜规则判定：<b>{{ formatTypes(detail.rule_categories) }}</b>
+                <template v-if="form.type_override.length">
+                  单独指定｜规则判定：<b>{{ formatTypes(ruleTypes) }}</b>
+                  <a v-if="canEditMaterial" class="mt-reset" @click="resetTypes">恢复规则判定</a>
                 </template>
+                <template v-else-if="detail.rule_source">来源：{{ SOURCE_TEXT[detail.rule_source] }}</template>
+                <template v-else>未匹配规则，请单独指定</template>
               </div>
             </div>
           </div>
@@ -707,13 +720,14 @@ watch(() => props.visible, v => {
 }
 .mt-chip:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .mt-chip.on { font-weight: 600; }
-.mt-chip:first-child.on { color: #3a3028; border-color: #8a7a6a; background: rgba(138,122,106,0.1); }
 .mt-chip:disabled { cursor: not-allowed; opacity: 0.7; }
 .mt-hint {
   font-size: 11px; color: #6b5e4e; line-height: 1.6;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .mt-hint b { color: #3a3028; }
+.mt-reset { margin-left: 6px; color: var(--accent); cursor: pointer; }
+.mt-reset:hover { text-decoration: underline; }
 .mc-field > span { flex: 1; min-width: 0; word-break: break-all; }
 /* 状态文字与停用角标紧挨着显示，角标不参与撑满 */
 .mc-field > span.status-text, .mc-field > span.ro-badge { flex: none; }
