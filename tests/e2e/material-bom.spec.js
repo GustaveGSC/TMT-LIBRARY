@@ -158,12 +158,12 @@ test('物料表 BOM 标记 + 物料卡片：BOM下级按研发版本列出并弹
   const bomSec = card.locator('.mc-bom')
   const usedSec = card.locator('.mc-used')
   await expect(bomSec.locator('.mc-section-title')).toContainText('BOM下级')
-  await expect(usedSec.locator('.mc-section-title')).toContainText('被使用')
   // 1 个 ERP 物料挂 2 个研发 BOM：两个都列出来，各带下级数量；卡片里不直接展开树
   await expect(bomSec.locator('.bom-drawing')).toHaveText(['F1-A02', 'F1-A01'])
   await expect(bomSec.locator('tbody tr').nth(1)).toContainText('5 项')
   await expect(bomSec.locator('.bom-tree')).toHaveCount(0)
-  await expect(usedSec).toContainText('没有被任何 BOM 使用')
+  // 没有被使用：整个分区隐藏
+  await expect(usedSec).toHaveCount(0)
   await bomSec.scrollIntoViewIfNeeded()
   await page.locator('.el-dialog.material-card-dialog').screenshot({ path: 'test-results/material-card-bom.png' })
 
@@ -173,20 +173,37 @@ test('物料表 BOM 标记 + 物料卡片：BOM下级按研发版本列出并弹
   await expect(dlg.locator('.bom-dlg-code')).toHaveText('F1-A01')
   await expect(dlg.locator('.bt-seq')).toHaveText(['1', '1.1', '2'])
   expect(treeRequests).toEqual([3])
+  // 弹窗更大：宽度明显超过卡片
+  const dlgBox = await dlg.boundingBox()
+  expect(dlgBox.width).toBeGreaterThan(1200)
+
+  // 筛选：命中「方管」→ 保留上级 P1（序号仍是原层级编号），命中行高亮
+  await dlg.locator('.bom-dlg-search input').fill('方管')
+  await expect(dlg.locator('.bt-seq')).toHaveText(['1', '1.1'])
+  await expect(dlg.locator('.bom-dlg-hit')).toContainText('匹配 1 项')
+  await expect(dlg.locator('tr.bt-hit-row')).toHaveCount(1)
   await dlg.screenshot({ path: 'test-results/material-card-bom-dialog.png' })
 
   // 弹窗里点子件编码：关弹窗，卡片内跳到该物料，出现返回按钮
-  await dlg.locator('.bt-erp', { hasText: 'P1-A01' }).click()
+  await dlg.locator('.bt-erp', { hasText: 'R1-A01' }).click()
   await expect(dlg).toBeHidden()
   await expect(page.locator('.el-dialog__header .mc-back-btn')).toBeVisible()
+  // 返回：回到原物料，并重新打开刚才的 BOM 弹窗（保留筛选词）
   await page.locator('.el-dialog__header .mc-back-btn').click()
+  await expect(page.locator('.el-dialog__header .mc-erp-code')).toHaveText('F1-A')
+  await expect(dlg).toBeVisible()
+  await expect(dlg.locator('.bom-dlg-code')).toHaveText('F1-A01')
+  await expect(dlg.locator('.bom-dlg-search input')).toHaveValue('方管')
   await expect(page.locator('.el-dialog__header .mc-back-btn')).toHaveCount(0)
+  await dlg.locator('.el-dialog__headerbtn').click()
+  await expect(dlg).toBeHidden()
 
   // 打开原材料 R1：没有下级 BOM，被使用分区显示最终产品和直接上级
   await page.locator('.el-dialog__header .mc-close-btn').click()
   await page.locator('.code-link', { hasText: 'R1-A01' }).click()
   await expect(page.locator('.el-dialog__header .mc-erp-code')).toHaveText('R1-A01')
-  await expect(bomSec).toContainText('没有下级 BOM')
+  // 没有下级 BOM：整个分区隐藏
+  await expect(bomSec).toHaveCount(0)
   await expect(usedSec.locator('.mc-section-title')).toContainText('1 个最终产品')
   await expect(usedSec.locator('.used-chip')).toContainText('F1-A02')
   await expect(usedSec.locator('.cost-table tbody tr')).toHaveCount(1)

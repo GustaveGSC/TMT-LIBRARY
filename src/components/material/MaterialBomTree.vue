@@ -10,6 +10,8 @@ const props = defineProps({
   maxHeight:  { type: [String, Number], default: undefined },
   expandAll:  { type: Boolean, default: true },
   emptyText:  { type: String,  default: '暂无 BOM 数据' },
+  // 筛选词（编码/名称，不区分大小写）：命中的行连同它的上级链路保留，其余隐藏
+  keyword:    { type: String,  default: '' },
 })
 // 点击编码：由上层决定打开哪个物料卡片
 const emit = defineEmits(['open-code'])
@@ -27,6 +29,37 @@ const numberedRows = computed(() => {
   return walk(props.rows || [], '')
 })
 
+const kw = computed(() => (props.keyword || '').trim().toLowerCase())
+
+function isHit(node) {
+  const k = kw.value
+  if (!k) return false
+  return [node.drawing, node.erp_code, node.name]
+    .some(v => v && String(v).toLowerCase().includes(k))
+}
+
+// 筛选后的树：序号在筛选前已生成，所以筛选后仍是原层级编号，便于对照原表
+const filtered = computed(() => {
+  if (!kw.value) return { rows: numberedRows.value, hits: 0 }
+  let hits = 0
+  const walk = nodes => nodes.reduce((acc, node) => {
+    const children = node.children ? walk(node.children) : []
+    const hit = isHit(node)
+    if (hit) hits++
+    if (hit || children.length) {
+      acc.push({ ...node, _hit: hit, ...(node.children ? { children } : {}) })
+    }
+    return acc
+  }, [])
+  const rows = walk(numberedRows.value)
+  return { rows, hits }
+})
+
+// 命中行浅色高亮，上级链路行保持原样
+function rowClass({ row }) { return row._hit ? 'bt-hit-row' : '' }
+
+defineExpose({ matchCount: computed(() => filtered.value.hits) })
+
 // ── 方法 ──────────────────────────────────────────
 function formatQty(q) {
   if (q == null) return ''
@@ -37,7 +70,7 @@ function formatQty(q) {
 <template>
   <el-table
     class="bom-tree"
-    :data="numberedRows"
+    :data="filtered.rows"
     row-key="id"
     :tree-props="{ children: 'children' }"
     :default-expand-all="expandAll"
@@ -46,6 +79,7 @@ function formatQty(q) {
     size="small"
     border
     :empty-text="emptyText"
+    :row-class-name="rowClass"
   >
     <!-- 序号列承载树的展开箭头与缩进，层级一目了然 -->
     <el-table-column label="序号" width="120">
@@ -83,4 +117,5 @@ function formatQty(q) {
 .bt-erp { font-size: 12px; font-weight: 600; color: #2c2420; cursor: pointer; }
 .bt-erp:hover { color: var(--accent); text-decoration: underline; }
 .bt-none { font-size: 12px; color: var(--text-muted); }
+:deep(.bt-hit-row > td.el-table__cell) { background: #fff6dc !important; }
 </style>

@@ -1,7 +1,7 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
 import { ref, computed, watch } from 'vue'
-import { WarningFilled, Picture, Plus, Edit, Delete, ZoomIn, Close, Check, Back, View } from '@element-plus/icons-vue'
+import { WarningFilled, Picture, Plus, Edit, Delete, ZoomIn, Close, Check, Back, View, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import MediaViewer from '@/components/common/MediaViewer.vue'
 import MaterialBomTree from './MaterialBomTree.vue'
@@ -21,7 +21,9 @@ const emit = defineEmits(['update:visible', 'saved'])
 
 // ── 响应式状态 ────────────────────────────────────
 // 当前显示的物料编码：打开时取 props.code；在 BOM 区点编码可以在卡片内跳到其他物料，
-// 跳转前的编码压进 navStack，标题栏出现「返回」
+// 跳转前的状态压进 navStack，标题栏出现「返回」。
+// 每项 { code, bomDialog }：从 BOM 弹窗里点进去的，bomDialog 记下当时看的 BOM 和筛选词，
+// 返回时重新打开那个弹窗——用户感知的「上一层」是弹窗，不只是上一个物料
 const activeCode = ref('')
 const navStack   = ref([])
 const detail   = ref(null)
@@ -251,8 +253,11 @@ const bomDialogOpen    = ref(false)
 const bomDialogHead    = ref(null)   // 列表里点的那一条（先用它显示标题，树加载完再替换）
 const bomDialogTree    = ref([])
 const bomDialogLoading = ref(false)
+const bomDialogKeyword = ref('')     // 弹窗内筛选：编码/名称
+const bomTreeRef       = ref(null)   // 读取树组件暴露的匹配数
 
-async function openBomDialog(v) {
+async function openBomDialog(v, keyword = '') {
+  bomDialogKeyword.value = keyword
   bomDialogHead.value = v
   bomDialogTree.value = []
   bomDialogOpen.value = true
@@ -274,25 +279,30 @@ async function openBomDialog(v) {
 }
 
 // 弹窗里点子件编码：关掉弹窗，卡片跳到该物料
-function onBomDialogCode(code) {
-  bomDialogOpen.value = false
-  navigateTo(code)
+async function onBomDialogCode(code) {
+  const snapshot = { head: bomDialogHead.value, keyword: bomDialogKeyword.value }
+  // 先确认能跳（可能有未保存修改被取消），再关弹窗
+  if (await navigateTo(code, snapshot)) bomDialogOpen.value = false
 }
 
 // 在卡片内跳到另一个物料（BOM 子件/上级）；有未保存的人工维护时先确认
-async function navigateTo(code) {
-  if (!code || code === activeCode.value) return
-  if (!(await confirmDiscard())) return
-  navStack.value.push(activeCode.value)
+async function navigateTo(code, bomDialog = null) {
+  if (!code || code === activeCode.value) return false
+  if (!(await confirmDiscard())) return false
+  navStack.value.push({ code: activeCode.value, bomDialog })
   activeCode.value = code
   resetForCode()
+  return true
 }
 
 async function navigateBack() {
   if (!navStack.value.length) return
   if (!(await confirmDiscard())) return
-  activeCode.value = navStack.value.pop()
+  const prev = navStack.value.pop()
+  activeCode.value = prev.code
   resetForCode()
+  // 从 BOM 弹窗点进来的：回到那个弹窗（保留当时的筛选词）
+  if (prev.bomDialog?.head) openBomDialog(prev.bomDialog.head, prev.bomDialog.keyword)
 }
 
 function resetForCode() {
@@ -467,7 +477,7 @@ watch(() => props.visible, v => {
     <template #header>
       <div class="mc-erp-line">
         <button v-if="navStack.length" class="mc-back-btn" type="button"
-                :title="`返回 ${navStack[navStack.length - 1]}`" aria-label="返回" @click="navigateBack">
+                :title="`返回 ${navStack[navStack.length - 1].code}`" aria-label="返回" @click="navigateBack">
           <el-icon><Back /></el-icon>
         </button>
         <template v-if="detail">
@@ -609,13 +619,12 @@ watch(() => props.visible, v => {
 
         <!-- ── BOM下级：该物料挂的全部研发 BOM（每个研发版本一行），点「查看」弹窗看完整结构
              （在「物料BOM」页导入）── -->
-        <div class="mc-section mc-bom">
+        <div v-if="bom?.versions.length" class="mc-section mc-bom">
           <div class="mc-section-title">
             <span>BOM下级</span>
             <span v-if="bom?.versions.length" class="bom-ver-text">{{ bom.versions.length }} 个研发版本</span>
           </div>
-          <div v-if="bomLoading && !bom" class="state-tip mini">加载中...</div>
-          <table v-else-if="bom?.versions.length" class="cost-table bom-ver-table">
+          <table class="cost-table bom-ver-table">
             <thead>
               <tr>
                 <th style="width:160px">研发编码</th>
@@ -639,17 +648,15 @@ watch(() => props.visible, v => {
               </tr>
             </tbody>
           </table>
-          <div v-else class="cost-empty">没有下级 BOM</div>
         </div>
 
         <!-- ── 被使用：直接上级 + 沿上级一路找到的最终产品 ── -->
-        <div class="mc-section mc-used">
+        <div v-if="bom?.direct_parents.length" class="mc-section mc-used">
           <div class="mc-section-title">
             <span>被使用</span>
             <span v-if="bom?.top_products.length" class="bom-ver-text">{{ bom.top_products.length }} 个最终产品</span>
           </div>
-          <div v-if="bomLoading && !bom" class="state-tip mini">加载中...</div>
-          <template v-else>
+          <template v-if="bom">
             <div v-if="bom?.top_products.length" class="used-block">
               <div class="used-label">最终产品</div>
               <div class="used-chips">
@@ -681,7 +688,6 @@ watch(() => props.visible, v => {
                 </tr>
               </tbody>
             </table>
-            <div v-if="!bom?.direct_parents.length" class="cost-empty">没有被任何 BOM 使用</div>
           </template>
         </div>
 
@@ -832,7 +838,7 @@ watch(() => props.visible, v => {
   <el-dialog
     v-model="bomDialogOpen"
     class="material-bom-dialog"
-    width="960"
+    width="min(1400px, 92vw)"
     align-center
     append-to-body
   >
@@ -843,9 +849,17 @@ watch(() => props.visible, v => {
         <span class="bom-dlg-meta">{{ bomDialogHead.imported_by || '—' }} · {{ bomDialogHead.imported_at }}</span>
       </div>
     </template>
+    <div class="bom-dlg-filter">
+      <el-input v-model="bomDialogKeyword" size="small" clearable placeholder="筛选编码 / 名称"
+                :prefix-icon="Search" class="bom-dlg-search" />
+      <span v-if="bomDialogKeyword.trim()" class="bom-dlg-hit">
+        匹配 {{ bomTreeRef?.matchCount ?? 0 }} 项（保留其上级层次）
+      </span>
+    </div>
     <div v-loading="bomDialogLoading" class="bom-dlg-body">
-      <MaterialBomTree :rows="bomDialogTree" height="100%" @open-code="onBomDialogCode"
-                       :empty-text="bomDialogLoading ? '加载中...' : '暂无 BOM 数据'" />
+      <MaterialBomTree ref="bomTreeRef" :rows="bomDialogTree" height="100%" :keyword="bomDialogKeyword"
+                       @open-code="onBomDialogCode"
+                       :empty-text="bomDialogLoading ? '加载中...' : (bomDialogKeyword.trim() ? '没有匹配的物料' : '暂无 BOM 数据')" />
     </div>
   </el-dialog>
 
@@ -1092,7 +1106,10 @@ watch(() => props.visible, v => {
 .bom-dlg-code { font-size: 17px; font-weight: 700; color: #000; }
 .bom-dlg-name { font-size: 15px; color: #3a3028; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bom-dlg-meta { font-size: 12px; color: #8a7a6a; flex-shrink: 0; }
-.bom-dlg-body { height: 62vh; }
+.bom-dlg-filter { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.bom-dlg-search { width: 280px; }
+.bom-dlg-hit { font-size: 12px; color: #6b5e4e; }
+.bom-dlg-body { height: 72vh; }
 .bom-ver-text { font-size: 12px; font-weight: 400; color: #6b5e4e; letter-spacing: 0; }
 .used-block { margin-bottom: 10px; }
 .used-label { font-size: 12px; color: #6b5e4e; margin-bottom: 6px; }
