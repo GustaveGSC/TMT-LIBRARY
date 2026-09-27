@@ -1,7 +1,8 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
 import { ref, computed, watch } from 'vue'
-import { WarningFilled, Picture, Plus, Edit, Delete, ZoomIn, Close } from '@element-plus/icons-vue'
+import { WarningFilled, Picture, Plus, Edit, Delete, ZoomIn, Close, Check } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import MediaViewer from '@/components/common/MediaViewer.vue'
 import { pickFile } from '@/utils/download'
 import http from '@/api/http'
@@ -43,6 +44,28 @@ const TYPE_OPTIONS = [
 ]
 const typeLabel = Object.fromEntries(TYPE_OPTIONS.map(t => [t.key, t.label]))
 const SOURCE_TEXT = { manual: '单独指定', rule: '编码前缀规则', group: '分组默认类型' }
+
+// 已保存状态的快照（规范化后的 JSON），与 form 比较得出是否有未保存的修改
+const savedSnapshot = ref('')
+function snapshotOf(f) {
+  return JSON.stringify({
+    short_name: (f.short_name || '').trim(), category: (f.category || '').trim(),
+    spec: (f.spec || '').trim(), remark: (f.remark || '').trim(),
+    type_override: [...(f.type_override || [])].sort(),
+  })
+}
+const isDirty = computed(() => !!detail.value && snapshotOf(form.value) !== savedSnapshot.value)
+
+function fillForm(data) {
+  form.value = {
+    short_name: data.short_name || '',
+    category:   data.category   || '',
+    spec:       data.spec       || '',
+    remark:     data.remark     || '',
+    type_override: [...(data.type_override || [])],
+  }
+  savedSnapshot.value = snapshotOf(form.value)
+}
 
 function toggleType(key) {
   const list = form.value.type_override
@@ -186,13 +209,7 @@ async function loadDetail() {
     const res = await http.get(`/api/material/items/${encodeURIComponent(props.code)}`)
     if (res.success) {
       detail.value = res.data
-      form.value = {
-        short_name: res.data.short_name || '',
-        category:   res.data.category   || '',
-        spec:       res.data.spec       || '',
-        remark:     res.data.remark     || '',
-        type_override: [...(res.data.type_override || [])],
-      }
+      fillForm(res.data)
       images.value = res.data.images || []
       currentIdx.value = 0
       loadCost()
@@ -206,10 +223,12 @@ async function loadDetail() {
   }
 }
 
-// ── 保存 ──────────────────────────────────────────
+// ── 保存人工维护 ──────────────────────────────────
+// 卡片底部不再有保存/取消：图片操作即时生效，人工维护用分区标题行里的确认图标单独保存，
+// 保存后卡片保持打开。操作类错误用消息提示，errorMsg 只留给"详情加载失败"（它会替换整张卡片）。
 async function handleSave() {
-  saving.value   = true
-  errorMsg.value = ''
+  if (!isDirty.value || saving.value) return
+  saving.value = true
   try {
     // 刻意不传 is_disabled：该列是「人工覆盖」，一旦传值就会覆盖导入数据的判定。
     // 停用状态只来源于导入，卡片无权修改。
@@ -224,15 +243,16 @@ async function handleSave() {
       `/api/material/items/${encodeURIComponent(props.code)}`, payload,
     )
     if (res.success) {
-      // 用服务端返回值回写，并通知列表更新对应行
+      // 用服务端返回值回写（物料类型的判定结果也会随之更新），并通知列表更新对应行
       detail.value = { ...detail.value, ...(res.data || {}) }
+      fillForm(detail.value)
       emit('saved', detail.value)
-      close()
+      ElMessage.success('已保存')
     } else {
-      errorMsg.value = res.message || '保存失败'
+      ElMessage.error(res.message || '保存失败')
     }
   } catch (e) {
-    errorMsg.value = e.message || '网络错误'
+    ElMessage.error(e.message || '网络错误')
   } finally {
     saving.value = false
   }
@@ -242,8 +262,7 @@ async function handleSave() {
 async function pickImageDataUrl() {
   const file = await pickFile('image/*')
   if (!file) return ''
-  if (file.size > 5 * 1024 * 1024) { errorMsg.value = '图片不能超过 5MB'; return '' }
-  errorMsg.value = ''
+  if (file.size > 5 * 1024 * 1024) { ElMessage.error('图片不能超过 5MB'); return '' }
   return new Promise((resolve) => {
     const fr = new FileReader()
     fr.onload = () => resolve(String(fr.result || ''))
@@ -259,12 +278,12 @@ async function runImageOp(request, { selectLast = false } = {}) {
   imgBusy.value = true
   try {
     const res = await request()
-    if (!res.success) { errorMsg.value = res.message || '图片操作失败'; return }
+    if (!res.success) { ElMessage.error(res.message || '图片操作失败'); return }
     images.value = res.data || []
     if (selectLast) currentIdx.value = images.value.length - 1
     else if (currentIdx.value >= images.value.length) currentIdx.value = Math.max(0, images.value.length - 1)
   } catch (e) {
-    errorMsg.value = e.message || '网络错误'
+    ElMessage.error(e.message || '网络错误')
   } finally {
     imgBusy.value = false
   }
@@ -287,7 +306,6 @@ async function replaceImage() {
 async function deleteImage() {
   const img = currentImage.value
   if (!img) return
-  const { ElMessageBox } = await import('element-plus')
   try {
     await ElMessageBox.confirm('确认删除这张图片？删除后不可恢复。', '删除图片',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' })
@@ -300,6 +318,24 @@ function viewImage() {
 }
 
 function close() { emit('update:visible', false) }
+
+async function confirmDiscard() {
+  if (!isDirty.value) return true
+  try {
+    await ElMessageBox.confirm('人工维护有未保存的修改，确定关闭？', '未保存',
+      { type: 'warning', confirmButtonText: '放弃修改并关闭', cancelButtonText: '继续编辑' })
+    return true
+  } catch { return false }
+}
+
+async function requestClose() {
+  if (await confirmDiscard()) close()
+}
+
+// el-dialog 的 ESC / 点遮罩关闭
+async function beforeClose(done) {
+  if (await confirmDiscard()) done()
+}
 
 // 打开时才拉详情，关闭不清理（同一条再打开可秒开）
 watch(() => props.visible, v => {
@@ -314,6 +350,8 @@ watch(() => props.visible, v => {
   <el-dialog
     :model-value="props.visible"
     :show-close="false"
+    :before-close="beforeClose"
+    class="material-card-dialog"
     :width="canMaterialPrice ? 900 : 760"
     align-center
     append-to-body
@@ -333,8 +371,8 @@ watch(() => props.visible, v => {
           >{{ detail.is_disabled ? '已停用' : '启用' }}</span>
         </template>
         <span v-else class="mc-erp-name">物料卡片</span>
-        <button class="mc-close-btn" type="button" @click="close">
-          <el-icon><Close /></el-icon><span>关闭</span>
+        <button class="mc-close-btn" type="button" aria-label="关闭" @click="requestClose">
+          <el-icon><Close /></el-icon>
         </button>
       </div>
     </template>
@@ -400,7 +438,19 @@ watch(() => props.visible, v => {
         <!-- 人工维护：放在图片右侧（可编辑内容是卡片的主要操作对象），
              所有字段标签同宽右对齐，输入框左边缘在一条竖线上 -->
         <div class="mc-section mc-manual">
-          <div class="mc-section-title">人工维护</div>
+          <!-- 标题行右侧的确认图标：只保存人工维护，有修改时才可点 -->
+          <div class="mc-section-title">
+            <span>人工维护<span v-if="isDirty" class="mc-dirty">未保存</span></span>
+            <button
+              v-if="canEditMaterial"
+              class="mc-save-btn"
+              :class="{ active: isDirty }"
+              type="button"
+              aria-label="保存人工维护"
+              :disabled="!isDirty || saving"
+              @click="handleSave"
+            ><el-icon><Check /></el-icon></button>
+          </div>
           <!-- 物料类型：单独指定 > 编码前缀规则 > 分组默认类型 -->
           <div class="mc-field mc-field-top">
             <label>物料类型</label>
@@ -592,12 +642,6 @@ watch(() => props.visible, v => {
         </div>
        </div><!-- /mc-scroll -->
 
-        <div class="mc-actions">
-          <button class="btn btn-secondary" @click="close">取消</button>
-          <button v-if="canEditMaterial" class="btn btn-primary" :disabled="saving" @click="handleSave">
-            {{ saving ? '保存中...' : '保存' }}
-          </button>
-        </div>
       </template>
     </div>
   </el-dialog>
@@ -704,7 +748,6 @@ watch(() => props.visible, v => {
 
 
 /* ── 操作 ─────────────────────────────────────── */
-.mc-actions { display: flex; gap: 8px; justify-content: flex-end; }
 .btn {
   padding: 6px 18px; border-radius: 7px;
   font-size: 13px; font-family: inherit;
@@ -718,7 +761,7 @@ watch(() => props.visible, v => {
 
 /* ── 布局：第一行 图片|ERP 信息，其下 人工维护、价格 通栏 ── */
 /* 整体一个滚动容器，价格表很长时只滚卡片内容，操作按钮始终可见 */
-.mc-scroll { max-height: 70vh; overflow-y: auto; padding-right: 4px; margin-bottom: 14px; }
+.mc-scroll { max-height: 72vh; overflow-y: auto; padding-right: 4px; }
 .mc-scroll::-webkit-scrollbar { width: 4px; }
 .mc-scroll::-webkit-scrollbar-track { background: transparent; }
 .mc-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
@@ -793,9 +836,7 @@ watch(() => props.visible, v => {
 
 /* 标题栏（el-dialog #header 插槽）：编码 名称 状态 …… 关闭，底部分割线 */
 .mc-erp-line {
-  display: flex; align-items: center; gap: 12px;
-  padding-bottom: 12px; border-bottom: 1px solid var(--border);
-  min-width: 0;
+  display: flex; align-items: center; gap: 12px; min-width: 0;
 }
 .mc-erp-code {
   /* 固定黑色加粗，不跟随主题 */
@@ -809,15 +850,33 @@ watch(() => props.visible, v => {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .mc-erp-line .ro-badge { flex-shrink: 0; font-size: 11px; padding: 2px 8px; }
+/* 关闭：圆形图标按键 */
 .mc-close-btn {
   margin-left: auto; flex-shrink: 0;
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 4px 12px; border-radius: 7px;
+  width: 30px; height: 30px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
   border: 1px solid var(--border); background: var(--bg-card);
-  color: #3a3028; font-size: 13px; font-family: inherit; cursor: pointer;
+  color: #3a3028; font-size: 15px; cursor: pointer;
   transition: all 0.15s;
 }
-.mc-close-btn:hover { border-color: var(--accent); color: var(--accent); }
+.mc-close-btn:hover { border-color: #d05a3c; color: #d05a3c; background: rgba(208,90,60,0.06); }
+
+/* 人工维护标题行：右侧确认图标。按键高度压在 22px 内，保证分区仍与图片列等高 */
+.mc-manual .mc-section-title { align-items: center; min-height: 22px; margin-bottom: 8px; }
+.mc-dirty {
+  margin-left: 8px; font-size: 11px; font-weight: 400; letter-spacing: 0;
+  color: #c0782a;
+}
+.mc-save-btn {
+  width: 22px; height: 22px; border-radius: 50%; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); background: var(--bg-card);
+  color: #8a7a6a; font-size: 13px; cursor: pointer; transition: all 0.15s;
+}
+.mc-save-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.mc-save-btn.active:hover { filter: brightness(1.1); }
+.mc-save-btn:disabled { cursor: not-allowed; }
+.mc-save-btn:not(.active):disabled { opacity: 0.6; }
 
 /* ── 价格区 ───────────────────────────────────── */
 .mc-section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
@@ -902,4 +961,18 @@ watch(() => props.visible, v => {
   display: flex; gap: 10px; font-size: 12px;
 }
 .cost-notes label { color: var(--text-secondary); flex-shrink: 0; }
+</style>
+
+<!-- 非 scoped：el-dialog 会被 Teleport 到 body，scoped/:deep() 都命不中它自身的结构，
+     必须用自定义类名写全局样式（见 feedback_eldialog_teleport_scoped_css_bug）。
+     第一条是占位：dev 环境下非 scoped 块的第一条规则可能被丢弃 -->
+<style>
+.material-card-dialog-css-order-guard { all: unset; }
+.el-dialog.material-card-dialog { --el-dialog-border-radius: 14px; }
+/* 标题栏分割线延伸到弹窗左右边界：抵消 el-dialog 自身的左右内边距 */
+.el-dialog.material-card-dialog .el-dialog__header {
+  margin: 0 calc(-1 * var(--el-dialog-padding-primary)) 16px;
+  padding: 0 var(--el-dialog-padding-primary) 14px;
+  border-bottom: 1px solid var(--border);
+}
 </style>

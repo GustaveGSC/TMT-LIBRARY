@@ -28,7 +28,10 @@ async function openCard(page, item) {
     r.request().resourceType() === 'script' ? r.continue() : r.fulfill({ json: OK([]) }))
   await page.route('**/api/account/me', r => r.fulfill({ json: OK(USER) }))
   await page.route('**/api/material/items?*', r => r.fulfill({ json: OK({ items: [item], total: 1, page: 1, page_size: 50 }) }))
-  await page.route('**/api/material/items/14ST02001-A01', r => r.fulfill({ json: OK(item) }))
+  await page.route('**/api/material/items/14ST02001-A01', r => {
+    const body = r.request().method() === 'PUT' ? JSON.parse(r.request().postData() || '{}') : {}
+    return r.fulfill({ json: OK({ ...item, ...body }) })
+  })
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto('/#/material')
   await page.locator('.code-link', { hasText: '14ST02001-A01' }).click()
@@ -130,13 +133,24 @@ test('物料卡片：编码/名称/状态作为标题栏，图片|人工维护�
   await expect(page.locator('.el-dialog .el-dialog__title')).toHaveCount(0)
   await expect(page.locator('.el-dialog .el-dialog__headerbtn')).toHaveCount(0)
   expect(erpBox.y + erpBox.height).toBeLessThanOrEqual(img.y + 1)
-  const lineStyle = await erp.evaluate(el => {
+  // 分割线延伸到弹窗左右边界；弹窗圆角加大
+  const header = page.locator('.el-dialog.material-card-dialog .el-dialog__header')
+  const headerStyle = await header.evaluate(el => {
     const cs = getComputedStyle(el)
-    return { bottom: cs.borderBottomWidth, style: cs.borderBottomStyle, bg: cs.backgroundColor }
+    return { bottom: cs.borderBottomWidth, style: cs.borderBottomStyle }
   })
-  expect(lineStyle.bottom).not.toBe('0px')
-  expect(lineStyle.style).toBe('solid')
-  expect(lineStyle.bg).toBe('rgba(0, 0, 0, 0)')
+  expect(headerStyle.bottom).not.toBe('0px')
+  expect(headerStyle.style).toBe('solid')
+  const headerBox = await header.boundingBox()
+  const dialogBox = await page.locator('.el-dialog.material-card-dialog').boundingBox()
+  expect(Math.abs(headerBox.x - dialogBox.x)).toBeLessThan(1)
+  expect(Math.abs(headerBox.width - dialogBox.width)).toBeLessThan(1)
+  const radius = await page.locator('.el-dialog.material-card-dialog')
+    .evaluate(el => parseFloat(getComputedStyle(el).borderTopLeftRadius))
+  expect(radius).toBeGreaterThanOrEqual(12)
+  // 底部不再有保存/取消按键
+  await expect(page.locator('.el-dialog.material-card-dialog .mc-actions')).toHaveCount(0)
+  await expect(page.locator('.el-dialog.material-card-dialog button', { hasText: /^(保存|取消)$/ })).toHaveCount(0)
   // 只显示编码、名称、启用状态角标：无字段标签、不显示分组和 ERP 原始状态文字
   await expect(erp).not.toContainText('编码')
   await expect(erp).not.toContainText('名称')
@@ -166,7 +180,10 @@ test('物料卡片：编码/名称/状态作为标题栏，图片|人工维护�
   expect(badgeBox.x - (nameBox.x + nameBox.width)).toBeLessThan(16)
   expect(closeBox.x).toBeGreaterThan(badgeBox.x + badgeBox.width)
   expect(Math.abs((closeBox.x + closeBox.width) - (erpBox.x + erpBox.width))).toBeLessThan(1)
-  await expect(erp.locator('.mc-close-btn')).toHaveText('关闭')
+  // 关闭是纯图标按键（圆形）
+  await expect(erp.locator('.mc-close-btn')).toHaveText('')
+  await expect(erp.locator('.mc-close-btn')).toHaveAttribute('aria-label', '关闭')
+  expect(Math.abs(closeBox.width - closeBox.height)).toBeLessThan(1)
 
   // 图片在左、人工维护在右，等高；价格在下方通栏
   expect(img.x).toBeLessThan(manual.x)
@@ -216,4 +233,37 @@ test('单独指定物料类型时人工维护区仍与图片列等高', async ({
   expect(Math.abs(img.height - manual.height)).toBeLessThan(1)
   await expect(card.locator('.mt-hint')).toHaveAttribute('title', /若取消单独指定/)
   await page.locator('.el-dialog').screenshot({ path: 'test-results/material-card-manual.png' })
+})
+
+// 人工维护：标题行的确认图标单独保存，保存后卡片不关闭；有未保存修改时关闭要先确认
+test('人工维护用标题行确认图标保存，关闭前提示未保存修改', async ({ page }) => {
+  const card = await openCard(page, ITEM)
+  await page.waitForTimeout(500)
+  const saveBtn = card.locator('.mc-manual .mc-save-btn')
+  await expect(saveBtn).toBeDisabled()
+  await expect(card.locator('.mc-dirty')).toHaveCount(0)
+
+  // 改动后：出现"未保存"，确认图标可点
+  await card.locator('.mc-manual input.mc-input').first().fill('新简称')
+  await expect(card.locator('.mc-dirty')).toHaveText('未保存')
+  await expect(saveBtn).toBeEnabled()
+
+  // 有未保存修改时点关闭：弹确认框，选"继续编辑"卡片不关
+  await page.locator('.el-dialog__header .mc-close-btn').click()
+  await expect(page.locator('.el-message-box')).toBeVisible()
+  await page.locator('.el-message-box button', { hasText: '继续编辑' }).click()
+  await expect(card).toBeVisible()
+
+  // 保存：请求带上新简称，保存后"未保存"消失，卡片仍打开
+  const req = page.waitForRequest(r => r.method() === 'PUT' && r.url().includes('/api/material/items/'))
+  await saveBtn.click()
+  const put = await req
+  expect(JSON.parse(put.postData()).short_name).toBe('新简称')
+  await expect(card.locator('.mc-dirty')).toHaveCount(0)
+  await expect(saveBtn).toBeDisabled()
+  await expect(card).toBeVisible()
+
+  // 已保存后关闭不再提示
+  await page.locator('.el-dialog__header .mc-close-btn').click()
+  await expect(card).toBeHidden()
 })
