@@ -687,7 +687,7 @@ watch(() => props.visible, v => {
 .mc-image {
   height: 180px; margin-bottom: 16px;
   border: 1px solid var(--border); border-radius: 12px;
-  background: var(--bg); overflow: hidden;
+  background: #fff; overflow: hidden;
   display: flex; align-items: center; justify-content: center;
 }
 /* 图片在固定尺寸的框内等比缩放居中，框本身不随图片实际尺寸变化 */
@@ -848,7 +848,7 @@ watch(() => props.visible, v => {
 .mc-thumbs::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 .mc-thumb {
   width: 44px; height: 44px; flex-shrink: 0; padding: 0; box-sizing: border-box;
-  border: 1.5px solid var(--border); border-radius: 6px; background: var(--bg);
+  border: 1.5px solid var(--border); border-radius: 6px; background: #fff;
   overflow: hidden; cursor: pointer;
 }
 .mc-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }

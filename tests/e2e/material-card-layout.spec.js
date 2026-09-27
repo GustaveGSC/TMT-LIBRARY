@@ -331,6 +331,9 @@ test('成品直接显示产品库图片，只读', async ({ page }) => {
   await expect(card.locator('.mc-img-count')).toHaveText('1 / 2')
   await card.locator('.mc-image').hover()
   await expect(card.locator('.mc-img-source')).toHaveText('产品库')
+  // 图片框与缩略图底色为白色（产品图多为白底/透明底）
+  expect(await card.locator('.mc-image').evaluate(el => getComputedStyle(el).backgroundColor)).toBe('rgb(255, 255, 255)')
+  expect(await card.locator('.mc-thumb').first().evaluate(el => getComputedStyle(el).backgroundColor)).toBe('rgb(255, 255, 255)')
   await expect(card.locator('.mc-round-btn[title="新增图片"]')).toBeVisible()
   await expect(card.locator('.mc-round-btn[title="查看大图"]')).toBeVisible()
   await expect(card.locator('.mc-round-btn[title^="编辑"]')).toHaveCount(0)
