@@ -20,7 +20,7 @@ from openpyxl import load_workbook
 
 from database.base import db
 from database.models.product.import_raw import ImportProductRaw
-from database.models.rd.cost import CostBomNode, CostMaterialPrice, CostSnapshot
+from database.models.rd.cost import CostBomNode, CostMaterialPrice, CostSnapshot, CostSnapshotSku
 from result import Result
 from services.rd.cost_import import (
     _is_summary_sheet, _parse_sku_sheet, _parse_summary_sheet, _strip_version,
@@ -52,7 +52,7 @@ def parse_workbook(data: bytes):
             if _is_summary_sheet(name):
                 order_no, _ = _parse_summary_sheet(wb[name])
                 break
-        lines, warnings, sheets = [], [], 0
+        lines, warnings, sheets, finished = [], [], 0, []
         for name in wb.sheetnames:
             if _is_summary_sheet(name):
                 continue
@@ -61,13 +61,16 @@ def parse_workbook(data: bytes):
                 warnings.append(f'Sheet「{name}」无法识别成品品号，已跳过')
                 continue
             sheets += 1
+            # 订单里包含哪些成品（每个 Sheet 的主件品号）：只记这一层，用于成本历史标注「本产品订单」
+            finished.append({'code': parsed['finished_code'], 'name': parsed['finished_name'] or '',
+                             'spec': parsed['finished_spec'] or ''})
             for line in parsed['lines']:
                 lines.append({**line, 'finished_code': parsed['finished_code']})
         if not lines:
             raise UploadValidationError('文件里没有识别到 BOM 明细行，请确认是采购带价格的 BOM')
         return {
             'order_no': order_no or '', 'suggested_date': _suggest_date(order_no),
-            'lines': lines, 'sheets': sheets, 'warnings': warnings,
+            'lines': lines, 'sheets': sheets, 'warnings': warnings, 'finished': finished,
         }
     finally:
         wb.close()
@@ -216,6 +219,13 @@ class PurchasePriceImportService:
             )
             db.session.add(batch)
             db.session.flush()
+            # 只记订单包含的成品（不记 BOM 明细）：成本历史据此区分「本产品订单」和「共用物料变价」
+            for f in parsed['finished']:
+                db.session.add(CostSnapshotSku(
+                    snapshot_id=batch.id, finished_code=f['code'][:64],
+                    finished_name=(f['name'] or None) and f['name'][:128],
+                    finished_spec=(f['spec'] or None) and f['spec'][:256],
+                ))
             created = skipped = 0
             for i in items:
                 if (i['code'], i['price']) in existing:

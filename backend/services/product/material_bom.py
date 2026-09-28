@@ -250,6 +250,11 @@ def build_single_level_boms(rows):
     return boms
 
 
+def _order_base_code(code):
+    """订单里的成品主件品号 → 研发编码（去掉 -A / -A01 这类版本后缀，统一大写），用于判断订单是否包含本产品。"""
+    return re.sub(r'-[A-Za-z]+\d*$', '', (code or '').strip()).upper()
+
+
 def _erp_info(erp_codes):
     """ERP 物料的名称/规格（一条查询）；BOM 里优先显示 ERP 的，文件里的作兜底。"""
     codes = [c for c in set(erp_codes) if c]
@@ -542,7 +547,18 @@ class MaterialBomService:
 
     # ── 物料卡片：按 BOM 实时计算的价格 + 价格变化历史 ───
     def calc_price(self, erp_code, bom_id=None):
-        """该 ERP 物料挂的研发 BOM（默认最新版本）的当前计算价，以及在各价格日期上重算的历史。"""
+        """物料卡片的「成本视图」（有研发 BOM 的成品/产成品/半成品）：
+
+        - current：按最新价格计算的成本 + 完整度（已计价 / 全部原材料种类，按编码去重）
+        - missing_items：缺价的原材料（有效用量、所在部件），方便去补价格
+        - composition：金额占比最高的 5 个第一层下级
+        - history：按采购订单逐单重算（旧→新计算、返回新→旧），每行拆成「价格涨跌」+「新增计价」，
+          并标出这个订单里是否包含本产品（related）。未变化、也不相关的订单不列出。
+        全部现算，不存库。
+        """
+        from database.models.rd.cost import CostSnapshotSku
+        from database.repository.product.material_price import MaterialPriceRepository
+
         versions = (MaterialBom.query.filter(MaterialBom.erp_code == erp_code)
                     .order_by(MaterialBom.version.desc()).all())
         if not versions:
@@ -550,13 +566,71 @@ class MaterialBomService:
         bom = next((b for b in versions if b.id == bom_id), versions[0])
         children = self.tree(bom.id).data['children']
         histories = bom_price.price_histories(bom_price.collect_codes(children) | {bom.code})
-        current = bom_price.root_price(children, bom.code, histories, None, annotate=False)
+
+        # 当前（最新价格）
+        root_drawing = f'{bom.code}-{bom.version}' if bom.version else bom.code
+        now = bom_price.cost_snapshot(children, bom.code, histories, None, root_drawing)
+        current = bom_price.root_price(children, bom.code, histories, None, annotate=True)
+        current.update({'priced': len(now['covered']), 'total': len(now['leaves'])})
+        current['missing'] = current['total'] - current['priced']
+
+        missing_items = sorted((
+            {'drawing': v['drawing'], 'erp_code': v['erp_code'], 'name': v['name'],
+             'qty': round(v['eq'], 4), 'parents': v['parents']}
+            for code, v in now['leaves'].items() if code not in now['covered']
+        ), key=lambda x: x['drawing'])
+
+        root_total = current['unit_price'] or 0
+        composition = sorted((
+            {'drawing': n['drawing'], 'erp_code': n.get('erp_code'), 'name': n.get('name'),
+             'qty': n.get('qty'), 'amount': n.get('amount'),
+             'share': round(n['amount'] / root_total, 4) if root_total and n.get('amount') else None,
+             'missing': n.get('missing', 0)}
+            for n in children if n.get('amount')
+        ), key=lambda x: -x['amount'])[:5]
+
+        # 与本物料相关的成品研发编码：自己 + 沿上级找到的最终产品（订单只记录成品主件品号）
+        related_codes = {bom.code.upper()}
+        for top in self.for_material(erp_code).data['top_products']:
+            related_codes.add(top['code'].upper())
+
+        batches = list(reversed(MaterialPriceRepository.price_batches()))   # 旧→新
+        finished_by_batch = {}
+        if batches:
+            rows = db.session.query(CostSnapshotSku.snapshot_id, CostSnapshotSku.finished_code).filter(
+                CostSnapshotSku.snapshot_id.in_([b.id for b in batches])).all()
+            for sid, code in rows:
+                finished_by_batch.setdefault(sid, set()).add(_order_base_code(code))
+
+        history, prev = [], None
+        for b in batches:
+            snap = bom_price.cost_snapshot(children, bom.code, histories, b.snapshot_date)
+            related = bool(finished_by_batch.get(b.id, set()) & related_codes)
+            known = b.id in finished_by_batch      # 老批次没有记录订单成品，无法判断是否相关
+            changed = prev is None or snap['total'] != prev['total'] or len(snap['covered']) != len(prev['covered'])
+            if snap['total'] > 0 and (changed or related):
+                row = {
+                    'batch_id': b.id, 'order_no': b.order_no or '', 'date': b.snapshot_date.isoformat(),
+                    'unit_price': snap['total'], 'priced': len(snap['covered']), 'total': len(snap['leaves']),
+                    'related': related if known else None,
+                    'delta': None, 'price_effect': None, 'coverage_effect': None,
+                }
+                if prev is not None and prev['total'] > 0:
+                    pe, ce = bom_price.decompose(prev, snap)
+                    row.update({'delta': round(snap['total'] - prev['total'], 4),
+                                'price_effect': pe, 'coverage_effect': ce})
+                history.append(row)
+            if snap['total'] > 0:
+                prev = snap
+
         return Result.ok(data={
             'bom': bom.to_dict(),
             'versions': [{'id': b.id, 'drawing': f'{b.code}-{b.version}' if b.version else b.code}
                          for b in versions],
             'current': current,
-            'history': bom_price.history_points(children, bom.code, histories),
+            'missing_items': missing_items,
+            'composition': composition,
+            'history': list(reversed(history)),
         })
 
     # ── 导出 Excel ────────────────────────────────────

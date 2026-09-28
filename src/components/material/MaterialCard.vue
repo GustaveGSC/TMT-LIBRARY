@@ -230,8 +230,24 @@ async function loadSupplierOptions() {
 
 // ── 按 BOM 计算的价格（仅 material:price）：部件价格不存储，由下级原材料价格实时计算 ──
 // 历史 = 在下级各价格日期上重算一次（新→旧），也是后端现算的
-const calcPrice   = ref(null)    // { bom, versions, current, history } | null
-const calcHistoryOpen = ref(false)
+const calcPrice   = ref(null)    // { bom, versions, current, missing_items, composition, history } | null
+const costTab     = ref('history')   // 成本视图页签：history 成本变化 | composition 成本构成 | missing 缺价清单
+
+// 有 BOM 的物料：外购价只在「外购半成品」或已经有自身价格时显示（普通部件的价格由下级计算）
+const showOwnPrice = computed(() => !calcPrice.value
+  || !!detail.value?.is_purchased_semi || prices.value.length > 0)
+
+// 已计价比例（按原材料种类去重）
+const coverage = computed(() => {
+  const c = calcPrice.value?.current
+  return c && c.total ? Math.round(c.priced / c.total * 100) : 0
+})
+
+function signed(v) {
+  if (v == null) return '—'
+  const n = +Number(v).toFixed(4)
+  return (n > 0 ? '+' : n < 0 ? '−' : '') + '¥' + Math.abs(n)
+}
 
 async function loadCalcPrice() {
   const code = activeCode.value
@@ -345,7 +361,7 @@ async function navigateBack() {
 function resetForCode() {
   prices.value = []
   priceFormOpen.value = false; priceErr.value = ''; trendOpen.value = false
-  bom.value = null; bomDialogOpen.value = false; calcPrice.value = null; calcHistoryOpen.value = false
+  bom.value = null; bomDialogOpen.value = false; calcPrice.value = null; costTab.value = 'history'
   loadDetail()
 }
 
@@ -718,43 +734,131 @@ watch(() => props.visible, v => {
              后端在无 rd:view 时根本不返回价格字段，此处隐藏只是体验层。 -->
         <div v-if="canMaterialPrice" class="mc-section">
           <div class="mc-section-title">
-            <span>价格</span>
-            <span v-if="detail.latest_price != null" class="mc-latest">
+            <span>{{ calcPrice ? '成本（按 BOM 计算）' : '价格' }}</span>
+            <span v-if="!calcPrice && detail.latest_price != null" class="mc-latest">
               最新　<b>¥{{ Number(detail.latest_price).toFixed(4) }}</b>
               <span class="mc-src">{{ SOURCE_LABELS[detail.latest_price_source] || '' }}</span>
             </span>
           </div>
 
-          <!-- 有研发 BOM 的部件：价格由下级实时计算（不存储） -->
-          <div v-if="calcPrice" class="calc-box">
-            <div class="calc-line">
-              <span class="calc-label">按 BOM 计算</span>
-              <span class="mono calc-bom">{{ calcPrice.bom.drawing }}</span>
-              <b class="mono calc-val">{{ money(calcPrice.current.unit_price) }}</b>
+          <!-- 有研发 BOM 的部件：成本由下级原材料价格实时计算（不存储）
+               成本 + 完整度 → 成本变化（按订单，拆价格涨跌/新增计价）/ 成本构成 / 缺价清单 -->
+          <div v-if="calcPrice" class="cost-view">
+            <div class="cv-head">
+              <b class="mono cv-val">{{ money(calcPrice.current.unit_price) }}</b>
               <span v-if="calcPrice.current.price_source === 'own'" class="calc-own"
-                    title="下级都没有价格，使用该部件自己的采购价">自身采购价</span>
-              <span v-if="calcPrice.current.missing" class="calc-miss"
-                    :title="`其中 ${calcPrice.current.missing} 项原材料无价格，合计偏低`">缺 {{ calcPrice.current.missing }} 项价格</span>
-              <button v-if="calcPrice.history.length" class="calc-toggle" type="button"
-                      @click="calcHistoryOpen = !calcHistoryOpen">
-                {{ calcHistoryOpen ? '收起历史' : `价格变化 ${calcPrice.history.length} 次` }}
+                    title="下级都没有价格，使用该部件自己的外购价">外购价</span>
+              <span class="cv-bom mono" title="计算依据的研发 BOM 版本">{{ calcPrice.bom.drawing }}</span>
+              <span class="cv-cover" :title="`已计价 ${calcPrice.current.priced} 种 / 共 ${calcPrice.current.total} 种原材料（按编码去重）`">
+                已计价 <b>{{ calcPrice.current.priced }}</b> / {{ calcPrice.current.total }} 种原材料
+                <span class="cv-bar"><span :style="{ width: coverage + '%' }"></span></span>
+                <span class="cv-pct" :class="{ full: coverage === 100 }">{{ coverage }}%</span>
+              </span>
+              <button class="cost-trend" type="button" :disabled="!calcPrice.history.length && !prices.length"
+                      title="按订单显示成本走势" @click="trendOpen = true">
+                <el-icon><TrendCharts /></el-icon>成本趋势
               </button>
             </div>
-            <table v-if="calcHistoryOpen" class="cost-table calc-history">
-              <thead><tr><th style="width:120px">价格日期</th><th class="ta-r" style="width:120px">计算单价</th><th>说明</th></tr></thead>
-              <tbody>
-                <tr v-for="h in calcPrice.history" :key="h.date">
-                  <td>{{ h.date }}</td>
-                  <td class="ta-r price-val">{{ money(h.unit_price) }}</td>
-                  <td class="cell-muted">{{ h.missing ? `缺 ${h.missing} 项价格` : '下级价格齐全' }}</td>
-                </tr>
-              </tbody>
-            </table>
+
+            <div class="cv-tabs">
+              <button :class="{ active: costTab === 'history' }" @click="costTab = 'history'">
+                成本变化（{{ calcPrice.history.length }}）</button>
+              <button :class="{ active: costTab === 'composition' }" @click="costTab = 'composition'">成本构成</button>
+              <button :class="{ active: costTab === 'missing' }" @click="costTab = 'missing'">
+                缺价清单（{{ calcPrice.missing_items.length }}）</button>
+            </div>
+
+            <!-- 成本变化：按采购订单逐单重算；较上一单的变化拆成「价格涨跌」+「新增计价」 -->
+            <template v-if="costTab === 'history'">
+              <table v-if="calcPrice.history.length" class="cost-table cv-table">
+                <thead>
+                  <tr>
+                    <th>订单</th>
+                    <th style="width:88px">日期</th>
+                    <th style="width:96px" class="ta-r">计算成本</th>
+                    <th style="width:70px" class="ta-r">已计价</th>
+                    <th style="width:92px" class="ta-r">较上一单</th>
+                    <th style="width:92px" class="ta-r" title="两次都有价格的原材料，因单价变化带来的差额（真实成本变动）">价格涨跌</th>
+                    <th style="width:92px" class="ta-r" title="这次新拿到价格的原材料带来的增加（覆盖变化，不是涨价）">新增计价</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="h in calcPrice.history" :key="h.batch_id">
+                    <td>
+                      <span class="order-tag mono" :title="h.order_no">{{ h.order_no || '（无订单号）' }}</span>
+                      <span v-if="h.related === true" class="rel-tag rel-own" title="这个订单里包含本产品">本产品订单</span>
+                      <span v-else-if="h.related === false" class="rel-tag rel-shared"
+                            title="这个订单里没有本产品，是共用物料的价格更新了">共用物料变价</span>
+                    </td>
+                    <td>{{ h.date }}</td>
+                    <td class="ta-r price-val">{{ money(h.unit_price) }}</td>
+                    <td class="ta-r">{{ h.priced }}/{{ h.total }}</td>
+                    <td class="ta-r mono">{{ signed(h.delta) }}</td>
+                    <td class="ta-r mono" :class="{ up: h.price_effect > 0, down: h.price_effect < 0 }">{{ signed(h.price_effect) }}</td>
+                    <td class="ta-r mono cell-muted">{{ signed(h.coverage_effect) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div v-else class="cost-empty">还没有采购订单价格</div>
+            </template>
+
+            <!-- 成本构成：第一层下级按金额排前 5 -->
+            <template v-else-if="costTab === 'composition'">
+              <table v-if="calcPrice.composition.length" class="cost-table cv-table">
+                <thead>
+                  <tr><th style="width:150px">图纸编码</th><th>名称</th><th style="width:60px" class="ta-r">用量</th>
+                      <th style="width:96px" class="ta-r">金额</th><th style="width:150px">占比</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="c in calcPrice.composition" :key="c.drawing">
+                    <td class="mono">
+                      <span v-if="c.erp_code" class="bom-link" @click="navigateTo(c.erp_code)">{{ c.drawing }}</span>
+                      <span v-else>{{ c.drawing }}</span>
+                    </td>
+                    <td class="ellip" :title="c.name">{{ c.name || '—' }}</td>
+                    <td class="ta-r">{{ c.qty }}</td>
+                    <td class="ta-r price-val">{{ money(c.amount) }}</td>
+                    <td>
+                      <span class="cv-share"><span :style="{ width: ((c.share || 0) * 100) + '%' }"></span></span>
+                      {{ c.share != null ? (c.share * 100).toFixed(1) + '%' : '—' }}
+                      <span v-if="c.missing" class="calc-miss" :title="`其中 ${c.missing} 项原材料无价格`">缺{{ c.missing }}</span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              <div v-else class="cost-empty">还没有可计算的金额</div>
+            </template>
+
+            <!-- 缺价清单：点 ERP 编码到该物料卡片补价格 -->
+            <template v-else>
+              <table v-if="calcPrice.missing_items.length" class="cost-table cv-table">
+                <thead>
+                  <tr><th style="width:150px">图纸编码</th><th style="width:140px">ERP 编码</th><th>名称</th>
+                      <th style="width:70px" class="ta-r">总用量</th><th style="width:200px">所在部件</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="m in calcPrice.missing_items" :key="m.drawing">
+                    <td class="mono">{{ m.drawing }}</td>
+                    <td class="mono">
+                      <span v-if="m.erp_code" class="bom-link" title="到该物料卡片补价格" @click="navigateTo(m.erp_code)">{{ m.erp_code }}</span>
+                      <span v-else class="cell-muted">未匹配</span>
+                    </td>
+                    <td class="ellip" :title="m.name">{{ m.name || '—' }}</td>
+                    <td class="ta-r">{{ m.qty }}</td>
+                    <td class="ellip mono" :title="m.parents.join('、')">{{ m.parents.join('、') }}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div v-else class="cost-empty">原材料价格已齐全</div>
+            </template>
           </div>
 
+          <!-- 外购价：普通部件不显示；外购半成品或已有自身价格时显示（下级全无价格时计算用它） -->
+          <template v-if="showOwnPrice">
+          <div v-if="calcPrice" class="own-title">外购价 <span>下级全都没有价格时，成本改用这里的价格</span></div>
           <div class="cost-tabs">
             <span class="cost-count">价格记录（{{ prices.length }}）</span>
-            <button class="cost-trend" type="button" :disabled="!prices.length && !calcPrice?.history?.length"
+            <button v-if="!calcPrice" class="cost-trend" type="button" :disabled="!prices.length && !calcPrice?.history?.length"
                     title="按价格日期显示价格走势" @click="trendOpen = true">
               <el-icon><TrendCharts /></el-icon>价格趋势
             </button>
@@ -852,6 +956,7 @@ watch(() => props.visible, v => {
           </table>
 
           <div v-else class="cost-empty">暂无价格记录</div>
+          </template>
 
           <!-- 成本备注：属于 cost_bom_node.notes，与上面「人工维护」的备注是
                两个不同字段，刻意分开显示避免互相覆盖 -->
@@ -915,6 +1020,7 @@ watch(() => props.visible, v => {
     :title="detail ? `${detail.code} ${detail.name || ''}` : ''"
     :prices="prices"
     :calc-history="calcPrice?.history || []"
+    :title-prefix="calcPrice ? '成本趋势' : '价格趋势'"
   />
 
   <MediaViewer v-model="viewerOpen" :items="viewerItems" :initial-index="currentIdx" />
@@ -1173,23 +1279,40 @@ watch(() => props.visible, v => {
 .bom-dlg-total { font-size: 13px; color: #3a3028; }
 .bom-dlg-total b { color: #4a8fc0; font-size: 14px; }
 
-/* 按 BOM 计算的价格 */
-.calc-box {
-  margin-bottom: 10px; padding: 8px 12px; border-radius: 8px;
-  background: rgba(74,143,192,0.06); border: 1px solid rgba(74,143,192,0.25);
+/* 成本视图（有 BOM 的物料） */
+.cost-view {
+  margin-bottom: 10px; padding: 10px 12px; border-radius: 8px;
+  background: rgba(74,143,192,0.05); border: 1px solid rgba(74,143,192,0.25);
 }
-.calc-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
-.calc-label { color: #6b5e4e; }
-.calc-bom { color: #3a3028; font-size: 12px; }
-.calc-val { color: #4a8fc0; font-size: 15px; }
+.cv-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cv-val { font-size: 18px; color: #4a8fc0; }
+.cv-bom { font-size: 12px; color: #6b5e4e; }
+.cv-cover { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #6b5e4e; }
+.cv-cover b { color: #2c2420; }
+.cv-bar, .cv-share {
+  display: inline-block; width: 90px; height: 6px; border-radius: 3px; overflow: hidden;
+  background: rgba(138,122,106,0.2); vertical-align: middle;
+}
+.cv-bar > span, .cv-share > span { display: block; height: 100%; background: #4a8fc0; border-radius: 3px; }
+.cv-share { width: 60px; margin-right: 4px; }
+.cv-pct { font-weight: 600; color: #c0782a; }
+.cv-pct.full { color: #4a8f6a; }
+.cv-head .cost-trend { margin-left: auto; }
+.cv-tabs { display: flex; gap: 6px; margin: 10px 0 6px; }
+.cv-tabs button {
+  padding: 3px 12px; border-radius: 7px; border: 1px solid var(--border);
+  background: #fff; color: #6b5e4e; font-size: 12px; font-family: inherit; cursor: pointer;
+}
+.cv-tabs button.active { background: var(--accent-bg); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.cv-table td.up { color: #d05a3c; }
+.cv-table td.down { color: #4a8f6a; }
+.rel-tag { margin-left: 4px; padding: 0 5px; border-radius: 4px; font-size: 10px; line-height: 16px; display: inline-block; }
+.rel-own { color: #4a8f6a; background: rgba(74,143,106,0.12); }
+.rel-shared { color: #8a7a6a; background: rgba(138,122,106,0.12); }
 .calc-own { padding: 0 6px; border-radius: 4px; font-size: 11px; color: #9c6fba; background: rgba(156,111,186,0.12); }
 .calc-miss { padding: 0 6px; border-radius: 4px; font-size: 11px; color: #c0782a; background: rgba(224,144,80,0.15); }
-.calc-toggle {
-  margin-left: auto; padding: 1px 10px; border-radius: 10px; cursor: pointer;
-  border: 1px solid rgba(74,143,192,0.4); background: #fff; color: #4a8fc0;
-  font-size: 12px; font-family: inherit;
-}
-.calc-history { margin-top: 8px; }
+.own-title { margin: 6px 0 -2px; font-size: 13px; font-weight: 600; color: #3a3028; }
+.own-title span { margin-left: 6px; font-size: 11px; font-weight: 400; color: #8a7a6a; }
 .bom-dlg-body { height: 72vh; }
 .bom-ver-text { font-size: 12px; font-weight: 400; color: #6b5e4e; letter-spacing: 0; }
 .used-block { margin-bottom: 10px; }

@@ -462,6 +462,8 @@ cost_material_price                        # 物料价格记录（手动 + BOM�
   # 2026-09-27 晚：用户要求清空全部价格数据重新导入——cost_material_price/cost_bom_line/cost_snapshot_sku/cost_snapshot
   #   全部清空（备份 /root/backup_price_data_20260927.json）；物料卡片「使用记录」已去掉（读 cost_bom_line 的接口已删），
   #   价格记录每行显示导入订单号（snapshot_id → cost_snapshot.order_no），另有「价格趋势」图
+  # 2026-09-28 起采购导入价格会给批次写 cost_snapshot_sku（只记每个 Sheet 的主件品号/品名/规格，不写 cost_bom_line），
+  #   用于成本视图区分「本产品订单」/「共用物料变价」；此前的批次没有这份记录（related=null）
   id, node_id(FK→cost_bom_node CASCADE),
   snapshot_id(FK→cost_snapshot SET NULL nullable),  # BOM导入时关联快照
   unit_price(DECIMAL 12,4), price_date(DATE nullable),

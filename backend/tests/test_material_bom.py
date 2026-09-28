@@ -10,7 +10,7 @@ import database.models.product.category  # noqa: F401
 import database.models.product.finished  # noqa: F401
 import database.models.product.resource  # noqa: F401
 import database.models.product.material_supplier  # noqa: F401
-from database.models.rd.cost import CostBomNode, CostMaterialPrice, CostSnapshot
+from database.models.rd.cost import CostBomNode, CostMaterialPrice, CostSnapshot, CostSnapshotSku
 from database.models.product.erp_code_rules import ErpCodeRule
 from database.models.product.import_raw import ImportProductRaw
 from database.models.product.material import (
@@ -83,7 +83,8 @@ def bom_app():
     db.init_app(app)
     tables = [ImportProductRaw.__table__, MaterialBom.__table__, MaterialBomLine.__table__,
               ErpCodeRule.__table__, ErpGroupCategory.__table__, ProductMaterial.__table__,
-              CostSnapshot.__table__, CostBomNode.__table__, CostMaterialPrice.__table__]
+              CostSnapshot.__table__, CostSnapshotSku.__table__, CostBomNode.__table__,
+              CostMaterialPrice.__table__]
 
     def reset_caches():
         material_service.invalidate_rule_cache()
@@ -422,13 +423,25 @@ def test_export_route_is_registered():
 
 # ── 实时计价 ──────────────────────────────────────────
 
-def _price(code, price, day, source='bom_import'):
+def _batch(order_no, day, finished_codes=None):
+    """模拟一次采购导入批次；finished_codes=None 表示老批次（没有记录订单成品）。"""
+    batch = CostSnapshot(order_no=order_no, snapshot_date=day, notes='采购导入价格')
+    db.session.add(batch)
+    db.session.flush()
+    for code in finished_codes or []:
+        db.session.add(CostSnapshotSku(snapshot_id=batch.id, finished_code=code))
+    db.session.commit()
+    return batch.id
+
+
+def _price(code, price, day, source='bom_import', batch_id=None):
     node = CostBomNode.query.filter_by(code=code).first()
     if node is None:
         node = CostBomNode(code=code, code_with_version=f'{code}-A01', node_type='material')
         db.session.add(node)
         db.session.flush()
-    db.session.add(CostMaterialPrice(node_id=node.id, unit_price=price, price_date=day, source=source))
+    db.session.add(CostMaterialPrice(node_id=node.id, unit_price=price, price_date=day, source=source,
+                                     snapshot_id=batch_id))
     db.session.commit()
 
 
@@ -484,21 +497,47 @@ def test_semi_without_priced_children_uses_own_purchase_price(bom_app):
         assert data['bom']['unit_price'] == 150 and data['bom']['missing'] == 1
 
 
-def test_calc_price_current_and_history_points(bom_app):
+def test_cost_overview_by_order_with_decomposition_and_relation(bom_app):
     from datetime import date
     with bom_app.app_context():
         material_bom_service.import_file(_pdm(SAMPLE), 'a.xlsx', 'tester')
-        _price('R1', 3, date(2024, 1, 1))
-        _price('R1', 4, date(2024, 6, 1))
-        _price('S1', 0.5, date(2024, 6, 1))
+        # 订单 A 就是本产品 F1 的订单；订单 B 是别的产品 Y1，只是和 F1 共用 R1、S1
+        a = _batch('A-20240101', date(2024, 1, 1), ['F1-A'])
+        _price('R1', 3, date(2024, 1, 1), batch_id=a)
+        b = _batch('B-20240601', date(2024, 6, 1), ['Y1-A01'])
+        _price('R1', 4, date(2024, 6, 1), batch_id=b)
+        _price('S1', 0.5, date(2024, 6, 1), batch_id=b)
+
         data = material_bom_service.calc_price('F1-A').data
-        assert data['bom']['drawing'] == 'F1-A01'
-        assert data['current'] == {'unit_price': 38.0, 'missing': 0, 'price_source': 'calc', 'price_date': None}
-        # 每个价格日期重算一次，新→旧
-        assert data['history'] == [
-            {'date': '2024-06-01', 'unit_price': 38.0, 'missing': 0},
-            {'date': '2024-01-01', 'unit_price': 27.0, 'missing': 1},
-        ]
+        # R1 有效用量 = 1×2×3（经 P1→M1）+ 1×3（直接挂的 M1）= 9；S1 = 4
+        assert data['current']['unit_price'] == 38.0
+        assert (data['current']['priced'], data['current']['total'], data['current']['missing']) == (2, 2, 0)
+        assert data['missing_items'] == []
+        assert [(c['drawing'], c['amount'], c['share']) for c in data['composition']] == [
+            ('P1-A01', 24.0, round(24 / 38, 4)), ('M1-A01', 12.0, round(12 / 38, 4)), ('S1-A01', 2.0, round(2 / 38, 4))]
+
+        newest, oldest = data['history']
+        assert (oldest['order_no'], oldest['unit_price'], oldest['priced'], oldest['related']) == ('A-20240101', 27.0, 1, True)
+        assert oldest['delta'] is None
+        # 27 → 38：R1 涨价 9×(4−3)=9 是「价格涨跌」，S1 新拿到价格 4×0.5=2 是「新增计价」
+        assert (newest['order_no'], newest['unit_price'], newest['related']) == ('B-20240601', 38.0, False)
+        assert (newest['delta'], newest['price_effect'], newest['coverage_effect']) == (11.0, 9.0, 2.0)
+
+        # 半成品 M1：最终产品是 F1，所以订单 A 也算「本产品订单」
+        m1 = material_bom_service.calc_price('M1-A01').data
+        assert [h['related'] for h in m1['history']] == [False, True]
+
+
+def test_cost_overview_lists_missing_items_and_old_batches_unknown_relation(bom_app):
+    from datetime import date
+    with bom_app.app_context():
+        material_bom_service.import_file(_pdm(SAMPLE), 'a.xlsx', 'tester')
+        old = _batch('OLD', date(2024, 1, 1))          # 老批次：没记录订单成品
+        _price('R1', 3, date(2024, 1, 1), batch_id=old)
+        data = material_bom_service.calc_price('F1-A').data
+        assert (data['current']['priced'], data['current']['total']) == (1, 2)
+        assert [(m['drawing'], m['qty'], m['parents']) for m in data['missing_items']] == [('S1-A01', 4.0, ['F1-A01'])]
+        assert data['history'][0]['related'] is None
         assert material_bom_service.calc_price('R1-A01').data is None   # 没有 BOM 的物料
 
 

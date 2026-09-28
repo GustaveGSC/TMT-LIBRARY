@@ -89,6 +89,10 @@ def test_import_dedupes_same_day_same_price_only(app):
         assert res.success, res.message
         assert res.data['created'] == 3 and res.data['skipped'] == 0
         assert res.data['special_semis'] == 1 and res.data['zero_count'] == 1
+        # 订单包含的成品（每个 Sheet 的主件品号）被记下，不记 BOM 明细
+        batch = CostSnapshot.query.filter_by(id=res.data['batch_id']).one()
+        assert [k.finished_code for k in CostSnapshotSku.query.filter_by(snapshot_id=batch.id)] == ['F1-A01']
+        assert CostBomLine.query.count() == 0
         s9 = CostBomNode.query.filter_by(code='S9').one()
         assert s9.is_purchased_semi and s9.node_type == 'semi'
         price = CostMaterialPrice.query.filter_by(node_id=s9.id).one()

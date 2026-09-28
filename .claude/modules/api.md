@@ -179,8 +179,12 @@ GET  /api/material/items/:code/bom      # 物料卡片用：{versions[+line_coun
 
 # material_cost_bp：全部方法统一需要 material:price（查看/编辑不分级，与 rd:view/edit 的两档设计不同）
 GET  /api/material/price-batches            # 计价依据下拉：有价格的采购导入批次 [{id, order_no, price_date, price_count}]，日期新→旧（物料BOM 计价不手动选日期）
-GET  /api/material/items/:code/calc-price   # ?bom_id= 按研发 BOM 实时计算的价格 {bom, versions, current{unit_price,missing,price_source}, history[{date,unit_price,missing}]}
-                                            #   history = 在下级各价格日期上重算（新→旧，相邻相同合并），不存库；无 BOM 返回 data=null
+GET  /api/material/items/:code/calc-price   # ?bom_id= 物料卡片「成本视图」（有研发 BOM 的物料），全部现算不存库；无 BOM 返回 data=null
+                                            #   {bom, versions, current{unit_price, price_source, priced, total, missing}（按原材料编码去重计完整度）,
+                                            #    missing_items[{drawing, erp_code, name, qty(有效用量), parents}], composition[第一层下级金额前5{amount, share, missing}],
+                                            #    history[按采购订单逐单重算，新→旧：{batch_id, order_no, date, unit_price, priced, total,
+                                            #      related(订单成品含本产品或其最终产品；老批次未记录成品为 null), delta, price_effect(价格涨跌), coverage_effect(新增计价)}]}
+                                            #   计价单元 = 原材料叶子，或下级全无价格而用自身价的部件；price_effect+coverage_effect=delta
 GET  /api/material/items/:code/prices
 POST /api/material/items/:code/prices
 PATCH /api/material/prices/:price_id
