@@ -144,3 +144,15 @@ def test_purchase_routes_registered():
     assert routes.match('/api/purchase/price-import/preview', method='POST')[0] == 'purchase.preview_price_import'
     assert routes.match('/api/purchase/price-import', method='POST')[0] == 'purchase.run_price_import'
     assert routes.match('/api/purchase/price-import/history')[0] == 'purchase.price_import_history'
+
+
+def test_price_batches_list_orders_with_dates_newest_first(app):
+    from services.product.material_price import material_price_service
+    with app.app_context():
+        purchase_price_import_service.import_prices(_workbook(order_no='2M2-SC20240620-050'), '2024-06-20', 'buyer')
+        purchase_price_import_service.import_prices(_workbook(order_no='2M2-SC20250101-001'), '2025-01-01', 'buyer')
+        # 全部同日同价跳过、没有写入价格的批次不列出
+        purchase_price_import_service.import_prices(_workbook(order_no='2M2-SC20250101-002'), '2025-01-01', 'buyer')
+        data = material_price_service.price_batches().data
+        assert [(b['order_no'], b['price_date'], b['price_count']) for b in data] == [
+            ('2M2-SC20250101-001', '2025-01-01', 3), ('2M2-SC20240620-050', '2024-06-20', 3)]

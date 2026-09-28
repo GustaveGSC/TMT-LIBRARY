@@ -335,6 +335,10 @@ test('BOM 计价：单价/金额列、合计、计价日期；卡片显示按 BO
   await page.route('**/api/material/items/*', r => r.fulfill({ json: OK(item('F1-A')) }))
   await page.route('**/api/material/items/*/bom', r => r.fulfill({ json: OK({
     versions: [{ ...head, line_count: 2 }], direct_parents: [], top_products: [] }) }))
+  await page.route('**/api/material/price-batches', r => r.fulfill({ json: OK([
+    { id: 5, order_no: '2M2-SC20250522-025', price_date: '2025-05-22', price_count: 133 },
+    { id: 4, order_no: '2M2-SC20240301-001', price_date: '2024-03-01', price_count: 40 },
+  ]) }))
   await page.route('**/api/material/items/*/calc-price', r => r.fulfill({ json: OK({
     bom: head, versions: [{ id: 1, drawing: 'F1-A02' }],
     current: { unit_price: 24, missing: 1, price_source: 'calc', price_date: null },
@@ -365,11 +369,17 @@ test('BOM 计价：单价/金额列、合计、计价日期；卡片显示按 BO
   })
   expect(fits).toBe(true)
 
-  // 改计价日期：带 price_date 重新计算
-  await page.locator('.bd-date input').fill('2024-03-01')
-  await page.locator('.bd-date input').press('Enter')
+  // 计价依据：不手动选日期，而是选「最新价格」或某次采购导入（订单号 · 日期）
+  await page.locator('.bd-date').click()
+  const opts = page.locator('.el-select-dropdown__item:visible')
+  await expect(opts).toHaveCount(3)
+  await expect(opts.first()).toHaveText('计价：最新价格')
+  await expect(opts.nth(1)).toContainText('2M2-SC20250522-025')
+  await opts.nth(2).click()      // 2M2-SC20240301-001 · 2024-03-01
   await expect.poll(() => treeDates.at(-1)).toBe('2024-03-01')
   await expect(page.locator('.bd-total')).toContainText('¥20')
+  await expect(page.locator('.bd-date')).toContainText('计价：2M2-SC20240301-001 · 2024-03-01')
+  await page.screenshot({ path: 'test-results/material-bom-priced-batch.png' })
 
   // 物料卡片：价格区显示按 BOM 计算的价格与价格变化历史
   await page.locator('.bd-drawing').click()

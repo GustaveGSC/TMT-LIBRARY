@@ -8,6 +8,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Upload, Delete, Download, WarningFilled, ArrowDown, ArrowUp } from '@element-plus/icons-vue'
 import http from '@/api/http'
 import MaterialBomTree from './MaterialBomTree.vue'
+import PriceBatchSelect from './PriceBatchSelect.vue'
 import { exportBom } from './bomExport'
 import MaterialCard from './MaterialCard.vue'
 import { usePermission } from '@/composables/usePermission'
@@ -287,10 +288,8 @@ onMounted(loadList)
           <span class="bd-meta">{{ treeData.bom.imported_by || '—' }} · {{ treeData.bom.imported_at }}</span>
           <!-- 计价：按计价日期由下级实时计算（仅物料价格权限可见） -->
           <template v-if="canMaterialPrice">
-            <el-date-picker
-              v-model="priceDate" type="date" value-format="YYYY-MM-DD" size="small" clearable
-              placeholder="计价日期：最新价格" class="bd-date" @change="onPriceDateChange"
-            />
+            <!-- 计价依据：最新价格 或 某次采购导入（订单号+日期），不手动选日期 -->
+            <PriceBatchSelect v-model="priceDate" class="bd-date" @change="onPriceDateChange" />
             <span class="bd-total" :title="treeData.bom.missing ? `其中 ${treeData.bom.missing} 项原材料无价格，合计偏低` : '由下级价格计算'">
               合计 <b class="mono">{{ money(treeData.bom.unit_price) }}</b>
               <span v-if="treeData.bom.missing" class="bd-miss">缺 {{ treeData.bom.missing }} 项价格</span>
@@ -434,7 +433,7 @@ onMounted(loadList)
 .bd-drawing.link:hover { color: var(--accent); text-decoration: underline; }
 
 .bd-meta { font-size: 11px; color: #8a7a6a; }
-.bd-date { width: 170px !important; }
+.bd-date { width: 310px !important; }
 .bd-total { font-size: 13px; color: #3a3028; }
 .bd-total b { color: #4a8fc0; font-size: 14px; }
 .bd-miss {

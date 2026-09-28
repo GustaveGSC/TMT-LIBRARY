@@ -178,6 +178,7 @@ GET  /api/material/items/:code/bom      # 物料卡片用：{versions[+line_coun
 #   BOM 表头/子件行补关联，返回里多 bom_headers_relinked / bom_lines_relinked
 
 # material_cost_bp：全部方法统一需要 material:price（查看/编辑不分级，与 rd:view/edit 的两档设计不同）
+GET  /api/material/price-batches            # 计价依据下拉：有价格的采购导入批次 [{id, order_no, price_date, price_count}]，日期新→旧（物料BOM 计价不手动选日期）
 GET  /api/material/items/:code/calc-price   # ?bom_id= 按研发 BOM 实时计算的价格 {bom, versions, current{unit_price,missing,price_source}, history[{date,unit_price,missing}]}
                                             #   history = 在下级各价格日期上重算（新→旧，相邻相同合并），不存库；无 BOM 返回 data=null
 GET  /api/material/items/:code/prices

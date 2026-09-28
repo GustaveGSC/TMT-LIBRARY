@@ -5,6 +5,7 @@ import { WarningFilled, Picture, Plus, Edit, Delete, ZoomIn, Close, Check, Back,
 import { ElMessage, ElMessageBox } from 'element-plus'
 import MediaViewer from '@/components/common/MediaViewer.vue'
 import MaterialBomTree from './MaterialBomTree.vue'
+import PriceBatchSelect from './PriceBatchSelect.vue'
 import MaterialPriceTrendDialog from './MaterialPriceTrendDialog.vue'
 import { exportBom } from './bomExport'
 import { pickFile } from '@/utils/download'
@@ -887,10 +888,8 @@ watch(() => props.visible, v => {
         匹配 {{ bomTreeRef?.matchCount ?? 0 }} 项（保留其上级层次）
       </span>
       <template v-if="canMaterialPrice">
-        <el-date-picker
-          v-model="bomDialogPriceDate" type="date" value-format="YYYY-MM-DD" size="small" clearable
-          placeholder="计价日期：最新价格" class="bom-dlg-date" @change="onBomDialogPriceDate"
-        />
+        <!-- 计价依据：最新价格 或 某次采购导入（订单号+日期），不手动选日期 -->
+        <PriceBatchSelect v-model="bomDialogPriceDate" class="bom-dlg-date" @change="onBomDialogPriceDate" />
         <span v-if="bomDialogHead && 'unit_price' in bomDialogHead" class="bom-dlg-total"
               :title="bomDialogHead.missing ? `其中 ${bomDialogHead.missing} 项原材料无价格，合计偏低` : '由下级价格计算'">
           合计 <b class="mono">{{ money(bomDialogHead.unit_price) }}</b>
@@ -1166,7 +1165,7 @@ watch(() => props.visible, v => {
 .bom-dlg-search { width: 280px; }
 .bom-dlg-hit { font-size: 12px; color: #6b5e4e; }
 .bom-dlg-toggle { margin-left: auto; }
-.bom-dlg-date { width: 170px !important; }
+.bom-dlg-date { width: 310px !important; }
 .bom-dlg-total { font-size: 13px; color: #3a3028; }
 .bom-dlg-total b { color: #4a8fc0; font-size: 14px; }
 

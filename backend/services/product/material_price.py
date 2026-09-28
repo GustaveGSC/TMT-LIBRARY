@@ -97,6 +97,14 @@ class MaterialPriceService:
             'can_add_price': can_add_price,
         }
 
+    @staticmethod
+    def price_batches():
+        """计价日期的可选项：每次采购导入的订单号 + 价格日期（物料BOM 计价按订单选日期，不手动选）。"""
+        return Result.ok(data=[{
+            'id': row.id, 'order_no': row.order_no or '',
+            'price_date': row.snapshot_date.isoformat(), 'price_count': row.price_count,
+        } for row in MaterialPriceRepository.price_batches()])
+
     def list_prices(self, material):
         node = MaterialPriceRepository.node_for_code(
             material['code'], _strip_version(material['code'])

@@ -67,6 +67,18 @@ class MaterialPriceRepository:
         ).all()
 
     @staticmethod
+    def price_batches():
+        """有价格记录的采购导入批次（订单号 + 价格日期），日期新→旧；一条查询。"""
+        return db.session.query(
+            CostSnapshot.id, CostSnapshot.order_no, CostSnapshot.snapshot_date,
+            db.func.count(CostMaterialPrice.id).label('price_count'),
+        ).join(CostMaterialPrice, CostMaterialPrice.snapshot_id == CostSnapshot.id).filter(
+            CostSnapshot.snapshot_date.isnot(None),
+        ).group_by(CostSnapshot.id, CostSnapshot.order_no, CostSnapshot.snapshot_date).order_by(
+            CostSnapshot.snapshot_date.desc(), CostSnapshot.id.desc(),
+        ).all()
+
+    @staticmethod
     def snapshot_order_map(snapshot_ids):
         if not snapshot_ids:
             return {}

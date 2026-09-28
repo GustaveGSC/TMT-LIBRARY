@@ -335,6 +335,11 @@ def delete_material_image(code, image_id):
     return material_service.delete_image(code, image_id).to_response()
 
 
+@material_cost_bp.get('/price-batches')
+def material_price_batches():
+    return material_price_service.price_batches().to_response()
+
+
 @material_cost_bp.get('/items/<path:code>/calc-price')
 def material_calc_price(code):
     return material_bom_service.calc_price(code, request.args.get('bom_id', type=int)).to_response()
