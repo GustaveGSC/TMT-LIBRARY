@@ -20,7 +20,7 @@ from sqlalchemy import func, or_, tuple_
 
 from database.base import db
 from database.models.product.import_raw import ImportProductRaw
-from database.models.product.material import MaterialBom, MaterialBomLine
+from database.models.product.material import MaterialBom, MaterialBomLine, ProductMaterial
 from result import Result
 from services.common.bom_excel import bom_columns, category_name, numeric_code_text
 from services.product import material_bom_price as bom_price
@@ -541,20 +541,33 @@ class MaterialBomService:
         children = build(root, {(root.code, root.version)}, 1)
         if include_price:
             histories = bom_price.price_histories(bom_price.collect_codes(children) | {root.code})
-            root_dict.update(bom_price.root_price(children, root.code, histories, price_date))
+            free = self._free_codes(children)
+            root_dict.update(bom_price.root_price(children, root.code, histories, price_date, free=free))
             root_dict['priced_as_of'] = price_date.isoformat() if price_date else None
         return Result.ok(data={'bom': root_dict, 'children': children})
 
     # ── 物料卡片：按 BOM 实时计算的价格 + 价格变化历史 ───
-    def calc_price(self, erp_code, bom_id=None):
-        """物料卡片的「成本视图」（有研发 BOM 的成品/产成品/半成品）：
+    @staticmethod
+    def _free_codes(children):
+        """树上被标记「不计价」的物料（按 ERP 编码存在 product_material.no_price）→ 基础码集合；一条查询。"""
+        pairs = bom_price.collect_pairs(children)
+        erps = {erp for _, erp in pairs if erp}
+        if not erps:
+            return frozenset()
+        flagged = {c for (c,) in db.session.query(ProductMaterial.code).filter(
+            ProductMaterial.code.in_(list(erps)), ProductMaterial.no_price.is_(True)).all()}
+        return frozenset(code for code, erp in pairs if erp in flagged)
 
-        - current：按最新价格计算的成本 + 完整度（已计价 / 全部原材料种类，按编码去重）
-        - missing_items：缺价的原材料（有效用量、所在部件），方便去补价格
-        - composition：金额占比最高的 5 个第一层下级
-        - history：按采购订单逐单重算（旧→新计算、返回新→旧），每行拆成「价格涨跌」+「新增计价」，
-          并标出这个订单里是否包含本产品（related）。未变化、也不相关的订单不列出。
-        全部现算，不存库。
+    def calc_price(self, erp_code, bom_id=None):
+        """物料卡片的「成本视图」（有研发 BOM 的成品/产成品/半成品），全部现算不存库。
+
+        「齐全才计价」（用户 2026-09-28 定）：
+        - current：齐全（或有外购价）时给成本，否则 unit_price=None；另给完整度 priced/total（原材料按编码去重）
+        - started：开始计价的日期与对应订单（下级价格第一次齐全的那天）；没开始为 None
+        - missing_items：缺价的原材料（有效用量、所在部件），没开始计价时用来告诉「卡在哪」
+        - composition：齐全时第一层下级金额前 5
+        - history：从开始计价那一单往后，按采购订单逐单重算（新→旧），只列成本有变化或包含本产品的订单，
+          标出 related（订单成品含本产品或其最终产品；老批次没记录成品为 null）
         """
         from database.models.rd.cost import CostSnapshotSku
         from database.repository.product.material_price import MaterialPriceRepository
@@ -566,11 +579,11 @@ class MaterialBomService:
         bom = next((b for b in versions if b.id == bom_id), versions[0])
         children = self.tree(bom.id).data['children']
         histories = bom_price.price_histories(bom_price.collect_codes(children) | {bom.code})
-
-        # 当前（最新价格）
+        free = self._free_codes(children)
         root_drawing = f'{bom.code}-{bom.version}' if bom.version else bom.code
-        now = bom_price.cost_snapshot(children, bom.code, histories, None, root_drawing)
-        current = bom_price.root_price(children, bom.code, histories, None, annotate=True)
+
+        now = bom_price.cost_snapshot(children, bom.code, histories, None, root_drawing, free)
+        current = bom_price.root_price(children, bom.code, histories, None, annotate=True, free=free)
         current.update({'priced': len(now['covered']), 'total': len(now['leaves'])})
         current['missing'] = current['total'] - current['priced']
 
@@ -580,14 +593,14 @@ class MaterialBomService:
             for code, v in now['leaves'].items() if code not in now['covered']
         ), key=lambda x: x['drawing'])
 
-        root_total = current['unit_price'] or 0
-        composition = sorted((
-            {'drawing': n['drawing'], 'erp_code': n.get('erp_code'), 'name': n.get('name'),
-             'qty': n.get('qty'), 'amount': n.get('amount'),
-             'share': round(n['amount'] / root_total, 4) if root_total and n.get('amount') else None,
-             'missing': n.get('missing', 0)}
-            for n in children if n.get('amount')
-        ), key=lambda x: -x['amount'])[:5]
+        composition = []
+        if current['unit_price']:
+            composition = sorted((
+                {'drawing': n['drawing'], 'erp_code': n.get('erp_code'), 'name': n.get('name'),
+                 'qty': n.get('qty'), 'amount': n.get('amount'),
+                 'share': round(n['amount'] / current['unit_price'], 4) if n.get('amount') else 0}
+                for n in children if n.get('amount') is not None
+            ), key=lambda x: -x['amount'])[:5]
 
         # 与本物料相关的成品研发编码：自己 + 沿上级找到的最终产品（订单只记录成品主件品号）
         related_codes = {bom.code.upper()}
@@ -602,32 +615,39 @@ class MaterialBomService:
             for sid, code in rows:
                 finished_by_batch.setdefault(sid, set()).add(_order_base_code(code))
 
-        history, prev = [], None
-        for b in batches:
-            snap = bom_price.cost_snapshot(children, bom.code, histories, b.snapshot_date)
-            related = bool(finished_by_batch.get(b.id, set()) & related_codes)
-            known = b.id in finished_by_batch      # 老批次没有记录订单成品，无法判断是否相关
-            changed = prev is None or snap['total'] != prev['total'] or len(snap['covered']) != len(prev['covered'])
-            if snap['total'] > 0 and (changed or related):
-                row = {
-                    'batch_id': b.id, 'order_no': b.order_no or '', 'date': b.snapshot_date.isoformat(),
-                    'unit_price': snap['total'], 'priced': len(snap['covered']), 'total': len(snap['leaves']),
-                    'related': related if known else None,
-                    'delta': None, 'price_effect': None, 'coverage_effect': None,
-                }
-                if prev is not None and prev['total'] > 0:
-                    pe, ce = bom_price.decompose(prev, snap)
-                    row.update({'delta': round(snap['total'] - prev['total'], 4),
-                                'price_effect': pe, 'coverage_effect': ce})
-                history.append(row)
-            if snap['total'] > 0:
-                prev = snap
+        started, start_day = bom_price.start_date(children, bom.code, histories, free)
+        start_info = None
+        if started:
+            same_day = [b for b in batches if b.snapshot_date == start_day] if start_day else []
+            pick = next((b for b in same_day
+                         if finished_by_batch.get(b.id, set()) & related_codes), same_day[0] if same_day else None)
+            start_info = {'date': start_day.isoformat() if start_day else None,
+                          'order_no': (pick.order_no or '') if pick else None}
+
+        history, prev_total = [], None
+        if started:
+            for b in batches:
+                if start_day and b.snapshot_date < start_day:
+                    continue
+                snap = bom_price.cost_snapshot(children, bom.code, histories, b.snapshot_date, root_drawing, free)
+                if not snap['complete']:
+                    continue
+                related = bool(finished_by_batch.get(b.id, set()) & related_codes)
+                known = b.id in finished_by_batch
+                if prev_total is None or snap['total'] != prev_total or related:
+                    history.append({
+                        'batch_id': b.id, 'order_no': b.order_no or '', 'date': b.snapshot_date.isoformat(),
+                        'unit_price': snap['total'], 'related': related if known else None,
+                        'delta': None if prev_total is None else round(snap['total'] - prev_total, 4),
+                    })
+                prev_total = snap['total']
 
         return Result.ok(data={
             'bom': bom.to_dict(),
             'versions': [{'id': b.id, 'drawing': f'{b.code}-{b.version}' if b.version else b.code}
                          for b in versions],
             'current': current,
+            'started': start_info,
             'missing_items': missing_items,
             'composition': composition,
             'history': list(reversed(history)),

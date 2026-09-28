@@ -45,7 +45,7 @@ const errorMsg = ref('')
 //
 // 简称/分类/规格已去掉（用户 2026-09-27 决定）：生产上简称 0 条、分类 1 条、规格全部等于 ERP 规格，
 // 且没有任何下游使用；名称/规格一律以 ERP 为准。数据库列保留未删，只是不再显示和提交。
-const form = ref({ remark: '', type_override: [] })
+const form = ref({ remark: '', type_override: [], no_price: false })
 
 // 物料类型定义，与后端 CATEGORY_TYPES / TYPE_LABELS 一致
 const TYPE_OPTIONS = [
@@ -62,7 +62,7 @@ const SOURCE_TEXT = { manual: '单独指定', rule: '编码前缀规则', group:
 const savedSnapshot = ref('')
 function snapshotOf(f) {
   return JSON.stringify({
-    remark: (f.remark || '').trim(),
+    remark: (f.remark || '').trim(), no_price: !!f.no_price,
     type_override: [...(f.type_override || [])].sort(),
   })
 }
@@ -71,6 +71,7 @@ const isDirty = computed(() => !!detail.value && snapshotOf(form.value) !== save
 function fillForm(data) {
   form.value = {
     remark:     data.remark     || '',
+    no_price:   !!data.no_price,
     type_override: [...(data.type_override || [])],
   }
   savedSnapshot.value = snapshotOf(form.value)
@@ -243,6 +244,23 @@ const coverage = computed(() => {
   return c && c.total ? Math.round(c.priced / c.total * 100) : 0
 })
 
+// 缺价清单里直接把物料标记为「不计价」（客供件、赠送件等），然后重算
+async function markNoPrice(m) {
+  if (!m.erp_code) return
+  try {
+    await ElMessageBox.confirm(
+      `把 ${m.erp_code} ${m.name || ''} 标记为「不计价」？计价时按 0 元、算作已有价格。适用于客供件、赠送件等不会有采购价的物料。`,
+      '标记不计价', { type: 'warning', confirmButtonText: '标记', cancelButtonText: '取消' })
+  } catch { return }
+  const res = await http.put(`/api/material/items/${encodeURIComponent(m.erp_code)}`, { no_price: true })
+  if (res.success) {
+    ElMessage.success('已标记不计价')
+    loadCalcPrice()
+  } else {
+    ElMessage.error(res.message || '标记失败')
+  }
+}
+
 function signed(v) {
   if (v == null) return '—'
   const n = +Number(v).toFixed(4)
@@ -256,7 +274,11 @@ async function loadCalcPrice() {
   try {
     const res = await http.get(`/api/material/items/${encodeURIComponent(code)}/calc-price`)
     if (code !== activeCode.value) return
-    if (res.success && res.data?.current) calcPrice.value = res.data
+    if (res.success && res.data?.current) {
+      calcPrice.value = res.data
+      // 没开始计价时默认看缺价清单（告诉你卡在哪），开始后看成本变化
+      costTab.value = res.data.started ? 'history' : 'missing'
+    }
   } catch { /* 计算价拿不到不影响卡片 */ }
 }
 
@@ -402,6 +424,7 @@ async function handleSave() {
     // 停用状态只来源于导入，卡片无权修改。
     const payload = {
       remark:     form.value.remark,
+      no_price:   form.value.no_price,
       type_override: form.value.type_override,
     }
     const res = await http.put(
@@ -648,6 +671,18 @@ watch(() => props.visible, v => {
               </div>
             </div>
           </div>
+          <!-- 不计价：客供件/赠送件等永远不会有采购价的物料，计价按 0 元、算作已有价格，
+               否则用到它的部件永远到不了「下级价格齐全」、无法开始计价 -->
+          <div class="mc-field">
+            <label>计价</label>
+            <div class="np-box">
+              <label class="np-check" :class="{ on: form.no_price }">
+                <input v-model="form.no_price" type="checkbox" :disabled="!canEditMaterial" />
+                不计价
+              </label>
+              <span class="np-hint">客供件、赠送件等不会有采购价的物料，计价时按 0 元计</span>
+            </div>
+          </div>
           <div class="mc-field mc-field-top mc-field-remark">
             <label>备注</label>
             <textarea v-model="form.remark" class="mc-textarea" :disabled="!canEditMaterial" rows="2"></textarea>
@@ -745,9 +780,18 @@ watch(() => props.visible, v => {
                成本 + 完整度 → 成本变化（按订单，拆价格涨跌/新增计价）/ 成本构成 / 缺价清单 -->
           <div v-if="calcPrice" class="cost-view">
             <div class="cv-head">
-              <b class="mono cv-val">{{ money(calcPrice.current.unit_price) }}</b>
-              <span v-if="calcPrice.current.price_source === 'own'" class="calc-own"
-                    title="下级都没有价格，使用该部件自己的外购价">外购价</span>
+              <!-- 齐全才计价：下级价格第一次齐全的那一刻才开始计价，之前不给成本数字 -->
+              <template v-if="calcPrice.current.unit_price != null">
+                <b class="mono cv-val">{{ money(calcPrice.current.unit_price) }}</b>
+                <span v-if="calcPrice.current.price_source === 'own'" class="calc-own"
+                      title="下级价格不齐全，使用该部件自己的外购价">外购价</span>
+                <span v-if="calcPrice.started" class="cv-start" title="下级价格第一次齐全的时间">
+                  开始计价：
+                  <span v-if="calcPrice.started.order_no" class="order-tag mono">{{ calcPrice.started.order_no }}</span>
+                  {{ calcPrice.started.date || '' }}
+                </span>
+              </template>
+              <span v-else class="cv-unpriced" title="下级价格齐全后才开始计价">未开始计价</span>
               <span class="cv-bom mono" title="计算依据的研发 BOM 版本">{{ calcPrice.bom.drawing }}</span>
               <span class="cv-cover" :title="`已计价 ${calcPrice.current.priced} 种 / 共 ${calcPrice.current.total} 种原材料（按编码去重）`">
                 已计价 <b>{{ calcPrice.current.priced }}</b> / {{ calcPrice.current.total }} 种原材料
@@ -761,9 +805,11 @@ watch(() => props.visible, v => {
             </div>
 
             <div class="cv-tabs">
-              <button :class="{ active: costTab === 'history' }" @click="costTab = 'history'">
-                成本变化（{{ calcPrice.history.length }}）</button>
-              <button :class="{ active: costTab === 'composition' }" @click="costTab = 'composition'">成本构成</button>
+              <template v-if="calcPrice.started">
+                <button :class="{ active: costTab === 'history' }" @click="costTab = 'history'">
+                  成本变化（{{ calcPrice.history.length }}）</button>
+                <button :class="{ active: costTab === 'composition' }" @click="costTab = 'composition'">成本构成</button>
+              </template>
               <button :class="{ active: costTab === 'missing' }" @click="costTab = 'missing'">
                 缺价清单（{{ calcPrice.missing_items.length }}）</button>
             </div>
@@ -774,12 +820,9 @@ watch(() => props.visible, v => {
                 <thead>
                   <tr>
                     <th>订单</th>
-                    <th style="width:88px">日期</th>
-                    <th style="width:96px" class="ta-r">计算成本</th>
-                    <th style="width:70px" class="ta-r">已计价</th>
-                    <th style="width:92px" class="ta-r">较上一单</th>
-                    <th style="width:92px" class="ta-r" title="两次都有价格的原材料，因单价变化带来的差额（真实成本变动）">价格涨跌</th>
-                    <th style="width:92px" class="ta-r" title="这次新拿到价格的原材料带来的增加（覆盖变化，不是涨价）">新增计价</th>
+                    <th style="width:100px">日期</th>
+                    <th style="width:110px" class="ta-r">计算成本</th>
+                    <th style="width:110px" class="ta-r" title="开始计价后下级价格都齐全，这里的变化就是真实的价格涨跌">较上一单</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -792,14 +835,13 @@ watch(() => props.visible, v => {
                     </td>
                     <td>{{ h.date }}</td>
                     <td class="ta-r price-val">{{ money(h.unit_price) }}</td>
-                    <td class="ta-r">{{ h.priced }}/{{ h.total }}</td>
-                    <td class="ta-r mono">{{ signed(h.delta) }}</td>
-                    <td class="ta-r mono" :class="{ up: h.price_effect > 0, down: h.price_effect < 0 }">{{ signed(h.price_effect) }}</td>
-                    <td class="ta-r mono cell-muted">{{ signed(h.coverage_effect) }}</td>
+                    <td class="ta-r mono" :class="{ up: h.delta > 0, down: h.delta < 0 }">
+                      {{ h.delta == null ? '开始计价' : signed(h.delta) }}
+                    </td>
                   </tr>
                 </tbody>
               </table>
-              <div v-else class="cost-empty">还没有采购订单价格</div>
+              <div v-else class="cost-empty">开始计价后还没有采购订单记录（价格来自手动录入或不计价标记）</div>
             </template>
 
             <!-- 成本构成：第一层下级按金额排前 5 -->
@@ -834,7 +876,8 @@ watch(() => props.visible, v => {
               <table v-if="calcPrice.missing_items.length" class="cost-table cv-table">
                 <thead>
                   <tr><th style="width:150px">图纸编码</th><th style="width:140px">ERP 编码</th><th>名称</th>
-                      <th style="width:70px" class="ta-r">总用量</th><th style="width:200px">所在部件</th></tr>
+                      <th style="width:70px" class="ta-r">总用量</th><th style="width:180px">所在部件</th>
+                      <th v-if="canEditMaterial" style="width:84px"></th></tr>
                 </thead>
                 <tbody>
                   <tr v-for="m in calcPrice.missing_items" :key="m.drawing">
@@ -846,15 +889,23 @@ watch(() => props.visible, v => {
                     <td class="ellip" :title="m.name">{{ m.name || '—' }}</td>
                     <td class="ta-r">{{ m.qty }}</td>
                     <td class="ellip mono" :title="m.parents.join('、')">{{ m.parents.join('、') }}</td>
+                    <td v-if="canEditMaterial">
+                      <button v-if="m.erp_code" class="np-btn" type="button"
+                              title="客供件、赠送件等不会有采购价的物料：标记后按 0 元计" @click="markNoPrice(m)">标记不计价</button>
+                    </td>
                   </tr>
                 </tbody>
               </table>
               <div v-else class="cost-empty">原材料价格已齐全</div>
+              <div v-if="calcPrice.missing_items.length" class="cv-tip">
+                下级价格全部齐全时才开始计价。价格不全时，现有价格大多来自别的产品的订单，合计没有参考意义。
+              </div>
             </template>
           </div>
 
           <!-- 外购价：普通部件不显示；外购半成品或已有自身价格时显示（下级全无价格时计算用它） -->
           <template v-if="showOwnPrice">
+          <div v-if="!calcPrice && detail.no_price" class="np-note">已标记「不计价」：用到它的部件计价时按 0 元计</div>
           <div v-if="calcPrice" class="own-title">外购价 <span>下级全都没有价格时，成本改用这里的价格</span></div>
           <div class="cost-tabs">
             <span class="cost-count">价格记录（{{ prices.length }}）</span>
@@ -1001,11 +1052,15 @@ watch(() => props.visible, v => {
     <div v-if="canMaterialPrice" class="bom-dlg-price">
       <!-- 计价依据：最新价格 或 某次采购导入（年 → 月 → 订单），不手动选日期 -->
       <PriceBatchSelect v-model="bomDialogPriceDate" @change="onBomDialogPriceDate" />
-      <span v-if="bomDialogHead && 'unit_price' in bomDialogHead" class="bom-dlg-total"
-            :title="bomDialogHead.missing ? `其中 ${bomDialogHead.missing} 项原材料无价格，合计偏低` : '由下级价格计算'">
-        合计 <b class="mono">{{ money(bomDialogHead.unit_price) }}</b>
-        <span v-if="bomDialogHead.missing" class="calc-miss">缺 {{ bomDialogHead.missing }} 项价格</span>
-      </span>
+      <template v-if="bomDialogHead && 'unit_price' in bomDialogHead">
+        <!-- 齐全才计价：下级有缺价就不给合计 -->
+        <span v-if="bomDialogHead.unit_price != null" class="bom-dlg-total" title="由下级价格计算（下级价格齐全）">
+          合计 <b class="mono">{{ money(bomDialogHead.unit_price) }}</b>
+        </span>
+        <span v-else class="bom-dlg-total" title="下级价格齐全后才开始计价">
+          未开始计价 <span class="calc-miss">缺 {{ bomDialogHead.missing }} 项价格</span>
+        </span>
+      </template>
     </div>
     <div v-loading="bomDialogLoading" class="bom-dlg-body">
       <MaterialBomTree ref="bomTreeRef" :rows="bomDialogTree" height="100%" :keyword="bomDialogKeyword"
@@ -1312,6 +1367,23 @@ watch(() => props.visible, v => {
 .calc-own { padding: 0 6px; border-radius: 4px; font-size: 11px; color: #9c6fba; background: rgba(156,111,186,0.12); }
 .calc-miss { padding: 0 6px; border-radius: 4px; font-size: 11px; color: #c0782a; background: rgba(224,144,80,0.15); }
 .own-title { margin: 6px 0 -2px; font-size: 13px; font-weight: 600; color: #3a3028; }
+.cv-unpriced { font-size: 15px; font-weight: 600; color: #8a7a6a; }
+.cv-start { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: #6b5e4e; }
+.cv-tip { margin-top: 6px; font-size: 12px; color: #8a7a6a; }
+.np-btn {
+  padding: 1px 8px; border-radius: 10px; cursor: pointer; white-space: nowrap;
+  border: 1px solid var(--border); background: #fff; color: #6b5e4e; font-size: 11px; font-family: inherit;
+}
+.np-btn:hover { border-color: var(--accent); color: var(--accent); }
+.np-note { margin: 4px 0 6px; font-size: 12px; color: #6b5e4e; }
+.np-box { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.np-check {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer; flex-shrink: 0;
+  font-size: 13px; color: #3a3028; width: auto !important; text-align: left !important;
+}
+.np-check input { margin: 0; cursor: pointer; }
+.np-check.on { font-weight: 600; }
+.np-hint { font-size: 11px; color: #8a7a6a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .own-title span { margin-left: 6px; font-size: 11px; font-weight: 400; color: #8a7a6a; }
 .bom-dlg-body { height: 72vh; }
 .bom-ver-text { font-size: 12px; font-weight: 400; color: #6b5e4e; letter-spacing: 0; }

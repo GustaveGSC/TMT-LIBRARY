@@ -329,7 +329,7 @@ test('BOM 计价：单价/金额列、合计、计价日期；卡片显示按 BO
     const d = new URL(r.request().url()).searchParams.get('price_date')
     treeDates.push(d)
     return r.fulfill({ json: OK({
-      bom: { ...head, unit_price: d ? 20 : 24, missing: 1, price_source: 'calc', priced_as_of: d },
+      bom: { ...head, unit_price: d ? 20 : 24, missing: 0, price_source: 'calc', priced_as_of: d },
       children: PRICED_TREE }) })
   })
   await page.route('**/api/material/items/*', r => r.fulfill({ json: OK(item('F1-A')) }))
@@ -341,14 +341,13 @@ test('BOM 计价：单价/金额列、合计、计价日期；卡片显示按 BO
   ]) }))
   await page.route('**/api/material/items/*/calc-price', r => r.fulfill({ json: OK({
     bom: head, versions: [{ id: 1, drawing: 'F1-A02' }],
-    current: { unit_price: 24, missing: 1, priced: 3, total: 4, price_source: 'calc', price_date: null },
-    missing_items: [{ drawing: 'S1-A01', erp_code: null, name: '螺钉', qty: 4, parents: ['F1-A02'] }],
-    composition: [{ drawing: 'P1-A01', erp_code: 'P1-A', name: '桌面', qty: 1, amount: 24, share: 1, missing: 0 }],
+    current: { unit_price: 24, missing: 0, priced: 4, total: 4, price_source: 'calc', price_date: null },
+    started: { date: '2024-01-01', order_no: 'F-SC20240101-001' },
+    missing_items: [],
+    composition: [{ drawing: 'P1-A01', erp_code: 'P1-A', name: '桌面', qty: 1, amount: 24, share: 1 }],
     history: [
-      { batch_id: 2, order_no: 'Y-SC20240601-002', date: '2024-06-01', unit_price: 24, priced: 3, total: 4,
-        related: false, delta: 6, price_effect: 1.5, coverage_effect: 4.5 },
-      { batch_id: 1, order_no: 'F-SC20240101-001', date: '2024-01-01', unit_price: 18, priced: 2, total: 4,
-        related: true, delta: null, price_effect: null, coverage_effect: null },
+      { batch_id: 2, order_no: 'Y-SC20240601-002', date: '2024-06-01', unit_price: 24, related: false, delta: 6 },
+      { batch_id: 1, order_no: 'F-SC20240101-001', date: '2024-01-01', unit_price: 18, related: true, delta: null },
     ],
   }) }))
   await page.route('**/api/material/items/*/prices', r => r.fulfill({ json: OK([
@@ -367,7 +366,6 @@ test('BOM 计价：单价/金额列、合计、计价日期；卡片显示按 BO
   await expect(page.locator('.bom-tree .bt-price.src-calc')).toHaveCount(1)
   await expect(page.locator('.bom-tree .bt-price.src-none')).toHaveText('—')
   await expect(page.locator('.bd-total')).toContainText('¥24')
-  await expect(page.locator('.bd-total .bd-miss')).toHaveText('缺 1 项价格')
   await page.screenshot({ path: 'test-results/material-bom-priced.png' })
   // 所有列都在可视范围内（不被挤进横向滚动区）
   const fits = await page.locator('.bom-tree').evaluate(t => {
@@ -405,25 +403,25 @@ test('BOM 计价：单价/金额列、合计、计价日期；卡片显示按 BO
   const cv = card.locator('.cost-view')
   await expect(card.locator('.mc-section-title', { hasText: '成本（按 BOM 计算）' })).toBeVisible()
   await expect(cv.locator('.cv-val')).toHaveText('¥24')
-  await expect(cv.locator('.cv-cover')).toContainText('已计价 3 / 4 种原材料')
-  await expect(cv.locator('.cv-pct')).toHaveText('75%')
-  // 成本变化：按订单，标出本产品订单 / 共用物料变价，变化拆成价格涨跌 + 新增计价
+  await expect(cv.locator('.cv-cover')).toContainText('已计价 4 / 4 种原材料')
+  await expect(cv.locator('.cv-pct')).toHaveText('100%')
+  // 已开始计价：标出开始计价的订单；默认看成本变化
+  await expect(cv.locator('.cv-start')).toContainText('F-SC20240101-001')
+  await expect(cv.locator('.cv-tabs button.active')).toContainText('成本变化')
   const rows = cv.locator('.cv-table tbody tr')
   await expect(rows).toHaveCount(2)
+  await expect(cv.locator('.cv-table th')).toHaveText(['订单', '日期', '计算成本', '较上一单'])
   await expect(rows.first().locator('.rel-shared')).toHaveText('共用物料变价')
   await expect(rows.first()).toContainText('+¥6')
-  await expect(rows.first()).toContainText('+¥1.5')
-  await expect(rows.first()).toContainText('+¥4.5')
   await expect(rows.nth(1).locator('.rel-own')).toHaveText('本产品订单')
+  await expect(rows.nth(1)).toContainText('开始计价')
   await cv.scrollIntoViewIfNeeded()
   await page.locator('.el-dialog.material-card-dialog').screenshot({ path: 'test-results/material-card-calc-price.png' })
-  // 成本构成 / 缺价清单
   await cv.locator('.cv-tabs button', { hasText: '成本构成' }).click()
   await expect(cv.locator('.cv-table tbody tr').first()).toContainText('P1-A01')
   await expect(cv.locator('.cv-table tbody tr').first()).toContainText('100.0%')
   await cv.locator('.cv-tabs button', { hasText: '缺价清单' }).click()
-  await expect(cv.locator('.cv-table tbody tr')).toHaveCount(1)
-  await expect(cv.locator('.cv-table tbody tr').first()).toContainText('S1-A01')
+  await expect(cv.locator('.cost-empty')).toHaveText('原材料价格已齐全')
   // 这个成品已有自身价格记录（mock 3 条）→ 显示「外购价」区块
   await expect(card.locator('.own-title')).toContainText('外购价')
 
@@ -449,7 +447,7 @@ test('BOM 计价：单价/金额列、合计、计价日期；卡片显示按 BO
   await trend.screenshot({ path: 'test-results/material-price-trend.png' })
 })
 
-test('有 BOM、没有自身价格的部件：不显示价格记录与添加价格', async ({ page }) => {
+test('有 BOM 的部件：未开始计价不给成本，缺价清单可标记不计价；没有自身价格时不显示价格记录', async ({ page }) => {
   await setup(page)
   const head = { ...bomHead(1, 'F1', 'A02'), material_types: ['finished'] }
   await page.route('**/api/material/items?*', r => r.fulfill({ json: OK({
@@ -458,15 +456,32 @@ test('有 BOM、没有自身价格的部件：不显示价格记录与添加价�
     r => r.fulfill({ json: OK(item('F1-A', { is_purchased_semi: false })) }))
   await page.route('**/api/material/items/*/bom', r => r.fulfill({ json: OK({
     versions: [{ ...head, line_count: 2 }], direct_parents: [], top_products: [] }) }))
-  await page.route('**/api/material/items/*/calc-price', r => r.fulfill({ json: OK({
+  let calcCalls = 0
+  await page.route('**/api/material/items/*/calc-price', r => { calcCalls++; return r.fulfill({ json: OK({
     bom: head, versions: [{ id: 1, drawing: 'F1-A02' }],
-    current: { unit_price: 10, missing: 0, priced: 2, total: 2, price_source: 'calc', price_date: null },
-    missing_items: [], composition: [], history: [] }) }))
+    current: { unit_price: calcCalls > 1 ? 10 : null, missing: calcCalls > 1 ? 0 : 1,
+               priced: calcCalls > 1 ? 2 : 1, total: 2, price_source: calcCalls > 1 ? 'calc' : null, price_date: null },
+    started: calcCalls > 1 ? { date: null, order_no: null } : null,
+    missing_items: calcCalls > 1 ? [] : [{ drawing: 'S1-A01', erp_code: 'S1-A01', name: '客供标贴', qty: 4, parents: ['F1-A02'] }],
+    composition: [], history: [] }) }) })
   await page.route('**/api/material/items/*/prices', r => r.fulfill({ json: OK([]) }))
+  await page.route('**/api/material/items/S1-A01', r => r.fulfill({ json: OK(item('S1-A01', { no_price: true })) }))
   await page.goto('/#/material')
   await page.locator('.code-link', { hasText: 'F1-A' }).click()
   const card = page.locator('.material-card')
-  await expect(card.locator('.cost-view .cv-pct')).toHaveText('100%')
+  // 未开始计价：不给成本数字，默认看缺价清单
+  await expect(card.locator('.cv-unpriced')).toHaveText('未开始计价')
+  await expect(card.locator('.cv-val')).toHaveCount(0)
+  await expect(card.locator('.cv-tabs button')).toHaveText(['缺价清单（1）'])
+  await expect(card.locator('.cv-tip')).toBeVisible()
+  await card.locator('.cost-view').scrollIntoViewIfNeeded()
+  await page.locator('.el-dialog.material-card-dialog').screenshot({ path: 'test-results/material-card-unpriced.png' })
+  // 缺价清单里把客供件标记为不计价 → 重新计算后开始计价
+  const put = page.waitForRequest(r => r.method() === 'PUT' && r.url().includes('/api/material/items/S1-A01'))
+  await card.locator('.np-btn').click()
+  await page.locator('.el-message-box button', { hasText: '标记' }).click()
+  expect(JSON.parse((await put).postData())).toEqual({ no_price: true })
+  await expect(card.locator('.cv-val')).toHaveText('¥10')
   await expect(card.locator('.cost-count')).toHaveCount(0)
   await expect(card.locator('.cost-add')).toHaveCount(0)
   await expect(card.locator('.own-title')).toHaveCount(0)

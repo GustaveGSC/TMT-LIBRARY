@@ -163,9 +163,9 @@ GET  /api/material/boms                 # ?keyword=&material_type=&page=&page_si
                                         #   按 erp_code 走物料类型判定缓存（与物料表同口径），unmatched=ERP 对应不到；
                                         #   关键词命中的 (id, erp_code) 先全取出在内存分类计数再按 id 取当前页，共 3 条查询
 GET  /api/material/boms/:id/tree        # ?price_date=YYYY-MM-DD 完整多层展开 {bom, children:[{id(路径), drawing, erp_code, name, spec, category, qty, unit, children?}]}
-                                        #   有 material:price 时每个节点另带 unit_price/amount/price_date/price_source(material|own|calc)/missing，
-                                        #   bom 带 unit_price/missing/priced_as_of：原材料取计价日期当天或之前最近价，部件=Σ下级，
-                                        #   下级全无价格时用部件自己的采购价；不传日期=最新价。价格只多一条查询
+                                        #   有 material:price 时每个节点另带 unit_price/amount/price_date/price_source(material|own|calc|free)/missing，
+                                        #   bom 带 unit_price/missing/priced_as_of。齐全才计价：部件下级全部有价才=Σ下级，否则用外购价，都没有则 null；
+                                        #   free=物料被标记「不计价」按 0 元（product_material.no_price）
                                         #   每层一次查询；名称/规格优先用 ERP 的，文件里的兜底
 GET  /api/material/boms/:id/export      # ?price_date= 有价格权限时另带 单价/金额/价格日期 列；下载 xlsx（BOM-{研发编码}.xlsx）：序号(层级编号)/层级/图纸编码/ERP编码/名称/数量/单位，与页面树一致
 DELETE /api/material/boms/:id           # ?force=1。只删这一层子件清单，下级半成品自己的 BOM 不动
@@ -180,11 +180,11 @@ GET  /api/material/items/:code/bom      # 物料卡片用：{versions[+line_coun
 # material_cost_bp：全部方法统一需要 material:price（查看/编辑不分级，与 rd:view/edit 的两档设计不同）
 GET  /api/material/price-batches            # 计价依据下拉：有价格的采购导入批次 [{id, order_no, price_date, price_count}]，日期新→旧（物料BOM 计价不手动选日期）
 GET  /api/material/items/:code/calc-price   # ?bom_id= 物料卡片「成本视图」（有研发 BOM 的物料），全部现算不存库；无 BOM 返回 data=null
-                                            #   {bom, versions, current{unit_price, price_source, priced, total, missing}（按原材料编码去重计完整度）,
-                                            #    missing_items[{drawing, erp_code, name, qty(有效用量), parents}], composition[第一层下级金额前5{amount, share, missing}],
-                                            #    history[按采购订单逐单重算，新→旧：{batch_id, order_no, date, unit_price, priced, total,
-                                            #      related(订单成品含本产品或其最终产品；老批次未记录成品为 null), delta, price_effect(价格涨跌), coverage_effect(新增计价)}]}
-                                            #   计价单元 = 原材料叶子，或下级全无价格而用自身价的部件；price_effect+coverage_effect=delta
+                                            #   齐全才计价（2026-09-28）：下级价格全部齐全才给成本；不齐全但有外购价用外购价；否则 unit_price=null
+                                            #   {bom, versions, current{unit_price, price_source(calc|own|null), priced, total, missing},
+                                            #    started{date, order_no}|null（下级价格第一次齐全的日期/订单）,
+                                            #    missing_items[{drawing, erp_code, name, qty(有效用量), parents}], composition[齐全时第一层下级金额前5],
+                                            #    history[开始计价之后按采购订单逐单重算，新→旧：{batch_id, order_no, date, unit_price, related, delta}]}
 GET  /api/material/items/:code/prices
 POST /api/material/items/:code/prices
 PATCH /api/material/prices/:price_id

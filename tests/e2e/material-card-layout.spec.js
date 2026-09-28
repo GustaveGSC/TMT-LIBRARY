@@ -357,11 +357,12 @@ test('成品直接显示产品库图片，只读', async ({ page }) => {
   await card.locator('.mc-image').screenshot({ path: 'test-results/material-card-product-image.png' })
 })
 
-// 人工维护只剩物料类型和备注；物料表没有「简称」列
+// 人工维护：物料类型、计价（不计价标记）、备注；物料表没有「简称」列
 test('人工维护去掉简称/分类/规格，物料表去掉简称列', async ({ page }) => {
   const card = await openCard(page, ITEM)
   await page.waitForTimeout(500)
-  await expect(card.locator('.mc-manual label')).toHaveText(['物料类型', '备注'])
+  await expect(card.locator('.mc-manual .mc-field > label')).toHaveText(['物料类型', '计价', '备注'])
+  await expect(card.locator('.mc-manual .np-check')).toContainText('不计价')
   await expect(card.locator('.mc-manual input.mc-input')).toHaveCount(0)
   await page.locator('.el-dialog__header .mc-close-btn').click()
   await expect(page.locator('.el-table__header th', { hasText: '简称' })).toHaveCount(0)

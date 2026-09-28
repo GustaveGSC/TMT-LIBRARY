@@ -7,14 +7,15 @@ from flask import Flask
 
 from database.base import db
 import database.models.product.category  # noqa: F401
-import database.models.product.finished  # noqa: F401
+from database.models.product.finished import ProductFinished
 import database.models.product.resource  # noqa: F401
 import database.models.product.material_supplier  # noqa: F401
 from database.models.rd.cost import CostBomNode, CostMaterialPrice, CostSnapshot, CostSnapshotSku
 from database.models.product.erp_code_rules import ErpCodeRule
 from database.models.product.import_raw import ImportProductRaw
 from database.models.product.material import (
-    ErpGroupCategory, MaterialBom, MaterialBomLine, ProductMaterial,
+    ErpGroupCategory, MaterialBom, MaterialBomLine, MaterialDisableKeyword, MaterialImage,
+    ProductMaterial,
 )
 from routes.product.material import material_bp
 from services.product.material import material_service
@@ -83,6 +84,7 @@ def bom_app():
     db.init_app(app)
     tables = [ImportProductRaw.__table__, MaterialBom.__table__, MaterialBomLine.__table__,
               ErpCodeRule.__table__, ErpGroupCategory.__table__, ProductMaterial.__table__,
+              MaterialDisableKeyword.__table__, MaterialImage.__table__, ProductFinished.__table__,
               CostSnapshot.__table__, CostSnapshotSku.__table__, CostBomNode.__table__,
               CostMaterialPrice.__table__]
 
@@ -451,7 +453,14 @@ def _flat(nodes):
         yield from _flat(n.get('children') or [])
 
 
-def test_tree_prices_by_price_date_with_missing_count(bom_app):
+def _add_erp_raw(code):
+    db.session.add(ImportProductRaw(code=code, name=f'ERP{code}', group_code='G', group_name='组',
+                                    imported_at=now_cst()))
+    db.session.commit()
+
+
+def test_tree_prices_only_when_children_complete(bom_app):
+    """齐全才计价：下级有一项没价格，部件就是未计价（不给残缺合计），只给缺价数。"""
     from datetime import date
     with bom_app.app_context():
         material_bom_service.import_file(_pdm(SAMPLE), 'a.xlsx', 'tester')
@@ -460,85 +469,84 @@ def test_tree_prices_by_price_date_with_missing_count(bom_app):
         plain = material_bom_service.tree(f1.id).data
         assert 'unit_price' not in plain['bom'] and 'unit_price' not in plain['children'][0]
 
+        none = material_bom_service.tree(f1.id, include_price=True).data
+        assert none['bom']['unit_price'] is None and none['bom']['missing'] == 3
+
         _price('R1', 3, date(2024, 1, 1))
         _price('R1', 4, date(2024, 6, 1))
         _price('P1', 999, date(2024, 1, 1), source='bom_calc')   # 旧推算价不参与
-
-        latest = material_bom_service.tree(f1.id, include_price=True).data
-        nodes = {n['id']: n for n in _flat(latest['children'])}
-        p1 = latest['children'][0]
-        m1_under_p1 = p1['children'][0]
-        assert m1_under_p1['unit_price'] == 12 and m1_under_p1['price_source'] == 'calc'   # 3 × 4
-        assert m1_under_p1['children'][0]['price_date'] == '2024-06-01'
-        assert p1['unit_price'] == 24 and p1['amount'] == 24                                # 2 × 12
-        s1 = latest['children'][1]
+        partial = material_bom_service.tree(f1.id, include_price=True).data
+        p1, s1, m1 = partial['children']
+        assert p1['unit_price'] == 24 and p1['price_source'] == 'calc'      # P1 下级齐全：2 × (3 × 4)
+        assert m1['unit_price'] == 12
         assert s1['unit_price'] is None and s1['missing'] == 1
-        # 根：P1 24 + M1 12；S1 无价格
-        assert latest['bom']['unit_price'] == 36 and latest['bom']['missing'] == 1
-        assert latest['bom']['priced_as_of'] is None
-        assert len(nodes) == 6
+        # 根：S1 没价格 → 未计价，不给 36 这种残缺合计
+        assert partial['bom']['unit_price'] is None and partial['bom']['missing'] == 1
 
+        _price('S1', 0.5, date(2024, 6, 1))
+        full = material_bom_service.tree(f1.id, include_price=True).data
+        assert full['bom']['unit_price'] == 38.0 and full['bom']['missing'] == 0   # 24 + 4×0.5 + 12
+        # 计价日期在 S1 有价之前：又回到未计价
         early = material_bom_service.tree(f1.id, include_price=True, price_date=date(2024, 3, 1)).data
-        assert early['bom']['unit_price'] == 27 and early['bom']['priced_as_of'] == '2024-03-01'
-        none = material_bom_service.tree(f1.id, include_price=True, price_date=date(2023, 1, 1)).data
-        assert none['bom']['unit_price'] is None and none['bom']['missing'] == 3
+        assert early['bom']['unit_price'] is None and early['children'][0]['unit_price'] == 18
 
 
-def test_semi_without_priced_children_uses_own_purchase_price(bom_app):
+def test_own_price_and_no_price_flag_make_items_complete(bom_app):
     from datetime import date
+    from services.product.material import material_service
     with bom_app.app_context():
+        _add_erp_raw('S1-A01')                          # 让 S1 能对应到 ERP 物料，才能打「不计价」标记
         material_bom_service.import_file(_pdm(SAMPLE), 'a.xlsx', 'tester')
         f1 = MaterialBom.query.filter_by(code='F1').one()
-        _price('M1', 50, date(2024, 1, 1))     # 采购导入的特例半成品价（R1 无价格）
+        _price('M1', 50, date(2024, 1, 1))             # 外购半成品：R1 无价格时用自身外购价
         data = material_bom_service.tree(f1.id, include_price=True).data
         m1 = data['children'][2]
-        assert m1['unit_price'] == 50 and m1['price_source'] == 'own' and m1['missing'] == 0
-        assert data['children'][0]['unit_price'] == 100           # P1 = 2 × 50
-        assert data['bom']['unit_price'] == 150 and data['bom']['missing'] == 1
+        assert m1['unit_price'] == 50 and m1['price_source'] == 'own'
+        assert data['children'][0]['unit_price'] == 100
+        assert data['bom']['unit_price'] is None and data['bom']['missing'] == 1   # S1 仍缺
+
+        assert not material_service.save_item('S1-A01', {'no_price': 'yes'}).success
+        assert material_service.save_item('S1-A01', {'no_price': True}).data['no_price'] is True
+        data = material_bom_service.tree(f1.id, include_price=True).data
+        assert data['children'][1]['price_source'] == 'free' and data['children'][1]['unit_price'] == 0
+        assert data['bom']['unit_price'] == 150.0 and data['bom']['missing'] == 0
 
 
-def test_cost_overview_by_order_with_decomposition_and_relation(bom_app):
+def test_cost_overview_starts_when_complete(bom_app):
     from datetime import date
     with bom_app.app_context():
         material_bom_service.import_file(_pdm(SAMPLE), 'a.xlsx', 'tester')
-        # 订单 A 就是本产品 F1 的订单；订单 B 是别的产品 Y1，只是和 F1 共用 R1、S1
+        # 订单 A：本产品 F1 的订单，但 S1 没价格 → 还没开始计价
         a = _batch('A-20240101', date(2024, 1, 1), ['F1-A'])
         _price('R1', 3, date(2024, 1, 1), batch_id=a)
+        data = material_bom_service.calc_price('F1-A').data
+        assert data['current']['unit_price'] is None
+        assert (data['current']['priced'], data['current']['total'], data['current']['missing']) == (1, 2, 1)
+        assert data['started'] is None and data['history'] == [] and data['composition'] == []
+        assert [(m['drawing'], m['qty'], m['parents']) for m in data['missing_items']] == [('S1-A01', 4.0, ['F1-A01'])]
+
+        # 订单 B（别的产品 Y1）带来了 S1 的价格 → 这一刻齐全，开始计价
         b = _batch('B-20240601', date(2024, 6, 1), ['Y1-A01'])
         _price('R1', 4, date(2024, 6, 1), batch_id=b)
         _price('S1', 0.5, date(2024, 6, 1), batch_id=b)
+        # 订单 C：本产品的订单，R1 涨到 5
+        c = _batch('C-20240701', date(2024, 7, 1), ['F1-A01'])
+        _price('R1', 5, date(2024, 7, 1), batch_id=c)
 
         data = material_bom_service.calc_price('F1-A').data
-        # R1 有效用量 = 1×2×3（经 P1→M1）+ 1×3（直接挂的 M1）= 9；S1 = 4
-        assert data['current']['unit_price'] == 38.0
-        assert (data['current']['priced'], data['current']['total'], data['current']['missing']) == (2, 2, 0)
+        assert data['started'] == {'date': '2024-06-01', 'order_no': 'B-20240601'}
+        assert data['current']['unit_price'] == 47.0 and data['current']['missing'] == 0   # 9×5 + 4×0.5
         assert data['missing_items'] == []
-        assert [(c['drawing'], c['amount'], c['share']) for c in data['composition']] == [
-            ('P1-A01', 24.0, round(24 / 38, 4)), ('M1-A01', 12.0, round(12 / 38, 4)), ('S1-A01', 2.0, round(2 / 38, 4))]
+        assert [(x['drawing'], x['amount']) for x in data['composition']] == [
+            ('P1-A01', 30.0), ('M1-A01', 15.0), ('S1-A01', 2.0)]
+        # 历史只从开始计价那一单往后；订单 A 不出现
+        assert [(h['order_no'], h['unit_price'], h['related'], h['delta']) for h in data['history']] == [
+            ('C-20240701', 47.0, True, 9.0), ('B-20240601', 38.0, False, None)]
 
-        newest, oldest = data['history']
-        assert (oldest['order_no'], oldest['unit_price'], oldest['priced'], oldest['related']) == ('A-20240101', 27.0, 1, True)
-        assert oldest['delta'] is None
-        # 27 → 38：R1 涨价 9×(4−3)=9 是「价格涨跌」，S1 新拿到价格 4×0.5=2 是「新增计价」
-        assert (newest['order_no'], newest['unit_price'], newest['related']) == ('B-20240601', 38.0, False)
-        assert (newest['delta'], newest['price_effect'], newest['coverage_effect']) == (11.0, 9.0, 2.0)
-
-        # 半成品 M1：最终产品是 F1，所以订单 A 也算「本产品订单」
+        # 半成品 M1 在订单 A 那天就齐全（下级只有 R1），开始得更早
         m1 = material_bom_service.calc_price('M1-A01').data
-        assert [h['related'] for h in m1['history']] == [False, True]
-
-
-def test_cost_overview_lists_missing_items_and_old_batches_unknown_relation(bom_app):
-    from datetime import date
-    with bom_app.app_context():
-        material_bom_service.import_file(_pdm(SAMPLE), 'a.xlsx', 'tester')
-        old = _batch('OLD', date(2024, 1, 1))          # 老批次：没记录订单成品
-        _price('R1', 3, date(2024, 1, 1), batch_id=old)
-        data = material_bom_service.calc_price('F1-A').data
-        assert (data['current']['priced'], data['current']['total']) == (1, 2)
-        assert [(m['drawing'], m['qty'], m['parents']) for m in data['missing_items']] == [('S1-A01', 4.0, ['F1-A01'])]
-        assert data['history'][0]['related'] is None
-        assert material_bom_service.calc_price('R1-A01').data is None   # 没有 BOM 的物料
+        assert m1['started'] == {'date': '2024-01-01', 'order_no': 'A-20240101'}
+        assert [h['related'] for h in m1['history']] == [True, False, True]
 
 
 def test_export_includes_price_columns_only_with_permission(bom_app):
@@ -546,11 +554,12 @@ def test_export_includes_price_columns_only_with_permission(bom_app):
     with bom_app.app_context():
         material_bom_service.import_file(_pdm(SAMPLE), 'a.xlsx', 'tester')
         _price('R1', 4, date(2024, 6, 1))
+        _price('S1', 0.5, date(2024, 6, 1))
         f1 = MaterialBom.query.filter_by(code='F1').one()
         data, _ = material_bom_service.export_xlsx(f1.id, include_price=True)
         ws = openpyxl.load_workbook(io.BytesIO(data)).active
         assert [c.value for c in ws[4]][-3:] == ['单价', '金额', '价格日期']
-        assert '合计单价：36' in ws['A2'].value
+        assert '合计单价：38' in ws['A2'].value
         first = [c.value for c in ws[5]]
         assert first[7] == 24 and first[8] == 24
         plain, _ = material_bom_service.export_xlsx(f1.id)

@@ -95,13 +95,13 @@ function fmtMoney(v) {
 }
 
 // 单价的来源说明（悬停提示）
+// 「齐全才计价」：部件下级有缺价就是未计价，不给残缺合计
 function priceTitle(row) {
   if (row.price_source === 'material') return `价格日期：${row.price_date || '未填'}`
-  if (row.price_source === 'own') return `下级都没有价格，使用该部件自己的采购价（${row.price_date || '未填日期'}）`
-  if (row.price_source === 'calc') {
-    return row.missing ? `由下级计算；其中 ${row.missing} 项原材料无价格，合计偏低` : '由下级计算'
-  }
-  return row.children?.length ? `下级 ${row.missing} 项原材料都没有价格` : '没有价格'
+  if (row.price_source === 'own') return `下级价格不齐全，使用该部件自己的外购价（${row.price_date || '未填日期'}）`
+  if (row.price_source === 'calc') return '由下级计算（下级价格齐全）'
+  if (row.price_source === 'free') return '已标记「不计价」，按 0 元计'
+  return row.children?.length ? `未计价：下级还缺 ${row.missing} 项原材料价格` : '没有价格'
 }
 
 function formatQty(q) {
@@ -155,10 +155,12 @@ function formatQty(q) {
     <template v-if="showPrice">
       <el-table-column label="单价" width="130" align="right">
         <template #default="{ row }">
-          <span :title="priceTitle(row)" class="bt-price mono" :class="['src-' + (row.price_source || 'none')]">
+          <span v-if="row.unit_price == null && row.children?.length" class="bt-price src-none" :title="priceTitle(row)">未计价</span>
+          <span v-else :title="priceTitle(row)" class="bt-price mono" :class="['src-' + (row.price_source || 'none')]">
             {{ fmtMoney(row.unit_price) }}
           </span>
-          <span v-if="row.price_source === 'own'" class="bt-own" :title="priceTitle(row)">自身价</span>
+          <span v-if="row.price_source === 'own'" class="bt-own" :title="priceTitle(row)">外购价</span>
+          <span v-if="row.price_source === 'free'" class="bt-free" :title="priceTitle(row)">不计价</span>
           <span v-if="row.children?.length && row.missing" class="bt-miss" :title="priceTitle(row)">缺{{ row.missing }}</span>
         </template>
       </el-table-column>
@@ -189,5 +191,9 @@ function formatQty(q) {
   margin-left: 4px; padding: 0 4px; border-radius: 4px; font-size: 10px; line-height: 15px; display: inline-block;
 }
 .bt-own { color: #9c6fba; background: rgba(156,111,186,0.12); }
+.bt-free {
+  margin-left: 4px; padding: 0 4px; border-radius: 4px; font-size: 10px; line-height: 15px; display: inline-block;
+  color: #6b5e4e; background: rgba(138,122,106,0.15);
+}
 .bt-miss { color: #c0782a; background: rgba(224,144,80,0.15); }
 </style>

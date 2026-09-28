@@ -297,9 +297,13 @@ onMounted(loadList)
         <div v-if="canMaterialPrice" class="bd-price-row">
           <!-- 计价依据：最新价格 或 某次采购导入（年 → 月 → 订单），不手动选日期 -->
           <PriceBatchSelect v-model="priceDate" class="bd-date" @change="onPriceDateChange" />
-          <span class="bd-total" :title="treeData.bom.missing ? `其中 ${treeData.bom.missing} 项原材料无价格，合计偏低` : '由下级价格计算'">
+          <!-- 齐全才计价：下级有缺价就不给合计 -->
+          <span v-if="treeData.bom.unit_price != null" class="bd-total" title="由下级价格计算（下级价格齐全）">
             合计 <b class="mono">{{ money(treeData.bom.unit_price) }}</b>
-            <span v-if="treeData.bom.missing" class="bd-miss">缺 {{ treeData.bom.missing }} 项价格</span>
+            <span v-if="treeData.bom.price_source === 'own'" class="bd-miss">外购价</span>
+          </span>
+          <span v-else class="bd-total bd-unpriced" title="下级价格齐全后才开始计价">
+            未开始计价 <span class="bd-miss">缺 {{ treeData.bom.missing }} 项价格</span>
           </span>
         </div>
         <div class="bd-tree">
@@ -439,6 +443,7 @@ onMounted(loadList)
 }
 .bd-total { font-size: 13px; color: #3a3028; }
 .bd-total b { color: #4a8fc0; font-size: 14px; }
+.bd-unpriced { color: #8a7a6a; }
 .bd-miss {
   margin-left: 4px; padding: 0 6px; border-radius: 4px; font-size: 11px;
   color: #c0782a; background: rgba(224,144,80,0.15);

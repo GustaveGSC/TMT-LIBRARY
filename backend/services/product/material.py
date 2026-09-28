@@ -322,10 +322,14 @@ class MaterialService:
         if not raw:
             return Result.fail('物料不存在')
         # 图片改走 material_image（add_image/replace_image/delete_image），这里不再接收封面字段
-        # 人工字段只剩备注（简称/分类/规格 2026-09-27 删列）
+        # 人工字段：备注（简称/分类/规格 2026-09-27 删列）、不计价标记
         values = {}
         if 'remark' in body:
             values['remark'] = (body.get('remark') or '').strip() or None
+        if 'no_price' in body:
+            if not isinstance(body.get('no_price'), bool):
+                return Result.fail('不计价参数格式无效')
+            values['no_price'] = body['no_price']
         if 'type_override' in body:
             raw_types = body.get('type_override') or []
             if not isinstance(raw_types, list):
@@ -367,7 +371,7 @@ class MaterialService:
 
     def _serialize(self, raw, categories, material, source=None):
         manual = material.to_dict() if material else {
-            'code': raw.code, 'remark': None, 'type_override': [],
+            'code': raw.code, 'remark': None, 'type_override': [], 'no_price': False,
         }
         manual.update({
             'spec': raw.spec,

@@ -253,7 +253,8 @@ erp_group_category
 
 product_material
   id, code(UNIQUE), cover_image, cover_image_original,
-  img_updated_at, remark, type_override(VARCHAR 100, NULL), is_disabled(INDEX), created_at, updated_at
+  img_updated_at, remark, type_override(VARCHAR 100, NULL), no_price(BOOL, 默认 false), is_disabled(INDEX), created_at, updated_at
+  # no_price（2026-09-28，迁移 20260928_01）：不计价——客供件/赠送件等不会有采购价的物料，研发 BOM 计价时按 0 元、算作已有价格
   # short_name/category/spec 已于 2026-09-27 删列（迁移 20260927_04，删前数据备份在服务器
   #   /root/backup_product_material_fields_20260927.json）：无下游使用，名称/规格以 import_product_raw 为准
   # 只存人工属性，按首次保存/传图创建；ERP name/group_code/group_name 不复制
