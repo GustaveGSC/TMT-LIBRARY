@@ -324,12 +324,14 @@ test('BOM 计价：单价/金额列、合计、计价日期；卡片显示按 BO
   await page.route('**/api/material/boms?*', r => r.fulfill({ json: OK({
     items: [{ ...head, line_count: 2 }], total: 1, all_total: 1, page: 1, page_size: 50,
     type_counts: { finished: 1 } }) }))
-  const treeDates = []
+  // 按采购订单计价：传批次 id（同日多订单也能区分），不再传日期
+  const treeBatches = []
   await page.route('**/api/material/boms/*/tree*', r => {
-    const d = new URL(r.request().url()).searchParams.get('price_date')
-    treeDates.push(d)
+    const d = new URL(r.request().url()).searchParams.get('batch_id')
+    treeBatches.push(d)
     return r.fulfill({ json: OK({
-      bom: { ...head, unit_price: d ? 20 : 24, missing: 0, price_source: 'calc', priced_as_of: d },
+      bom: { ...head, unit_price: d ? 20 : 24, missing: 0, price_source: 'calc',
+             priced_as_of: d ? '2M2-SC20240301-001 · 2024-03-01' : null },
       children: PRICED_TREE }) })
   })
   await page.route('**/api/material/items/*', r => r.fulfill({ json: OK(item('F1-A')) }))
@@ -392,7 +394,7 @@ test('BOM 计价：单价/金额列、合计、计价日期；卡片显示按 BO
   await popper.locator('.pb-group', { hasText: '2024年' }).click()
   await popper.locator('.pb-group', { hasText: '3月' }).click()
   await popper.locator('.pb-order', { hasText: '2M2-SC20240301-001' }).click()
-  await expect.poll(() => treeDates.at(-1)).toBe('2024-03-01')
+  await expect.poll(() => treeBatches.at(-1)).toBe('4')
   await expect(page.locator('.bd-total')).toContainText('¥20')
   await expect(priceRow.locator('.pb-select')).toContainText('2M2-SC20240301-001 · 2024-03-01')
   await page.screenshot({ path: 'test-results/material-bom-priced-batch.png' })

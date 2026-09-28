@@ -72,11 +72,23 @@ class MaterialPriceRepository:
         return db.session.query(
             CostSnapshot.id, CostSnapshot.order_no, CostSnapshot.snapshot_date,
             db.func.count(CostMaterialPrice.id).label('price_count'),
+            db.func.max(CostMaterialPrice.id).label('max_price_id'),
         ).join(CostMaterialPrice, CostMaterialPrice.snapshot_id == CostSnapshot.id).filter(
             CostSnapshot.snapshot_date.isnot(None),
         ).group_by(CostSnapshot.id, CostSnapshot.order_no, CostSnapshot.snapshot_date).order_by(
             CostSnapshot.snapshot_date.desc(), CostSnapshot.id.desc(),
         ).all()
+
+    @staticmethod
+    def batch_cursor(batch_id):
+        """某个采购导入批次的计价截止点 (价格日期, 该批次最后一条价格 id)；没有价格返回 None。"""
+        row = db.session.query(
+            CostSnapshot.id, CostSnapshot.order_no, CostSnapshot.snapshot_date,
+            db.func.max(CostMaterialPrice.id).label('max_price_id'),
+        ).join(CostMaterialPrice, CostMaterialPrice.snapshot_id == CostSnapshot.id).filter(
+            CostSnapshot.id == batch_id, CostSnapshot.snapshot_date.isnot(None),
+        ).group_by(CostSnapshot.id, CostSnapshot.order_no, CostSnapshot.snapshot_date).first()
+        return row
 
     @staticmethod
     def snapshot_order_map(snapshot_ids):

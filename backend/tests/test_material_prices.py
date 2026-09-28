@@ -90,11 +90,11 @@ def test_lazy_node_creation_reuses_base_code_across_versions(price_app):
 
         first = material_price_service.add_price(
             material_service.detail('14WD11001-A01').data,
-            {'unit_price': '12.50', 'supplier_name': '供应商甲'}, 'tester',
+            {'unit_price': '12.50', 'price_date': '2026-09-01', 'supplier_name': '供应商甲'}, 'tester',
         )
         second = material_price_service.add_price(
             material_service.detail('14WD11001-B01').data,
-            {'unit_price': '13.00'}, 'tester',
+            {'unit_price': '13.00', 'price_date': '2026-09-01'}, 'tester',
         )
 
         assert first.success and second.success
@@ -147,31 +147,36 @@ def test_material_price_fields_are_permission_gated_and_add_only_one_query(price
         assert priced_count - plain_count == 1
 
 
-def test_price_routes_enforce_rd_permissions_without_requiring_product_edit(price_app):
+def test_price_routes_enforce_material_price_permission(price_app):
     with price_app.app_context():
         db.session.add(_raw('ERP001-A01'))
         db.session.commit()
 
+    # 物料库权限已独立（2026-09-04）：旧的 product:view 不能再进物料库
+    legacy = price_app.test_client()
+    _login(legacy, ['product:view', 'rd:view', 'rd:edit'])
+    assert legacy.get('/api/material/items').status_code == 403
+
     viewer = price_app.test_client()
-    _login(viewer, ['product:view'])
+    _login(viewer, ['material:view'])
     plain = viewer.get('/api/material/items').get_json()['data']['items'][0]
     assert 'latest_price' not in plain
     plain_detail = viewer.get('/api/material/items/ERP001-A01').get_json()['data']
     assert 'latest_price' not in plain_detail
     assert 'has_cost_node' not in plain_detail
     denied = viewer.post(
-        '/api/material/items/ERP001-A01/prices', json={'unit_price': 10},
+        '/api/material/items/ERP001-A01/prices', json={'unit_price': 10, 'price_date': '2026-09-01'},
         headers={'X-CSRF-Token': 'csrf'},
     )
     assert denied.status_code == 403
 
     rd_editor = price_app.test_client()
-    _login(rd_editor, ['product:view', 'rd:view', 'rd:edit'])
+    _login(rd_editor, ['material:view', 'material:price'])
     detail = rd_editor.get('/api/material/items/ERP001-A01').get_json()['data']
     assert detail['has_cost_node'] is False
     created = rd_editor.post(
         '/api/material/items/ERP001-A01/prices',
-        json={'unit_price': 10, 'supplier_name': '供应商'},
+        json={'unit_price': 10, 'supplier_name': '供应商', 'price_date': '2026-09-01'},
         headers={'X-CSRF-Token': 'csrf'},
     )
     assert created.status_code == 200, created.get_json()
@@ -216,7 +221,7 @@ def test_price_state_filter_and_price_validation(price_app):
 
         invalid = material_price_service.add_price(
             material_service.detail('NONE-A01').data,
-            {'unit_price': 0}, 'tester',
+            {'unit_price': 0, 'price_date': '2026-09-01'}, 'tester',
         )
         assert invalid.message.startswith('单价必须是大于 0')
         assert CostBomNode.query.filter_by(code='NONE').first() is None
@@ -240,7 +245,7 @@ def test_useless_material_cannot_create_price_or_empty_cost_node(price_app):
         assert material_price_service.detail_fields(material)['can_add_price'] is False
 
         result = material_price_service.add_price(
-            material, {'unit_price': 9.9}, 'tester',
+            material, {'unit_price': 9.9, 'price_date': '2026-09-01'}, 'tester',
         )
 
         assert result.message == '无用物料不支持维护价格'
@@ -254,11 +259,11 @@ def test_supplier_auto_register_rename_and_protected_delete(price_app):
         db.session.commit()
         first = material_price_service.add_price(
             material_service.detail('SUP-A01').data,
-            {'unit_price': 5, 'supplier_name': '新供应商'}, 'tester',
+            {'unit_price': 5, 'price_date': '2026-09-01', 'supplier_name': '新供应商'}, 'tester',
         )
         second = material_price_service.add_price(
             material_service.detail('SUP2-A01').data,
-            {'unit_price': 6, 'supplier_name': '新供应商'}, 'tester',
+            {'unit_price': 6, 'price_date': '2026-09-01', 'supplier_name': '新供应商'}, 'tester',
         )
         assert first.success and second.success
         supplier = MaterialSupplier.query.one()
@@ -283,7 +288,7 @@ def test_supplier_summary_is_fixed_queries_and_returns_materials(price_app):
         db.session.commit()
         assert material_price_service.add_price(
             material_service.detail('SUM-A01').data,
-            {'unit_price': 7, 'supplier_name': '汇总商'}, 'tester',
+            {'unit_price': 7, 'price_date': '2026-09-01', 'supplier_name': '汇总商'}, 'tester',
         ).success
         statements = []
 

@@ -468,7 +468,7 @@ cost_material_price                        # 物料价格记录（手动 + BOM�
   #   用于成本视图区分「本产品订单」/「共用物料变价」；此前的批次没有这份记录（related=null）
   id, node_id(FK→cost_bom_node CASCADE),
   snapshot_id(FK→cost_snapshot SET NULL nullable),  # BOM导入时关联快照
-  unit_price(DECIMAL 12,4), price_date(DATE nullable),
+  unit_price(DECIMAL 12,4), price_date(DATE nullable),  # 列可空（历史遗留），但新增价格接口都要求日期；BOM 计价时无日期价格只算「最新」，不回溯历史
   supplier_name(VARCHAR 100 nullable),
   supplier_id(FK→material_supplier SET NULL nullable, INDEX),
   source(VARCHAR 20 DEFAULT 'manual'),  # 'manual' | 'bom_import' | 'bom_calc'

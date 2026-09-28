@@ -157,7 +157,7 @@ def test_combo_list_uses_three_selects_and_returns_total(combo_app):
 
 def test_combo_routes_enforce_view_and_edit_permissions(combo_app):
     viewer = combo_app.test_client()
-    _login(viewer, ['product:view'])
+    _login(viewer, ['material:view'])
     assert viewer.get('/api/material/combos').status_code == 200
     denied = viewer.post(
         '/api/material/combos', json=_payload(items=[]),
@@ -166,7 +166,7 @@ def test_combo_routes_enforce_view_and_edit_permissions(combo_app):
     assert denied.status_code == 403
 
     editor = combo_app.test_client()
-    _login(editor, ['product:view', 'product:edit'])
+    _login(editor, ['material:view', 'material:edit'])
     created = editor.post(
         '/api/material/combos', json=_payload(items=[]),
         headers={'X-CSRF-Token': 'csrf'},

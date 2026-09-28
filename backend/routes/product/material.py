@@ -156,7 +156,7 @@ def material_bom_tree(bom_id):
         return Result.fail('计价日期格式无效').to_response()
     return material_bom_service.tree(
         bom_id, include_price=has_permission(g.current_user or {}, 'material:price'),
-        price_date=price_date,
+        price_date=price_date, batch_id=request.args.get('batch_id', type=int),
     ).to_response()
 
 
@@ -167,7 +167,7 @@ def export_material_bom(bom_id):
         return Result.fail('计价日期格式无效').to_response()
     data, name_or_error = material_bom_service.export_xlsx(
         bom_id, include_price=has_permission(g.current_user or {}, 'material:price'),
-        price_date=price_date,
+        price_date=price_date, batch_id=request.args.get('batch_id', type=int),
     )
     if data is None:
         return Result.fail(name_or_error).to_response(404)

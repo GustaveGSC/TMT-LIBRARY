@@ -10,6 +10,13 @@
 - 「开始计价」= 这个物料下级价格第一次齐全的那个价格日期；之后的变化都是真实的价格涨跌。
 
 成本视图（物料卡片用）按采购订单逐单重算，不存库（见 cost_snapshot）。
+
+计价截止点 as_of（Codex 审计 #1/#3，2026-09-28）：
+- None：最新价格；
+- date：价格日期 ≤ 该日期；
+- (date, max_price_id)：按采购订单计价——价格日期早于该日，或同日且价格记录 id ≤ 该订单最后一条价格的 id。
+  同一天导入多个订单时，选前一个订单不会用到后一个订单的价格（之前只传日期，同日订单分不开）。
+- 没有日期的价格只在「最新价格」时参与，不回溯到任何历史日期（避免今天补录的价格改写过去的开始计价时间）。
 """
 from datetime import date as _date
 
@@ -18,43 +25,65 @@ from database.models.rd.cost import CostBomNode, CostMaterialPrice
 
 
 def price_histories(codes):
-    """{基础码: [(price_date, 单价), ...]}，按日期从新到旧；一条查询。
+    """{基础码: [(price_date, 单价, 价格id, 批次id), ...]}，按 (日期, id) 从新到旧；一条查询。
 
     旧的 bom_calc（部件推算价）不参与：部件价格一律由下级现算。
-    无日期的价格排在最后（视为最早）。
+    同一天多条价格按记录 id（导入先后）排序，后导入的在前。
     """
     codes = [c for c in set(codes) if c]
     if not codes:
         return {}
     rows = db.session.query(
         CostBomNode.code, CostMaterialPrice.price_date, CostMaterialPrice.unit_price,
+        CostMaterialPrice.id, CostMaterialPrice.snapshot_id,
     ).join(CostMaterialPrice, CostMaterialPrice.node_id == CostBomNode.id).filter(
         CostBomNode.code.in_(codes), CostMaterialPrice.source != 'bom_calc',
-    ).order_by(
-        CostBomNode.code, CostMaterialPrice.price_date.desc(),
-        CostMaterialPrice.created_at.desc(), CostMaterialPrice.id.desc(),
     ).all()
     result = {}
-    for code, day, price in rows:
-        result.setdefault(code, []).append((day, float(price)))
-    # MySQL 的 DESC 会把 NULL 排在最后，SQLite 相反；统一在内存里排一次
-    for code, items in result.items():
-        items.sort(key=lambda x: (x[0] is not None, x[0] or _date.min), reverse=True)
+    for code, day, price, pid, sid in rows:
+        result.setdefault(code, []).append((day, float(price), pid, sid))
+    # 新→旧：先按日期（无日期视为最早），同日按记录 id；在内存里排，避免 MySQL/SQLite 的 NULL 排序差异
+    for items in result.values():
+        items.sort(key=lambda x: (x[0] is not None, x[0] or _date.min, x[2]), reverse=True)
     return result
 
 
+def _visible(day, pid, as_of):
+    """价格记录在计价截止点 as_of 下是否可用（规则见模块说明）。"""
+    if as_of is None:
+        return True
+    if day is None:
+        return False          # 无日期价格不回溯到任何历史时点
+    if isinstance(as_of, tuple):
+        cut_day, cut_id = as_of
+        return day < cut_day or (day == cut_day and pid <= cut_id)
+    return day <= as_of
+
+
 def price_as_of(history, as_of=None):
-    """历史里取计价日期当天或之前最近的一条：(单价, 日期)；没有返回 None。"""
-    for day, price in history or []:
-        if as_of is None or day is None or day <= as_of:
-            if price and price > 0:
-                return price, day
+    """历史里取截止点 as_of 之前最近的一条：(单价, 日期)；没有返回 None。"""
+    for day, price, pid, _sid in history or []:
+        if _visible(day, pid, as_of) and price and price > 0:
+            return price, day
     return None
 
 
-def price_dates(histories):
-    """所有出现过的价格日期（升序），用来找「开始计价」的日期。"""
-    return sorted({d for items in histories.values() for d, _ in items if d is not None})
+def price_cursors(histories):
+    """所有可能的「开始计价」时点（升序）：每个 (日期, 批次) 一组，取组内最大价格 id 作为截止点。
+
+    返回 [((日期, 最大价格id), 批次id 或 None), ...]；手动价格（无批次）各自成组。
+    """
+    groups = {}
+    for items in histories.values():
+        for day, _price, pid, sid in items:
+            if day is None:
+                continue
+            key = (day, sid if sid is not None else ('manual', pid))
+            if key not in groups or pid > groups[key]:
+                groups[key] = pid
+    points = sorted(((day, pid), key[1] if not isinstance(key[1], tuple) else None)
+                    for key, pid in groups.items() for day in [key[0]])
+    return points
 
 
 def collect_codes(nodes, acc=None):
@@ -170,13 +199,14 @@ def cost_snapshot(children, root_code, histories, as_of=None, root_drawing=None,
             'leaves': leaves, 'covered': covered}
 
 
-def start_date(children, root_code, histories, free=frozenset()):
-    """「开始计价」日期：按价格日期从早到晚找第一次齐全的那天；从来没齐全返回 None。
+def start_point(children, root_code, histories, free=frozenset()):
+    """「开始计价」时点：按 (价格日期, 导入先后) 从早到晚，找第一次齐全的那个截止点。
 
-    返回 (是否已开始, 日期)：只靠无日期价格/不计价标记就齐全时，日期为 None 但已开始。
+    返回 (是否已开始, 截止点 (日期, 最大价格id) 或 None, 批次id 或 None)。
+    只靠无日期价格/不计价标记才齐全时：已开始，但截止点为 None。
     """
-    for day in price_dates(histories):
-        if root_price(children, root_code, histories, day, annotate=False, free=free)['unit_price'] is not None:
-            return True, day
+    for cursor, sid in price_cursors(histories):
+        if root_price(children, root_code, histories, cursor, annotate=False, free=free)['unit_price'] is not None:
+            return True, cursor, sid
     now = root_price(children, root_code, histories, None, annotate=False, free=free)
-    return now['unit_price'] is not None, None
+    return now['unit_price'] is not None, None, None

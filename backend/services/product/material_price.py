@@ -55,6 +55,13 @@ class MaterialPriceService:
             raise ValueError('日期格式错误')
 
     @staticmethod
+    def _required_date(value):
+        day = MaterialPriceService._date(value)
+        if day is None:
+            raise ValueError('请填写价格日期')
+        return day
+
+    @staticmethod
     def _node(material):
         code = material['code']
         base_code = _strip_version(code)
@@ -134,7 +141,8 @@ class MaterialPriceService:
             )
             price = CostMaterialPrice(
                 unit_price=self._price_value(body.get('unit_price')),
-                price_date=self._date(body.get('price_date')),
+                # 价格日期必填：无日期价格会被当成「一直有效」回溯到所有历史时点（Codex 审计 #3）
+                price_date=self._required_date(body.get('price_date')),
                 supplier_id=supplier.id if supplier else None,
                 supplier_name=supplier.name if supplier else None,
                 source='manual',

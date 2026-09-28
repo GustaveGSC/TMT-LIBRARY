@@ -24,8 +24,11 @@ const history    = ref([])
 const tab        = ref('items')   // items | zero | conflicts
 
 // ── 计算属性 ──────────────────────────────────────
+// 同一物料多个不同单价时禁止导入（用户 2026-09-28 定），必须先改 Excel
+const hasConflicts = computed(() => !!preview.value?.conflicts?.length)
 const canImport = computed(() =>
-  canMaterialPrice && !!preview.value && !!priceDate.value && preview.value.new_count > 0 && !importing.value)
+  canMaterialPrice && !!preview.value && !!priceDate.value && preview.value.new_count > 0
+  && !hasConflicts.value && !importing.value)
 
 // ── 方法 ──────────────────────────────────────────
 async function chooseFile() {
@@ -51,7 +54,7 @@ async function runPreview() {
     if (res.success) {
       preview.value = res.data
       if (!priceDate.value && res.data.price_date) priceDate.value = res.data.price_date
-      tab.value = 'items'
+      tab.value = res.data.conflicts?.length ? 'conflicts' : 'items'
     } else {
       preview.value = null
       ElMessage.error(res.message || '解析失败')
@@ -83,7 +86,7 @@ async function doImport() {
       result.value = res.data
       preview.value = null
       file.value = null
-      ElMessage.success(`已导入 ${res.data.created} 条价格`)
+      ElMessage.success(res.data.created ? `已导入 ${res.data.created} 条价格` : (res.message || "没有新增价格"))
       loadHistory()
     } else {
       ElMessage.error(res.message || '导入失败')
@@ -157,6 +160,10 @@ onMounted(() => { if (canMaterialPrice) loadHistory() })
           <div :class="{ warn: preview.zero_items.length }"><b>{{ preview.zero_items.length }}</b><span>原材料无价格</span></div>
           <div :class="{ warn: preview.conflicts.length }"><b>{{ preview.conflicts.length }}</b><span>同物料多单价</span></div>
         </div>
+        <div v-if="hasConflicts" class="prc-warn">
+          <el-icon><WarningFilled /></el-icon>
+          有 {{ preview.conflicts.length }} 个物料在文件里出现了多个不同单价，不能导入。请先在 Excel 里把这些物料的单价改成一致，再重新选择文件。
+        </div>
         <div v-for="w in preview.warnings" :key="w" class="prc-warn small">
           <el-icon><WarningFilled /></el-icon>{{ w }}
         </div>
@@ -212,12 +219,13 @@ onMounted(() => { if (canMaterialPrice) loadHistory() })
             <template #default="{ row }"><span class="mono">{{ row.code }}</span></template>
           </el-table-column>
           <el-table-column label="文件里出现的单价" min-width="260">
-            <template #default="{ row }">{{ row.prices.map(fmtPrice).join('、') }}（导入第一个出现的）</template>
+            <template #default="{ row }">{{ row.prices.map(fmtPrice).join('、') }}</template>
           </el-table-column>
         </el-table>
 
         <div class="prc-actions">
-          <span v-if="!priceDate" class="prc-warn-text">请先确认价格日期</span>
+          <span v-if="hasConflicts" class="prc-warn-text">存在同物料多单价，需先修改 Excel</span>
+          <span v-else-if="!priceDate" class="prc-warn-text">请先确认价格日期</span>
           <span v-else-if="preview.new_count === 0" class="prc-muted">没有需要新增的价格</span>
           <el-button type="primary" :disabled="!canImport" :loading="importing" @click="doImport">确认导入</el-button>
         </div>

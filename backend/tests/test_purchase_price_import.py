@@ -23,7 +23,7 @@ from utils import now_cst
 HEADERS = ['主件品号', '主件品名', '主件规格', '品号', '品名', '规格', '序号', '组成用量',
            '元件品号', '标准号', '元件品名', '元件规格', '元件品名分类', '单价', '金额']
 
-# 成品 F1 → 产成品 P1（部件）+ 原材料 R1（同一文件里出现两个单价）+ 原材料 R5（单价 0）
+# 成品 F1 → 产成品 P1（部件）+ 原材料 R1（出现两次、单价相同）+ 原材料 R5（单价 0）
 # P1 → R2；P1 → 特例半成品 S9（自身有价，下面 R3/R4 全为 0）
 LINES = [
     ('F1-A01', 'P1-A01', 1, 0),
@@ -33,8 +33,10 @@ LINES = [
     ('S9-A01', 'R3-A01', 1, 0),
     ('S9-A01', 'R4-A01', 2, None),
     ('F1-A01', 'R5-A01', 1, 0),
-    ('F1-A01', 'R1-A01', 1, 1.6),
+    ('F1-A01', 'R1-A01', 1, 1.5),
 ]
+# 同一物料出现两个不同单价
+CONFLICT_LINES = LINES[:-1] + [('F1-A01', 'R1-A01', 1, 1.6)]
 
 
 def _workbook(lines=LINES, order_no='2M2-SC20240620-050'):
@@ -80,7 +82,34 @@ def test_extract_only_raw_materials_and_special_semi():
     # P1 是普通部件不导入；S9 下面全是 0 → 导入 S9 自己的价；R3/R4 被 S9 覆盖不算「无价格」
     assert got == {'R1': (1.5, 'material'), 'R2': (2.0, 'material'), 'S9': (10.0, 'semi')}
     assert [z['code'] for z in zero_items] == ['R5']
-    assert conflicts == [{'code': 'R1', 'prices': [1.5, 1.6]}]
+    assert conflicts == []
+    assert extract_prices(parse_workbook(_workbook(CONFLICT_LINES))['lines'])[2] == [
+        {'code': 'R1', 'prices': [1.5, 1.6]}]
+
+
+def test_special_semi_requires_its_own_price():
+    # Q1 下面全为 0，但 Q1 自己也没有正价：不能算特例半成品，下级仍要列在「无价格」里
+    lines = [('F1-A01', 'Q1-A01', 1, 0), ('Q1-A01', 'R6-A01', 1, 0), ('Q1-A01', 'R7-A01', 1, None),
+             ('F1-A01', 'R1-A01', 1, 1.5)]
+    items, zero_items, _ = extract_prices(parse_workbook(_workbook(lines))['lines'])
+    assert {i['code'] for i in items} == {'R1'}
+    assert {z['code'] for z in zero_items} == {'R6', 'R7'}
+
+
+def test_conflicting_prices_block_import(app):
+    with app.app_context():
+        preview = purchase_price_import_service.preview(_workbook(CONFLICT_LINES), '2024-06-20').data
+        assert preview['conflicts'] and preview['can_import'] is False
+        res = purchase_price_import_service.import_prices(_workbook(CONFLICT_LINES), '2024-06-20', 'buyer')
+        assert not res.success and 'R1' in res.message
+        assert CostSnapshot.query.count() == 0 and CostMaterialPrice.query.count() == 0
+
+
+def test_preview_rejects_invalid_date(app):
+    with app.app_context():
+        res = purchase_price_import_service.preview(_workbook(), '2024-13-45')
+        assert not res.success and '日期' in res.message
+        assert purchase_price_import_service.preview(_workbook(), '').data['price_date'] == '2024-06-20'
 
 
 def test_import_dedupes_same_day_same_price_only(app):
@@ -102,6 +131,8 @@ def test_import_dedupes_same_day_same_price_only(app):
         # 同一日期再导一次：全部「同日同价」跳过
         again = purchase_price_import_service.import_prices(_workbook(), '2024-06-20', 'buyer')
         assert again.data['created'] == 0 and again.data['skipped'] == 3
+        # 没有新增时不建空批次
+        assert again.data['batch_id'] is None and CostSnapshot.query.count() == 1
 
         # 同一日期、R2 价格不同：只新增 R2，R2 当天有两条价格
         changed = [l if l[1] != 'R2-A01' else ('P1-A01', 'R2-A01', 3, 2.5) for l in LINES]
@@ -119,6 +150,7 @@ def test_import_dedupes_same_day_same_price_only(app):
         history = purchase_price_import_service.history().data
         assert [h['price_date'] for h in history][:2] == ['2024-07-01', '2024-06-20']
         assert history[0]['price_count'] == 3
+        assert all(h['price_count'] > 0 for h in history)
 
 
 def test_preview_marks_new_and_skip_by_date(app):

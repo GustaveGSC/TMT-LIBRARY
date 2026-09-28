@@ -419,7 +419,7 @@ def test_material_route_rejects_invalid_sort_field(material_app, monkeypatch):
     client = material_app.test_client()
     viewer = {
         'id': 1, 'username': 'viewer', 'roles': [],
-        'permissions': ['product:view'], 'token_version': 0,
+        'permissions': ['material:view'], 'token_version': 0,
     }
     client.set_cookie('tmt_session', generate_token(viewer, csrf_token='csrf'))
     response = client.get('/api/material/items?sort_by=code;DROP TABLE product_material')
@@ -522,7 +522,7 @@ def test_material_route_returns_expression_error_as_400(material_app, monkeypatc
     client = material_app.test_client()
     viewer = {
         'id': 1, 'username': 'viewer', 'roles': [],
-        'permissions': ['product:view'], 'token_version': 0,
+        'permissions': ['material:view'], 'token_version': 0,
     }
     client.set_cookie('tmt_session', generate_token(viewer, csrf_token='csrf'))
     response = client.get(

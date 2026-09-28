@@ -550,6 +550,75 @@ def test_cost_overview_starts_when_complete(bom_app):
         assert [h['related'] for h in m1['history']] == [True, False, True]
 
 
+def test_same_day_batches_are_priced_separately(bom_app):
+    """同一天导入两个订单：按订单计价时各用各的截止点（Codex 审计 #1）。"""
+    from datetime import date
+    with bom_app.app_context():
+        material_bom_service.import_file(_pdm(SAMPLE), 'a.xlsx', 'tester')
+        f1 = MaterialBom.query.filter_by(code='F1').one()
+        day = date(2024, 6, 1)
+        a = _batch('A-20240601', day, ['F1-A01'])
+        _price('R1', 4, day, batch_id=a)
+        _price('S1', 0.5, day, batch_id=a)
+        b = _batch('B-20240601', day, ['F1-A01'])
+        _price('R1', 5, day, batch_id=b)
+
+        at_a = material_bom_service.tree(f1.id, include_price=True, batch_id=a).data['bom']
+        at_b = material_bom_service.tree(f1.id, include_price=True, batch_id=b).data['bom']
+        assert at_a['unit_price'] == 38.0 and at_a['priced_as_of'] == 'A-20240601 · 2024-06-01'
+        assert at_b['unit_price'] == 47.0
+        assert not material_bom_service.tree(f1.id, include_price=True, batch_id=999).success
+
+        data = material_bom_service.calc_price('F1-A').data
+        assert data['started'] == {'date': '2024-06-01', 'order_no': 'A-20240601'}
+        assert [(h['order_no'], h['unit_price']) for h in data['history']] == [
+            ('B-20240601', 47.0), ('A-20240601', 38.0)]
+
+
+def test_undated_price_is_not_retroactive(bom_app):
+    """没有日期的价格只参与「最新价格」，不改写历史订单的计价和开始计价时间（Codex 审计 #3）。"""
+    from datetime import date
+    with bom_app.app_context():
+        material_bom_service.import_file(_pdm(SAMPLE), 'a.xlsx', 'tester')
+        f1 = MaterialBom.query.filter_by(code='F1').one()
+        a = _batch('A-20240101', date(2024, 1, 1), ['F1-A01'])
+        _price('R1', 3, date(2024, 1, 1), batch_id=a)
+        _price('S1', 1, None, source='manual')          # 历史遗留的无日期手动价
+        assert material_bom_service.tree(f1.id, include_price=True, batch_id=a).data['bom']['unit_price'] is None
+        assert material_bom_service.tree(f1.id, include_price=True).data['bom']['unit_price'] == 31.0
+        data = material_bom_service.calc_price('F1-A').data
+        # 现在齐全了，但没有任何一个历史订单时点是齐全的：开始计价没有日期，也没有历史
+        assert data['current']['unit_price'] == 31.0
+        assert data['started'] == {'date': None, 'order_no': None} and data['history'] == []
+
+
+def test_manual_price_requires_date(bom_app):
+    from services.product.material import material_service
+    from services.product.material_price import material_price_service
+    with bom_app.app_context():
+        _add_erp_raw('RAW-A01')
+        res = material_price_service.add_price(material_service.detail('RAW-A01').data, {'unit_price': 3}, 'u')
+        assert not res.success and '价格日期' in res.message
+
+
+def test_export_escapes_formula_text(bom_app):
+    """导出时以 = + - @ 开头的文本按文本写入，不被 Excel 当成公式（Codex 审计 #6）。"""
+    rows = [
+        ('1',   '11_成品',   'F9', 'A01', 1, '=HYPERLINK("http://x","点我")'),
+        ('1.1', '14_原材料', 'R9', 'A01', 2, '@SUM(1,2)'),
+    ]
+    with bom_app.app_context():
+        material_bom_service.import_file(_pdm(rows), 'a.xlsx', 'tester')
+        f9 = MaterialBom.query.filter_by(code='F9').one()
+        data, _ = material_bom_service.export_xlsx(f9.id)
+        ws = openpyxl.load_workbook(io.BytesIO(data)).active
+        assert ws['A1'].data_type == 's'
+        row = [c for c in ws[5]]
+        assert row[4].value == "'@SUM(1,2)" and row[4].data_type == 's'
+    from services.common.excel_text import safe_excel_text
+    assert safe_excel_text('-1') == "'-1" and safe_excel_text(-1) == -1 and safe_excel_text(None) is None
+
+
 def test_export_includes_price_columns_only_with_permission(bom_app):
     from datetime import date
     with bom_app.app_context():

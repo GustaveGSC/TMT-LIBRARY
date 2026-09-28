@@ -2,12 +2,13 @@
 // ── 导入 ──────────────────────────────────────────
 // 计价依据选择：不手动选日期，而是选「最新价格」或某一次采购导入（订单号 + 价格日期）。
 // 批次按 年 → 月 → 订单 组织成树，只有「最新价格」和订单可选（年/月只用来展开）。
-// v-model 仍是计价日期字符串（YYYY-MM-DD；'' = 最新价格），后端按这个日期取当天或之前最近的价格现算。
+// v-model 是采购导入批次 id（null = 最新价格）：后端按「该订单导入时」的截止点计价，
+// 同一天导入多个订单也能区分（之前只传日期，同日订单结果一样，Codex 审计 #1，2026-09-28）。
 import { ref, computed, watch, onMounted } from 'vue'
 import http from '@/api/http'
 
 const props = defineProps({
-  modelValue: { type: String, default: '' },
+  modelValue: { type: Number, default: null },
 })
 const emit = defineEmits(['update:modelValue', 'change'])
 
@@ -51,20 +52,15 @@ async function load() {
 
 function onChange(value) {
   const batch = batches.value.find(b => `b-${b.id}` === value)
-  const date = batch ? batch.price_date : ''
-  emit('update:modelValue', date)
-  emit('change', date)
+  const id = batch ? batch.id : null
+  emit('update:modelValue', id)
+  emit('change', id)
 }
 
-// 外部改了计价日期（如重新打开弹窗时清空、返回时恢复）：选择框跟着对齐
+// 外部改了批次（如重新打开弹窗时清空、返回时恢复）：选择框跟着对齐
 function syncFromValue() {
-  const date = props.modelValue || ''
-  if (!date) { selected.value = LATEST; return }
-  const current = batches.value.find(b => `b-${b.id}` === selected.value)
-  if (current?.price_date !== date) {
-    const hit = batches.value.find(b => b.price_date === date)
-    selected.value = hit ? `b-${hit.id}` : LATEST
-  }
+  const id = props.modelValue
+  selected.value = id && batches.value.some(b => b.id === id) ? `b-${id}` : LATEST
 }
 watch(() => props.modelValue, syncFromValue)
 

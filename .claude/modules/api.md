@@ -162,12 +162,15 @@ GET  /api/material/boms                 # ?keyword=&material_type=&page=&page_si
                                         #   material_type 取值 finished/packaged/semi/material/useless/unclassified/unmatched，
                                         #   按 erp_code 走物料类型判定缓存（与物料表同口径），unmatched=ERP 对应不到；
                                         #   关键词命中的 (id, erp_code) 先全取出在内存分类计数再按 id 取当前页，共 3 条查询
-GET  /api/material/boms/:id/tree        # ?price_date=YYYY-MM-DD 完整多层展开 {bom, children:[{id(路径), drawing, erp_code, name, spec, category, qty, unit, children?}]}
+GET  /api/material/boms/:id/tree        # ?batch_id=采购导入批次（优先）|?price_date=YYYY-MM-DD|都不传=最新价格；完整多层展开 {bom, children:[{id(路径), drawing, erp_code, name, spec, category, qty, unit, children?}]}
                                         #   有 material:price 时每个节点另带 unit_price/amount/price_date/price_source(material|own|calc|free)/missing，
                                         #   bom 带 unit_price/missing/priced_as_of。齐全才计价：部件下级全部有价才=Σ下级，否则用外购价，都没有则 null；
                                         #   free=物料被标记「不计价」按 0 元（product_material.no_price）；missing = 缺价原材料**种类数**（同一物料多处只算一种，与卡片口径一致）
+                                        #   计价截止点（2026-09-28 Codex 审计 #1/#3）：batch_id → (该批次价格日期, 该批次最大价格 id)，
+                                        #   即「日期更早，或同日且 id ≤ 该批次最后一条」，同日多订单互不串价；无日期价格只在「最新价格」时参与，不回溯历史；
+                                        #   priced_as_of 为「订单号 · 日期」；batch_id 不存在返回失败
                                         #   每层一次查询；名称/规格优先用 ERP 的，文件里的兜底
-GET  /api/material/boms/:id/export      # ?price_date= 有价格权限时另带 单价/金额/价格日期 列；下载 xlsx（BOM-{研发编码}.xlsx）：序号(层级编号)/层级/图纸编码/ERP编码/名称/数量/单位，与页面树一致
+GET  /api/material/boms/:id/export      # ?batch_id=|?price_date= 有价格权限时另带 单价/金额/价格日期 列；下载 xlsx（BOM-{研发编码}.xlsx）：序号(层级编号)/层级/图纸编码/ERP编码/名称/数量/单位，与页面树一致；文本列经 safe_excel_text（= + - @ 开头前置单引号，防公式注入）
 DELETE /api/material/boms/:id           # ?force=1。只删这一层子件清单，下级半成品自己的 BOM 不动
                                         #   被其他 BOM 引用且无 force → success=false, data={needs_force:true, references:[上级 BOM]}
 GET  /api/material/items/:code/bom      # 物料卡片用：{versions[+line_count], direct_parents[], top_products[]}
@@ -241,7 +244,7 @@ DELETE /api/material/suppliers/:id
 - 物料价格直接复用研发 BOM 的 `cost_material_price`：
   - `GET items/:code/prices` 返回价格历史并附 `order_no`；
   - `POST items/:code/prices` 接收
-    `{unit_price,price_date?,supplier_name?,notes?}`，手工来源固定为 `manual`；没有成本节点时惰性创建；
+    `{unit_price,price_date,supplier_name?,notes?}`，**price_date 必填**（2026-09-28 起，防无日期价格回溯历史）；手工来源固定为 `manual`；没有成本节点时惰性创建；
   - `PATCH prices/:id` 本期只允许修改 `{supplier_name}`；
   - `DELETE prices/:id` 删除价格记录；
   - `GET items/:code/usages` 返回该成本节点出现过的快照/SKU。
@@ -685,7 +688,10 @@ PUT    /api/rd/cost/col-aliases           # 更新 Excel 列名映射
 ```
 POST /api/purchase/price-import/preview   # multipart file(+price_date)：解析采购 BOM（成本核算格式，复用 rd/cost_import 解析）
                                           #   → {order_no, suggested_date(订单号里的日期), price_date, items[{code(去版本),name,price,kind(material|semi),status(new|skip),in_erp}],
-                                          #      new_count, skip_count, special_semis, zero_items, conflicts, warnings}
-POST /api/purchase/price-import           # multipart file + price_date(必填)：写 cost_material_price（见 database.md），返回 {created, skipped, ...}
+                                          #      new_count, skip_count, special_semis, zero_items, conflicts, can_import, warnings}
+                                          #   非法的非空 price_date 直接失败（空/未传才用订单号日期）；特例半成品要求父件自身有正价行且直接下级全无价
+POST /api/purchase/price-import           # multipart file + price_date(必填)：写 cost_material_price（见 database.md），返回 {batch_id, created, skipped, ...}
+                                          #   conflicts（同物料多个不同单价）非空 → 禁止导入，需先改 Excel（用户 2026-09-28 定）；
+                                          #   全部同日同价 → 成功但不建批次（batch_id=null, message=没有新增），不写 cost_snapshot
 GET  /api/purchase/price-import/history   # 最近 20 次导入批次
 ```

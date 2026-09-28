@@ -477,11 +477,11 @@ class MaterialBomService:
         return Result.ok()
 
     # ── 展开 ──────────────────────────────────────────
-    def tree(self, bom_id, include_price=False, price_date=None):
+    def tree(self, bom_id, include_price=False, price_date=None, batch_id=None):
         """展开一份 BOM 的完整多层结构；每层一次查询（O(层数)）。
 
-        include_price=True（调用方已确认 material:price 权限）时，按计价日期给每个节点算单价/金额，
-        价格只多一条查询（见 material_bom_price）。"""
+        include_price=True（调用方已确认 material:price 权限）时给每个节点算单价/金额，价格只多一条查询。
+        计价截止点：batch_id（按采购订单，同日多订单也能区分）优先，其次 price_date，都没有 = 最新价格。"""
         root = db.session.get(MaterialBom, bom_id)
         if root is None:
             return Result.fail('BOM 不存在')
@@ -540,12 +540,20 @@ class MaterialBomService:
         root_dict['spec'] = root_spec or root.spec
         children = build(root, {(root.code, root.version)}, 1)
         if include_price:
+            from database.repository.product.material_price import MaterialPriceRepository
+            as_of, as_of_label = price_date, price_date.isoformat() if price_date else None
+            if batch_id:
+                batch = MaterialPriceRepository.batch_cursor(batch_id)
+                if batch is None:
+                    return Result.fail('采购订单不存在或没有价格')
+                as_of = (batch.snapshot_date, batch.max_price_id)
+                as_of_label = f"{batch.order_no or '（无订单号）'} · {batch.snapshot_date.isoformat()}"
             histories = bom_price.price_histories(bom_price.collect_codes(children) | {root.code})
             free = self._free_codes(children)
-            price = bom_price.root_price(children, root.code, histories, price_date, free=free)
+            price = bom_price.root_price(children, root.code, histories, as_of, free=free)
             price.pop('missing_codes', None)
             root_dict.update(price)
-            root_dict['priced_as_of'] = price_date.isoformat() if price_date else None
+            root_dict['priced_as_of'] = as_of_label
         return Result.ok(data={'bom': root_dict, 'children': children})
 
     # ── 物料卡片：按 BOM 实时计算的价格 + 价格变化历史 ───
@@ -610,7 +618,8 @@ class MaterialBomService:
         for top in self.for_material(erp_code).data['top_products']:
             related_codes.add(top['code'].upper())
 
-        batches = list(reversed(MaterialPriceRepository.price_batches()))   # 旧→新
+        # 旧→新：按计价截止点 (日期, 批次最后一条价格 id) 排，同日多订单按导入先后
+        batches = sorted(MaterialPriceRepository.price_batches(), key=lambda b: (b.snapshot_date, b.max_price_id))
         finished_by_batch = {}
         if batches:
             rows = db.session.query(CostSnapshotSku.snapshot_id, CostSnapshotSku.finished_code).filter(
@@ -618,21 +627,23 @@ class MaterialBomService:
             for sid, code in rows:
                 finished_by_batch.setdefault(sid, set()).add(_order_base_code(code))
 
-        started, start_day = bom_price.start_date(children, bom.code, histories, free)
+        # 开始计价：按 (价格日期, 导入先后) 找第一次齐全的截止点；对应到那次导入的订单
+        started, start_cursor, start_sid = bom_price.start_point(children, bom.code, histories, free)
         start_info = None
         if started:
-            same_day = [b for b in batches if b.snapshot_date == start_day] if start_day else []
-            pick = next((b for b in same_day
-                         if finished_by_batch.get(b.id, set()) & related_codes), same_day[0] if same_day else None)
-            start_info = {'date': start_day.isoformat() if start_day else None,
+            batch_by_id = {b.id: b for b in batches}
+            pick = batch_by_id.get(start_sid)
+            start_info = {'date': start_cursor[0].isoformat() if start_cursor else None,
                           'order_no': (pick.order_no or '') if pick else None}
 
+        # 成本历史：每个订单用自己的截止点 (日期, 该订单最后一条价格 id) 重算，同日多个订单也能区分
         history, prev_total = [], None
         if started:
             for b in batches:
-                if start_day and b.snapshot_date < start_day:
+                cursor = (b.snapshot_date, b.max_price_id)
+                if start_cursor and cursor < start_cursor:
                     continue
-                snap = bom_price.cost_snapshot(children, bom.code, histories, b.snapshot_date, root_drawing, free)
+                snap = bom_price.cost_snapshot(children, bom.code, histories, cursor, root_drawing, free)
                 if not snap['complete']:
                     continue
                 related = bool(finished_by_batch.get(b.id, set()) & related_codes)
@@ -657,15 +668,16 @@ class MaterialBomService:
         })
 
     # ── 导出 Excel ────────────────────────────────────
-    def export_xlsx(self, bom_id, include_price=False, price_date=None):
+    def export_xlsx(self, bom_id, include_price=False, price_date=None, batch_id=None):
         """把一份 BOM 的完整多层结构导出成 Excel（与页面上的树一致：序号按层级编号）。
 
         返回 (bytes, 文件名)；BOM 不存在返回 (None, 错误信息)。
         """
         from openpyxl import Workbook
         from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+        from services.common.excel_text import safe_excel_text as t   # 防公式注入（Codex 审计 #6）
 
-        res = self.tree(bom_id, include_price=include_price, price_date=price_date)
+        res = self.tree(bom_id, include_price=include_price, price_date=price_date, batch_id=batch_id)
         if not res.success:
             return None, res.message
         bom, children = res.data['bom'], res.data['children']
@@ -676,11 +688,11 @@ class MaterialBomService:
         headers = ['序号', '层级', '图纸编码', 'ERP编码', '名称', '数量', '单位']
         if include_price:
             headers += ['单价', '金额', '价格日期']
-        ws.append([f"BOM：{bom['drawing']}  {bom.get('name') or ''}"])
+        ws.append([t(f"BOM：{bom['drawing']}  {bom.get('name') or ''}")])
         ws.append([f"ERP编码：{bom.get('erp_code') or '未匹配'}    导入：{bom.get('imported_by') or '—'} "
                    f"{bom.get('imported_at') or ''}    导出：{now_cst().strftime('%Y-%m-%d %H:%M')}"
-                   + (f"    计价日期：{bom.get('priced_as_of') or '最新价格'}    合计单价："
-                      f"{bom['unit_price'] if bom.get('unit_price') is not None else '—'}"
+                   + (f"    计价：{bom.get('priced_as_of') or '最新价格'}    合计单价："
+                      f"{bom['unit_price'] if bom.get('unit_price') is not None else '未计价'}"
                       + (f"（{bom['missing']} 项无价格）" if bom.get('missing') else '')
                       if include_price else '')])
         ws.append([])
@@ -697,8 +709,8 @@ class MaterialBomService:
         def walk(nodes, prefix, depth):
             for i, n in enumerate(nodes, start=1):
                 seq = f'{prefix}.{i}' if prefix else str(i)
-                row_values = [seq, depth, n['drawing'], n.get('erp_code') or '', n.get('name') or '',
-                              n.get('qty'), n.get('unit') or '']
+                row_values = [seq, depth, t(n['drawing']), t(n.get('erp_code') or ''), t(n.get('name') or ''),
+                              n.get('qty'), t(n.get('unit') or '')]
                 if include_price:
                     row_values += [n.get('unit_price'), n.get('amount'), n.get('price_date') or '']
                 ws.append(row_values)

@@ -21,14 +21,14 @@ function errorMessage(buf) {
 /**
  * 导出一份 BOM 的完整多层结构
  * @param {{ id: number, drawing: string }} bom
- * @param {string} [priceDate] 计价日期 YYYY-MM-DD；空 = 最新价格（仅有价格权限时导出带价格列）
+ * @param {number|null} [batchId] 计价依据的采购导入批次 id；null = 最新价格（仅有价格权限时导出带价格列）
  * @returns {Promise<boolean>} 是否成功开始下载
  */
-export async function exportBom(bom, priceDate = '') {
+export async function exportBom(bom, batchId = null) {
   if (!bom?.id) return false
   try {
     const buf = await http.get(`/api/material/boms/${bom.id}/export`, {
-      responseType: 'arraybuffer', params: priceDate ? { price_date: priceDate } : {},
+      responseType: 'arraybuffer', params: batchId ? { batch_id: batchId } : {},
     })
     if (!isXlsx(buf)) {
       ElMessage.error(errorMessage(buf))

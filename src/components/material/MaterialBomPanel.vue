@@ -43,8 +43,8 @@ const errorMsg  = ref('')
 const selectedId  = ref(null)
 const treeData    = ref(null)    // { bom, children }
 const treeLoading = ref(false)
-// 计价日期（仅 material:price 可见）：空 = 各原材料最新价格；选了日期就用当天或之前最近的价格现算
-const priceDate = ref('')
+// 计价依据（仅 material:price 可见）：采购导入批次 id；null = 各原材料最新价格
+const priceBatch = ref(null)
 
 const fileInput  = ref(null)
 const importing  = ref(false)
@@ -99,7 +99,7 @@ async function selectBom(id) {
   treeLoading.value = true
   try {
     const res = await http.get(`/api/material/boms/${id}/tree`,
-      { params: priceDate.value ? { price_date: priceDate.value } : {} })
+      { params: priceBatch.value ? { batch_id: priceBatch.value } : {} })
     // 快速连点时只认最后一次
     if (selectedId.value !== id) return
     if (res.success) treeData.value = res.data
@@ -187,7 +187,7 @@ async function deleteBom() {
 async function handleExport() {
   if (exporting.value) return
   exporting.value = true
-  try { await exportBom(treeData.value?.bom, priceDate.value) } finally { exporting.value = false }
+  try { await exportBom(treeData.value?.bom, priceBatch.value) } finally { exporting.value = false }
 }
 
 // 改计价日期：重新计算当前 BOM
@@ -296,7 +296,7 @@ onMounted(loadList)
         <!-- 计价行（仅物料价格权限可见）：计价依据 + 合计，单独一行 -->
         <div v-if="canMaterialPrice" class="bd-price-row">
           <!-- 计价依据：最新价格 或 某次采购导入（年 → 月 → 订单），不手动选日期 -->
-          <PriceBatchSelect v-model="priceDate" class="bd-date" @change="onPriceDateChange" />
+          <PriceBatchSelect v-model="priceBatch" class="bd-date" @change="onPriceDateChange" />
           <!-- 齐全才计价：下级有缺价就不给合计 -->
           <span v-if="treeData.bom.unit_price != null" class="bd-total" title="由下级价格计算（下级价格齐全）">
             合计 <b class="mono">{{ money(treeData.bom.unit_price) }}</b>

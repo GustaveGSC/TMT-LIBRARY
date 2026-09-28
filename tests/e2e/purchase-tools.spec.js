@@ -28,7 +28,7 @@ const PREVIEW = (priceDate, newCount = 3) => ({
   new_count: newCount, skip_count: 3 - newCount,
   special_semis: [{ code: 'S9', name: '外购配件包', price: 10, kind: 'semi' }],
   zero_items: [{ code: 'R5', name: '胶水', in_erp: true }],
-  conflicts: [{ code: 'R1', prices: [1.5, 1.6] }],
+  conflicts: [],
   warnings: [],
 })
 
@@ -91,6 +91,26 @@ test('采购工具：预览确认日期后导入价格，记录可见', async ({
   await expect(page.locator('.prc-result')).toContainText('新增 3 条')
   expect(imported).toBe('2024-07-01')
   await expect(page.locator('.prc-card').last()).toContainText('2M2-SC20240620-050')
+})
+
+test('同一物料多个单价：禁止导入，默认显示多单价清单', async ({ page }) => {
+  await login(page, ['purchase:view', 'material:price'])
+  await page.route('**/api/purchase/price-import/preview', r => r.fulfill({ json: OK({
+    ...PREVIEW('2024-07-01'), conflicts: [{ code: 'R1', prices: [1.5, 1.6] }], can_import: false }) }))
+  await page.route('**/api/purchase/price-import/history', r => r.fulfill({ json: OK([]) }))
+  await page.goto('/#/purchase-tools')
+  await page.locator('.tool-card', { hasText: '导入价格' }).click()
+  const [chooser] = await Promise.all([
+    page.waitForEvent('filechooser'),
+    page.locator('.prc button', { hasText: '选择采购 BOM' }).click(),
+  ])
+  await chooser.setFiles({ name: 'bom.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                           buffer: Buffer.from('x') })
+  await expect(page.locator('.prc-card .prc-warn')).toContainText('不能导入')
+  await expect(page.locator('.prc-tabs button.active')).toContainText('多单价')
+  await expect(page.locator('.prc-table').first()).toContainText('¥1.5、¥1.6')
+  await expect(page.locator('.prc-actions button', { hasText: '确认导入' })).toBeDisabled()
+  await expect(page.locator('.prc-actions')).toContainText('需先修改 Excel')
 })
 
 test('没有物料价格权限：可以进入采购工具但不能导入', async ({ page }) => {

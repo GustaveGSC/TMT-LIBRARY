@@ -149,7 +149,9 @@ const costLoading   = ref(false)
 const trendOpen     = ref(false)
 const priceFormOpen = ref(false)
 const priceSaving   = ref(false)
-const priceForm     = ref({ unit_price: '', price_date: '', supplier_name: '', notes: '' })
+// 价格日期默认今天（本地时区），可改
+const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
+const priceForm     = ref({ unit_price: '', price_date: todayStr(), supplier_name: '', notes: '' })
 const priceErr      = ref('')
 
 // 无用物料不允许维护价格（用户 2026-08-07 决定：金蝶旧编码那两组已不再使用）。
@@ -178,6 +180,8 @@ async function loadCost() {
 async function submitPrice() {
   priceErr.value = ''
   if (!String(priceForm.value.unit_price).trim()) { priceErr.value = '请填写单价'; return }
+  // 价格日期必填：无日期价格会回溯到所有历史时点（Codex 审计 #3）
+  if (!priceForm.value.price_date) { priceErr.value = '请填写价格日期'; return }
   priceSaving.value = true
   try {
     const res = await http.post(
@@ -192,7 +196,7 @@ async function submitPrice() {
       // 新加的一条不一定就是最新（可能补录的是更早日期）。
       await loadCost()
       priceFormOpen.value = false
-      priceForm.value = { unit_price: '', price_date: '', supplier_name: '', notes: '' }
+      priceForm.value = { unit_price: '', price_date: todayStr(), supplier_name: '', notes: '' }
       // 通知列表刷新该行的价格列
       emit('saved', { ...detail.value, _priceChanged: true })
     } else {
@@ -322,19 +326,19 @@ const bomDialogHead    = ref(null)   // 列表里点的那一条（先用它显�
 const bomDialogTree    = ref([])
 const bomDialogLoading = ref(false)
 const bomDialogKeyword = ref('')     // 弹窗内筛选：编码/名称
-const bomDialogPriceDate = ref('')   // 计价日期（仅 material:price）：空 = 最新价格
+const bomDialogPriceBatch = ref(null)   // 计价依据的采购导入批次 id（仅 material:price）：null = 最新价格
 const bomTreeRef       = ref(null)   // 读取树组件暴露的匹配数
 
-async function openBomDialog(v, keyword = '', priceDate = '') {
+async function openBomDialog(v, keyword = '', priceBatch = null) {
   bomDialogKeyword.value = keyword
-  bomDialogPriceDate.value = priceDate
+  bomDialogPriceBatch.value = priceBatch
   bomDialogHead.value = v
   bomDialogTree.value = []
   bomDialogOpen.value = true
   bomDialogLoading.value = true
   try {
     const res = await http.get(`/api/material/boms/${v.id}/tree`,
-      { params: bomDialogPriceDate.value ? { price_date: bomDialogPriceDate.value } : {} })
+      { params: bomDialogPriceBatch.value ? { batch_id: bomDialogPriceBatch.value } : {} })
     if (bomDialogHead.value?.id !== v.id) return
     if (res.success) {
       bomDialogHead.value = { ...v, ...res.data.bom }
@@ -354,17 +358,17 @@ const bomExporting = ref(false)
 async function exportBomDialog() {
   if (bomExporting.value) return
   bomExporting.value = true
-  try { await exportBom(bomDialogHead.value, bomDialogPriceDate.value) } finally { bomExporting.value = false }
+  try { await exportBom(bomDialogHead.value, bomDialogPriceBatch.value) } finally { bomExporting.value = false }
 }
 
 // 弹窗里点子件编码：关掉弹窗，卡片跳到该物料
 // 弹窗里改计价日期：保留筛选词重新加载
 function onBomDialogPriceDate() {
-  if (bomDialogHead.value) openBomDialog(bomDialogHead.value, bomDialogKeyword.value, bomDialogPriceDate.value)
+  if (bomDialogHead.value) openBomDialog(bomDialogHead.value, bomDialogKeyword.value, bomDialogPriceBatch.value)
 }
 
 async function onBomDialogCode(code) {
-  const snapshot = { head: bomDialogHead.value, keyword: bomDialogKeyword.value, priceDate: bomDialogPriceDate.value }
+  const snapshot = { head: bomDialogHead.value, keyword: bomDialogKeyword.value, priceBatch: bomDialogPriceBatch.value }
   // 先确认能跳（可能有未保存修改被取消），再关弹窗
   if (await navigateTo(code, snapshot)) bomDialogOpen.value = false
 }
@@ -386,7 +390,7 @@ async function navigateBack() {
   activeCode.value = prev.code
   resetForCode()
   // 从 BOM 弹窗点进来的：回到那个弹窗（保留当时的筛选词）
-  if (prev.bomDialog?.head) openBomDialog(prev.bomDialog.head, prev.bomDialog.keyword, prev.bomDialog.priceDate)
+  if (prev.bomDialog?.head) openBomDialog(prev.bomDialog.head, prev.bomDialog.keyword, prev.bomDialog.priceBatch)
 }
 
 function resetForCode() {
@@ -940,7 +944,7 @@ watch(() => props.visible, v => {
             <div class="pf-row">
               <label>单价 <b>*</b></label>
               <input v-model="priceForm.unit_price" class="mc-input" placeholder="如 12.3456" />
-              <label>日期</label>
+              <label>日期 <b>*</b></label>
               <input v-model="priceForm.price_date" class="mc-input" type="date" />
             </div>
             <div class="pf-row">
@@ -1061,7 +1065,7 @@ watch(() => props.visible, v => {
     <!-- 计价行（仅物料价格权限可见）：计价依据 + 合计，单独一行 -->
     <div v-if="canMaterialPrice" class="bom-dlg-price">
       <!-- 计价依据：最新价格 或 某次采购导入（年 → 月 → 订单），不手动选日期 -->
-      <PriceBatchSelect v-model="bomDialogPriceDate" @change="onBomDialogPriceDate" />
+      <PriceBatchSelect v-model="bomDialogPriceBatch" @change="onBomDialogPriceDate" />
       <template v-if="bomDialogHead && 'unit_price' in bomDialogHead">
         <!-- 齐全才计价：下级有缺价就不给合计 -->
         <span v-if="bomDialogHead.unit_price != null" class="bom-dlg-total" title="由下级价格计算（下级价格齐全）">

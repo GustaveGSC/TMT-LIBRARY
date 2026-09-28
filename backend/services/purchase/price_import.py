@@ -82,17 +82,20 @@ def extract_prices(lines):
     返回 (items, zero_items, conflicts)：
     - items：[{code(基础码), code_with_version, name, spec, price, kind: material|semi}]
     - zero_items：原材料单价为 0/空、无法导入的（特例半成品下面的物料不算，它们由半成品价格覆盖）
-    - conflicts：同一物料在文件里出现多个不同单价（取第一个，列出提醒）
+    - conflicts：同一物料在文件里出现多个不同单价 → 禁止导入（用户 2026-09-28 定），需先改 Excel
     """
     parents = {_strip_version(l['parent_code']) for l in lines if l.get('parent_code')}
     children_by_parent = {}
     for l in lines:
         children_by_parent.setdefault(_strip_version(l['parent_code']), []).append(l)
 
-    # 特例半成品：作为上级、有自己的采购行、且下面所有物料单价都为 0/空
+    # 部件自身作为子件出现时的正价（外购整件价）
+    own_priced = {_strip_version(l['child_code']) for l in lines if _price(l.get('unit_price')) is not None}
+    # 特例半成品：父件自身有一条正价采购行，且直接下级单价全为 0/空（Codex 审计 #5：
+    # 之前没要求父件自身有价，会把「根本没有价格可导」的部件下级也从缺价提醒里藏掉）
     special = set()
     for parent, kids in children_by_parent.items():
-        if kids and all(_price(k.get('unit_price')) is None for k in kids):
+        if parent in own_priced and kids and all(_price(k.get('unit_price')) is None for k in kids):
             special.add(parent)
     covered = set()   # 特例半成品下面的物料（递归），不算「无价格」
     stack = list(special)
@@ -176,6 +179,8 @@ class PurchasePriceImportService:
         except UploadValidationError as exc:
             return Result.fail(str(exc))
         items, zero_items, conflicts = extract_prices(parsed['lines'])
+        if price_date not in (None, '') and _parse_date(price_date) is None:
+            return Result.fail('价格日期格式无效（应为 YYYY-MM-DD）')
         day = _parse_date(price_date) or _parse_date(parsed['suggested_date'])
         existing = _existing_same_day({i['code'] for i in items}, day)
         erp = _erp_base_codes({i['code'] for i in items} | {z['code'] for z in zero_items})
@@ -194,6 +199,7 @@ class PurchasePriceImportService:
             'skip_count': sum(1 for i in items if i['status'] == 'skip'),
             'special_semis': [i for i in items if i['kind'] == 'semi'],
             'zero_items': zero_items, 'conflicts': conflicts,
+            'can_import': not conflicts and any(i['status'] == 'new' for i in items),
             'warnings': parsed['warnings'],
         })
 
@@ -206,11 +212,22 @@ class PurchasePriceImportService:
         except UploadValidationError as exc:
             return Result.fail(str(exc))
         items, zero_items, conflicts = extract_prices(parsed['lines'])
+        if conflicts:
+            detail = '；'.join(f"{c['code']}（{'、'.join(str(p) for p in c['prices'])}）" for c in conflicts[:10])
+            return Result.fail(f'文件里有 {len(conflicts)} 个物料出现了多个不同单价，请先在 Excel 里改成一致再导入：{detail}')
         if not items:
             return Result.fail('文件里没有可导入的价格（原材料单价都为 0 或为空）')
 
         bases = {i['code'] for i in items}
         existing = _existing_same_day(bases, day)
+        to_create = [i for i in items if (i['code'], i['price']) not in existing]
+        if not to_create:
+            # 全部同日同价：不建空批次，避免污染导入记录（Codex 审计 #4）
+            return Result.ok(data={
+                'batch_id': None, 'order_no': parsed['order_no'], 'price_date': day.isoformat(),
+                'created': 0, 'skipped': len(items), 'special_semis': 0,
+                'zero_count': len(zero_items), 'conflicts': [],
+            }, message='全部价格与该日期已有价格相同，没有新增')
         try:
             nodes = {n.code: n for n in CostBomNode.query.filter(CostBomNode.code.in_(list(bases))).all()}
             batch = CostSnapshot(
@@ -226,11 +243,8 @@ class PurchasePriceImportService:
                     finished_name=(f['name'] or None) and f['name'][:128],
                     finished_spec=(f['spec'] or None) and f['spec'][:256],
                 ))
-            created = skipped = 0
-            for i in items:
-                if (i['code'], i['price']) in existing:
-                    skipped += 1
-                    continue
+            created, skipped = 0, len(items) - len(to_create)
+            for i in to_create:
                 node = nodes.get(i['code'])
                 if node is None:
                     node = CostBomNode(
@@ -259,8 +273,8 @@ class PurchasePriceImportService:
         return Result.ok(data={
             'batch_id': batch.id, 'order_no': parsed['order_no'], 'price_date': day.isoformat(),
             'created': created, 'skipped': skipped,
-            'special_semis': len([i for i in items if i['kind'] == 'semi']),
-            'zero_count': len(zero_items), 'conflicts': conflicts,
+            'special_semis': len([i for i in to_create if i['kind'] == 'semi']),
+            'zero_count': len(zero_items), 'conflicts': [],
         })
 
     @staticmethod
