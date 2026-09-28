@@ -100,6 +100,10 @@ def login():
     result = account_service.verify_password(username, password, machine_name=_machine_name())
     if result.success and result.data:
         clear_login_account_failures(username)
+        # 有发货看板权限：后台线程预热 chart-options 缓存（不阻塞登录响应，见 services/shipping/prewarm.py）
+        if has_permission(result.data, 'shipping:view'):
+            from services.shipping.prewarm import prewarm_chart_options_async
+            prewarm_chart_options_async()
         return set_auth_cookies(result.to_response(), result.data)
     return result.to_response()
 

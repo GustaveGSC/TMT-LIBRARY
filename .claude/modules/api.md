@@ -48,6 +48,10 @@ GET    /api/config/login-mottos                       # 公开；返回登录页
 PUT    /api/config/login-mottos                       # ops:login-config:edit；body {mottos:string[]}，去除空白项后至少保留一条；成功返回保存后的数组
 
 POST   /api/account/login                             # 公开；登录时自动写入 user_login_log（成功/失败均记录）；失败受账号+IP双维度限流
+                                                      #   成功且有 shipping:view 时，后台线程预热发货看板默认范围（近一个月、source=shipping）的
+                                                      #   chart-options 缓存（services/shipping/prewarm.py；缓存有效或已在预热时跳过）。前端不再发预热请求：
+                                                      #   MySQL 冷数据要约 11 秒，单 worker 下前端预热会堵住登录后的其他请求（2026-09-28）；
+                                                      #   前端登录成功后也不再调 /api/account/me（登录响应即视为已校验）
 POST   /api/account/register                          # 公开但默认关闭（通过 ALLOW_REGISTER=true 开启）；注册后无角色/业务权限，仅可使用无需权限码的通用工具；同IP每小时最多5次
 POST   /api/account/logout                            # 清除会话/CSRF Cookie；幂等；有效会话请求需通过 CSRF
 GET    /api/account/me                                # 2026-09-04 新增；任意已登录用户（无需具体权限码），返回最新 user.to_dict()
