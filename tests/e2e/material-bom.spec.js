@@ -469,16 +469,24 @@ test('有 BOM 的部件：未开始计价不给成本，缺价清单可标记不
   await page.goto('/#/material')
   await page.locator('.code-link', { hasText: 'F1-A' }).click()
   const card = page.locator('.material-card')
-  // 未开始计价：不给成本数字，默认看缺价清单
+  // 未开始计价：不给成本数字；页签全部收起（缺价可能很多），点开才显示缺价清单，再点收起
   await expect(card.locator('.cv-unpriced')).toHaveText('未开始计价')
   await expect(card.locator('.cv-val')).toHaveCount(0)
   await expect(card.locator('.cv-tabs button')).toHaveText(['缺价清单（1）'])
+  await expect(card.locator('.cv-tabs button.active')).toHaveCount(0)
+  await expect(card.locator('.cost-view .cv-table')).toHaveCount(0)
+  await card.locator('.cv-tabs button', { hasText: '缺价清单' }).click()
+  await expect(card.locator('.cost-view .cv-table tbody tr')).toHaveCount(1)
   await expect(card.locator('.cv-tip')).toBeVisible()
+  // 成品不能设为不计价：勾选框禁用并提示原因
+  await expect(card.locator('.np-check input')).toBeDisabled()
+  await expect(card.locator('.mc-manual .np-hint')).toContainText('不能设为不计价')
   await card.locator('.cost-view').scrollIntoViewIfNeeded()
   await page.locator('.el-dialog.material-card-dialog').screenshot({ path: 'test-results/material-card-unpriced.png' })
   // 缺价清单里把客供件标记为不计价 → 重新计算后开始计价
   const put = page.waitForRequest(r => r.method() === 'PUT' && r.url().includes('/api/material/items/S1-A01'))
   await card.locator('.np-btn').click()
+  // （标记后重新计算：开始计价，缺价清单消失）
   await page.locator('.el-message-box button', { hasText: '标记' }).click()
   expect(JSON.parse((await put).postData())).toEqual({ no_price: true })
   await expect(card.locator('.cv-val')).toHaveText('¥10')

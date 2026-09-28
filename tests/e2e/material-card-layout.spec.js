@@ -363,6 +363,8 @@ test('人工维护去掉简称/分类/规格，物料表去掉简称列', async 
   await page.waitForTimeout(500)
   await expect(card.locator('.mc-manual .mc-field > label')).toHaveText(['物料类型', '计价', '备注'])
   await expect(card.locator('.mc-manual .np-check')).toContainText('不计价')
+  // 原材料可以设为不计价
+  await expect(card.locator('.mc-manual .np-check input')).toBeEnabled()
   await expect(card.locator('.mc-manual input.mc-input')).toHaveCount(0)
   await page.locator('.el-dialog__header .mc-close-btn').click()
   await expect(page.locator('.el-table__header th', { hasText: '简称' })).toHaveCount(0)

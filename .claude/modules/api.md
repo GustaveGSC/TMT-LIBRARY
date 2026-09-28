@@ -165,7 +165,7 @@ GET  /api/material/boms                 # ?keyword=&material_type=&page=&page_si
 GET  /api/material/boms/:id/tree        # ?price_date=YYYY-MM-DD 完整多层展开 {bom, children:[{id(路径), drawing, erp_code, name, spec, category, qty, unit, children?}]}
                                         #   有 material:price 时每个节点另带 unit_price/amount/price_date/price_source(material|own|calc|free)/missing，
                                         #   bom 带 unit_price/missing/priced_as_of。齐全才计价：部件下级全部有价才=Σ下级，否则用外购价，都没有则 null；
-                                        #   free=物料被标记「不计价」按 0 元（product_material.no_price）
+                                        #   free=物料被标记「不计价」按 0 元（product_material.no_price）；missing = 缺价原材料**种类数**（同一物料多处只算一种，与卡片口径一致）
                                         #   每层一次查询；名称/规格优先用 ERP 的，文件里的兜底
 GET  /api/material/boms/:id/export      # ?price_date= 有价格权限时另带 单价/金额/价格日期 列；下载 xlsx（BOM-{研发编码}.xlsx）：序号(层级编号)/层级/图纸编码/ERP编码/名称/数量/单位，与页面树一致
 DELETE /api/material/boms/:id           # ?force=1。只删这一层子件清单，下级半成品自己的 BOM 不动

@@ -470,7 +470,8 @@ def test_tree_prices_only_when_children_complete(bom_app):
         assert 'unit_price' not in plain['bom'] and 'unit_price' not in plain['children'][0]
 
         none = material_bom_service.tree(f1.id, include_price=True).data
-        assert none['bom']['unit_price'] is None and none['bom']['missing'] == 3
+        # 缺价按原材料种类计：R1 出现两处只算一种 → R1、S1 共 2 种
+        assert none['bom']['unit_price'] is None and none['bom']['missing'] == 2
 
         _price('R1', 3, date(2024, 1, 1))
         _price('R1', 4, date(2024, 6, 1))
@@ -574,3 +575,33 @@ def test_calc_price_route_registered():
     routes = app.url_map.bind('localhost')
     assert routes.match('/api/material/items/A/B/calc-price') == (
         'material_cost.material_calc_price', {'code': 'A/B'})
+
+
+def test_tree_and_card_missing_counts_agree(bom_app):
+    """BOM 树合计上的「缺N」和卡片「已计价 N / M 种」按同一口径（原材料种类）。"""
+    from datetime import date
+    with bom_app.app_context():
+        material_bom_service.import_file(_pdm(SAMPLE), 'a.xlsx', 'tester')
+        _price('S1', 0.5, date(2024, 6, 1))          # 只剩 R1（出现在两处）缺价
+        f1 = MaterialBom.query.filter_by(code='F1').one()
+        tree = material_bom_service.tree(f1.id, include_price=True).data
+        card = material_bom_service.calc_price('F1-A').data['current']
+        assert tree['bom']['missing'] == card['missing'] == 1
+        assert (card['priced'], card['total']) == (1, 2)
+
+
+def test_assemblies_cannot_be_no_price(bom_app):
+    from services.product.material import material_service
+    with bom_app.app_context():
+        db.session.add(ErpGroupCategory(group_code='GS', is_semi=True))
+        db.session.add(ImportProductRaw(code='SEMI-A01', name='半成品', group_code='GS', group_name='半成品',
+                                        imported_at=now_cst()))
+        _add_erp_raw('RAW-A01')
+        material_service.invalidate_group_config_cache()
+        res = material_service.save_item('SEMI-A01', {'no_price': True})
+        assert not res.success and '不能设为不计价' in res.message
+        # 原材料可以；之后被单独指定成半成品时，不计价标记自动取消
+        assert material_service.save_item('RAW-A01', {'no_price': True}).data['no_price'] is True
+        changed = material_service.save_item('RAW-A01', {'type_override': ['semi']}).data
+        assert changed['no_price'] is False
+        material_service.invalidate_override_cache()

@@ -76,90 +76,96 @@ def collect_pairs(nodes, acc=None):
     return acc
 
 
-def evaluate(nodes, histories, as_of=None, annotate=True, free=frozenset()):
-    """给树上每个节点算单价/金额；返回这一层的 (合计, missing)。
+def _evaluate(nodes, histories, as_of, annotate, free):
+    """逐层计价；返回 (合计或 None, 缺价原材料基础码集合)。
 
-    合计只有这一层全部有价格（missing == 0）时才有意义，否则返回 None。
-    annotate=False 时只算不写字段（成本历史要在多个日期上反复算）。
-    free：「不计价」物料的基础码集合，按 0 元算作已有价格。
+    缺价按原材料**种类**计（同一物料在树里出现多次只算一种），与物料卡片「已计价 N / M 种」同一口径。
     """
-    total, missing = 0.0, 0
+    total, missing = 0.0, set()
     for n in nodes:
         own = price_as_of(histories.get(n['code']), as_of)
         if n.get('children'):
-            sub_total, sub_missing = evaluate(n['children'], histories, as_of, annotate, free)
-            if sub_missing == 0:
-                unit, day, source, miss = sub_total, None, 'calc', 0
+            sub_total, sub_missing = _evaluate(n['children'], histories, as_of, annotate, free)
+            if not sub_missing:
+                unit, day, source, miss = sub_total, None, 'calc', set()
             elif own:
-                unit, day, source, miss = own[0], own[1], 'own', 0          # 外购价兜底
+                unit, day, source, miss = own[0], own[1], 'own', set()          # 外购价兜底
             else:
-                unit, day, source, miss = None, None, None, sub_missing      # 未计价
+                unit, day, source, miss = None, None, None, sub_missing          # 未计价
         elif own:
-            unit, day, source, miss = own[0], own[1], 'material', 0
+            unit, day, source, miss = own[0], own[1], 'material', set()
         elif n['code'] in free:
-            unit, day, source, miss = 0.0, None, 'free', 0
+            unit, day, source, miss = 0.0, None, 'free', set()
         else:
-            unit, day, source, miss = None, None, None, 1
+            unit, day, source, miss = None, None, None, {n['code']}
         qty = float(n.get('qty') or 0)
         if annotate:
             n['unit_price'] = unit
             n['amount'] = round(unit * qty, 4) if unit is not None else None
             n['price_date'] = day.isoformat() if day else None
             n['price_source'] = source
-            n['missing'] = miss
+            n['missing'] = len(miss)
         if unit is not None:
             total += unit * qty
-        missing += miss
-    return (round(total, 4) if missing == 0 else None), missing
+        missing |= miss
+    return (round(total, 4) if not missing else None), missing
+
+
+def evaluate(nodes, histories, as_of=None, annotate=True, free=frozenset()):
+    """给树上每个节点算单价/金额；返回这一层的 (合计, 缺价原材料种类数)。
+
+    合计只有这一层全部有价格时才有意义，否则返回 None。
+    annotate=False 时只算不写字段（成本历史要在多个日期上反复算）。
+    free：「不计价」物料的基础码集合，按 0 元算作已有价格。
+    """
+    total, missing = _evaluate(nodes, histories, as_of, annotate, free)
+    return total, len(missing)
 
 
 def root_price(children, root_code, histories, as_of=None, annotate=True, free=frozenset()):
-    """整份 BOM（根部件）的单价：下级齐全 → 计算价；不齐全但有外购价 → 外购价；否则未计价。"""
-    total, missing = evaluate(children, histories, as_of, annotate, free)
-    if missing == 0:
-        return {'unit_price': total, 'missing': 0, 'price_source': 'calc', 'price_date': None}
+    """整份 BOM（根部件）的单价：下级齐全 → 计算价；不齐全但有外购价 → 外购价；否则未计价。
+
+    另带 missing_codes（缺价原材料基础码），供成本视图列缺价清单，保证两处数字一致。
+    """
+    total, missing = _evaluate(children, histories, as_of, annotate, free)
+    if not missing:
+        return {'unit_price': total, 'missing': 0, 'price_source': 'calc', 'price_date': None,
+                'missing_codes': set()}
     own = price_as_of(histories.get(root_code), as_of)
     if own:
         return {'unit_price': own[0], 'missing': 0, 'price_source': 'own',
-                'price_date': own[1].isoformat() if own[1] else None}
-    return {'unit_price': None, 'missing': missing, 'price_source': None, 'price_date': None}
+                'price_date': own[1].isoformat() if own[1] else None, 'missing_codes': set()}
+    return {'unit_price': None, 'missing': len(missing), 'price_source': None, 'price_date': None,
+            'missing_codes': missing}
 
 
 def cost_snapshot(children, root_code, histories, as_of=None, root_drawing=None, free=frozenset()):
     """某个计价日期下的成本快照（物料卡片成本视图用）。
 
-    返回 {total, complete, leaves:{code: {eq, drawing, erp_code, name, parents, free}}, covered:set}
+    返回 {total, complete, leaves:{code: {eq, drawing, erp_code, name, parents}}, covered:set}
     - total：齐全（或用外购价）时的单价，否则 None；
     - 有效用量 eq = 从根到该行路径上数量的乘积（同一物料出现在多处时累加）；
-    - covered = 有价格 / 不计价的原材料，以及被外购价部件覆盖的原材料。
+    - covered = 全部原材料 − 根计价时的缺价集合（与 BOM 树的「缺N」同一来源，数字一致）。
     """
-    leaves, covered = {}, set()
+    leaves = {}
 
-    def walk(nodes, mult, parent, under_own):
+    def walk(nodes, mult, parent):
         for n in nodes:
             q = mult * float(n.get('qty') or 0)
             if n.get('children'):
-                if under_own:
-                    walk(n['children'], q, n['drawing'], True)
-                    continue
-                _, sub_missing = evaluate(n['children'], histories, as_of, False, free)
-                own = price_as_of(histories.get(n['code']), as_of)
-                walk(n['children'], q, n['drawing'], bool(sub_missing and own))
+                walk(n['children'], q, n['drawing'])
                 continue
             leaf = leaves.setdefault(n['code'], {
                 'eq': 0.0, 'drawing': n['drawing'], 'erp_code': n.get('erp_code'),
-                'name': n.get('name'), 'parents': [], 'free': n['code'] in free,
+                'name': n.get('name'), 'parents': [],
             })
             leaf['eq'] += q
             if parent and parent not in leaf['parents']:
                 leaf['parents'].append(parent)
-            if under_own or n['code'] in free or price_as_of(histories.get(n['code']), as_of):
-                covered.add(n['code'])
 
-    walk(children, 1.0, root_drawing, False)   # 第一层原材料的「所在部件」就是根本身
+    walk(children, 1.0, root_drawing)   # 第一层原材料的「所在部件」就是根本身
     res = root_price(children, root_code, histories, as_of, annotate=False, free=free)
-    if res['price_source'] == 'own':
-        covered = set(leaves)
+    covered = set(leaves) - res['missing_codes']
     return {'total': res['unit_price'], 'complete': res['unit_price'] is not None,
             'leaves': leaves, 'covered': covered}
 

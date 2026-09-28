@@ -9,6 +9,8 @@ from services.product.material_price import material_price_service
 
 BOOLEAN_KEYS = ('is_finished', 'is_packaged', 'is_semi', 'is_material', 'is_useless')
 CATEGORY_TYPES = ('finished', 'packaged', 'semi', 'material', 'useless')
+# 部件类物料：成本由研发 BOM 下级计算，不能设为「不计价」
+ASSEMBLY_TYPES = {'finished', 'packaged', 'semi'}
 
 # 物料类型的判定来源，按优先级从高到低：单独指定 > 编码前缀规则 > 分组默认类型
 SOURCE_MANUAL = 'manual'
@@ -340,6 +342,21 @@ class MaterialService:
             # 空列表 = 取消单独指定，恢复按编码前缀规则/分组默认类型判定
             chosen = [t for t in CATEGORY_TYPES if t in raw_types]
             values['type_override'] = ','.join(chosen) or None
+        # 不计价只用于原材料等（客供件、赠送件）：成品/产成品/半成品的成本由下级计算，不能设为不计价。
+        # 按保存后的物料类型判断；类型被改成部件时，原有的不计价标记自动取消。
+        overrides = dict(self._overrides())
+        if 'type_override' in values:
+            if values['type_override']:
+                overrides[code] = values['type_override'].split(',')
+            else:
+                overrides.pop(code, None)
+        cats, _ = self._classify(code, raw.group_code, self._rules(), self._group_configs(), overrides)
+        if ASSEMBLY_TYPES & set(cats):
+            if values.get('no_price'):
+                return Result.fail('成品、产成品、半成品不能设为不计价（它们的成本由下级计算）')
+            existing = MaterialRepository.materials_for_codes([code]).get(code)
+            if existing is not None and existing.no_price:
+                values['no_price'] = False
         MaterialRepository.save_material(code, values)
         if 'type_override' in values:
             self.invalidate_override_cache()

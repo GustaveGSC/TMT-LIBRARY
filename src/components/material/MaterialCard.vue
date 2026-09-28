@@ -102,6 +102,10 @@ function toggleType(key) {
   form.value.type_override = sameSet(list, ruleTypes.value) ? [] : list
 }
 
+// 当前生效类型含成品/产成品/半成品时不能设「不计价」（成本由下级计算）；改成这些类型时自动取消勾选
+const isAssembly = computed(() => shownTypes.value.some(t => ['finished', 'packaged', 'semi'].includes(t)))
+watch(isAssembly, v => { if (v && form.value.no_price) form.value.no_price = false })
+
 // 恢复按规则判定
 function resetTypes() { form.value.type_override = [] }
 
@@ -232,7 +236,12 @@ async function loadSupplierOptions() {
 // ── 按 BOM 计算的价格（仅 material:price）：部件价格不存储，由下级原材料价格实时计算 ──
 // 历史 = 在下级各价格日期上重算一次（新→旧），也是后端现算的
 const calcPrice   = ref(null)    // { bom, versions, current, missing_items, composition, history } | null
-const costTab     = ref('history')   // 成本视图页签：history 成本变化 | composition 成本构成 | missing 缺价清单
+const costTab     = ref('history')   // 成本视图页签：history 成本变化 | composition 成本构成 | missing 缺价清单 | '' 收起
+
+// 点页签展开；再点当前页签收起
+function toggleCostTab(key) {
+  costTab.value = costTab.value === key ? '' : key
+}
 
 // 有 BOM 的物料：外购价只在「外购半成品」或已经有自身价格时显示（普通部件的价格由下级计算）
 const showOwnPrice = computed(() => !calcPrice.value
@@ -276,8 +285,8 @@ async function loadCalcPrice() {
     if (code !== activeCode.value) return
     if (res.success && res.data?.current) {
       calcPrice.value = res.data
-      // 没开始计价时默认看缺价清单（告诉你卡在哪），开始后看成本变化
-      costTab.value = res.data.started ? 'history' : 'missing'
+      // 开始计价后默认展开成本变化；没开始时全部收起（缺价清单可能很长，点开再看）
+      costTab.value = res.data.started ? 'history' : ''
     }
   } catch { /* 计算价拿不到不影响卡片 */ }
 }
@@ -676,11 +685,12 @@ watch(() => props.visible, v => {
           <div class="mc-field">
             <label>计价</label>
             <div class="np-box">
-              <label class="np-check" :class="{ on: form.no_price }">
-                <input v-model="form.no_price" type="checkbox" :disabled="!canEditMaterial" />
+              <label class="np-check" :class="{ on: form.no_price, off: isAssembly }">
+                <input v-model="form.no_price" type="checkbox" :disabled="!canEditMaterial || isAssembly" />
                 不计价
               </label>
-              <span class="np-hint">客供件、赠送件等不会有采购价的物料，计价时按 0 元计</span>
+              <span v-if="isAssembly" class="np-hint">成品、产成品、半成品的成本由下级计算，不能设为不计价</span>
+              <span v-else class="np-hint">客供件、赠送件等不会有采购价的物料，计价时按 0 元计</span>
             </div>
           </div>
           <div class="mc-field mc-field-top mc-field-remark">
@@ -806,11 +816,11 @@ watch(() => props.visible, v => {
 
             <div class="cv-tabs">
               <template v-if="calcPrice.started">
-                <button :class="{ active: costTab === 'history' }" @click="costTab = 'history'">
+                <button :class="{ active: costTab === 'history' }" @click="toggleCostTab('history')">
                   成本变化（{{ calcPrice.history.length }}）</button>
-                <button :class="{ active: costTab === 'composition' }" @click="costTab = 'composition'">成本构成</button>
+                <button :class="{ active: costTab === 'composition' }" @click="toggleCostTab('composition')">成本构成</button>
               </template>
-              <button :class="{ active: costTab === 'missing' }" @click="costTab = 'missing'">
+              <button :class="{ active: costTab === 'missing' }" @click="toggleCostTab('missing')">
                 缺价清单（{{ calcPrice.missing_items.length }}）</button>
             </div>
 
@@ -872,7 +882,7 @@ watch(() => props.visible, v => {
             </template>
 
             <!-- 缺价清单：点 ERP 编码到该物料卡片补价格 -->
-            <template v-else>
+            <template v-else-if="costTab === 'missing'">
               <table v-if="calcPrice.missing_items.length" class="cost-table cv-table">
                 <thead>
                   <tr><th style="width:150px">图纸编码</th><th style="width:140px">ERP 编码</th><th>名称</th>
@@ -1383,6 +1393,8 @@ watch(() => props.visible, v => {
 }
 .np-check input { margin: 0; cursor: pointer; }
 .np-check.on { font-weight: 600; }
+.np-check.off { color: #b0a494; cursor: not-allowed; }
+.np-check.off input { cursor: not-allowed; }
 .np-hint { font-size: 11px; color: #8a7a6a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .own-title span { margin-left: 6px; font-size: 11px; font-weight: 400; color: #8a7a6a; }
 .bom-dlg-body { height: 72vh; }

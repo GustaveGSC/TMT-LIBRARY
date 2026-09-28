@@ -542,7 +542,9 @@ class MaterialBomService:
         if include_price:
             histories = bom_price.price_histories(bom_price.collect_codes(children) | {root.code})
             free = self._free_codes(children)
-            root_dict.update(bom_price.root_price(children, root.code, histories, price_date, free=free))
+            price = bom_price.root_price(children, root.code, histories, price_date, free=free)
+            price.pop('missing_codes', None)
+            root_dict.update(price)
             root_dict['priced_as_of'] = price_date.isoformat() if price_date else None
         return Result.ok(data={'bom': root_dict, 'children': children})
 
@@ -584,6 +586,7 @@ class MaterialBomService:
 
         now = bom_price.cost_snapshot(children, bom.code, histories, None, root_drawing, free)
         current = bom_price.root_price(children, bom.code, histories, None, annotate=True, free=free)
+        current.pop('missing_codes', None)
         current.update({'priced': len(now['covered']), 'total': len(now['leaves'])})
         current['missing'] = current['total'] - current['priced']
 
