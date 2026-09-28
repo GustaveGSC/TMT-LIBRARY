@@ -369,16 +369,27 @@ test('BOM 计价：单价/金额列、合计、计价日期；卡片显示按 BO
   })
   expect(fits).toBe(true)
 
-  // 计价依据：不手动选日期，而是选「最新价格」或某次采购导入（订单号 · 日期）
-  await page.locator('.bd-date').click()
-  const opts = page.locator('.el-select-dropdown__item:visible')
-  await expect(opts).toHaveCount(3)
-  await expect(opts.first()).toHaveText('计价：最新价格')
-  await expect(opts.nth(1)).toContainText('2M2-SC20250522-025')
-  await opts.nth(2).click()      // 2M2-SC20240301-001 · 2024-03-01
+  // 计价依据：单独一行；不手动选日期，按 年 → 月 → 订单 树状选择
+  const priceRow = page.locator('.bd-price-row')
+  await expect(priceRow).toContainText('合计')
+  const headBox = await page.locator('.bd-head').boundingBox()
+  const rowBox = await priceRow.boundingBox()
+  expect(rowBox.y).toBeGreaterThanOrEqual(headBox.y + headBox.height - 1)
+  await priceRow.locator('.pb-select').click()
+  const popper = page.locator('.price-batch-popper:visible')
+  // 默认展开最近一年、最近一月：能看到 最新价格 / 2025年 / 5月 / 该月订单 / 2024年
+  await expect(popper.locator('.pb-latest')).toHaveText('最新价格')
+  await expect(popper.locator('.pb-group:visible')).toHaveText(['2025年', '5月', '2024年'])
+  await expect(popper.locator('.pb-order:visible')).toHaveText(['2M2-SC20250522-025'])
+  await page.waitForTimeout(400)
+  await page.screenshot({ path: 'test-results/material-bom-price-tree.png' })
+  // 展开 2024年 → 3月，选订单
+  await popper.locator('.pb-group', { hasText: '2024年' }).click()
+  await popper.locator('.pb-group', { hasText: '3月' }).click()
+  await popper.locator('.pb-order', { hasText: '2M2-SC20240301-001' }).click()
   await expect.poll(() => treeDates.at(-1)).toBe('2024-03-01')
   await expect(page.locator('.bd-total')).toContainText('¥20')
-  await expect(page.locator('.bd-date')).toContainText('计价：2M2-SC20240301-001 · 2024-03-01')
+  await expect(priceRow.locator('.pb-select')).toContainText('2M2-SC20240301-001 · 2024-03-01')
   await page.screenshot({ path: 'test-results/material-bom-priced-batch.png' })
 
   // 物料卡片：价格区显示按 BOM 计算的价格与价格变化历史

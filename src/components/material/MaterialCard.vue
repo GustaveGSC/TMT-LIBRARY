@@ -887,19 +887,20 @@ watch(() => props.visible, v => {
       <span v-if="bomDialogKeyword.trim()" class="bom-dlg-hit">
         匹配 {{ bomTreeRef?.matchCount ?? 0 }} 项（保留其上级层次）
       </span>
-      <template v-if="canMaterialPrice">
-        <!-- 计价依据：最新价格 或 某次采购导入（订单号+日期），不手动选日期 -->
-        <PriceBatchSelect v-model="bomDialogPriceDate" class="bom-dlg-date" @change="onBomDialogPriceDate" />
-        <span v-if="bomDialogHead && 'unit_price' in bomDialogHead" class="bom-dlg-total"
-              :title="bomDialogHead.missing ? `其中 ${bomDialogHead.missing} 项原材料无价格，合计偏低` : '由下级价格计算'">
-          合计 <b class="mono">{{ money(bomDialogHead.unit_price) }}</b>
-          <span v-if="bomDialogHead.missing" class="calc-miss">缺 {{ bomDialogHead.missing }} 项价格</span>
-        </span>
-      </template>
       <el-button v-if="bomTreeRef?.hasNested" size="small" class="bom-dlg-toggle"
                  :icon="bomTreeRef.allExpanded ? ArrowUp : ArrowDown" @click="bomTreeRef.toggleAll()">
         {{ bomTreeRef.allExpanded ? '全部收起' : '全部展开' }}
       </el-button>
+    </div>
+    <!-- 计价行（仅物料价格权限可见）：计价依据 + 合计，单独一行 -->
+    <div v-if="canMaterialPrice" class="bom-dlg-price">
+      <!-- 计价依据：最新价格 或 某次采购导入（年 → 月 → 订单），不手动选日期 -->
+      <PriceBatchSelect v-model="bomDialogPriceDate" @change="onBomDialogPriceDate" />
+      <span v-if="bomDialogHead && 'unit_price' in bomDialogHead" class="bom-dlg-total"
+            :title="bomDialogHead.missing ? `其中 ${bomDialogHead.missing} 项原材料无价格，合计偏低` : '由下级价格计算'">
+        合计 <b class="mono">{{ money(bomDialogHead.unit_price) }}</b>
+        <span v-if="bomDialogHead.missing" class="calc-miss">缺 {{ bomDialogHead.missing }} 项价格</span>
+      </span>
     </div>
     <div v-loading="bomDialogLoading" class="bom-dlg-body">
       <MaterialBomTree ref="bomTreeRef" :rows="bomDialogTree" height="100%" :keyword="bomDialogKeyword"
@@ -1165,7 +1166,10 @@ watch(() => props.visible, v => {
 .bom-dlg-search { width: 280px; }
 .bom-dlg-hit { font-size: 12px; color: #6b5e4e; }
 .bom-dlg-toggle { margin-left: auto; }
-.bom-dlg-date { width: 310px !important; }
+.bom-dlg-price {
+  display: flex; align-items: center; gap: 16px; margin-bottom: 10px;
+  padding: 6px 10px; border-radius: 8px; background: #faf7f2; border: 1px solid var(--border);
+}
 .bom-dlg-total { font-size: 13px; color: #3a3028; }
 .bom-dlg-total b { color: #4a8fc0; font-size: 14px; }
 

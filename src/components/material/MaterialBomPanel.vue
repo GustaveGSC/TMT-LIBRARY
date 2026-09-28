@@ -286,15 +286,6 @@ onMounted(loadList)
           <span v-else class="bd-drawing mono" title="ERP 物料表里没有对应编码">{{ treeData.bom.drawing }}</span>
           <span class="bd-name">{{ treeData.bom.name }}</span>
           <span class="bd-meta">{{ treeData.bom.imported_by || '—' }} · {{ treeData.bom.imported_at }}</span>
-          <!-- 计价：按计价日期由下级实时计算（仅物料价格权限可见） -->
-          <template v-if="canMaterialPrice">
-            <!-- 计价依据：最新价格 或 某次采购导入（订单号+日期），不手动选日期 -->
-            <PriceBatchSelect v-model="priceDate" class="bd-date" @change="onPriceDateChange" />
-            <span class="bd-total" :title="treeData.bom.missing ? `其中 ${treeData.bom.missing} 项原材料无价格，合计偏低` : '由下级价格计算'">
-              合计 <b class="mono">{{ money(treeData.bom.unit_price) }}</b>
-              <span v-if="treeData.bom.missing" class="bd-miss">缺 {{ treeData.bom.missing }} 项价格</span>
-            </span>
-          </template>
           <el-button v-if="treeRef?.hasNested" size="small" class="bd-toggle"
                      :icon="treeRef.allExpanded ? ArrowUp : ArrowDown" @click="treeRef.toggleAll()">
             {{ treeRef.allExpanded ? '全部收起' : '全部展开' }}
@@ -302,6 +293,15 @@ onMounted(loadList)
           <el-button size="small" :icon="Download" class="bd-export" :loading="exporting" @click="handleExport">导出</el-button>
           <el-button v-if="canEditMaterial" size="small" :icon="Delete" class="bd-del" @click="deleteBom">删除</el-button>
         </header>
+        <!-- 计价行（仅物料价格权限可见）：计价依据 + 合计，单独一行 -->
+        <div v-if="canMaterialPrice" class="bd-price-row">
+          <!-- 计价依据：最新价格 或 某次采购导入（年 → 月 → 订单），不手动选日期 -->
+          <PriceBatchSelect v-model="priceDate" class="bd-date" @change="onPriceDateChange" />
+          <span class="bd-total" :title="treeData.bom.missing ? `其中 ${treeData.bom.missing} 项原材料无价格，合计偏低` : '由下级价格计算'">
+            合计 <b class="mono">{{ money(treeData.bom.unit_price) }}</b>
+            <span v-if="treeData.bom.missing" class="bd-miss">缺 {{ treeData.bom.missing }} 项价格</span>
+          </span>
+        </div>
         <div class="bd-tree">
           <MaterialBomTree ref="treeRef" :rows="treeData.children" height="100%" :show-price="canMaterialPrice"
                            @open-code="openCard" />
@@ -433,7 +433,10 @@ onMounted(loadList)
 .bd-drawing.link:hover { color: var(--accent); text-decoration: underline; }
 
 .bd-meta { font-size: 11px; color: #8a7a6a; }
-.bd-date { width: 310px !important; }
+.bd-price-row {
+  display: flex; align-items: center; gap: 16px; margin: -2px 0 10px;
+  padding: 6px 10px; border-radius: 8px; background: #faf7f2; border: 1px solid var(--border);
+}
 .bd-total { font-size: 13px; color: #3a3028; }
 .bd-total b { color: #4a8fc0; font-size: 14px; }
 .bd-miss {
