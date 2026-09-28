@@ -146,6 +146,13 @@ function clearSession() {
 // （GET /api/account/me），无效则直接跳登录页；只做一次，避免每次路由切换都多一次网络请求。
 let authChecked = false
 
+// 刚登录成功时，登录接口本身就是一次服务端确认，不需要再调 /me：
+// 之前登录后跳 /index 还要串行等一次 /me（单 worker 下还会排在预热请求后面），
+// 而且 /me 一旦超时/网络抖动就会被静默踢回登录页，表现为"要按两下登录"（2026-09-28）
+export function markSessionVerified() {
+  authChecked = true
+}
+
 // 路由权限守卫
 router.beforeEach(async (to) => {
   // 非登录页且已有登录态，检查是否过期
@@ -164,9 +171,13 @@ router.beforeEach(async (to) => {
           clearSession()
           return '/login'
         }
-      } catch {
-        clearSession()
-        return '/login'
+      } catch (err) {
+        // 只有服务端明确说会话无效（401，拦截器已清本地状态）才回登录页；
+        // 超时/断网/5xx 不代表会话失效，放行，后续业务请求真 401 时拦截器会再跳转
+        if (err?.response?.status === 401) {
+          clearSession()
+          return '/login'
+        }
       }
     }
   }
@@ -196,6 +207,21 @@ router.beforeEach(async (to) => {
   if (!required) return true
   if (perms.includes(required)) return true
   return '/index'
+})
+
+// 页面懒加载分片取不到（部署后旧页面还引用已被覆盖的旧 hash 文件）时，导航会直接失败、停在原页面，
+// 用户只能再点一次。这里整页刷新到目标地址，拿到新的 index.html 和分片
+router.onError((err, to) => {
+  const msg = String(err?.message || '')
+  if (/Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module/i.test(msg)) {
+    // 防止分片确实缺失时无限刷新：10 秒内只自动刷新一次
+    let last = 0
+    try { last = Number(sessionStorage.getItem('chunk_reload_at') || 0) } catch { /* 存储不可用 */ }
+    if (Date.now() - last < 10000) return
+    try { sessionStorage.setItem('chunk_reload_at', String(Date.now())) } catch { /* 存储不可用 */ }
+    window.location.hash = '#' + (to?.fullPath || '/index')
+    window.location.reload()
+  }
 })
 
 export default router

@@ -6,6 +6,8 @@ import { ElMessage } from 'element-plus'
 import { checkUpdateType } from '@/utils/version'
 import { isElectron } from '@/utils/platform'
 import http from '@/api/http'
+import { markSessionVerified } from '@/routers'
+import { useCategoryTree } from '@/composables/useCategoryTree'
 import GToast from '@/components/common/GToast.vue'
 import WindowControls from '@/components/common/WindowControls.vue'
 import UpdateDialog from '@/components/update/UpdateDialog.vue'
@@ -227,6 +229,9 @@ onMounted(async () => {
   scheduleBlink(purplePose)
   scheduleBlink(blackPose)
 
+  // 趁用户输入账号密码时预先下载主页分片，登录后跳转不用再等它（失败无所谓，跳转时会正常加载）
+  import('@/views/indexViews/page-index.vue').catch(() => {})
+
   // 从后端获取轮播语句
   try {
     const res = await http.get('/api/config/login-mottos')
@@ -266,6 +271,18 @@ function switchMode(target) {
   }, 150)
 }
 
+// 发货看板首次进入要先拿分类树（effectiveGroupBy 依赖的稳定配置数据），登录后在后台预热，
+// 分类树走模块级单例缓存（loadCategoryTreeOnce），用户点开发货看板时直接读缓存。
+// 静默失败：预热失败不影响登录本身，用户真正进页面时会照常发起正式请求兜底。
+// 2026-09-28 去掉 chart-options 预热：生产日志显示它缓存未命中时要约 11 秒，后端只有 1 个 worker，
+// 预热期间 /api/account/me 和用户点开的下一个页面都被堵在后面，造成「登录很慢、以为没反应又点一次」。
+// 只保留很快的分类树预热。
+const { loadCategoryTreeOnce } = useCategoryTree()
+function prefetchShippingDashboard(loginData) {
+  if (!loginData?.permissions?.includes('shipping:view')) return
+  loadCategoryTreeOnce().catch(() => {})
+}
+
 async function handleLogin() {
   if (!loginForm.username || !loginForm.password) {
     toast.value?.show('请填写用户名和密码', 'error'); return
@@ -285,7 +302,16 @@ async function handleLogin() {
       // 会话已由后端 Set-Cookie 下发（httpOnly tmt_session + tmt_csrf），前端只存展示信息
       localStorage.setItem('user', JSON.stringify(res.data))
       localStorage.setItem('login_time', Date.now().toString())
-      window.electronAPI ? window.electronAPI.loginSuccess() : router.push('/index')
+      // 登录接口本身已确认会话有效，跳转时不再额外调 /api/account/me
+      markSessionVerified()
+      if (window.electronAPI) {
+        prefetchShippingDashboard(res.data)
+        window.electronAPI.loginSuccess()
+      } else {
+        // 预热等主页出来之后再发：后端只有 1 个 worker，请求排队处理，先发会堵住跳转
+        await router.push('/index')
+        setTimeout(() => prefetchShippingDashboard(res.data), 1500)
+      }
     } else {
       toast.value?.show(res.message || '登录失败，请重试', 'error')
     }
