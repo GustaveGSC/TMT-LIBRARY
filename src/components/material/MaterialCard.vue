@@ -1,13 +1,12 @@
 <script setup>
 // ── 导入 ──────────────────────────────────────────
 import { ref, computed, watch } from 'vue'
-import { WarningFilled, Picture, Plus, Edit, Delete, ZoomIn, Close, Check, Back, View, Search, Download, ArrowDown, ArrowUp, TrendCharts } from '@element-plus/icons-vue'
+import { WarningFilled, Picture, Plus, Edit, Delete, ZoomIn, Close, Check, Back, View, TrendCharts } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import MediaViewer from '@/components/common/MediaViewer.vue'
-import MaterialBomTree from './MaterialBomTree.vue'
-import PriceBatchSelect from './PriceBatchSelect.vue'
+import MaterialBomDialog from './MaterialBomDialog.vue'
+import MaterialCostView from './MaterialCostView.vue'
 import MaterialPriceTrendDialog from './MaterialPriceTrendDialog.vue'
-import { exportBom } from './bomExport'
 import { pickFile } from '@/utils/download'
 import http from '@/api/http'
 import { usePermission } from '@/composables/usePermission'
@@ -240,45 +239,11 @@ async function loadSupplierOptions() {
 // ── 按 BOM 计算的价格（仅 material:price）：部件价格不存储，由下级原材料价格实时计算 ──
 // 历史 = 在下级各价格日期上重算一次（新→旧），也是后端现算的
 const calcPrice   = ref(null)    // { bom, versions, current, missing_items, composition, history } | null
-const costTab     = ref('history')   // 成本视图页签：history 成本变化 | composition 成本构成 | missing 缺价清单 | '' 收起
-
-// 点页签展开；再点当前页签收起
-function toggleCostTab(key) {
-  costTab.value = costTab.value === key ? '' : key
-}
+// 成本视图（页签、标记不计价）在 MaterialCostView 里
 
 // 有 BOM 的物料：外购价只在「外购半成品」或已经有自身价格时显示（普通部件的价格由下级计算）
 const showOwnPrice = computed(() => !calcPrice.value
   || !!detail.value?.is_purchased_semi || prices.value.length > 0)
-
-// 已计价比例（按原材料种类去重）
-const coverage = computed(() => {
-  const c = calcPrice.value?.current
-  return c && c.total ? Math.round(c.priced / c.total * 100) : 0
-})
-
-// 缺价清单里直接把物料标记为「不计价」（客供件、赠送件等），然后重算
-async function markNoPrice(m) {
-  if (!m.erp_code) return
-  try {
-    await ElMessageBox.confirm(
-      `把 ${m.erp_code} ${m.name || ''} 标记为「不计价」？计价时按 0 元、算作已有价格。适用于客供件、赠送件等不会有采购价的物料。`,
-      '标记不计价', { type: 'warning', confirmButtonText: '标记', cancelButtonText: '取消' })
-  } catch { return }
-  const res = await http.put(`/api/material/items/${encodeURIComponent(m.erp_code)}`, { no_price: true })
-  if (res.success) {
-    ElMessage.success('已标记不计价')
-    loadCalcPrice()
-  } else {
-    ElMessage.error(res.message || '标记失败')
-  }
-}
-
-function signed(v) {
-  if (v == null) return '—'
-  const n = +Number(v).toFixed(4)
-  return (n > 0 ? '+' : n < 0 ? '−' : '') + '¥' + Math.abs(n)
-}
 
 async function loadCalcPrice() {
   const code = activeCode.value
@@ -289,14 +254,8 @@ async function loadCalcPrice() {
     if (code !== activeCode.value) return
     if (res.success && res.data?.current) {
       calcPrice.value = res.data
-      // 开始计价后默认展开成本变化；没开始时全部收起（缺价清单可能很长，点开再看）
-      costTab.value = res.data.started ? 'history' : ''
     }
   } catch { /* 计算价拿不到不影响卡片 */ }
-}
-
-function money(v) {
-  return v == null ? '—' : '¥' + String(+Number(v).toFixed(4))
 }
 
 // ── 研发 BOM：「BOM下级」列出该物料挂的全部研发 BOM（如 -A01、-A02 各一条），
@@ -320,57 +279,17 @@ async function loadBom() {
   }
 }
 
-// BOM 下级弹窗：展开某一个研发版本的完整多层结构
-const bomDialogOpen    = ref(false)
-const bomDialogHead    = ref(null)   // 列表里点的那一条（先用它显示标题，树加载完再替换）
-const bomDialogTree    = ref([])
-const bomDialogLoading = ref(false)
-const bomDialogKeyword = ref('')     // 弹窗内筛选：编码/名称
-const bomDialogPriceBatch = ref(null)   // 计价依据的采购导入批次 id（仅 material:price）：null = 最新价格
-const bomTreeRef       = ref(null)   // 读取树组件暴露的匹配数
+// BOM 下级弹窗：展开某一个研发版本的完整多层结构（MaterialBomDialog）
+const bomDialogRef = ref(null)
 
-async function openBomDialog(v, keyword = '', priceBatch = null) {
-  bomDialogKeyword.value = keyword
-  bomDialogPriceBatch.value = priceBatch
-  bomDialogHead.value = v
-  bomDialogTree.value = []
-  bomDialogOpen.value = true
-  bomDialogLoading.value = true
-  try {
-    const res = await http.get(`/api/material/boms/${v.id}/tree`,
-      { params: bomDialogPriceBatch.value ? { batch_id: bomDialogPriceBatch.value } : {} })
-    if (bomDialogHead.value?.id !== v.id) return
-    if (res.success) {
-      bomDialogHead.value = { ...v, ...res.data.bom }
-      bomDialogTree.value = res.data.children || []
-    } else {
-      ElMessage.error(res.message || '加载 BOM 失败')
-    }
-  } catch (e) {
-    ElMessage.error(e.message || '网络错误')
-  } finally {
-    if (bomDialogHead.value?.id === v.id) bomDialogLoading.value = false
-  }
+function openBomDialog(v, keyword = '', priceBatch = null) {
+  bomDialogRef.value?.open(v, keyword, priceBatch)
 }
 
-// 弹窗里导出当前 BOM 为 Excel
-const bomExporting = ref(false)
-async function exportBomDialog() {
-  if (bomExporting.value) return
-  bomExporting.value = true
-  try { await exportBom(bomDialogHead.value, bomDialogPriceBatch.value) } finally { bomExporting.value = false }
-}
-
-// 弹窗里点子件编码：关掉弹窗，卡片跳到该物料
-// 弹窗里改计价日期：保留筛选词重新加载
-function onBomDialogPriceDate() {
-  if (bomDialogHead.value) openBomDialog(bomDialogHead.value, bomDialogKeyword.value, bomDialogPriceBatch.value)
-}
-
-async function onBomDialogCode(code) {
-  const snapshot = { head: bomDialogHead.value, keyword: bomDialogKeyword.value, priceBatch: bomDialogPriceBatch.value }
+// 弹窗里点子件编码：卡片跳到该物料；snapshot 记下当时的 BOM/筛选词/计价依据，返回时重新打开弹窗
+async function onBomDialogCode(code, snapshot) {
   // 先确认能跳（可能有未保存修改被取消），再关弹窗
-  if (await navigateTo(code, snapshot)) bomDialogOpen.value = false
+  if (await navigateTo(code, snapshot)) bomDialogRef.value?.close()
 }
 
 // 在卡片内跳到另一个物料（BOM 子件/上级）；有未保存的人工维护时先确认
@@ -396,7 +315,7 @@ async function navigateBack() {
 function resetForCode() {
   prices.value = []
   priceFormOpen.value = false; priceErr.value = ''; trendOpen.value = false
-  bom.value = null; bomDialogOpen.value = false; calcPrice.value = null; costTab.value = 'history'
+  bom.value = null; bomDialogRef.value?.close(); calcPrice.value = null
   loadDetail()
 }
 
@@ -792,130 +711,9 @@ watch(() => props.visible, v => {
 
           <!-- 有研发 BOM 的部件：成本由下级原材料价格实时计算（不存储）
                成本 + 完整度 → 成本变化（按订单，拆价格涨跌/新增计价）/ 成本构成 / 缺价清单 -->
-          <div v-if="calcPrice" class="cost-view">
-            <div class="cv-head">
-              <!-- 齐全才计价：下级价格第一次齐全的那一刻才开始计价，之前不给成本数字 -->
-              <template v-if="calcPrice.current.unit_price != null">
-                <b class="mono cv-val">{{ money(calcPrice.current.unit_price) }}</b>
-                <span v-if="calcPrice.current.price_source === 'own'" class="calc-own"
-                      title="下级价格不齐全，使用该部件自己的外购价">外购价</span>
-                <span v-if="calcPrice.started" class="cv-start" title="下级价格第一次齐全的时间">
-                  开始计价：
-                  <span v-if="calcPrice.started.order_no" class="order-tag mono">{{ calcPrice.started.order_no }}</span>
-                  {{ calcPrice.started.date || '' }}
-                </span>
-              </template>
-              <span v-else class="cv-unpriced" title="下级价格齐全后才开始计价">未开始计价</span>
-              <span class="cv-bom mono" title="计算依据的研发 BOM 版本">{{ calcPrice.bom.drawing }}</span>
-              <span class="cv-cover" :title="`已计价 ${calcPrice.current.priced} 种 / 共 ${calcPrice.current.total} 种原材料（按编码去重）`">
-                已计价 <b>{{ calcPrice.current.priced }}</b> / {{ calcPrice.current.total }} 种原材料
-                <span class="cv-bar"><span :style="{ width: coverage + '%' }"></span></span>
-                <span class="cv-pct" :class="{ full: coverage === 100 }">{{ coverage }}%</span>
-              </span>
-              <button class="cost-trend" type="button" :disabled="!calcPrice.history.length && !prices.length"
-                      title="按订单显示成本走势" @click="trendOpen = true">
-                <el-icon><TrendCharts /></el-icon>成本趋势
-              </button>
-            </div>
-
-            <div class="cv-tabs">
-              <template v-if="calcPrice.started">
-                <button :class="{ active: costTab === 'history' }" @click="toggleCostTab('history')">
-                  成本变化（{{ calcPrice.history.length }}）</button>
-                <button :class="{ active: costTab === 'composition' }" @click="toggleCostTab('composition')">成本构成</button>
-              </template>
-              <button :class="{ active: costTab === 'missing' }" @click="toggleCostTab('missing')">
-                缺价清单（{{ calcPrice.missing_items.length }}）</button>
-            </div>
-
-            <!-- 成本变化：按采购订单逐单重算；较上一单的变化拆成「价格涨跌」+「新增计价」 -->
-            <template v-if="costTab === 'history'">
-              <table v-if="calcPrice.history.length" class="cost-table cv-table">
-                <thead>
-                  <tr>
-                    <th>订单</th>
-                    <th style="width:100px">日期</th>
-                    <th style="width:110px" class="ta-r">计算成本</th>
-                    <th style="width:110px" class="ta-r" title="开始计价后下级价格都齐全，这里的变化就是真实的价格涨跌">较上一单</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="h in calcPrice.history" :key="h.batch_id">
-                    <td>
-                      <span class="order-tag mono" :title="h.order_no">{{ h.order_no || '（无订单号）' }}</span>
-                      <span v-if="h.related === true" class="rel-tag rel-own" title="这个订单里包含本产品">本产品订单</span>
-                      <span v-else-if="h.related === false" class="rel-tag rel-shared"
-                            title="这个订单里没有本产品，是共用物料的价格更新了">共用物料变价</span>
-                    </td>
-                    <td>{{ h.date }}</td>
-                    <td class="ta-r price-val">{{ money(h.unit_price) }}</td>
-                    <td class="ta-r mono" :class="{ up: h.delta > 0, down: h.delta < 0 }">
-                      {{ h.delta == null ? '开始计价' : signed(h.delta) }}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-              <div v-else class="cost-empty">开始计价后还没有采购订单记录（价格来自手动录入或不计价标记）</div>
-            </template>
-
-            <!-- 成本构成：第一层下级按金额排前 5 -->
-            <template v-else-if="costTab === 'composition'">
-              <table v-if="calcPrice.composition.length" class="cost-table cv-table">
-                <thead>
-                  <tr><th style="width:150px">图纸编码</th><th>名称</th><th style="width:60px" class="ta-r">用量</th>
-                      <th style="width:96px" class="ta-r">金额</th><th style="width:150px">占比</th></tr>
-                </thead>
-                <tbody>
-                  <tr v-for="c in calcPrice.composition" :key="c.drawing">
-                    <td class="mono">
-                      <span v-if="c.erp_code" class="bom-link" @click="navigateTo(c.erp_code)">{{ c.drawing }}</span>
-                      <span v-else>{{ c.drawing }}</span>
-                    </td>
-                    <td class="ellip" :title="c.name">{{ c.name || '—' }}</td>
-                    <td class="ta-r">{{ c.qty }}</td>
-                    <td class="ta-r price-val">{{ money(c.amount) }}</td>
-                    <td>
-                      <span class="cv-share"><span :style="{ width: ((c.share || 0) * 100) + '%' }"></span></span>
-                      {{ c.share != null ? (c.share * 100).toFixed(1) + '%' : '—' }}
-                      <span v-if="c.missing" class="calc-miss" :title="`其中 ${c.missing} 项原材料无价格`">缺{{ c.missing }}</span>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-              <div v-else class="cost-empty">还没有可计算的金额</div>
-            </template>
-
-            <!-- 缺价清单：点 ERP 编码到该物料卡片补价格 -->
-            <template v-else-if="costTab === 'missing'">
-              <table v-if="calcPrice.missing_items.length" class="cost-table cv-table">
-                <thead>
-                  <tr><th style="width:150px">图纸编码</th><th style="width:140px">ERP 编码</th><th>名称</th>
-                      <th style="width:70px" class="ta-r">总用量</th><th style="width:180px">所在部件</th>
-                      <th v-if="canEditMaterial" style="width:84px"></th></tr>
-                </thead>
-                <tbody>
-                  <tr v-for="m in calcPrice.missing_items" :key="m.drawing">
-                    <td class="mono">{{ m.drawing }}</td>
-                    <td class="mono">
-                      <span v-if="m.erp_code" class="bom-link" title="到该物料卡片补价格" @click="navigateTo(m.erp_code)">{{ m.erp_code }}</span>
-                      <span v-else class="cell-muted">未匹配</span>
-                    </td>
-                    <td class="ellip" :title="m.name">{{ m.name || '—' }}</td>
-                    <td class="ta-r">{{ m.qty }}</td>
-                    <td class="ellip mono" :title="m.parents.join('、')">{{ m.parents.join('、') }}</td>
-                    <td v-if="canEditMaterial">
-                      <button v-if="m.erp_code" class="np-btn" type="button"
-                              title="客供件、赠送件等不会有采购价的物料：标记后按 0 元计" @click="markNoPrice(m)">标记不计价</button>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-              <div v-else class="cost-empty">原材料价格已齐全</div>
-              <div v-if="calcPrice.missing_items.length" class="cv-tip">
-                下级价格全部齐全时才开始计价。价格不全时，现有价格大多来自别的产品的订单，合计没有参考意义。
-              </div>
-            </template>
-          </div>
+          <MaterialCostView v-if="calcPrice" :data="calcPrice"
+                            :trend-disabled="!calcPrice.history.length && !prices.length"
+                            @open-code="navigateTo" @changed="loadCalcPrice" @trend="trendOpen = true" />
 
           <!-- 外购价：普通部件不显示；外购半成品或已有自身价格时显示（下级全无价格时计算用它） -->
           <template v-if="showOwnPrice">
@@ -1035,54 +833,7 @@ watch(() => props.visible, v => {
     </div>
   </el-dialog>
 
-  <el-dialog
-    v-model="bomDialogOpen"
-    class="material-bom-dialog"
-    width="min(1400px, 92vw)"
-    align-center
-    append-to-body
-  >
-    <template #header>
-      <div v-if="bomDialogHead" class="bom-dlg-head">
-        <span class="bom-dlg-code mono">{{ bomDialogHead.drawing }}</span>
-        <span class="bom-dlg-name">{{ bomDialogHead.name }}</span>
-        <span class="bom-dlg-meta">{{ bomDialogHead.imported_by || '—' }} · {{ bomDialogHead.imported_at }}</span>
-        <el-button size="small" :icon="Download" class="bom-dlg-export" :loading="bomExporting"
-                   @click="exportBomDialog">导出</el-button>
-      </div>
-    </template>
-    <div class="bom-dlg-filter">
-      <el-input v-model="bomDialogKeyword" size="small" clearable placeholder="筛选编码 / 名称"
-                :prefix-icon="Search" class="bom-dlg-search" />
-      <span v-if="bomDialogKeyword.trim()" class="bom-dlg-hit">
-        匹配 {{ bomTreeRef?.matchCount ?? 0 }} 项（保留其上级层次）
-      </span>
-      <el-button v-if="bomTreeRef?.hasNested" size="small" class="bom-dlg-toggle"
-                 :icon="bomTreeRef.allExpanded ? ArrowUp : ArrowDown" @click="bomTreeRef.toggleAll()">
-        {{ bomTreeRef.allExpanded ? '全部收起' : '全部展开' }}
-      </el-button>
-    </div>
-    <!-- 计价行（仅物料价格权限可见）：计价依据 + 合计，单独一行 -->
-    <div v-if="canMaterialPrice" class="bom-dlg-price">
-      <!-- 计价依据：最新价格 或 某次采购导入（年 → 月 → 订单），不手动选日期 -->
-      <PriceBatchSelect v-model="bomDialogPriceBatch" @change="onBomDialogPriceDate" />
-      <template v-if="bomDialogHead && 'unit_price' in bomDialogHead">
-        <!-- 齐全才计价：下级有缺价就不给合计 -->
-        <span v-if="bomDialogHead.unit_price != null" class="bom-dlg-total" title="由下级价格计算（下级价格齐全）">
-          合计 <b class="mono">{{ money(bomDialogHead.unit_price) }}</b>
-        </span>
-        <span v-else class="bom-dlg-total" title="下级价格齐全后才开始计价">
-          未开始计价 <span class="calc-miss">缺 {{ bomDialogHead.missing }} 项价格</span>
-        </span>
-      </template>
-    </div>
-    <div v-loading="bomDialogLoading" class="bom-dlg-body">
-      <MaterialBomTree ref="bomTreeRef" :rows="bomDialogTree" height="100%" :keyword="bomDialogKeyword"
-                       :show-price="canMaterialPrice"
-                       @open-code="onBomDialogCode"
-                       :empty-text="bomDialogLoading ? '加载中...' : (bomDialogKeyword.trim() ? '没有匹配的物料' : '暂无 BOM 数据')" />
-    </div>
-  </el-dialog>
+  <MaterialBomDialog ref="bomDialogRef" @open-code="onBomDialogCode" />
 
   <MaterialPriceTrendDialog
     v-model="trendOpen"
@@ -1331,64 +1082,8 @@ watch(() => props.visible, v => {
   font-size: 12px; font-family: inherit; white-space: nowrap; transition: all 0.15s;
 }
 .bom-view-btn:hover { background: var(--accent); color: #fff; }
-.bom-dlg-head { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
-.bom-dlg-code { font-size: 17px; font-weight: 700; color: #000; }
-.bom-dlg-name { font-size: 15px; color: #3a3028; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bom-dlg-meta { font-size: 12px; color: #8a7a6a; flex-shrink: 0; }
-/* 导出按钮靠右，给 el-dialog 右上角的关闭按钮留出位置 */
-.bom-dlg-export { margin-left: auto; margin-right: 28px; align-self: center; }
-.bom-dlg-filter { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
-.bom-dlg-search { width: 280px; }
-.bom-dlg-hit { font-size: 12px; color: #6b5e4e; }
-.bom-dlg-toggle { margin-left: auto; }
-.bom-dlg-price {
-  display: flex; align-items: center; gap: 16px; margin-bottom: 10px;
-  padding: 6px 10px; border-radius: 8px; background: #faf7f2; border: 1px solid var(--border);
-}
-.bom-dlg-total { font-size: 13px; color: #3a3028; }
-.bom-dlg-total b { color: #4a8fc0; font-size: 14px; }
 
-/* 成本视图（有 BOM 的物料） */
-.cost-view {
-  margin-bottom: 10px; padding: 10px 12px; border-radius: 8px;
-  background: rgba(74,143,192,0.05); border: 1px solid rgba(74,143,192,0.25);
-}
-.cv-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.cv-val { font-size: 18px; color: #4a8fc0; }
-.cv-bom { font-size: 12px; color: #6b5e4e; }
-.cv-cover { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #6b5e4e; }
-.cv-cover b { color: #2c2420; }
-.cv-bar, .cv-share {
-  display: inline-block; width: 90px; height: 6px; border-radius: 3px; overflow: hidden;
-  background: rgba(138,122,106,0.2); vertical-align: middle;
-}
-.cv-bar > span, .cv-share > span { display: block; height: 100%; background: #4a8fc0; border-radius: 3px; }
-.cv-share { width: 60px; margin-right: 4px; }
-.cv-pct { font-weight: 600; color: #c0782a; }
-.cv-pct.full { color: #4a8f6a; }
-.cv-head .cost-trend { margin-left: auto; }
-.cv-tabs { display: flex; gap: 6px; margin: 10px 0 6px; }
-.cv-tabs button {
-  padding: 3px 12px; border-radius: 7px; border: 1px solid var(--border);
-  background: #fff; color: #6b5e4e; font-size: 12px; font-family: inherit; cursor: pointer;
-}
-.cv-tabs button.active { background: var(--accent-bg); border-color: var(--accent); color: var(--accent); font-weight: 600; }
-.cv-table td.up { color: #d05a3c; }
-.cv-table td.down { color: #4a8f6a; }
-.rel-tag { margin-left: 4px; padding: 0 5px; border-radius: 4px; font-size: 10px; line-height: 16px; display: inline-block; }
-.rel-own { color: #4a8f6a; background: rgba(74,143,106,0.12); }
-.rel-shared { color: #8a7a6a; background: rgba(138,122,106,0.12); }
-.calc-own { padding: 0 6px; border-radius: 4px; font-size: 11px; color: #9c6fba; background: rgba(156,111,186,0.12); }
-.calc-miss { padding: 0 6px; border-radius: 4px; font-size: 11px; color: #c0782a; background: rgba(224,144,80,0.15); }
 .own-title { margin: 6px 0 -2px; font-size: 13px; font-weight: 600; color: #3a3028; }
-.cv-unpriced { font-size: 15px; font-weight: 600; color: #8a7a6a; }
-.cv-start { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: #6b5e4e; }
-.cv-tip { margin-top: 6px; font-size: 12px; color: #8a7a6a; }
-.np-btn {
-  padding: 1px 8px; border-radius: 10px; cursor: pointer; white-space: nowrap;
-  border: 1px solid var(--border); background: #fff; color: #6b5e4e; font-size: 11px; font-family: inherit;
-}
-.np-btn:hover { border-color: var(--accent); color: var(--accent); }
 .np-note { margin: 4px 0 6px; font-size: 12px; color: #6b5e4e; }
 .np-box { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .np-check {
@@ -1401,7 +1096,6 @@ watch(() => props.visible, v => {
 .np-check.off input { cursor: not-allowed; }
 .np-hint { font-size: 11px; color: #8a7a6a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .own-title span { margin-left: 6px; font-size: 11px; font-weight: 400; color: #8a7a6a; }
-.bom-dlg-body { height: 72vh; }
 .bom-ver-text { font-size: 12px; font-weight: 400; color: #6b5e4e; letter-spacing: 0; }
 .used-block { margin-bottom: 10px; }
 .used-label { font-size: 12px; color: #6b5e4e; margin-bottom: 6px; }

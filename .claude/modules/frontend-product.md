@@ -128,6 +128,13 @@ src/stores/product/
   - 编辑模式下可：「从资料库选择」关联现有资料 / 「新建资料」后自动关联
 - **权限**：`canEditProduct` 控制编辑入口
 
+## FinishedExpandRow「BOM 与成本」区说明（2026-09-29）
+- 折叠区位于「产品详情」和「数据」之间；**需 `material:view` 才显示**，标题在有 `material:price` 时叫「BOM 与成本」，否则叫「BOM」。
+- 成品编码即物料库 ERP 编码（生产 557 个成品全部能对上），展开时才请求 `GET /api/material/items/:code/bom`；有 BOM 且有 `material:price` 再请求 `calc-price`。
+- 完全复用物料库组件：`MaterialBomDialog.vue`（BOM 结构弹窗：筛选/计价依据/导出，`ref.open(版本行)`）、`MaterialCostView.vue`（成本视图：成本变化/成本构成/缺价清单/标记不计价）、`MaterialPriceTrendDialog.vue`、`MaterialCard.vue`。这两个组件是 2026-09-29 从 `MaterialCard.vue` 抽出的，物料卡片也改用它们——改 BOM 弹窗或成本视图只改组件本身，两处同时生效。
+- 在 BOM 弹窗或成本视图里点物料编码 → 打开该物料的物料卡片；物料卡片关闭后重新拉一次成本（可能补了价格或标了不计价）。
+- 没有研发 BOM 时显示提示「在物料库「物料BOM」导入研发 BOM 后显示」，不显示价格记录（成品价格只由 BOM 计算）。
+
 ## FinishedExpandRow 参数区说明
 - **折叠区 ec-sections 包含两个子节**：参数 / 数据
 - **参数节**：4个固定分组横排卡片（尺寸/配置/品牌/其他），由 `GROUP_DEFS` 定义

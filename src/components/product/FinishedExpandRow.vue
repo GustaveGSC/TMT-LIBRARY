@@ -5,7 +5,7 @@ import * as echarts from 'echarts'
 import http from '@/api/http'
 import { useCategoryTree } from '@/composables/useCategoryTree'
 import { usePermission } from '@/composables/usePermission'
-import { ZoomIn, EditPen, Plus, Delete, Document, VideoPlay, Link, Picture } from '@element-plus/icons-vue'
+import { ZoomIn, EditPen, Plus, Delete, Document, VideoPlay, Link, Picture, View } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFinishedStore } from '@/stores/product/finished'
 import { usePackagedStore } from '@/stores/product/packaged'
@@ -16,6 +16,10 @@ import { useFinishedImage } from '@/composables/useFinishedImage'
 import { useFinishedParams, GROUP_DEFS } from '@/composables/useFinishedParams'
 import { useProductResources } from '@/composables/useProductResources'
 import { copiedParams, copiedTagNames } from '@/composables/useParamsClipboard'
+import MaterialBomDialog from '@/components/material/MaterialBomDialog.vue'
+import MaterialCostView from '@/components/material/MaterialCostView.vue'
+import MaterialCard from '@/components/material/MaterialCard.vue'
+import MaterialPriceTrendDialog from '@/components/material/MaterialPriceTrendDialog.vue'
 
 // ── Props ─────────────────────────────────────────
 const props = defineProps({
@@ -28,7 +32,7 @@ const props = defineProps({
 const emit = defineEmits(['saved'])
 
 // ── 权限 ──────────────────────────────────────────
-const { canEditProduct, canViewShipping, canViewAftersale } = usePermission()
+const { canEditProduct, canViewShipping, canViewAftersale, canViewMaterial, canMaterialPrice } = usePermission()
 
 
 // ── 响应式状态 ────────────────────────────────────
@@ -80,6 +84,62 @@ const originalTagNames = ref(new Set())
 // ── 折叠分组 ──────────────────────────────────────
 const openSec = reactive({})
 function isSec(key) { return !!openSec[key] }
+
+// ── BOM 与成本（物料库的研发 BOM + 按 BOM 计算的成本，2026-09-29）──────
+// 成品编码就是物料库的 ERP 编码（生产 557 个成品全部对应得上），直接用它查。
+// 权限跟物料库一致：看 BOM 要 material:view，看成本要 material:price；没有权限整个分区不显示。
+// 展开分区时才加载（懒加载），BOM 弹窗 / 成本视图 / 物料卡片都复用物料库的组件。
+const bomInfo       = ref(null)    // GET /api/material/items/:code/bom → { versions, direct_parents, top_products }
+const bomInfoLoaded = ref(false)
+const bomInfoLoading = ref(false)
+const bomCalc       = ref(null)    // GET /api/material/items/:code/calc-price（仅 material:price 且有 BOM）
+const bomDialogRef  = ref(null)
+const bomTrendOpen  = ref(false)
+const matCardVisible = ref(false)  // 点 BOM/成本里的物料编码 → 打开物料卡片
+const matCardCode    = ref('')
+
+async function loadBomInfo() {
+  const code = props.row.code
+  if (!canViewMaterial || !code) return
+  bomInfoLoading.value = true
+  try {
+    const res = await http.get(`/api/material/items/${encodeURIComponent(code)}/bom`)
+    if (code !== props.row.code) return
+    bomInfo.value = res.success && Array.isArray(res.data?.versions) ? res.data : { versions: [] }
+    bomInfoLoaded.value = true
+    await loadBomCalc()
+  } catch { /* 拿不到就显示空状态 */ } finally {
+    bomInfoLoading.value = false
+  }
+}
+
+async function loadBomCalc() {
+  const code = props.row.code
+  bomCalc.value = null
+  if (!canMaterialPrice || !bomInfo.value?.versions?.length) return
+  try {
+    const res = await http.get(`/api/material/items/${encodeURIComponent(code)}/calc-price`)
+    if (code === props.row.code && res.success && res.data?.current) bomCalc.value = res.data
+  } catch { /* 成本拿不到不影响 BOM 列表 */ }
+}
+
+function openMaterialCard(code) {
+  if (!code) return
+  matCardCode.value = code
+  matCardVisible.value = true
+}
+
+// BOM 弹窗里点物料：关掉弹窗，打开该物料的物料卡片
+function onBomDialogCode(code) {
+  bomDialogRef.value?.close()
+  openMaterialCard(code)
+}
+
+// 物料卡片关闭后重新计算成本（可能在里面补了价格或标记了不计价）
+function onMatCardVisible(v) {
+  matCardVisible.value = v
+  if (!v && bomInfoLoaded.value) loadBomCalc()
+}
 
 // ── 发货数据图表 ──────────────────────────────────
 const shippingChartEl      = ref(null)   // DOM 节点
@@ -1147,6 +1207,9 @@ function toggleSec(key) {
   if (key === 'detailPackages' && openSec[key] && !detailPackagesLoaded.value) {
     loadDetailPackages()
   }
+  if (key === 'bom' && openSec[key] && !bomInfoLoaded.value) {
+    loadBomInfo()
+  }
   // 包装参数取自 packagedStore 全量缓存。正常路径下进产品库时已预载，
   // 但直接深链进来等场景可能还没载好——不兜这一手的话每行都会误显示"档案缺失"
   if (key === 'packaging' && openSec[key] && !packagedStore.loaded) {
@@ -1856,6 +1919,50 @@ function toggleSec(key) {
           </div>
         </div>
 
+        <!-- BOM 与成本 section（物料库的研发 BOM + 按 BOM 计算的成本；需 material:view，成本另需 material:price）── -->
+        <div v-if="canViewMaterial" class="eg-sec">
+          <div class="eg-sec-hd" @click="toggleSec('bom')">
+            <span class="eg-arr">{{ isSec('bom') ? '▾' : '›' }}</span>{{ canMaterialPrice ? 'BOM 与成本' : 'BOM' }}
+          </div>
+          <div v-if="isSec('bom')" class="eg-sec-bd">
+            <div v-if="bomInfoLoading" class="res-loading">加载中…</div>
+            <div v-else-if="!bomInfo?.versions?.length" class="res-empty">
+              该产品还没有研发 BOM（在物料库「物料BOM」导入研发 BOM 后显示）
+            </div>
+            <template v-else>
+              <!-- 研发 BOM 版本：每个研发版本一行，点「查看」弹窗看完整结构 -->
+              <table class="bom-ver-table">
+                <thead>
+                  <tr>
+                    <th style="width:170px">图纸编码</th>
+                    <th>名称</th>
+                    <th style="width:70px" class="ta-r">下级</th>
+                    <th style="width:150px">导入</th>
+                    <th style="width:80px"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="v in bomInfo.versions" :key="v.id">
+                    <td class="bom-drawing">{{ v.drawing }}</td>
+                    <td class="bom-ellip" :title="v.name">{{ v.name || '—' }}</td>
+                    <td class="ta-r">{{ v.line_count }} 项</td>
+                    <td class="bom-muted">{{ v.imported_at }}</td>
+                    <td class="ta-r">
+                      <button class="bom-view-btn" type="button" @click="bomDialogRef?.open(v)">
+                        <el-icon><View /></el-icon>查看
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              <!-- 成本：由 BOM 下级原材料价格实时计算（齐全才计价），仅 material:price -->
+              <MaterialCostView v-if="bomCalc" class="bom-cost" :data="bomCalc"
+                                :trend-disabled="!bomCalc.history.length"
+                                @open-code="openMaterialCard" @changed="loadBomCalc" @trend="bomTrendOpen = true" />
+            </template>
+          </div>
+        </div>
+
         <div class="eg-sec">
           <div class="eg-sec-hd" @click="toggleSec('data')">
             <span class="eg-arr">{{ isSec('data') ? '▾' : '›' }}</span>数据
@@ -1912,6 +2019,19 @@ function toggleSec(key) {
     </div><!-- /ec-main -->
 
   </div>
+
+  <!-- ── BOM 与成本：BOM 结构弹窗 / 成本趋势 / 物料卡片 ─────── -->
+  <template v-if="canViewMaterial && bomInfoLoaded">
+    <MaterialBomDialog ref="bomDialogRef" @open-code="onBomDialogCode" />
+    <MaterialPriceTrendDialog
+      v-model="bomTrendOpen"
+      :title="`${row.code} ${row.name || ''}`"
+      :prices="[]"
+      :calc-history="bomCalc?.history || []"
+      title-prefix="成本趋势"
+    />
+    <MaterialCard :visible="matCardVisible" :code="matCardCode" @update:visible="onMatCardVisible" />
+  </template>
 
   <!-- ── 资料选择弹窗 ─────────────────────────────── -->
   <el-dialog
@@ -2616,6 +2736,26 @@ function toggleSec(key) {
 .ei-check :deep(.el-checkbox__label) { font-size: 12px; color: #6b5e4e; padding-left: 4px; }
 
 /* ── 折叠分组区（在 ec-main 内，顶部分隔线） ── */
+/* BOM 与成本分区 */
+.bom-ver-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 10px; }
+.bom-ver-table th {
+  text-align: left; font-weight: 600; color: #6b5e4e;
+  padding: 6px 8px; border-bottom: 1px solid #e0d4c0; white-space: nowrap;
+}
+.bom-ver-table td { padding: 5px 8px; border-bottom: 1px solid #e0d4c0; color: #3a3028; vertical-align: middle; }
+.bom-ver-table tr:last-child td { border-bottom: none; }
+.bom-ver-table .ta-r, .bom-ver-table th.ta-r { text-align: right; }
+.bom-drawing { font-family: monospace; font-weight: 700; color: #2c2420; }
+.bom-ellip { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bom-muted { color: #8a7a6a; }
+.bom-view-btn {
+  display: inline-flex; align-items: center; gap: 3px; padding: 2px 10px; border-radius: 10px;
+  border: 1px solid var(--accent); background: transparent; color: var(--accent);
+  font-size: 12px; font-family: inherit; cursor: pointer; transition: all 0.15s;
+}
+.bom-view-btn:hover { background: var(--accent); color: #fff; }
+.bom-cost { margin-bottom: 0; }
+
 .ec-sections {
   border-top: 1px solid #e8ddd0;
 }
