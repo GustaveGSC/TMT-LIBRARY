@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 
-// 产品库成品卡片「BOM 与成本」分区：复用物料库的 BOM 弹窗 / 成本视图 / 物料卡片
-// 权限：material:view 才显示分区；material:price 才显示成本
+// 产品库成品卡片「BOM」「成本」两个分区：复用物料库的 BOM 弹窗 / 成本视图 / 物料卡片
+// 权限相互独立：material:view 才显示 BOM；material:price 才显示成本
 const OK = (data) => ({ success: true, message: '', data })
 const ROW = { code: '1108SG07-A', name: '书桌', model_name: '书桌', name_en: 'Desk' }
 const HEAD = {
@@ -56,23 +56,34 @@ async function setup(page, permissions) {
   return calls
 }
 
-test('有物料权限：成品卡片显示 BOM 与成本，可查看 BOM、点物料打开物料卡片', async ({ page }) => {
+// 分区定位：按分区标题（「BOM」「成本」各只出现在一个分区标题里）
+const secOf = (page, title) =>
+  page.locator('.eg-sec').filter({ has: page.locator('.eg-sec-hd', { hasText: title }) })
+
+test('BOM 和成本分成两个分区，各自展开才加载；可查看 BOM、点物料打开物料卡片', async ({ page }) => {
   const calls = await setup(page, ['product:view', 'material:view', 'material:price'])
-  const sec = page.locator('.eg-sec', { hasText: 'BOM 与成本' })
-  await expect(sec).toBeVisible()
-  // 展开才加载
-  expect(calls.some(p => p.endsWith('/bom'))).toBe(false)
-  await sec.locator('.eg-sec-hd').click()
-  await expect(sec.locator('.bom-ver-table')).toContainText('1108SG07-A01')
+  const bomSec = secOf(page, 'BOM')
+  const costSec = secOf(page, '成本')
+  await expect(bomSec).toBeVisible()
+  await expect(costSec).toBeVisible()
+  expect(calls.some(p => p.endsWith('/bom') || p.endsWith('/calc-price'))).toBe(false)
+
+  // BOM 分区：只加载 BOM
+  await bomSec.locator('.eg-sec-hd').click()
+  await expect(bomSec.locator('.bom-ver-table')).toContainText('1108SG07-A01')
   expect(calls).toContain('/api/material/items/1108SG07-A/bom')
-  // 成本视图（复用物料库组件）
-  await expect(sec.locator('.cost-view .cv-val')).toHaveText('¥24')
-  await expect(sec.locator('.cost-view')).toContainText('F-SC20240101-001')
-  await sec.scrollIntoViewIfNeeded()
-  await sec.screenshot({ path: 'test-results/product-bom-cost.png' })
+  expect(calls.some(p => p.endsWith('/calc-price'))).toBe(false)
+  await expect(bomSec.locator('.cost-view')).toHaveCount(0)
+
+  // 成本分区：只加载成本
+  await costSec.locator('.eg-sec-hd').click()
+  await expect(costSec.locator('.cost-view .cv-val')).toHaveText('¥24')
+  await expect(costSec.locator('.cost-view')).toContainText('F-SC20240101-001')
+  await costSec.scrollIntoViewIfNeeded()
+  await page.locator('.ec-sections').screenshot({ path: 'test-results/product-bom-cost.png' })
 
   // 查看 BOM → 弹窗树
-  await sec.locator('.bom-view-btn').click()
+  await bomSec.locator('.bom-view-btn').click()
   const dlg = page.locator('.material-bom-dialog')
   await expect(dlg.locator('.bom-dlg-code')).toHaveText('1108SG07-A01')
   await expect(dlg).toContainText('桌面')
@@ -80,24 +91,37 @@ test('有物料权限：成品卡片显示 BOM 与成本，可查看 BOM、点�
   await page.keyboard.press('Escape')
 
   // 成本构成里点物料编码 → 打开物料卡片
-  await sec.locator('.cv-tabs button', { hasText: '成本构成' }).click()
-  await sec.locator('.cost-view .bom-link', { hasText: 'P1-A01' }).click()
+  await costSec.locator('.cv-tabs button', { hasText: '成本构成' }).click()
+  await costSec.locator('.cost-view .bom-link', { hasText: 'P1-A01' }).click()
   await expect(page.locator('.material-card-dialog')).toBeVisible()
   expect(calls).toContain('/api/material/items/P1-A')
 })
 
-test('只有 material:view：显示 BOM 不显示成本；没有物料权限：不显示分区', async ({ page }) => {
+test('只有 material:view：只有 BOM 分区，不请求成本', async ({ page }) => {
   const calls = await setup(page, ['product:view', 'material:view'])
-  // 没有价格权限时分区标题只叫「BOM」
-  const sec = page.locator('.eg-sec').filter({ has: page.locator('.eg-sec-hd', { hasText: /BOM$/ }) })
-  await expect(sec).toBeVisible()
-  await sec.locator('.eg-sec-hd').click()
-  await expect(sec.locator('.bom-ver-table')).toContainText('1108SG07-A01')
-  await expect(sec.locator('.cost-view')).toHaveCount(0)
+  await expect(secOf(page, 'BOM')).toBeVisible()
+  await expect(secOf(page, '成本')).toHaveCount(0)
+  await secOf(page, 'BOM').locator('.eg-sec-hd').click()
+  await expect(secOf(page, 'BOM').locator('.bom-ver-table')).toContainText('1108SG07-A01')
   expect(calls.some(p => p.endsWith('/calc-price'))).toBe(false)
+})
 
-  const other = await page.context().newPage()
-  await setup(other, ['product:view'])
-  await expect(other.locator('.ec-sections')).toBeVisible()
-  await expect(other.locator('.eg-sec-hd', { hasText: 'BOM' })).toHaveCount(0)
+test('只有 material:price：只有成本分区，不请求 BOM，物料编码不可点', async ({ page }) => {
+  const calls = await setup(page, ['product:view', 'material:price'])
+  await expect(secOf(page, '成本')).toBeVisible()
+  await expect(secOf(page, 'BOM')).toHaveCount(0)
+  const costSec = secOf(page, '成本')
+  await costSec.locator('.eg-sec-hd').click()
+  await expect(costSec.locator('.cost-view .cv-val')).toHaveText('¥24')
+  await costSec.locator('.cv-tabs button', { hasText: '成本构成' }).click()
+  await expect(costSec.locator('.cost-view')).toContainText('P1-A01')
+  await expect(costSec.locator('.cost-view .bom-link')).toHaveCount(0)
+  expect(calls.some(p => p.endsWith('/bom'))).toBe(false)
+})
+
+test('没有物料权限：两个分区都不显示', async ({ page }) => {
+  await setup(page, ['product:view'])
+  await expect(page.locator('.ec-sections')).toBeVisible()
+  await expect(secOf(page, 'BOM')).toHaveCount(0)
+  await expect(secOf(page, '成本')).toHaveCount(0)
 })

@@ -16,6 +16,7 @@ const { canEditMaterial } = usePermission()
 const props = defineProps({
   data:          { type: Object,  required: true },   // calc-price 返回的 data
   trendDisabled: { type: Boolean, default: false },
+  linkable:      { type: Boolean, default: true },    // 编码能否点开物料卡片（产品库里没有 material:view 时为 false）
 })
 // open-code：点了某个物料的 ERP 编码；changed：标记了不计价，需要重新加载；trend：打开成本趋势
 const emit = defineEmits(['open-code', 'changed', 'trend'])
@@ -144,7 +145,7 @@ function signed(v) {
         <tbody>
           <tr v-for="c in data.composition" :key="c.drawing">
             <td class="mono">
-              <span v-if="c.erp_code" class="bom-link" @click="emit('open-code', c.erp_code)">{{ c.drawing }}</span>
+              <span v-if="c.erp_code && linkable" class="bom-link" @click="emit('open-code', c.erp_code)">{{ c.drawing }}</span>
               <span v-else>{{ c.drawing }}</span>
             </td>
             <td class="ellip" :title="c.name">{{ c.name || '—' }}</td>
@@ -173,7 +174,8 @@ function signed(v) {
           <tr v-for="m in data.missing_items" :key="m.drawing">
             <td class="mono">{{ m.drawing }}</td>
             <td class="mono">
-              <span v-if="m.erp_code" class="bom-link" title="到该物料卡片补价格" @click="emit('open-code', m.erp_code)">{{ m.erp_code }}</span>
+              <span v-if="m.erp_code && linkable" class="bom-link" title="到该物料卡片补价格" @click="emit('open-code', m.erp_code)">{{ m.erp_code }}</span>
+              <span v-else-if="m.erp_code">{{ m.erp_code }}</span>
               <span v-else class="cell-muted">未匹配</span>
             </td>
             <td class="ellip" :title="m.name">{{ m.name || '—' }}</td>

@@ -85,14 +85,16 @@ const originalTagNames = ref(new Set())
 const openSec = reactive({})
 function isSec(key) { return !!openSec[key] }
 
-// ── BOM 与成本（物料库的研发 BOM + 按 BOM 计算的成本，2026-09-29）──────
+// ── BOM / 成本（物料库的研发 BOM + 按 BOM 计算的成本，2026-09-29）──────
 // 成品编码就是物料库的 ERP 编码（生产 557 个成品全部对应得上），直接用它查。
-// 权限跟物料库一致：看 BOM 要 material:view，看成本要 material:price；没有权限整个分区不显示。
-// 展开分区时才加载（懒加载），BOM 弹窗 / 成本视图 / 物料卡片都复用物料库的组件。
+// 两个分区权限不同、互相独立（用户 2026-09-29 定）：「BOM」要 material:view，「成本」要 material:price，
+// 各自展开时才加载；BOM 弹窗 / 成本视图 / 物料卡片都复用物料库的组件。
 const bomInfo       = ref(null)    // GET /api/material/items/:code/bom → { versions, direct_parents, top_products }
 const bomInfoLoaded = ref(false)
 const bomInfoLoading = ref(false)
-const bomCalc       = ref(null)    // GET /api/material/items/:code/calc-price（仅 material:price 且有 BOM）
+const bomCalc        = ref(null)   // GET /api/material/items/:code/calc-price；没有研发 BOM 时为 null
+const bomCalcLoaded  = ref(false)
+const bomCalcLoading = ref(false)
 const bomDialogRef  = ref(null)
 const bomTrendOpen  = ref(false)
 const matCardVisible = ref(false)  // 点 BOM/成本里的物料编码 → 打开物料卡片
@@ -107,24 +109,29 @@ async function loadBomInfo() {
     if (code !== props.row.code) return
     bomInfo.value = res.success && Array.isArray(res.data?.versions) ? res.data : { versions: [] }
     bomInfoLoaded.value = true
-    await loadBomCalc()
   } catch { /* 拿不到就显示空状态 */ } finally {
     bomInfoLoading.value = false
   }
 }
 
+// 成本只要 material:price，不依赖 BOM 分区（calc-price 在没有研发 BOM 时返回 null）
 async function loadBomCalc() {
   const code = props.row.code
-  bomCalc.value = null
-  if (!canMaterialPrice || !bomInfo.value?.versions?.length) return
+  if (!canMaterialPrice || !code) return
+  bomCalcLoading.value = true
   try {
     const res = await http.get(`/api/material/items/${encodeURIComponent(code)}/calc-price`)
-    if (code === props.row.code && res.success && res.data?.current) bomCalc.value = res.data
-  } catch { /* 成本拿不到不影响 BOM 列表 */ }
+    if (code !== props.row.code) return
+    bomCalc.value = res.success && res.data?.current ? res.data : null
+    bomCalcLoaded.value = true
+  } catch { /* 拿不到就显示空状态 */ } finally {
+    bomCalcLoading.value = false
+  }
 }
 
+// 物料卡片属于物料库，要 material:view；只有成本权限时编码不可点
 function openMaterialCard(code) {
-  if (!code) return
+  if (!code || !canViewMaterial) return
   matCardCode.value = code
   matCardVisible.value = true
 }
@@ -138,7 +145,7 @@ function onBomDialogCode(code) {
 // 物料卡片关闭后重新计算成本（可能在里面补了价格或标记了不计价）
 function onMatCardVisible(v) {
   matCardVisible.value = v
-  if (!v && bomInfoLoaded.value) loadBomCalc()
+  if (!v && bomCalcLoaded.value) loadBomCalc()
 }
 
 // ── 发货数据图表 ──────────────────────────────────
@@ -1210,6 +1217,9 @@ function toggleSec(key) {
   if (key === 'bom' && openSec[key] && !bomInfoLoaded.value) {
     loadBomInfo()
   }
+  if (key === 'cost' && openSec[key] && !bomCalcLoaded.value) {
+    loadBomCalc()
+  }
   // 包装参数取自 packagedStore 全量缓存。正常路径下进产品库时已预载，
   // 但直接深链进来等场景可能还没载好——不兜这一手的话每行都会误显示"档案缺失"
   if (key === 'packaging' && openSec[key] && !packagedStore.loaded) {
@@ -1919,10 +1929,10 @@ function toggleSec(key) {
           </div>
         </div>
 
-        <!-- BOM 与成本 section（物料库的研发 BOM + 按 BOM 计算的成本；需 material:view，成本另需 material:price）── -->
+        <!-- BOM section（物料库的研发 BOM；需 material:view）── -->
         <div v-if="canViewMaterial" class="eg-sec">
           <div class="eg-sec-hd" @click="toggleSec('bom')">
-            <span class="eg-arr">{{ isSec('bom') ? '▾' : '›' }}</span>{{ canMaterialPrice ? 'BOM 与成本' : 'BOM' }}
+            <span class="eg-arr">{{ isSec('bom') ? '▾' : '›' }}</span>BOM
           </div>
           <div v-if="isSec('bom')" class="eg-sec-bd">
             <div v-if="bomInfoLoading" class="res-loading">加载中…</div>
@@ -1955,11 +1965,23 @@ function toggleSec(key) {
                   </tr>
                 </tbody>
               </table>
-              <!-- 成本：由 BOM 下级原材料价格实时计算（齐全才计价），仅 material:price -->
-              <MaterialCostView v-if="bomCalc" class="bom-cost" :data="bomCalc"
-                                :trend-disabled="!bomCalc.history.length"
-                                @open-code="openMaterialCard" @changed="loadBomCalc" @trend="bomTrendOpen = true" />
             </template>
+          </div>
+        </div>
+
+        <!-- 成本 section（由研发 BOM 下级原材料价格实时计算，齐全才计价；需 material:price，与 BOM 分区相互独立）── -->
+        <div v-if="canMaterialPrice" class="eg-sec">
+          <div class="eg-sec-hd" @click="toggleSec('cost')">
+            <span class="eg-arr">{{ isSec('cost') ? '▾' : '›' }}</span>成本
+          </div>
+          <div v-if="isSec('cost')" class="eg-sec-bd">
+            <div v-if="bomCalcLoading" class="res-loading">加载中…</div>
+            <div v-else-if="!bomCalc" class="res-empty">
+              该产品还没有研发 BOM，无法计算成本（在物料库「物料BOM」导入研发 BOM 后显示）
+            </div>
+            <MaterialCostView v-else class="bom-cost" :data="bomCalc" :linkable="canViewMaterial"
+                              :trend-disabled="!bomCalc.history.length"
+                              @open-code="openMaterialCard" @changed="loadBomCalc" @trend="bomTrendOpen = true" />
           </div>
         </div>
 
@@ -2020,18 +2042,18 @@ function toggleSec(key) {
 
   </div>
 
-  <!-- ── BOM 与成本：BOM 结构弹窗 / 成本趋势 / 物料卡片 ─────── -->
-  <template v-if="canViewMaterial && bomInfoLoaded">
-    <MaterialBomDialog ref="bomDialogRef" @open-code="onBomDialogCode" />
-    <MaterialPriceTrendDialog
-      v-model="bomTrendOpen"
-      :title="`${row.code} ${row.name || ''}`"
-      :prices="[]"
-      :calc-history="bomCalc?.history || []"
-      title-prefix="成本趋势"
-    />
-    <MaterialCard :visible="matCardVisible" :code="matCardCode" @update:visible="onMatCardVisible" />
-  </template>
+  <!-- ── BOM / 成本：BOM 结构弹窗 / 成本趋势 / 物料卡片（按各自权限、分区展开后才挂载）─────── -->
+  <MaterialBomDialog v-if="canViewMaterial && bomInfoLoaded" ref="bomDialogRef" @open-code="onBomDialogCode" />
+  <MaterialPriceTrendDialog
+    v-if="canMaterialPrice && bomCalcLoaded"
+    v-model="bomTrendOpen"
+    :title="`${row.code} ${row.name || ''}`"
+    :prices="[]"
+    :calc-history="bomCalc?.history || []"
+    title-prefix="成本趋势"
+  />
+  <MaterialCard v-if="canViewMaterial && (bomInfoLoaded || bomCalcLoaded)"
+                :visible="matCardVisible" :code="matCardCode" @update:visible="onMatCardVisible" />
 
   <!-- ── 资料选择弹窗 ─────────────────────────────── -->
   <el-dialog
@@ -2737,7 +2759,7 @@ function toggleSec(key) {
 
 /* ── 折叠分组区（在 ec-main 内，顶部分隔线） ── */
 /* BOM 与成本分区 */
-.bom-ver-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 10px; }
+.bom-ver-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .bom-ver-table th {
   text-align: left; font-weight: 600; color: #6b5e4e;
   padding: 6px 8px; border-bottom: 1px solid #e0d4c0; white-space: nowrap;
