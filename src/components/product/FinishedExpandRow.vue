@@ -136,17 +136,13 @@ function openMaterialCard(code) {
   matCardVisible.value = true
 }
 
-// BOM 弹窗里点物料：关掉弹窗，打开该物料的物料卡片
+// BOM 弹窗里点物料：弹窗保留不关，物料卡片叠在上面；关掉物料卡片就回到原来的 BOM 清单
+// （筛选词、展开状态、计价依据都还在）
 function onBomDialogCode(code) {
-  bomDialogRef.value?.close()
   openMaterialCard(code)
 }
-
-// 物料卡片关闭后重新计算成本（物料卡片在这里只读，但用户可能同时在别处改了价格）
-function onMatCardVisible(v) {
-  matCardVisible.value = v
-  if (!v && bomCalcLoaded.value) loadBomCalc()
-}
+// 物料卡片在这里只读，关闭后不重新加载成本：重新加载会让成本分区闪成「加载中」并重建，
+// 已展开的页签（如缺价清单）被收起，看起来像产品卡片被重置（用户 2026-09-29 反馈）
 
 // ── 发货数据图表 ──────────────────────────────────
 const shippingChartEl      = ref(null)   // DOM 节点
@@ -2052,7 +2048,7 @@ function toggleSec(key) {
     title-prefix="成本趋势"
   />
   <MaterialCard v-if="canViewMaterial && (bomInfoLoaded || bomCalcLoaded)"
-                :visible="matCardVisible" :code="matCardCode" readonly @update:visible="onMatCardVisible" />
+                v-model:visible="matCardVisible" :code="matCardCode" readonly />
 
   <!-- ── 资料选择弹窗 ─────────────────────────────── -->
   <el-dialog

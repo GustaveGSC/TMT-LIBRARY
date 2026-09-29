@@ -139,3 +139,38 @@ test('没有物料权限：两个分区都不显示', async ({ page }) => {
   await expect(secOf(page, 'BOM')).toHaveCount(0)
   await expect(secOf(page, '成本')).toHaveCount(0)
 })
+
+test('关闭物料卡片后产品卡片保持原状；从 BOM 清单打开的物料卡片关闭后回到 BOM 清单', async ({ page }) => {
+  const calls = await setup(page, ['product:view', 'material:view', 'material:price'])
+  const costSec = secOf(page, '成本')
+  const bomSec = secOf(page, 'BOM')
+
+  // 缺价清单 → 物料卡片 → 关闭：缺价清单页签仍展开，不重新请求成本
+  await costSec.locator('.eg-sec-hd').click()
+  await costSec.locator('.cv-tabs button', { hasText: '缺价清单' }).click()
+  const calcCalls = calls.filter(p => p === '/api/material/items/1108SG07-A/calc-price').length
+  await costSec.locator('.cost-view .bom-link', { hasText: 'S1-A' }).click()
+  const card = page.locator('.material-card-dialog')
+  await expect(card).toBeVisible()
+  await card.locator('.mc-close-btn').click()
+  await expect(card).toBeHidden()
+  await expect(costSec.locator('.cv-tabs button.active')).toContainText('缺价清单')
+  await expect(costSec.locator('.cost-view')).toContainText('S1-A')
+  expect(calls.filter(p => p === '/api/material/items/1108SG07-A/calc-price').length).toBe(calcCalls)
+
+  // BOM 清单 → 点物料 → 物料卡片 → 关闭：回到 BOM 清单，筛选词还在
+  await bomSec.locator('.eg-sec-hd').click()
+  await bomSec.locator('.bom-view-btn').click()
+  const dlg = page.locator('.material-bom-dialog')
+  await expect(dlg).toContainText('桌面')
+  await dlg.locator('.bom-dlg-search input').fill('P1')
+  await dlg.locator('.bt-erp', { hasText: 'P1-A' }).click()
+  await expect(card).toBeVisible()
+  await card.locator('.mc-close-btn').click()
+  await expect(card).toBeHidden()
+  await expect(dlg).toBeVisible()
+  await expect(dlg.locator('.bom-dlg-search input')).toHaveValue('P1')
+  // 产品卡片两个分区都还展开着
+  await expect(costSec.locator('.cv-tabs button.active')).toContainText('缺价清单')
+  await expect(bomSec.locator('.bom-ver-table')).toBeVisible()
+})
