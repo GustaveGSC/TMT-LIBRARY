@@ -267,6 +267,17 @@ def _erp_info(erp_codes):
     }
 
 
+def _apply_erp_names(dicts):
+    """BOM 表头字典的名称/规格改用 ERP 的（一条查询）：研发 BOM 文件里的名称只有 ERP 名称的前半段
+    （如「成品_成人桌类_E时光」，ERP 是「成品_成人桌类_E时光 (V1.2)电动2.0米…_A」），对不上 ERP 时用文件里的兜底。"""
+    info = _erp_info([d.get('erp_code') for d in dicts])
+    for d in dicts:
+        erp_name, erp_spec = info.get(d.get('erp_code'), (None, None))
+        d['name'] = erp_name or d.get('name')
+        d['spec'] = erp_spec or d.get('spec')
+    return dicts
+
+
 class MaterialBomService:
 
     # ── 编码对应 ──────────────────────────────────────
@@ -444,11 +455,11 @@ class MaterialBomService:
             .group_by(MaterialBomLine.bom_id).all()
         ) if page_ids else {}
         return Result.ok(data={
-            'items': [
+            'items': _apply_erp_names([
                 {**rows[i].to_dict(), 'line_count': counts.get(i, 0),
                  'material_types': types_by_id[i]}
                 for i in page_ids if i in rows
-            ],
+            ]),
             'total': len(ids), 'all_total': len(ordered),
             'page': page, 'page_size': page_size,
             'type_counts': type_counts,
@@ -657,7 +668,7 @@ class MaterialBomService:
                 prev_total = snap['total']
 
         return Result.ok(data={
-            'bom': bom.to_dict(),
+            'bom': _apply_erp_names([bom.to_dict()])[0],
             'versions': [{'id': b.id, 'drawing': f'{b.code}-{b.version}' if b.version else b.code}
                          for b in versions],
             'current': current,
@@ -779,14 +790,11 @@ class MaterialBomService:
 
         top_list = sorted((b.to_dict() for b in tops.values()),
                           key=lambda x: (x['code'], x['version']))
-        # 上级/最终产品的名称同样优先用 ERP 的
-        info = _erp_info([d['erp_code'] for d in direct + top_list])
-        for d in direct + top_list:
-            erp_name, erp_spec = info.get(d['erp_code'], (None, None))
-            d['name'] = erp_name or d['name']
-            d['spec'] = erp_spec or d['spec']
+        # 研发版本 / 上级 / 最终产品的名称都优先用 ERP 的（一次查询）
+        version_list = [{**b.to_dict(), 'line_count': line_counts.get(b.id, 0)} for b in versions]
+        _apply_erp_names(version_list + direct + top_list)
         return Result.ok(data={
-            'versions': [{**b.to_dict(), 'line_count': line_counts.get(b.id, 0)} for b in versions],
+            'versions': version_list,
             'direct_parents': direct,
             'top_products': top_list,
         })

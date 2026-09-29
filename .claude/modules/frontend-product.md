@@ -138,7 +138,11 @@ src/stores/product/
   （成本视图：成本变化/成本构成/缺价清单/标记不计价）、`MaterialPriceTrendDialog.vue`、`MaterialCard.vue`。这两个组件是
   2026-09-29 从 `MaterialCard.vue` 抽出的，物料卡片也改用它们——改 BOM 弹窗或成本视图只改组件本身，两处同时生效。
 - 点物料编码 → 打开该物料的物料卡片（需 `material:view`；只有价格权限时 `MaterialCostView` 传 `:linkable="false"`，编码不可点）；
-  物料卡片关闭后重新拉一次成本（可能补了价格或标了不计价）。
+  物料卡片关闭后重新拉一次成本。
+- **产品库里只看不改**（用户 2026-09-29 定）：打开的物料卡片传 `readonly`（不能改人工维护/图片/价格/供应商/不计价），
+  成本视图也传 `readonly`（缺价清单没有「标记不计价」），即使用户有 material:edit / material:price。
+- BOM 版本行不显示「下级」数量列；名称用 ERP 全名（研发 BOM 文件里的名称只有 ERP 名称的前半段，后端 `_apply_erp_names`
+  统一给版本行 / BOM 列表 / 成本视图表头换成 ERP 名称，对不上 ERP 时用文件里的兜底）。
 
 ## FinishedExpandRow 参数区说明
 - **折叠区 ec-sections 包含两个子节**：参数 / 数据

@@ -186,9 +186,9 @@ test('物料表 BOM 标记 + 物料卡片：BOM下级按研发版本列出并弹
   const bomSec = card.locator('.mc-bom')
   const usedSec = card.locator('.mc-used')
   await expect(bomSec.locator('.mc-section-title')).toContainText('BOM下级')
-  // 1 个 ERP 物料挂 2 个研发 BOM：两个都列出来，各带下级数量；卡片里不直接展开树
+  // 1 个 ERP 物料挂 2 个研发 BOM：两个都列出来；不显示「下级」数量列（用户 2026-09-29 定）；卡片里不直接展开树
   await expect(bomSec.locator('.bom-drawing')).toHaveText(['F1-A02', 'F1-A01'])
-  await expect(bomSec.locator('tbody tr').nth(1)).toContainText('5 项')
+  await expect(bomSec.locator('thead th')).toHaveText(['图纸编码', '名称', '导入', ''])
   await expect(bomSec.locator('.bom-tree')).toHaveCount(0)
   // 没有被使用：整个分区隐藏
   await expect(usedSec).toHaveCount(0)

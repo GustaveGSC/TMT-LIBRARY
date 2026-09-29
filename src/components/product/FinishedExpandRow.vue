@@ -142,7 +142,7 @@ function onBomDialogCode(code) {
   openMaterialCard(code)
 }
 
-// 物料卡片关闭后重新计算成本（可能在里面补了价格或标记了不计价）
+// 物料卡片关闭后重新计算成本（物料卡片在这里只读，但用户可能同时在别处改了价格）
 function onMatCardVisible(v) {
   matCardVisible.value = v
   if (!v && bomCalcLoaded.value) loadBomCalc()
@@ -1946,7 +1946,6 @@ function toggleSec(key) {
                   <tr>
                     <th style="width:170px">图纸编码</th>
                     <th>名称</th>
-                    <th style="width:70px" class="ta-r">下级</th>
                     <th style="width:150px">导入</th>
                     <th style="width:80px"></th>
                   </tr>
@@ -1954,8 +1953,7 @@ function toggleSec(key) {
                 <tbody>
                   <tr v-for="v in bomInfo.versions" :key="v.id">
                     <td class="bom-drawing">{{ v.drawing }}</td>
-                    <td class="bom-ellip" :title="v.name">{{ v.name || '—' }}</td>
-                    <td class="ta-r">{{ v.line_count }} 项</td>
+                    <td class="bom-name">{{ v.name || '—' }}</td>
                     <td class="bom-muted">{{ v.imported_at }}</td>
                     <td class="ta-r">
                       <button class="bom-view-btn" type="button" @click="bomDialogRef?.open(v)">
@@ -1979,7 +1977,8 @@ function toggleSec(key) {
             <div v-else-if="!bomCalc" class="res-empty">
               该产品还没有研发 BOM，无法计算成本（在物料库「物料BOM」导入研发 BOM 后显示）
             </div>
-            <MaterialCostView v-else class="bom-cost" :data="bomCalc" :linkable="canViewMaterial"
+            <!-- 产品库里只看不改：缺价清单不能标记不计价 -->
+            <MaterialCostView v-else class="bom-cost" :data="bomCalc" :linkable="canViewMaterial" readonly
                               :trend-disabled="!bomCalc.history.length"
                               @open-code="openMaterialCard" @changed="loadBomCalc" @trend="bomTrendOpen = true" />
           </div>
@@ -2053,7 +2052,7 @@ function toggleSec(key) {
     title-prefix="成本趋势"
   />
   <MaterialCard v-if="canViewMaterial && (bomInfoLoaded || bomCalcLoaded)"
-                :visible="matCardVisible" :code="matCardCode" @update:visible="onMatCardVisible" />
+                :visible="matCardVisible" :code="matCardCode" readonly @update:visible="onMatCardVisible" />
 
   <!-- ── 资料选择弹窗 ─────────────────────────────── -->
   <el-dialog
@@ -2768,7 +2767,8 @@ function toggleSec(key) {
 .bom-ver-table tr:last-child td { border-bottom: none; }
 .bom-ver-table .ta-r, .bom-ver-table th.ta-r { text-align: right; }
 .bom-drawing { font-family: monospace; font-weight: 700; color: #2c2420; }
-.bom-ellip { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 名称用 ERP 全名（较长），完整显示、需要时换行，不截断 */
+.bom-name { word-break: break-all; }
 .bom-muted { color: #8a7a6a; }
 .bom-view-btn {
   display: inline-flex; align-items: center; gap: 3px; padding: 2px 10px; border-radius: 10px;

@@ -10,13 +10,14 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '@/api/http'
 import { usePermission } from '@/composables/usePermission'
 
-const { canEditMaterial } = usePermission()
+const { canEditMaterial: permEditMaterial } = usePermission()
 
 // ── Props / Emits ─────────────────────────────────
 const props = defineProps({
   data:          { type: Object,  required: true },   // calc-price 返回的 data
   trendDisabled: { type: Boolean, default: false },
   linkable:      { type: Boolean, default: true },    // 编码能否点开物料卡片（产品库里没有 material:view 时为 false）
+  readonly:      { type: Boolean, default: false },   // 只读（产品库里）：缺价清单不能标记不计价
 })
 // open-code：点了某个物料的 ERP 编码；changed：标记了不计价，需要重新加载；trend：打开成本趋势
 const emit = defineEmits(['open-code', 'changed', 'trend'])
@@ -25,6 +26,7 @@ const emit = defineEmits(['open-code', 'changed', 'trend'])
 // 页签：history 成本变化 | composition 成本构成 | missing 缺价清单 | '' 收起
 // 开始计价后默认展开成本变化；没开始时全部收起（缺价清单可能很长，点开再看）
 const tab = ref('')
+const canEditMaterial = computed(() => permEditMaterial && !props.readonly)
 watch(() => props.data, d => { tab.value = d?.started ? 'history' : '' }, { immediate: true })
 
 // ── 计算属性 ──────────────────────────────────────

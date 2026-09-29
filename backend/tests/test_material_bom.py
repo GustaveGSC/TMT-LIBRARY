@@ -237,6 +237,19 @@ def test_import_maps_erp_codes_and_overwrites_same_version(bom_app):
         assert 'tree' not in view
 
 
+def test_bom_headers_use_full_erp_name(bom_app):
+    """研发 BOM 文件里的名称只是 ERP 名称的前半段：版本行 / BOM 列表 / 成本视图表头都用 ERP 全名。"""
+    with bom_app.app_context():
+        ImportProductRaw.query.filter_by(code='F1-A').one().name = '书桌 (V1.2)电动2.0米_A'
+        db.session.commit()
+        material_bom_service.import_file(_pdm(SAMPLE), 'a.xlsx', 'tester')
+        full = '书桌 (V1.2)电动2.0米_A'
+        assert material_bom_service.for_material('F1-A').data['versions'][0]['name'] == full
+        items = material_bom_service.list_boms(page=1, page_size=50).data['items']
+        assert next(i for i in items if i['code'] == 'F1')['name'] == full
+        assert material_bom_service.calc_price('F1-A').data['bom']['name'] == full
+
+
 def test_invalid_file_writes_nothing(bom_app):
     with bom_app.app_context():
         bad = SAMPLE[:4] + [('1.2', '14_原材料', 'S1', 'A01', 'x', '螺钉')]

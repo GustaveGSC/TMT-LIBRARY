@@ -12,13 +12,19 @@ import http from '@/api/http'
 import { usePermission } from '@/composables/usePermission'
 
 // 价格属于研发成本数据。usePermission 返回普通布尔值不是 ref，不能写 .value。
-const { canMaterialPrice, canEditMaterial } = usePermission()
+const { canMaterialPrice, canEditMaterial: permEditMaterial } = usePermission()
 
 // ── Props / Emits ─────────────────────────────────
 const props = defineProps({
-  visible: { type: Boolean, default: false },
-  code:    { type: String,  default: '' },
+  visible:  { type: Boolean, default: false },
+  code:     { type: String,  default: '' },
+  // 只读：从产品库的 BOM / 成本打开时只看不改（用户 2026-09-29 定）——不能改人工维护、图片、价格、供应商、不计价
+  readonly: { type: Boolean, default: false },
 })
+
+// 编辑权限 = 物料权限且不是只读打开
+const canEditMaterial = computed(() => permEditMaterial && !props.readonly)
+const canEditPrice    = computed(() => canMaterialPrice && !props.readonly)
 const emit = defineEmits(['update:visible', 'saved'])
 
 // ── 响应式状态 ────────────────────────────────────
@@ -157,7 +163,7 @@ const priceErr      = ref('')
 // 后端同样有门禁，这里只是不给入口。后端若返回 can_add_price 则优先用它。
 const canAddPrice = computed(() => {
   const d = detail.value
-  if (!d || !canMaterialPrice) return false
+  if (!d || !canEditPrice.value) return false
   if (typeof d.can_add_price === 'boolean') return d.can_add_price
   return !(d.categories || []).includes('useless')
 })
@@ -635,7 +641,6 @@ watch(() => props.visible, v => {
               <tr>
                 <th style="width:160px">图纸编码</th>
                 <th>名称</th>
-                <th style="width:70px" class="ta-r">下级</th>
                 <th style="width:150px">导入</th>
                 <th style="width:90px"></th>
               </tr>
@@ -643,8 +648,7 @@ watch(() => props.visible, v => {
             <tbody>
               <tr v-for="v in bom.versions" :key="v.id">
                 <td class="mono bom-drawing">{{ v.drawing }}</td>
-                <td class="ellip">{{ v.name || '—' }}</td>
-                <td class="ta-r">{{ v.line_count }} 项</td>
+                <td class="bom-name">{{ v.name || '—' }}</td>
                 <td class="cell-muted">{{ v.imported_at }}</td>
                 <td class="ta-r">
                   <button class="bom-view-btn" type="button" @click="openBomDialog(v)">
@@ -712,7 +716,7 @@ watch(() => props.visible, v => {
           <!-- 有研发 BOM 的部件：成本由下级原材料价格实时计算（不存储）
                成本 + 完整度 → 成本变化（按订单，拆价格涨跌/新增计价）/ 成本构成 / 缺价清单 -->
           <MaterialCostView v-if="calcPrice" :data="calcPrice"
-                            :trend-disabled="!calcPrice.history.length && !prices.length"
+                            :trend-disabled="!calcPrice.history.length && !prices.length" :readonly="readonly"
                             @open-code="navigateTo" @changed="loadCalcPrice" @trend="trendOpen = true" />
 
           <!-- 外购价：普通部件不显示；外购半成品或已有自身价格时显示（下级全无价格时计算用它） -->
@@ -778,7 +782,7 @@ watch(() => props.visible, v => {
                 <th style="width:170px">订单号</th>
                 <th>供应商</th>
                 <th style="width:104px">来源</th>
-                <th v-if="canMaterialPrice" style="width:44px"></th>
+                <th v-if="canEditPrice" style="width:44px"></th>
               </tr>
             </thead>
             <tbody>
@@ -791,7 +795,7 @@ watch(() => props.visible, v => {
                   <span v-else class="cell-muted">—</span>
                 </td>
                 <td>
-                  <template v-if="canMaterialPrice">
+                  <template v-if="canEditPrice">
                     <div class="sup-cell">
                       <el-select
                         v-model="row._supplierDraft" class="sup-select" size="small"
@@ -811,7 +815,7 @@ watch(() => props.visible, v => {
                     {{ SOURCE_LABELS[row.source] || row.source }}
                   </span>
                 </td>
-                <td v-if="canMaterialPrice">
+                <td v-if="canEditPrice">
                   <button class="del-btn" title="删除" @click="removePrice(row)">删除</button>
                 </td>
               </tr>
@@ -1075,6 +1079,8 @@ watch(() => props.visible, v => {
 /* ── 研发 BOM 区 ── */
 .mc-bom .mc-section-title, .mc-used .mc-section-title { align-items: center; }
 .bom-drawing { font-weight: 700; color: #2c2420; }
+/* 研发版本名称用 ERP 全名（较长），完整显示、需要时换行，不截断 */
+.bom-name { word-break: break-all; }
 .bom-view-btn {
   display: inline-flex; align-items: center; gap: 3px;
   padding: 2px 10px; border-radius: 12px; cursor: pointer;

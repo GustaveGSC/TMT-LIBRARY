@@ -16,7 +16,7 @@ const CALC = {
   bom: HEAD, versions: [{ id: 1, drawing: '1108SG07-A01' }],
   current: { unit_price: 24, missing: 0, priced: 4, total: 4, price_source: 'calc', price_date: null },
   started: { date: '2024-01-01', order_no: 'F-SC20240101-001' },
-  missing_items: [],
+  missing_items: [{ drawing: 'S1-A01', erp_code: 'S1-A', name: '螺钉', qty: 4, parents: ['1108SG07-A01'] }],
   composition: [{ drawing: 'P1-A01', erp_code: 'P1-A', name: '桌面', qty: 1, amount: 24, share: 1 }],
   history: [{ batch_id: 1, order_no: 'F-SC20240101-001', date: '2024-01-01', unit_price: 24, related: true, delta: null }],
 }
@@ -61,7 +61,8 @@ const secOf = (page, title) =>
   page.locator('.eg-sec').filter({ has: page.locator('.eg-sec-hd', { hasText: title }) })
 
 test('BOM 和成本分成两个分区，各自展开才加载；可查看 BOM、点物料打开物料卡片', async ({ page }) => {
-  const calls = await setup(page, ['product:view', 'material:view', 'material:price'])
+  // 带 material:edit：验证产品库里打开的内容仍是只读
+  const calls = await setup(page, ['product:view', 'material:view', 'material:edit', 'material:price'])
   const bomSec = secOf(page, 'BOM')
   const costSec = secOf(page, '成本')
   await expect(bomSec).toBeVisible()
@@ -71,6 +72,8 @@ test('BOM 和成本分成两个分区，各自展开才加载；可查看 BOM、
   // BOM 分区：只加载 BOM
   await bomSec.locator('.eg-sec-hd').click()
   await expect(bomSec.locator('.bom-ver-table')).toContainText('1108SG07-A01')
+  // 不显示「下级」列
+  await expect(bomSec.locator('.bom-ver-table th')).toHaveText(['图纸编码', '名称', '导入', ''])
   expect(calls).toContain('/api/material/items/1108SG07-A/bom')
   expect(calls.some(p => p.endsWith('/calc-price'))).toBe(false)
   await expect(bomSec.locator('.cost-view')).toHaveCount(0)
@@ -90,11 +93,22 @@ test('BOM 和成本分成两个分区，各自展开才加载；可查看 BOM、
   await expect(dlg.locator('.bom-dlg-total')).toContainText('¥24')
   await page.keyboard.press('Escape')
 
-  // 成本构成里点物料编码 → 打开物料卡片
+  // 缺价清单只读：没有「标记不计价」
+  await costSec.locator('.cv-tabs button', { hasText: '缺价清单' }).click()
+  await expect(costSec.locator('.cost-view')).toContainText('S1-A')
+  await expect(costSec.locator('.np-btn')).toHaveCount(0)
+
+  // 成本构成里点物料编码 → 打开物料卡片（只读：没有保存、图片编辑、添加/删除价格）
   await costSec.locator('.cv-tabs button', { hasText: '成本构成' }).click()
   await costSec.locator('.cost-view .bom-link', { hasText: 'P1-A01' }).click()
-  await expect(page.locator('.material-card-dialog')).toBeVisible()
+  const card = page.locator('.material-card-dialog')
+  await expect(card).toBeVisible()
   expect(calls).toContain('/api/material/items/P1-A')
+  await expect(card.locator('.mc-manual textarea')).toBeDisabled()
+  await expect(card.locator('.mc-save-btn')).toHaveCount(0)
+  await expect(card.locator('.mc-round-btn[title="新增图片"]')).toHaveCount(0)
+  await expect(card.locator('.cost-add')).toHaveCount(0)
+  await expect(card.locator('.del-btn')).toHaveCount(0)
 })
 
 test('只有 material:view：只有 BOM 分区，不请求成本', async ({ page }) => {
